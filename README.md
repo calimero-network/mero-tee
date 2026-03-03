@@ -17,6 +17,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
 - [Direct Phala KMS design](docs/phala-direct-kms-design.md)
 - [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
+- [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
@@ -65,6 +66,12 @@ Apply signed policy directly to an existing `merod` node config:
 ```bash
 scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
+
+Collect candidate KMS allowlists automatically from a staged Phala deployment:
+
+- Run GitHub Actions workflow `.github/workflows/kms_staging_probe_phala.yaml`
+- Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
+- Produces copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values and probe artifacts
 
 ## Related Repositories
 
