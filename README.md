@@ -16,6 +16,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Deploy on Phala](docs/deploy-phala.md) – Phala Cloud CVM
 - [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
 - [Direct Phala KMS design](docs/phala-direct-kms-design.md)
+- [Phala KMS attestation task list (mero-tee)](docs/phala-kms-attestation-task-list.md)
 - [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
