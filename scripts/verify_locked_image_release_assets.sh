@@ -14,6 +14,7 @@ signed_assets=(
   "published-mrtds.json"
   "release-provenance.json"
   "attestation-artifacts.tar.gz"
+  "locked-image-checksums.txt"
 )
 
 required_assets=("${signed_assets[@]}")
@@ -74,6 +75,19 @@ for pattern in "${required_assets[@]}"; do
     fi
     sleep 3
   done
+done
+
+for required in \
+  "mrtd-debug.json" \
+  "mrtd-debug-read-only.json" \
+  "mrtd-locked-read-only.json" \
+  "published-mrtds.json" \
+  "release-provenance.json" \
+  "attestation-artifacts.tar.gz"; do
+  if ! awk '{print $2}' "${tmp_dir}/locked-image-checksums.txt" | rg -x "${required}" >/dev/null 2>&1; then
+    echo "Checksums file missing entry for ${required}"
+    exit 1
+  fi
 done
 
 jq -e --arg tag "${tag}" '

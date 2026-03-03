@@ -1033,6 +1033,16 @@ jobs:
 
           tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
 
+          sha256sum \
+            artifacts/mrtd-debug.json \
+            artifacts/mrtd-debug-read-only.json \
+            artifacts/mrtd-locked-read-only.json \
+            artifacts/published-mrtds.json \
+            artifacts/release-provenance.json \
+            artifacts/attestation-artifacts.tar.gz \
+            | sed 's#  artifacts/#  #' \
+            > artifacts/locked-image-checksums.txt
+
           {
             echo "## Published MRTDs"
             echo ""
@@ -1056,6 +1066,7 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
+            "artifacts/locked-image-checksums.txt"
           )
 
           for asset in "${assets[@]}"; do
@@ -1079,6 +1090,7 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
+            "artifacts/locked-image-checksums.txt"
           )
 
           cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$"
@@ -1122,6 +1134,9 @@ jobs:
             artifacts/attestation-artifacts.tar.gz
             artifacts/attestation-artifacts.tar.gz.sig
             artifacts/attestation-artifacts.tar.gz.pem
+            artifacts/locked-image-checksums.txt
+            artifacts/locked-image-checksums.txt.sig
+            artifacts/locked-image-checksums.txt.pem
 
       - name: Smoke test published release assets
         env:
