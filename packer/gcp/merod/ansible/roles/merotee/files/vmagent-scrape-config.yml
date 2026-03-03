@@ -1,0 +1,5 @@
+# Minimal scrape config for locked-down image (R7). Used when metrics-endpoint metadata is set.
+scrape_configs:
+  - job_name: node_exporter
+    static_configs:
+      - targets: ["localhost:9100"]

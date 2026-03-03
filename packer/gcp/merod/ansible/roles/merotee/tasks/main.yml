@@ -1,0 +1,127 @@
+---
+# Directories and config
+- name: Create calimero base directory
+  file:
+    path: /etc/calimero
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create calimero init lib directory
+  file:
+    path: /usr/local/lib/calimero
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render baked-in init script (R6)
+  template:
+    src: calimero-init.sh.j2
+    dest: /usr/local/lib/calimero/init.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create calimero-init systemd service (R6)
+  copy:
+    content: |
+      [Unit]
+      Description=Calimero locked-down image init
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/lib/calimero/init.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/calimero-init.service
+
+- name: Enable calimero-init at boot
+  systemd:
+    name: calimero-init.service
+    enabled: true
+    daemon_reload: true
+
+- name: Ensure traefik starts after calimero-init
+  file:
+    path: /etc/systemd/system/traefik.service.d
+    state: directory
+    mode: "0755"
+
+- name: Drop-in for traefik to run after calimero-init
+  copy:
+    content: |
+      [Unit]
+      After=calimero-init.service
+    dest: /etc/systemd/system/traefik.service.d/after-calimero-init.conf
+    mode: "0644"
+
+- name: Ensure vmagent and vector config dirs exist for R7 defaults
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/vmagent
+    - /etc/vector
+
+- name: Copy default vmagent scrape config for R7
+  copy:
+    src: vmagent-scrape-config.yml
+    dest: /etc/vmagent/scrape_config.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy default vector partial config for R7
+  copy:
+    src: vector-partial-merod.yaml
+    dest: /etc/vector/vector_partial.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy mero-auth configuration file
+  copy:
+    src: mero-auth-config.toml
+    dest: /etc/calimero/auth.toml
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create mero-auth systemd service file
+  copy:
+    content: |
+        [Unit]
+        Description=mero-auth
+        After=calimero-init.service
+
+        [Service]
+        ExecStart=/usr/local/bin/mero-auth --config /etc/calimero/auth.toml --verbose
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-auth.service
+
+- name: Create merod systemd service file
+  copy:
+    content: |
+        [Unit]
+        Description=merod
+        After=calimero-init.service
+
+        [Service]
+        ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+    dest: /etc/systemd/system/merod.service

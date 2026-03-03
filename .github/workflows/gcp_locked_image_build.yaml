@@ -1,0 +1,1032 @@
+name: GCP Locked Image Build
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "packer/gcp/merod/versions.json"
+
+concurrency:
+  group: gcp-locked-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
+  PACKER_GCP_SOURCE_IMAGE: ${{ vars.PACKER_GCP_SOURCE_IMAGE }}
+  PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
+  PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
+  PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
+  GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID }}
+  GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE }}
+  GCP_ATTESTATION_SUBNETWORK: ${{ vars.GCP_ATTESTATION_SUBNETWORK }}
+  GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
+  GCP_ATTESTATION_ADMIN_API_PORT: ${{ vars.GCP_ATTESTATION_ADMIN_API_PORT }}
+  GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
+  GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS: ${{ vars.GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS }}
+  GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
+  ITA_APPRAISAL_URL: ${{ vars.ITA_APPRAISAL_URL }}
+  ITA_POLICY_IDS: ${{ vars.ITA_POLICY_IDS }}
+  ITA_POLICY_MUST_MATCH: ${{ vars.ITA_POLICY_MUST_MATCH }}
+
+jobs:
+  preflight:
+    name: Workflow preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      run_pipeline: ${{ steps.release_gate.outputs.run_pipeline }}
+      latest_merod_version: ${{ steps.release_gate.outputs.latest_merod_version }}
+      image_version: ${{ steps.version_manifest.outputs.image_version }}
+      gate_reason: ${{ steps.release_gate.outputs.reason }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate packer helper scripts
+        run: |
+          bash -n packer/gcp/merod/init.sh
+          bash -n packer/gcp/merod/build-and-release.sh
+          bash -n scripts/verify_locked_image_release_assets.sh
+          python3 -m py_compile scripts/verify_tdx_quote_ita.py
+
+      - name: Validate version manifest shape
+        id: version_manifest
+        run: |
+          image_version="$(jq -er '.imageVersion' packer/gcp/merod/versions.json)"
+          jq -e '
+            has("imageVersion")
+            and has("traefikVersion")
+            and has("nodeExporterVersion")
+            and has("vmagentVersion")
+            and has("vectorVersion")
+          ' packer/gcp/merod/versions.json >/dev/null
+          echo "image_version=${image_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve merod release gate (master only)
+        id: release_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_pipeline="false"
+          reason=""
+          latest_merod_version=""
+
+          if [[ "${GITHUB_REF}" != "refs/heads/master" ]]; then
+            reason="Workflow is restricted to refs/heads/master; current ref is ${GITHUB_REF}."
+            echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
+            echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
+            echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          release_json="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/calimero-network/core/releases/latest")"
+          latest_merod_version="$(jq -r '.tag_name // empty' <<< "${release_json}")"
+          if [[ -z "${latest_merod_version}" ]]; then
+            echo "Unable to resolve latest calimero-network/core release tag."
+            exit 1
+          fi
+
+          for required_asset in \
+            "merod_x86_64-unknown-linux-gnu.tar.gz" \
+            "meroctl_x86_64-unknown-linux-gnu.tar.gz" \
+            "mero-auth_x86_64-unknown-linux-gnu.tar.gz"; do
+              if ! jq -e --arg asset "${required_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
+                echo "::error::Latest core release '${latest_merod_version}' missing required asset: ${required_asset}"
+                exit 1
+              fi
+          done
+
+          run_pipeline="true"
+          reason="Detected packer/gcp/merod/versions.json change on master."
+
+          echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
+          echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
+          echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+
+      - name: Report release gate decision
+        run: |
+          {
+            echo "## Merod release gate"
+            echo ""
+            echo "- Latest merod release: ${{ steps.release_gate.outputs.latest_merod_version }}"
+            echo "- Run pipeline: ${{ steps.release_gate.outputs.run_pipeline }}"
+            echo "- Reason: ${{ steps.release_gate.outputs.reason }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  profile_pipeline:
+    name: Build and attest (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_pipeline == 'true' }}
+    env:
+      GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          mode="none"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          elif [[ -n "${SA_KEY}" ]]; then
+            mode="key"
+          fi
+
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "run_full_pipeline=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Require GCP auth
+        if: ${{ steps.auth_mode.outputs.mode == 'none' }}
+        run: |
+          echo "Missing GCP auth configuration."
+          echo "Set either:"
+          echo "  - GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_PACKER_SERVICE_ACCOUNT_EMAIL"
+          echo "or:"
+          echo "  - GCP_SERVICE_ACCOUNT_KEY"
+          exit 1
+
+      - name: Require pinned base source image
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        run: |
+          if [[ -z "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
+            echo "::warning::PACKER_GCP_SOURCE_IMAGE is unset; using Packer default source image (less reproducible). Set the repo variable for reproducible builds."
+          fi
+
+      - name: Setup packer
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        uses: hashicorp/setup-packer@v3.1.0
+        with:
+          version: v1.11.2
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode == 'key' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Validate GCP compute access
+        id: gcp_access
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        run: |
+          image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
+          zone="${PACKER_GCP_ZONE:-europe-west4-a}"
+          region="${PACKER_GCP_REGION:-europe-west4}"
+          subnetwork="${PACKER_GCP_SUBNETWORK:-}"
+
+          can_run="true"
+          reason=""
+
+          if ! gcloud compute zones describe "${zone}" --project "${image_project}" >/dev/null 2>&1; then
+            can_run="false"
+            reason="Missing compute.zones.get (or zone access) for project=${image_project}, zone=${zone}."
+          fi
+
+          # If subnet is not explicitly configured, auto-pick one accessible subnet in-region.
+          if [[ "${can_run}" == "true" ]] && [[ -z "${subnetwork}" ]]; then
+            subnetwork="$(gcloud compute networks subnets list \
+              --project "${image_project}" \
+              --regions "${region}" \
+              --format="value(name)" \
+              --limit=1 2>/dev/null | head -n1 || true)"
+          fi
+
+          if [[ "${can_run}" == "true" ]] && [[ -z "${subnetwork}" ]]; then
+            can_run="false"
+            reason="No accessible subnet found in region '${region}' for project '${image_project}'. Set GCP_PACKER_SUBNETWORK explicitly."
+          fi
+
+          if [[ "${can_run}" == "true" ]] && ! gcloud compute networks subnets describe "${subnetwork}" --region "${region}" --project "${image_project}" >/dev/null 2>&1; then
+            can_run="false"
+            reason="Subnetwork '${subnetwork}' in region '${region}' is not accessible in project '${image_project}'."
+          fi
+
+          if [[ "${can_run}" == "true" ]]; then
+            # Normalize resolved values for subsequent steps in this job.
+            echo "PACKER_GCP_PROJECT_ID=${image_project}" >> "${GITHUB_ENV}"
+            echo "PACKER_GCP_REGION=${region}" >> "${GITHUB_ENV}"
+            echo "PACKER_GCP_ZONE=${zone}" >> "${GITHUB_ENV}"
+            echo "PACKER_GCP_SUBNETWORK=${subnetwork}" >> "${GITHUB_ENV}"
+            echo "resolved_subnetwork=${subnetwork}" >> "${GITHUB_OUTPUT}"
+          fi
+
+          echo "can_run=${can_run}" >> "${GITHUB_OUTPUT}"
+          echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${can_run}" != "true" ]]; then
+            echo "${reason}"
+            exit 1
+          fi
+
+      - name: Show tool versions
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          packer --version
+          ansible --version
+          gcloud --version
+          jq --version
+
+      - name: Build profile image from packer/gcp/merod
+        id: build_image
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        working-directory: packer/gcp/merod
+        run: |
+          export PACKER_FORCE_BUILD=true
+          ./init.sh
+          ./build-and-release.sh "${{ matrix.profile }}"
+          echo "Packer build completed successfully."
+
+      - name: Resolve image and VM parameters
+        id: params
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        working-directory: packer/gcp/merod
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Resolving image and VM parameters..."
+          profile="${{ matrix.profile }}"
+          image_version="$(jq -r '.imageVersion // empty' versions.json 2>/dev/null || true)"
+          if [[ -z "${image_version}" ]]; then
+            echo "::error::Could not read imageVersion from versions.json (missing file or key)."
+            exit 1
+          fi
+          packer_vars_file="ubuntu-intel.pkrvars.hcl"
+          if [[ ! -f "${packer_vars_file}" ]]; then
+            echo "::error::Missing packer vars file: ${packer_vars_file}"
+            exit 1
+          fi
+
+          cpu_architecture=""
+          while IFS= read -r line; do
+            if [[ "${line}" =~ ^[[:space:]]*cpu_architecture[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+              cpu_architecture="${BASH_REMATCH[1]}"
+              break
+            fi
+          done < "${packer_vars_file}"
+          if [[ -z "${cpu_architecture}" ]]; then
+            echo "::error::Unable to resolve cpu_architecture from ${packer_vars_file}."
+            exit 1
+          fi
+
+          image_name="merotee-ubuntu-noble-24-04-${cpu_architecture}-${profile}-${image_version//./-}"
+          image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
+
+          vm_project="${GCP_ATTESTATION_PROJECT_ID:-${image_project}}"
+          vm_zone="${GCP_ATTESTATION_ZONE:-${PACKER_GCP_ZONE:-europe-west4-a}}"
+          vm_subnetwork="${GCP_ATTESTATION_SUBNETWORK:-${PACKER_GCP_SUBNETWORK:-}}"
+          vm_machine_type="${GCP_ATTESTATION_MACHINE_TYPE:-c3-standard-4}"
+          vm_region="${vm_zone%-[a-z]}"
+          admin_api_port="${GCP_ATTESTATION_ADMIN_API_PORT:-80}"
+
+          # Auto-discover subnetwork if not set (same logic as Validate GCP compute access)
+          if [[ -z "${vm_subnetwork}" ]]; then
+            echo "Subnetwork not set; auto-discovering in region ${vm_region}..."
+            vm_subnetwork="$(gcloud compute networks subnets list \
+              --project "${vm_project}" \
+              --regions "${vm_region}" \
+              --format="value(name)" \
+              --limit=1 2>/dev/null | head -n1 || true)"
+          fi
+          if [[ -z "${vm_subnetwork}" ]]; then
+            echo "::error::No subnetwork for attestation VM. Set GCP_ATTESTATION_SUBNETWORK or GCP_PACKER_SUBNETWORK, or ensure project has a subnet in region ${vm_region}."
+            exit 1
+          fi
+          echo "Using subnetwork: ${vm_subnetwork}"
+          vm_subnetwork_name="${vm_subnetwork##*/}"
+          vm_network_uri="$(gcloud compute networks subnets describe "${vm_subnetwork_name}" \
+            --project "${vm_project}" \
+            --region "${vm_region}" \
+            --format='value(network)' 2>/dev/null || true)"
+          if [[ -z "${vm_network_uri}" ]]; then
+            echo "::error::Unable to resolve network for subnetwork '${vm_subnetwork_name}' in region '${vm_region}' (project '${vm_project}')."
+            exit 1
+          fi
+          vm_network="${vm_network_uri##*/}"
+
+          firewall_tag="tee-attest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          firewall_tag="${firewall_tag:0:63}"
+          firewall_rule="tee-attest-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          firewall_rule="${firewall_rule:0:63}"
+
+          attestation_source_ranges="${GCP_ATTESTATION_ALLOWED_CIDRS:-}"
+          attestation_source_ranges="${attestation_source_ranges//[[:space:]]/}"
+          if [[ -z "${attestation_source_ranges}" ]]; then
+            runner_ipv4=""
+            for endpoint in \
+              "https://api.ipify.org" \
+              "https://ifconfig.me/ip" \
+              "https://checkip.amazonaws.com"; do
+              candidate="$(curl -fsS --max-time 5 "${endpoint}" 2>/dev/null | tr -d '[:space:]' || true)"
+              if [[ "${candidate}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                runner_ipv4="${candidate}"
+                break
+              fi
+            done
+
+            if [[ -z "${runner_ipv4}" ]]; then
+              echo "::error::Unable to determine runner egress IPv4. Set GCP_ATTESTATION_ALLOWED_CIDRS repository variable (comma-separated CIDRs)."
+              exit 1
+            fi
+
+            attestation_source_ranges="${runner_ipv4}/32"
+          fi
+          echo "Attestation firewall source ranges: ${attestation_source_ranges}"
+
+          merod_version="${GCP_ATTESTATION_MEROD_VERSION:-${GATED_MEROD_VERSION:-}}"
+          if [[ -z "${merod_version}" ]]; then
+            echo "GCP_ATTESTATION_MEROD_VERSION not set; resolving latest calimero-network/core release tag..."
+            release_json="$(curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/calimero-network/core/releases/latest" 2>/dev/null || true)"
+            merod_version="$(jq -r '.tag_name // empty' <<< "${release_json}" 2>/dev/null || true)"
+            if [[ -z "${merod_version}" ]]; then
+              echo "Could not resolve latest core release from API; using image_version as fallback: ${image_version}"
+              merod_version="${image_version}"
+            else
+              # Validate required linux artifacts are present for init downloads.
+              for required_asset in \
+                "merod_x86_64-unknown-linux-gnu.tar.gz" \
+                "meroctl_x86_64-unknown-linux-gnu.tar.gz" \
+                "mero-auth_x86_64-unknown-linux-gnu.tar.gz"; do
+                if ! jq -e --arg asset "${required_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null 2>&1; then
+                  echo "::error::Latest core release '${merod_version}' missing required asset: ${required_asset}"
+                  exit 1
+                fi
+              done
+            fi
+          fi
+          echo "Using merod_version: ${merod_version}"
+
+          instance_name="tdx-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          instance_name="${instance_name:0:63}"
+          artifacts_dir="${RUNNER_TEMP}/tdx-attestation-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${artifacts_dir}"
+
+          echo "profile=${profile}" >> "${GITHUB_OUTPUT}"
+          echo "cpu_architecture=${cpu_architecture}" >> "${GITHUB_OUTPUT}"
+          echo "image_name=${image_name}" >> "${GITHUB_OUTPUT}"
+          echo "image_project=${image_project}" >> "${GITHUB_OUTPUT}"
+          echo "vm_project=${vm_project}" >> "${GITHUB_OUTPUT}"
+          echo "vm_zone=${vm_zone}" >> "${GITHUB_OUTPUT}"
+          echo "vm_region=${vm_region}" >> "${GITHUB_OUTPUT}"
+          echo "vm_subnetwork=${vm_subnetwork}" >> "${GITHUB_OUTPUT}"
+          echo "vm_subnetwork_name=${vm_subnetwork_name}" >> "${GITHUB_OUTPUT}"
+          echo "vm_network=${vm_network}" >> "${GITHUB_OUTPUT}"
+          echo "vm_machine_type=${vm_machine_type}" >> "${GITHUB_OUTPUT}"
+          echo "admin_api_port=${admin_api_port}" >> "${GITHUB_OUTPUT}"
+          echo "firewall_tag=${firewall_tag}" >> "${GITHUB_OUTPUT}"
+          echo "firewall_rule=${firewall_rule}" >> "${GITHUB_OUTPUT}"
+          echo "attestation_source_ranges=${attestation_source_ranges}" >> "${GITHUB_OUTPUT}"
+          echo "merod_version=${merod_version}" >> "${GITHUB_OUTPUT}"
+          echo "instance_name=${instance_name}" >> "${GITHUB_OUTPUT}"
+          echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
+          echo "Params step completed successfully."
+          exit 0
+
+      - name: Verify resulting image exists
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && steps.params.outcome == 'success' }}
+        run: |
+          image_name="${{ steps.params.outputs.image_name }}"
+          image_project="${{ steps.params.outputs.image_project }}"
+          if [[ -z "${image_name}" || -z "${image_project}" ]]; then
+            echo "::error::Resolve image and VM parameters step did not output image_name/image_project. Check that step for errors."
+            exit 1
+          fi
+          echo "Checking for image: ${image_name} in project: ${image_project}"
+          for i in 1 2 3 4 5 6; do
+            if gcloud compute images describe "${image_name}" \
+              --project "${image_project}" \
+              --format="table(name,family,status)"; then
+              echo "Image is ready."
+              exit 0
+            fi
+            echo "Attempt ${i}/6: image not ready yet, waiting 15s..."
+            sleep 15
+          done
+          echo "Image still not available after 90s."
+          exit 1
+
+      - name: Capture built image metadata
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          profile="${{ steps.params.outputs.profile }}"
+          gcloud compute images describe "${{ steps.params.outputs.image_name }}" \
+            --project "${{ steps.params.outputs.image_project }}" \
+            --format=json > "${artifacts_dir}/image-${profile}.json"
+
+      - name: Create ephemeral firewall rule for admin API
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          gcloud compute firewall-rules create "${{ steps.params.outputs.firewall_rule }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --network "${{ steps.params.outputs.vm_network }}" \
+            --direction INGRESS \
+            --priority 1000 \
+            --action ALLOW \
+            --rules "tcp:${{ steps.params.outputs.admin_api_port }}" \
+            --source-ranges "${{ steps.params.outputs.attestation_source_ranges }}" \
+            --target-tags "${{ steps.params.outputs.firewall_tag }}" \
+            --description "Temporary attestation ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+
+      - name: Create ephemeral TDX VM
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --machine-type "${{ steps.params.outputs.vm_machine_type }}" \
+            --confidential-compute-type "TDX" \
+            --maintenance-policy "TERMINATE" \
+            --min-cpu-platform "Intel Sapphire Rapids" \
+            --no-service-account \
+            --no-scopes \
+            --image "${{ steps.params.outputs.image_name }}" \
+            --image-project "${{ steps.params.outputs.image_project }}" \
+            --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
+            --metadata "merod-version=${{ steps.params.outputs.merod_version }}" \
+            --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
+
+      - name: Wait for VM to reach RUNNING
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          for attempt in $(seq 1 30); do
+            status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+              --project "${{ steps.params.outputs.vm_project }}" \
+              --zone "${{ steps.params.outputs.vm_zone }}" \
+              --format='value(status)' || true)"
+
+            if [[ "${status}" == "RUNNING" ]]; then
+              echo "Instance is RUNNING."
+              break
+            fi
+
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "Instance did not reach RUNNING in time."
+              gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+                --project "${{ steps.params.outputs.vm_project }}" \
+                --zone "${{ steps.params.outputs.vm_zone }}" \
+                --format='yaml(name,status,lastStartTimestamp)'
+              exit 1
+            fi
+
+            echo "Current status: ${status:-unknown} (attempt ${attempt}/30)"
+            sleep 10
+          done
+
+      - name: Resolve attestation base URL
+        id: endpoint
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          nat_ip="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+
+          if [[ -z "${nat_ip}" ]]; then
+            echo "No external IP found on attestation VM; cannot reach admin API from GitHub runner."
+            exit 1
+          fi
+
+          echo "nat_ip=${nat_ip}" >> "${GITHUB_OUTPUT}"
+          echo "base_url=http://${nat_ip}:${{ steps.params.outputs.admin_api_port }}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect TEE info and quote artifacts
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          base_url="${{ steps.endpoint.outputs.base_url }}"
+
+          gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --format='json(name,status,networkInterfaces,tags,creationTimestamp,lastStartTimestamp)' \
+            > "${artifacts_dir}/instance.json"
+
+          ready="false"
+          for attempt in $(seq 1 60); do
+            http_code="$(curl -sS --max-time 5 -o "${artifacts_dir}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
+            if [[ "${http_code}" == "200" ]]; then
+              ready="true"
+              echo "Health endpoint ready (HTTP 200) at attempt ${attempt}/60"
+              break
+            fi
+
+            echo "Health endpoint not ready (HTTP ${http_code:-error}) at attempt ${attempt}/60"
+            sleep 5
+          done
+
+          if [[ "${ready}" != "true" ]]; then
+            echo "Timed out waiting for ${base_url}/admin-api/health"
+            echo "Capturing serial console logs for diagnostics..."
+            for serial_port in 1 2 3 4; do
+              gcloud compute instances get-serial-port-output "${{ steps.params.outputs.instance_name }}" \
+                --project "${{ steps.params.outputs.vm_project }}" \
+                --zone "${{ steps.params.outputs.vm_zone }}" \
+                --port "${serial_port}" \
+                > "${artifacts_dir}/serial-port-${serial_port}.log" || true
+            done
+            exit 1
+          fi
+
+          tee_info_code="$(curl -sS --max-time 10 -o "${artifacts_dir}/tee-info.json" -w "%{http_code}" "${base_url}/admin-api/tee/info" || true)"
+          if [[ "${tee_info_code}" != "200" ]]; then
+            echo "Failed to fetch ${base_url}/admin-api/tee/info (HTTP ${tee_info_code:-error})"
+            exit 1
+          fi
+          if ! jq -e . "${artifacts_dir}/tee-info.json" >/dev/null 2>&1; then
+            echo "TEE info response was not valid JSON."
+            exit 1
+          fi
+          echo "Fetched /admin-api/tee/info (HTTP 200). Keys: $(jq -r 'keys | join(",")' "${artifacts_dir}/tee-info.json")"
+
+          nonce="$(openssl rand -hex 32)"
+          jq -n --arg nonce "${nonce}" '{nonce: $nonce}' > "${artifacts_dir}/tee-attest-request.json"
+
+          attest_code="$(curl -sS --max-time 20 -o "${artifacts_dir}/tee-attest-response.json" -w "%{http_code}" \
+            -X POST "${base_url}/admin-api/tee/attest" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-attest-request.json" || true)"
+          if [[ "${attest_code}" != "200" ]]; then
+            echo "Failed to fetch ${base_url}/admin-api/tee/attest (HTTP ${attest_code:-error})"
+            exit 1
+          fi
+          if ! jq -e . "${artifacts_dir}/tee-attest-response.json" >/dev/null 2>&1; then
+            echo "TEE attest response was not valid JSON."
+            exit 1
+          fi
+          echo "Fetched /admin-api/tee/attest (HTTP 200). Keys: $(jq -r 'keys | join(",")' "${artifacts_dir}/tee-attest-response.json")"
+
+          jq -n \
+            --arg base_url "${base_url}" \
+            --arg nonce "${nonce}" \
+            --arg instance "${{ steps.params.outputs.instance_name }}" \
+            --arg image "${{ steps.params.outputs.image_name }}" \
+            --arg project "${{ steps.params.outputs.vm_project }}" \
+            --arg zone "${{ steps.params.outputs.vm_zone }}" \
+            '{base_url: $base_url, nonce: $nonce, instance: $instance, image: $image, project: $project, zone: $zone}' \
+            > "${artifacts_dir}/attestation-context.json"
+
+      - name: Add profile-specific artifact names
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          profile="${{ steps.params.outputs.profile }}"
+          cp "${artifacts_dir}/instance.json" "${artifacts_dir}/instance-${profile}.json"
+          cp "${artifacts_dir}/health.json" "${artifacts_dir}/health-${profile}.json"
+          cp "${artifacts_dir}/tee-info.json" "${artifacts_dir}/tee-info-${profile}.json"
+          cp "${artifacts_dir}/tee-attest-request.json" "${artifacts_dir}/tee-attest-request-${profile}.json"
+          cp "${artifacts_dir}/tee-attest-response.json" "${artifacts_dir}/tee-attest-response-${profile}.json"
+          cp "${artifacts_dir}/attestation-context.json" "${artifacts_dir}/attestation-context-${profile}.json"
+
+      - name: Note optional external verifier credentials
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+        run: |
+          if [[ -z "${ITA_API_KEY}" ]]; then
+            echo "ITA_API_KEY not configured; external verification will be skipped."
+          fi
+
+      - name: Verify quote externally (Intel Trust Authority)
+        id: verify_external
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+        run: |
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          profile="${{ steps.params.outputs.profile }}"
+          ita_url="${ITA_APPRAISAL_URL:-https://api.trustauthority.intel.com/appraisal/v2/attest}"
+
+          if [[ -z "${ITA_API_KEY}" ]]; then
+            echo "ITA_API_KEY not set; writing placeholder mrtd so publish step can assemble artifacts."
+            echo '{"mrtd":"","mrtd_source":"skipped_no_ita"}' > "${artifacts_dir}/mrtd.json"
+            cp "${artifacts_dir}/mrtd.json" "${artifacts_dir}/mrtd-${profile}.json"
+            echo "status=skipped" >> "${GITHUB_OUTPUT}"
+            echo "performed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          policy_flags=()
+          if [[ -n "${ITA_POLICY_IDS:-}" ]]; then
+            policy_flags+=(--policy-ids "${ITA_POLICY_IDS}")
+          fi
+          if [[ "${ITA_POLICY_MUST_MATCH:-true}" == "true" ]]; then
+            policy_flags+=(--policy-must-match)
+          fi
+
+          python3 scripts/verify_tdx_quote_ita.py \
+            --attest-response "${artifacts_dir}/tee-attest-response.json" \
+            --tee-info "${artifacts_dir}/tee-info.json" \
+            --output-dir "${artifacts_dir}" \
+            --ita-url "${ita_url}" \
+            --ita-api-key "${ITA_API_KEY}" \
+            "${policy_flags[@]}"
+
+          mrtd="$(jq -r '.mrtd' "${artifacts_dir}/mrtd.json")"
+          cp "${artifacts_dir}/mrtd.json" "${artifacts_dir}/mrtd-${profile}.json"
+          echo "mrtd=${mrtd}" >> "${GITHUB_OUTPUT}"
+          echo "status=performed" >> "${GITHUB_OUTPUT}"
+          echo "performed=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Build per-profile provenance record
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          profile="${{ steps.params.outputs.profile }}"
+
+          image_file="${artifacts_dir}/image-${profile}.json"
+          context_file="${artifacts_dir}/attestation-context-${profile}.json"
+          mrtd_file="${artifacts_dir}/mrtd-${profile}.json"
+
+          image_family="$(jq -r '.family // ""' "${image_file}")"
+          image_self_link="$(jq -r '.selfLink // ""' "${image_file}")"
+          mrtd_value=""
+          if [[ -f "${mrtd_file}" ]]; then
+            mrtd_value="$(jq -r '.mrtd // ""' "${mrtd_file}")"
+          fi
+
+          jq -n \
+            --arg profile "${profile}" \
+            --arg tag "${GITHUB_REF_NAME}" \
+            --arg commit "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg image_name "${{ steps.params.outputs.image_name }}" \
+            --arg image_project "${{ steps.params.outputs.image_project }}" \
+            --arg image_family "${image_family}" \
+            --arg image_self_link "${image_self_link}" \
+            --arg verification_status "${{ steps.verify_external.outputs.status }}" \
+            --arg mrtd "${mrtd_value}" \
+            --slurpfile context "${context_file}" \
+            '{
+              profile: $profile,
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              image: {
+                name: $image_name,
+                project: $image_project,
+                family: $image_family,
+                self_link: $image_self_link
+              },
+              attestation_context: $context[0],
+              external_verification: {
+                status: $verification_status,
+                mrtd: $mrtd
+              }
+            }' > "${artifacts_dir}/profile-provenance-${profile}.json"
+
+      - name: Note skipped external verification
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && steps.verify_external.outputs.performed != 'true' }}
+        run: |
+          {
+            echo "## External quote verification"
+            echo ""
+            echo "- Status: skipped (ITA_API_KEY not configured for this run)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Record ephemeral target details
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          {
+            echo "## Ephemeral TDX boot target (${{ steps.params.outputs.profile }})"
+            echo ""
+            echo "- Project: ${{ steps.params.outputs.vm_project }}"
+            echo "- Zone: ${{ steps.params.outputs.vm_zone }}"
+            echo "- Instance: ${{ steps.params.outputs.instance_name }}"
+            echo "- CPU architecture: ${{ steps.params.outputs.cpu_architecture }}"
+            echo "- Image: ${{ steps.params.outputs.image_name }}"
+            echo "- Base URL: ${{ steps.endpoint.outputs.base_url }}"
+            echo "- Firewall source ranges: ${{ steps.params.outputs.attestation_source_ranges }}"
+            echo "- External verification: ${{ steps.verify_external.outputs.status }}"
+            echo "- MRTD (external): ${{ steps.verify_external.outputs.mrtd }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload attestation artifacts
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && always() && steps.params.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.params.outputs.artifacts_dir }}
+          if-no-files-found: warn
+
+      - name: Cleanup ephemeral TDX VM
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && always() }}
+        run: |
+          instance_name="${{ steps.params.outputs.instance_name }}"
+          vm_project="${{ steps.params.outputs.vm_project }}"
+          vm_zone="${{ steps.params.outputs.vm_zone }}"
+          firewall_rule="${{ steps.params.outputs.firewall_rule }}"
+
+          if [[ -n "${instance_name}" && -n "${vm_project}" && -n "${vm_zone}" ]]; then
+            gcloud compute instances delete "${instance_name}" \
+              --project "${vm_project}" \
+              --zone "${vm_zone}" \
+              --delete-disks=all \
+              --quiet || true
+          else
+            echo "Direct instance cleanup skipped (instance parameters unavailable)."
+          fi
+
+          if [[ -n "${firewall_rule}" && -n "${vm_project}" ]]; then
+            gcloud compute firewall-rules delete "${firewall_rule}" \
+              --project "${vm_project}" \
+              --quiet || true
+          else
+            echo "Direct firewall cleanup skipped (firewall parameters unavailable)."
+          fi
+
+  cleanup_attestation_resources:
+    name: Cleanup attestation resources
+    runs-on: ubuntu-latest
+    needs: [preflight, profile_pipeline]
+    if: ${{ always() && needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          mode="none"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          elif [[ -n "${SA_KEY}" ]]; then
+            mode="key"
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Require GCP auth for cleanup
+        if: ${{ steps.auth_mode.outputs.mode == 'none' }}
+        run: |
+          echo "Missing GCP auth configuration for cleanup job."
+          exit 1
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode == 'key' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Sweep current-run and stale CI attestation resources
+        run: |
+          vm_project="${GCP_ATTESTATION_PROJECT_ID:-${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}}"
+          max_age_hours="${GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS:-24}"
+          if ! [[ "${max_age_hours}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS='${max_age_hours}'; expected integer."
+            exit 1
+          fi
+
+          run_prefix_regex="^tdx-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
+          stale_prefix_regex="^tdx-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+          run_firewall_regex="^tee-attest-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
+          stale_firewall_regex="^tee-attest-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+          cutoff_epoch="$(date -u -d "-${max_age_hours} hours" +%s)"
+
+          echo "Cleanup project: ${vm_project}"
+          echo "Current-run instance regex: ${run_prefix_regex}"
+          echo "Current-run firewall regex: ${run_firewall_regex}"
+          echo "Stale cleanup cutoff (hours): ${max_age_hours}"
+
+          # 1) Always sweep any instances from this workflow run across zones.
+          while IFS=$'\t' read -r name zone; do
+            [[ -z "${name}" ]] && continue
+            zone="${zone##*/}"
+            echo "Deleting current-run instance: ${name} (zone=${zone})"
+            gcloud compute instances delete "${name}" \
+              --project "${vm_project}" \
+              --zone "${zone}" \
+              --delete-disks=all \
+              --quiet || true
+          done < <(
+            gcloud compute instances list \
+              --project "${vm_project}" \
+              --filter="name~'${run_prefix_regex}'" \
+              --format='value(name,zone)' || true
+          )
+
+          # 2) Sweep current-run firewall rules.
+          while IFS= read -r rule; do
+            [[ -z "${rule}" ]] && continue
+            echo "Deleting current-run firewall rule: ${rule}"
+            gcloud compute firewall-rules delete "${rule}" \
+              --project "${vm_project}" \
+              --quiet || true
+          done < <(
+            gcloud compute firewall-rules list \
+              --project "${vm_project}" \
+              --filter="name~'${run_firewall_regex}'" \
+              --format='value(name)' || true
+          )
+
+          # 3) Sweep stale orphaned instances created by this workflow naming pattern.
+          gcloud compute instances list \
+            --project "${vm_project}" \
+            --filter="name~'${stale_prefix_regex}'" \
+            --format=json > /tmp/ci-tdx-instances.json || echo '[]' > /tmp/ci-tdx-instances.json
+          jq -r --argjson cutoff "${cutoff_epoch}" '
+            .[]?
+            | (.creationTimestamp | fromdateiso8601?) as $created
+            | select($created != null and $created < $cutoff)
+            | [.name, (.zone | split("/")[-1])]
+            | @tsv
+          ' /tmp/ci-tdx-instances.json | while IFS=$'\t' read -r name zone; do
+            [[ -z "${name}" ]] && continue
+            echo "Deleting stale instance: ${name} (zone=${zone})"
+            gcloud compute instances delete "${name}" \
+              --project "${vm_project}" \
+              --zone "${zone}" \
+              --delete-disks=all \
+              --quiet || true
+          done
+
+          # 4) Sweep stale orphaned firewall rules from this workflow naming pattern.
+          gcloud compute firewall-rules list \
+            --project "${vm_project}" \
+            --filter="name~'${stale_firewall_regex}'" \
+            --format=json > /tmp/ci-tdx-firewalls.json || echo '[]' > /tmp/ci-tdx-firewalls.json
+          jq -r --argjson cutoff "${cutoff_epoch}" '
+            .[]?
+            | (.creationTimestamp | fromdateiso8601?) as $created
+            | select($created != null and $created < $cutoff)
+            | .name
+          ' /tmp/ci-tdx-firewalls.json | while IFS= read -r rule; do
+            [[ -z "${rule}" ]] && continue
+            echo "Deleting stale firewall rule: ${rule}"
+            gcloud compute firewall-rules delete "${rule}" \
+              --project "${vm_project}" \
+              --quiet || true
+          done
+
+  publish_mrtds:
+    name: Publish profile MRTDs
+    runs-on: ubuntu-latest
+    needs: [preflight, profile_pipeline, cleanup_attestation_resources]
+    if: ${{ needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download attestation artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gcp-tdx-attestation-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Assemble published MRTD payload
+        run: |
+          if [[ ! -f artifacts/mrtd-debug.json ]]; then
+            echo "Missing artifacts/mrtd-debug.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/mrtd-debug-read-only.json ]]; then
+            echo "Missing artifacts/mrtd-debug-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/mrtd-locked-read-only.json ]]; then
+            echo "Missing artifacts/mrtd-locked-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/profile-provenance-debug.json ]]; then
+            echo "Missing artifacts/profile-provenance-debug.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/profile-provenance-debug-read-only.json ]]; then
+            echo "Missing artifacts/profile-provenance-debug-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/profile-provenance-locked-read-only.json ]]; then
+            echo "Missing artifacts/profile-provenance-locked-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+
+          jq -n \
+            --arg tag "locked-image-v${{ needs.preflight.outputs.image_version }}" \
+            --slurpfile debug artifacts/mrtd-debug.json \
+            --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
+            --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
+            '{
+              tag: $tag,
+              generated_at: (now | todate),
+              profiles: {
+                debug: $debug[0],
+                "debug-read-only": $debug_ro[0],
+                "locked-read-only": $locked_ro[0]
+              }
+            }' > artifacts/published-mrtds.json
+
+          jq -n \
+            --arg tag "locked-image-v${{ needs.preflight.outputs.image_version }}" \
+            --arg commit "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --slurpfile debug artifacts/profile-provenance-debug.json \
+            --slurpfile debug_ro artifacts/profile-provenance-debug-read-only.json \
+            --slurpfile locked_ro artifacts/profile-provenance-locked-read-only.json \
+            --slurpfile mrtds artifacts/published-mrtds.json \
+            '{
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              profiles: {
+                debug: $debug[0],
+                "debug-read-only": $debug_ro[0],
+                "locked-read-only": $locked_ro[0]
+              },
+              mrtds: $mrtds[0]
+            }' > artifacts/release-provenance.json
+
+          tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
+
+          {
+            echo "## Published MRTDs"
+            echo ""
+            echo "- Tag: locked-image-v${{ needs.preflight.outputs.image_version }}"
+            echo "- Debug MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug.json)"
+            echo "- Debug read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
+            echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload MRTD release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: locked-image-v${{ needs.preflight.outputs.image_version }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/mrtd-debug.json
+            artifacts/mrtd-debug-read-only.json
+            artifacts/mrtd-locked-read-only.json
+            artifacts/published-mrtds.json
+            artifacts/release-provenance.json
+            artifacts/attestation-artifacts.tar.gz
+
+      - name: Smoke test published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/verify_locked_image_release_assets.sh "locked-image-v${{ needs.preflight.outputs.image_version }}"

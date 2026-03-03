@@ -1,0 +1,4 @@
+---
+# defaults file for merotee
+lockdown_profile: "debug"
+merod_mode: "{{ 'read-only' if lockdown_profile in ['debug-read-only', 'locked-read-only'] else 'full' }}"

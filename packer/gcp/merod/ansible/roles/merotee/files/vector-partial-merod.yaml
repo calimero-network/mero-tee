@@ -1,0 +1,16 @@
+# Partial Vector config for locked-down image (R7). configure_vector.sh appends the sink.
+sources:
+  app_journal:
+    type: journald
+    include_units: ["merod.service", "mero-auth.service"]
+    data_dir: "/etc/vector/data"
+
+transforms:
+  add_labels:
+    type: remap
+    inputs: [app_journal]
+    source: |
+      .unit = ._SYSTEMD_UNIT
+      .hostname = .host
+      .instance_name = "merotee"
+      .instance_type = "gcp"

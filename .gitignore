@@ -1,0 +1,41 @@
+# Build artifacts
+/target/
+*.rs.bk
+
+# Packer
+*.pkr.hcl.json
+packer_cache/
+output-*/
+
+# Ansible
+*.retry
+.ansible/
+
+# Secrets and credentials - NEVER commit
+*.pem
+*.key
+*-key.json
+*.env
+.env
+.env.*
+!.env.example
+gcp-key.json
+credentials.json
+secrets/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Terraform (if ever added)
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Logs
+*.log
+logs/

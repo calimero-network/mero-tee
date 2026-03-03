@@ -1,0 +1,130 @@
+#!/bin/bash
+# Calimero locked-down image init (R6). Reads only whitelisted GCP instance
+# metadata keys; downloads merod/meroctl/mero-auth from GitHub only.
+set -euo pipefail
+
+LOG="/var/log/calimero-init.log"
+BIN_DIR="/usr/local/bin"
+CALIMERO_HOME="/mnt/data/calimero"
+CALIMERO_NODE="default"
+IMAGE_PROFILE="{{ lockdown_profile }}"
+MEROD_MODE="{{ merod_mode }}"
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+METADATA_HEADER="Metadata-Flavor: Google"
+
+# Whitelisted keys only (no arbitrary script execution)
+get_meta() {
+  local key="$1"
+  curl -sf -H "$METADATA_HEADER" "${METADATA_URL}/${key}" 2>/dev/null || true
+}
+
+log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
+
+log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
+
+# --- R7: observability off by default; enable only if endpoint set ---
+systemctl stop vmagent vector 2>/dev/null || true
+systemctl disable vmagent vector 2>/dev/null || true
+
+# Required
+MEROD_VERSION=$(get_meta "merod-version")
+if [[ -z "${MEROD_VERSION:-}" ]]; then
+  log "ERROR: merod-version metadata is required"
+  exit 1
+fi
+
+# Optional with defaults
+SERVER_PORT=$(get_meta "server-port")
+SERVER_PORT=${SERVER_PORT:-2428}
+SWARM_PORT=$(get_meta "swarm-port")
+SWARM_PORT=${SWARM_PORT:-2528}
+METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
+METRICS_SECRET=$(get_meta "metrics-secret-name")
+LOGS_ENDPOINT=$(get_meta "logs-endpoint")
+LOGS_SECRET=$(get_meta "logs-secret-name")
+
+# CPU platform for GitHub release tarballs (e.g. x86_64)
+CPU_PLATFORM=$(uname -m)
+BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VERSION}"
+
+log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
+
+# Download only from trusted GitHub releases
+download() {
+  local name="$1"
+  local tar="${name}_${CPU_PLATFORM}-unknown-linux-gnu.tar.gz"
+  log "Downloading $name from $BASE_URL ..."
+  wget -q -O "/tmp/${name}.tar.gz" "${BASE_URL}/${tar}"
+  tar -xzf "/tmp/${name}.tar.gz" -C "$BIN_DIR"
+  chmod 0755 "$BIN_DIR/$name"
+  rm -f "/tmp/${name}.tar.gz"
+}
+
+init_node() {
+  if [[ "$MEROD_MODE" == "read-only" ]]; then
+    "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
+      --mode read-only \
+      --advertise-address \
+      --server-port "$SERVER_PORT" \
+      --swarm-port "$SWARM_PORT"
+  else
+    "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
+      --advertise-address \
+      --server-port "$SERVER_PORT" \
+      --swarm-port "$SWARM_PORT"
+  fi
+}
+
+download merod
+download meroctl
+download mero-auth
+
+mkdir -p "$CALIMERO_HOME"
+if [[ ! -d "$CALIMERO_HOME/$CALIMERO_NODE" ]]; then
+  log "Initializing Calimero node..."
+  init_node
+else
+  log "Calimero node already initialized at $CALIMERO_HOME/$CALIMERO_NODE; skipping init"
+fi
+
+if [[ "$MEROD_MODE" == "read-only" ]]; then
+  log "Applying read-only merod config (jsonrpc/sse/websocket disabled)..."
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    'server.jsonrpc.enabled=false' \
+    'server.sse.enabled=false' \
+    'server.websocket.enabled=false' \
+    || log "WARN: failed to apply read-only merod config"
+fi
+
+log "Starting services..."
+systemctl daemon-reload
+systemctl enable merod mero-auth traefik
+# Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
+systemctl start --no-block merod mero-auth traefik
+log "Queued non-blocking start for merod, mero-auth, and traefik"
+
+# R7: start vmagent only if metrics-endpoint set
+if [[ -n "${METRICS_ENDPOINT:-}" ]]; then
+  AUTH="false"
+  SECRET_NAME=""
+  [[ -n "${METRICS_SECRET:-}" ]] && AUTH="true" && SECRET_NAME="$METRICS_SECRET"
+  if [[ -f /etc/vmagent/configure_vmagent.sh ]] && [[ -f /etc/vmagent/scrape_config.yml ]]; then
+    /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$METRICS_ENDPOINT" "$AUTH" gcp "$SECRET_NAME" || log "WARN: vmagent configure failed"
+  else
+    log "WARN: vmagent config or script missing, skipping"
+  fi
+fi
+
+# R7: start vector only if logs-endpoint set
+if [[ -n "${LOGS_ENDPOINT:-}" ]]; then
+  AUTH="false"
+  SECRET_NAME=""
+  [[ -n "${LOGS_SECRET:-}" ]] && AUTH="true" && SECRET_NAME="$LOGS_SECRET"
+  if [[ -f /etc/vector/configure_vector.sh ]] && [[ -f /etc/vector/vector_partial.yaml ]]; then
+    /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$LOGS_ENDPOINT" "$AUTH" gcp "$SECRET_NAME" || log "WARN: vector configure failed"
+  else
+    log "WARN: vector config or partial missing, skipping"
+  fi
+fi
+
+log "Calimero init completed"

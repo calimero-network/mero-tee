@@ -1,0 +1,55 @@
+---
+# Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
+# Only locked-read-only runs merod-lockdown so each profile has different content → different MRTD.
+- hosts: all
+  become: true
+  pre_tasks:
+    - name: Refresh apt metadata cache only (avoid non-deterministic full upgrades)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+  roles:
+    - role: ../../../ansible/roles/mero-traefik
+      vars:
+        cpu_architecture: "{{ cpu_architecture }}"
+        traefik_version: "{{ traefik_version }}"
+
+    - role: ansible/roles/merotee
+      vars:
+        image_profile: "{{ lockdown_profile | default('locked-read-only') }}"
+
+    - role: ../../../ansible/roles/node-exporter
+      vars:
+        version: "{{ node_exporter_version }}"
+        cpu_architecture: "{{ cpu_architecture }}"
+
+    - role: ../../../ansible/roles/vmagent
+      vars:
+        vmagent_version: "{{ vmagent_version }}"
+        cpu_architecture: "{{ cpu_architecture }}"
+
+    - role: ../../../ansible/roles/vector
+      vars:
+        version: "{{ vector_version }}"
+        cpu_architecture: "{{ cpu_architecture }}"
+
+    - role: ../../../ansible/roles/cleanup
+
+    # Lockdown (no SSH, no getty, etc.) only for production profile so MRTD differs per profile
+    - role: ../../../ansible/roles/merod-lockdown
+      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
+
+    - role: ansible/roles/merotee-conformance
+      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
+  post_tasks:
+    # Ensure each profile has distinct content so MRTD differs (merotee role has created /etc/calimero)
+    - name: Record image profile for attestation
+      copy:
+        content: "{{ lockdown_profile | default('locked-read-only') }}\n"
+        dest: /etc/calimero/image-profile
+        mode: "0644"
+    - name: Remove ubuntu user after conformance checks (R4)
+      include_role:
+        name: ../../../ansible/roles/merod-lockdown
+        tasks_from: remove_ubuntu
+      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'

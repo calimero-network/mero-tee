@@ -1,0 +1,15 @@
+---
+- name: Install awscli
+  community.general.snap:
+    name: aws-cli
+    classic: yes
+
+- name: Install jq
+  apt:
+    name: jq
+    state: present
+
+- name: Install curl
+  apt:
+    name: curl
+    state: present

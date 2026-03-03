@@ -1,0 +1,65 @@
+---
+- name: Create base directory
+  file:
+    path: /etc/vector
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create data directory
+  file:
+    path: /etc/vector/data
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy setup script
+  copy:
+    src: setup_vector_config.sh
+    dest: /etc/vector/setup_vector_config.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy configure_vector.sh script
+  copy:
+    src: configure_vector.sh
+    dest: /etc/vector/configure_vector.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy fetch_secret.sh script
+  copy:
+    src: fetch_secret.sh
+    dest: /etc/vector/fetch_secret.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Vector
+  shell: |
+    export VECTOR_VERSION="{{ version }}"
+    curl --proto '=https' --tlsv1.2 -sSfL https://sh.vector.dev | bash -s -- -y
+
+- name: Create symbolic link for binary
+  file:
+    src: /root/.vector/bin/vector
+    dest: /usr/local/bin/vector
+    state: link
+
+- name: Create systemd service file
+  copy:
+    content: |
+      [Unit]
+      Description=vector
+
+      [Service]
+      ExecStart=/usr/local/bin/vector --config /etc/vector/vector.yaml
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/vector.service

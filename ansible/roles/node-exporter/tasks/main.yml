@@ -1,0 +1,38 @@
+---
+- name: Create node exporter directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/node_exporter
+    - /var/lib/node_exporter
+
+- name: Download node exporter binary from GitHub releases
+  unarchive:
+    src: https://github.com/prometheus/node_exporter/releases/download/v{{ version }}/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+  register: node_exporter_download
+  retries: 5
+  delay: 10
+  until: node_exporter_download is succeeded
+
+- name: Create systemd service for node exporter
+  copy:
+    content: |
+      [Unit]
+      Description=Prometheus Node Exporter
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/node_exporter
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/node_exporter.service

@@ -1,0 +1,62 @@
+---
+- name: Install apache2-utils for htpasswd
+  package:
+    name: apache2-utils
+    state: present
+
+- name: Download Traefik binary from GitHub releases
+  unarchive:
+    src: https://github.com/traefik/traefik/releases/download/v{{ traefik_version }}/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+  register: traefik_download
+  retries: 5
+  delay: 10
+  until: traefik_download is succeeded
+
+- name: Create traefik base directory
+  file:
+    path: /etc/traefik
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy traefik configuration file
+  copy:
+    src: traefik-config.yml
+    dest: /etc/traefik/config.yml
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy traefik routing file
+  copy:
+    src: traefik-routing.yml
+    dest: /etc/traefik/routing.yml
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy traefik metrics user generator script
+  copy:
+    src: generate-metrics-user.sh
+    dest: /etc/traefik/generate-metrics-user.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create traefik systemd service file
+  copy:
+    content: |
+      [Unit]
+      Description=traefik
+
+      [Service]
+      ExecStart=/usr/local/bin/traefik --configFile=/etc/traefik/config.yml
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/traefik.service

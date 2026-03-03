@@ -1,0 +1,12 @@
+---
+# Final R4 hardening step: remove packer SSH user only after all build checks.
+- name: Remove ubuntu user (Packer build user)
+  shell: |
+    set -euo pipefail
+    userdel --force --remove ubuntu || true
+    if getent passwd ubuntu >/dev/null; then
+      echo "ubuntu user must be removed in locked-read-only profile"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash

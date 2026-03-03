@@ -1,0 +1,66 @@
+# Architecture & Verification
+
+## Overview
+
+mero-tee provides:
+
+1. **mero-kms-phala** – KMS for Phala CVM; validates attestation, releases storage keys
+2. **GCP locked image** – Packer-built merod node images with TDX attestation; MRTDs published for verification
+
+## Trust Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  mero-tee builds & publishes                                      │
+│  • mero-kms-phala binaries                                        │
+│  • GCP image MRTDs (published-mrtds.json)                         │
+│  • Attestation artifacts, provenance                             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MDMA / Operators                                                 │
+│  • Fetch published-mrtds.json from mero-tee releases             │
+│  • Post-boot: compare node MRTD to published                     │
+│  • Match → node runs expected image                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Users                                                            │
+│  • Trust: MDMA + published MRTDs                                 │
+│  • Optional: verify MRTD + attestation themselves                │
+│  • Full verification: reproducible build → same MRTD              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Verification
+
+### What Signing Proves
+
+- **GPG/Sigstore**: File came from mero-tee maintainers; not tampered in transit
+- **Does NOT prove**: Content is honest; build matches source
+
+### What Reproducible Build Proves
+
+- Anyone rebuilds from source → same MRTD
+- Match with published MRTD → we built from that source
+- Mismatch → we built something different
+
+### Malicious Resistance
+
+| Attack | Mitigation |
+|--------|------------|
+| Third-party forges MRTDs | Signing |
+| We publish malicious MRTDs | Reproducible build (users can verify) |
+| Malicious source | Open source audit; no crypto fix |
+| Malicious binary in image | Reproducible merod build + provenance |
+
+## GCP vs Phala
+
+| | GCP | Phala |
+|---|-----|-------|
+| **TEE** | Intel TDX | dstack (TDX) |
+| **Image** | Packer (this repo) | Docker Compose |
+| **KMS** | None (no dstack) | mero-kms-phala (this repo) |
+| **MRTDs** | Published here | Per-deployment (RTMR3) |

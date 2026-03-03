@@ -1,0 +1,95 @@
+http:
+  routers:
+    node-api-health:
+      rule: "Path(`/admin-api/health`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 100
+
+    node-api-tee:
+      rule: "PathPrefix(`/admin-api/tee`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 99
+
+    node-api:
+      rule: "PathPrefix(`/jsonrpc`) || PathPrefix(`/admin-api/`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+        - auth-node
+      priority: 10
+
+    node-ws:
+      rule: "PathPrefix(`/ws`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+        - auth-node
+
+    node-dashboard:
+      rule: "PathPrefix(`/admin-dashboard`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+
+    auth-public:
+      rule: "PathPrefix(`/auth/`) || PathPrefix(`/admin/`)"
+      entryPoints:
+        - web
+      service: auth-service
+      middlewares:
+        - cors
+
+    metrics:
+      rule: "Path(`/metrics`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - metrics-auth
+
+  services:
+    node-core:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:2428"
+
+    auth-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:3001"
+
+  middlewares:
+    cors:
+      headers:
+        accessControlAllowMethods: GET,OPTIONS,PUT,POST,DELETE
+        accessControlAllowHeaders: "*"
+        accessControlAllowOriginList: "*"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+        accessControlExposeHeaders: X-Auth-Error
+
+    auth-node:
+      forwardAuth:
+        address: "http://127.0.0.1:3001/auth/validate"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-User
+          - X-Auth-Permissions
+
+    metrics-auth:
+      basicAuth:
+        usersFile: "/etc/traefik/metrics-users"

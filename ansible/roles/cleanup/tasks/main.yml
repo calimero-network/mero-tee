@@ -1,0 +1,18 @@
+---
+- name: Truncate /etc/machine-id
+  copy:
+    content: ""
+    dest: /etc/machine-id
+
+- name: Remove cloud-init logs
+  file:
+    path: /var/log/cloud-init*.log
+    state: absent
+
+- name: Remove cloud-init directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /var/lib/cloud/instances
+    - /var/lib/cloud/instance

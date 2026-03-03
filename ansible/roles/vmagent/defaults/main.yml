@@ -1,0 +1,6 @@
+---
+# vmagent version
+vmagent_version: "1.132.0"
+
+# CPU architecture (amd64, arm64)
+cpu_architecture: "amd64"

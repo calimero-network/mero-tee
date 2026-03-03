@@ -1,0 +1,121 @@
+---
+# Conformance checks for locked-read-only profile (R1-R7).
+
+- name: Gather package facts
+  package_facts:
+    manager: auto
+
+- name: Assert SSH packages are absent (R1)
+  assert:
+    that:
+      - "'openssh-server' not in ansible_facts.packages"
+      - "'openssh-client' not in ansible_facts.packages"
+    fail_msg: "openssh packages must be absent in locked-read-only profile"
+
+- name: Check /etc/ssh does not exist (R1)
+  stat:
+    path: /etc/ssh
+  register: etc_ssh
+
+- name: Assert /etc/ssh is removed (R1)
+  assert:
+    that:
+      - not etc_ssh.stat.exists
+    fail_msg: "/etc/ssh should not exist in locked-read-only profile"
+
+- name: Verify masked lockout services (R2/R3/R5)
+  command: systemctl is-enabled {{ item }}
+  register: masked_units
+  changed_when: false
+  failed_when: false
+  loop:
+    - getty@tty1.service
+    - getty@tty2.service
+    - getty@tty3.service
+    - getty@tty4.service
+    - getty@tty5.service
+    - getty@tty6.service
+    - serial-getty@ttyS0.service
+    - console-getty.service
+    - getty.target
+    - emergency.service
+    - rescue.service
+    - debug-shell.service
+    - google-startup-scripts.service
+    - cloud-init.service
+    - cloud-init-local.service
+    - cloud-config.service
+    - cloud-final.service
+
+- name: Assert lockout services are masked (R2/R3/R5)
+  assert:
+    that:
+      - (item.stdout | trim) == "masked"
+    fail_msg: "Expected {{ item.item }} to be masked, got '{{ item.stdout }}'"
+  loop: "{{ masked_units.results }}"
+
+- name: Check root account status (R4)
+  command: passwd -S root
+  register: root_status
+  changed_when: false
+
+- name: Assert root account is locked (R4)
+  assert:
+    that:
+      - "' L ' in root_status.stdout"
+    fail_msg: "Root account must be locked in locked-read-only profile"
+
+- name: Check /etc/securetty state (R4)
+  stat:
+    path: /etc/securetty
+  register: securetty
+
+- name: Assert /etc/securetty is empty (R4)
+  assert:
+    that:
+      - securetty.stat.exists
+      - securetty.stat.size == 0
+    fail_msg: "/etc/securetty must be present and empty in locked-read-only profile"
+
+- name: Check calimero-init enabled at boot (R6)
+  command: systemctl is-enabled calimero-init.service
+  register: calimero_init_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Assert calimero-init is enabled (R6)
+  assert:
+    that:
+      - (calimero_init_enabled.stdout | trim) == "enabled"
+    fail_msg: "calimero-init.service must be enabled"
+
+- name: Read baked calimero init script (R6/R7)
+  slurp:
+    path: /usr/local/lib/calimero/init.sh
+  register: baked_init
+
+- name: Assert baked init has read-only and observability gating (R6/R7)
+  assert:
+    that:
+      - "'MEROD_MODE=\"read-only\"' in (baked_init.content | b64decode)"
+      - "'--mode read-only' in (baked_init.content | b64decode)"
+      - "'if [[ -n \"${METRICS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
+      - "'if [[ -n \"${LOGS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
+      - "'systemctl disable vmagent vector' in (baked_init.content | b64decode)"
+    fail_msg: "Baked init script does not satisfy expected R6/R7 invariants"
+
+- name: Check that observability services are not enabled by default (R7)
+  command: systemctl is-enabled {{ item }}
+  register: observability_enabled
+  changed_when: false
+  failed_when: false
+  loop:
+    - vmagent.service
+    - vector.service
+
+- name: Assert observability services are not enabled by default (R7)
+  assert:
+    that:
+      - (item.stdout | trim) != "enabled"
+    fail_msg: "Service {{ item.item }} should not be enabled by default"
+  loop: "{{ observability_enabled.results }}"

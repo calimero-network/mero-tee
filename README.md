@@ -1,0 +1,47 @@
+# mero-tee
+
+TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP locked image build** (Packer-based merod node images with TDX attestation).
+
+## Contents
+
+| Component | Description |
+|-----------|-------------|
+| **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVM |
+| **packer/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
+| **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
+
+## Quick Links
+
+- [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
+- [Architecture & Verification](docs/ARCHITECTURE.md)
+- [Security (no secrets)](SECURITY.md)
+- [mero-kms-phala README](crates/mero-kms-phala/README.md)
+
+## Building mero-kms-phala
+
+```bash
+cargo build --release -p mero-kms-phala
+```
+
+Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` are satisfied via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
+
+## Building GCP Images
+
+See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, Ansible, and GCP credentials.
+
+## Releases
+
+- **mero-kms-phala**: Binaries published per platform
+- **locked-image-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance
+
+MDMA and operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image.
+
+## Related Repositories
+
+- [calimero-network/core](https://github.com/calimero-network/core) – merod, node runtime
+- [calimero-network/infrastructure](https://github.com/calimero-network/infrastructure) – Terraform, K8s (image build moved here)
+- [calimero-network/mdma](https://github.com/calimero-network/mdma) – Node provisioning (uses published MRTDs)
+
+## License
+
+MIT OR Apache-2.0
