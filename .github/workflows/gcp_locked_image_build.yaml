@@ -50,6 +50,8 @@ jobs:
           bash -n packer/gcp/merod/init.sh
           bash -n packer/gcp/merod/build-and-release.sh
           bash -n scripts/verify_locked_image_release_assets.sh
+          bash -n scripts/verify_mero_kms_release_assets.sh
+          bash -n scripts/generate_merod_kms_attestation_config.sh
           python3 -m py_compile scripts/verify_tdx_quote_ita.py
 
       - name: Validate version manifest shape

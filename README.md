@@ -16,6 +16,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Deploy on Phala](docs/deploy-phala.md) – Phala Cloud CVM
 - [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
 - [Direct Phala KMS design](docs/phala-direct-kms-design.md)
+- [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
@@ -40,7 +41,8 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala release trust bundle**:
   - `mero-kms-phala-checksums.txt` (SHA-256 for binary archives),
   - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata),
-  - Sigstore keyless signatures/certificates for binary archives, checksums, and manifest (`*.sig`, `*.pem`)
+  - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
+  - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
 
@@ -50,6 +52,12 @@ Verify KMS release assets:
 
 ```bash
 scripts/verify_mero_kms_release_assets.sh X.Y.Z
+```
+
+Generate a pinned `core` TEE config snippet from signed release policy:
+
+```bash
+scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/
 ```
 
 ## Related Repositories

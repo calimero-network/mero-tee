@@ -19,27 +19,65 @@ tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
 trap cleanup EXIT
 
-echo "Inspecting mero-kms-phala release ${tag}..."
-release_json="$(gh release view "${tag}" --json assets,tagName,targetCommitish 2>/dev/null || true)"
-if [[ -z "${release_json}" ]]; then
-  echo "Release '${tag}' not found"
-  exit 1
-fi
+download_asset() {
+  local release_tag="$1"
+  local pattern="$2"
+  local output_dir="$3"
+  for attempt in $(seq 1 5); do
+    if gh release download "${release_tag}" --pattern "${pattern}" --dir "${output_dir}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ "${attempt}" -eq 5 ]]; then
+      return 1
+    fi
+    sleep 3
+  done
+}
 
+echo "Inspecting mero-kms-phala release ${tag}..."
 base_signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
+  "mero-kms-phala-attestation-policy.json"
 )
+
+release_json=""
+for attempt in $(seq 1 10); do
+  release_json="$(gh release view "${tag}" --json assets,tagName,targetCommitish 2>/dev/null || true)"
+  if [[ -n "${release_json}" ]]; then
+    missing_asset=""
+    for asset in "${base_signed_assets[@]}"; do
+      for suffix in "" ".sig" ".pem"; do
+        signed_asset="${asset}${suffix}"
+        if ! jq -e --arg asset "${signed_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
+          missing_asset="${signed_asset}"
+          break 2
+        fi
+      done
+    done
+    if [[ -z "${missing_asset}" ]]; then
+      break
+    fi
+  fi
+
+  if [[ "${attempt}" -eq 10 ]]; then
+    if [[ -z "${release_json}" ]]; then
+      echo "Release '${tag}' not found"
+    else
+      echo "Release asset set did not stabilize in time. Last missing asset: ${missing_asset:-unknown}"
+    fi
+    exit 1
+  fi
+  sleep 6
+done
 
 for asset in "${base_signed_assets[@]}"; do
   for suffix in "" ".sig" ".pem"; do
     signed_asset="${asset}${suffix}"
-    if ! jq -e --arg asset "${signed_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
-      echo "Release is missing required asset: ${signed_asset}"
+    if ! download_asset "${tag}" "${signed_asset}" "${tmp_dir}"; then
+      echo "Failed to download required asset ${signed_asset}"
       exit 1
     fi
-
-    gh release download "${tag}" --pattern "${signed_asset}" --dir "${tmp_dir}" >/dev/null
   done
 done
 
@@ -72,7 +110,10 @@ for archive in "${archives[@]}"; do
       echo "Release is missing required archive asset: ${archive_asset}"
       exit 1
     fi
-    gh release download "${tag}" --pattern "${archive_asset}" --dir "${tmp_dir}" >/dev/null
+    if ! download_asset "${tag}" "${archive_asset}" "${tmp_dir}"; then
+      echo "Failed to download required archive asset ${archive_asset}"
+      exit 1
+    fi
   done
 done
 
@@ -87,8 +128,34 @@ jq -e --arg tag "${tag}" '
   (.binaries | type == "array" and length > 0) and
   (.container.image | type == "string" and length > 0) and
   (.container.digest | type == "string" and length > 0) and
-  (.verification.kms_attest_endpoint == "/attest")
+  (.verification.kms_attest_endpoint == "/attest") and
+  (.verification.attestation_policy_asset == "mero-kms-phala-attestation-policy.json")
 ' "${tmp_dir}/mero-kms-phala-release-manifest.json" >/dev/null
+
+jq -e --arg tag "${tag}" '
+  .schema_version == 1 and
+  .tag == $tag and
+  (.commit_sha | type == "string" and length > 0) and
+  (.kms.provider == "mero-kms-phala") and
+  (.kms.attest_endpoint == "/attest") and
+  (.kms.default_binding_hex | type == "string" and test("^[A-Fa-f0-9]{64}$")) and
+  (.kms.default_binding_b64 | type == "string" and length > 0) and
+  (.policy.allowed_tcb_statuses | type == "array" and length > 0) and
+  (.policy.allowed_mrtd | type == "array") and
+  (.policy.allowed_rtmr0 | type == "array") and
+  (.policy.allowed_rtmr1 | type == "array") and
+  (.policy.allowed_rtmr2 | type == "array") and
+  (.policy.allowed_rtmr3 | type == "array")
+' "${tmp_dir}/mero-kms-phala-attestation-policy.json" >/dev/null
+
+manifest_commit="$(jq -r '.commit_sha' "${tmp_dir}/mero-kms-phala-release-manifest.json")"
+policy_commit="$(jq -r '.commit_sha' "${tmp_dir}/mero-kms-phala-attestation-policy.json")"
+if [[ "${manifest_commit}" != "${policy_commit}" ]]; then
+  echo "Manifest and policy commit mismatch"
+  echo "  manifest: ${manifest_commit}"
+  echo "  policy:   ${policy_commit}"
+  exit 1
+fi
 
 while read -r checksum archive; do
   manifest_checksum="$(
@@ -121,6 +188,7 @@ cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.github
 signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
+  "mero-kms-phala-attestation-policy.json"
 )
 for archive in "${archives[@]}"; do
   signed_assets+=("${archive}")
@@ -135,4 +203,4 @@ for asset in "${signed_assets[@]}"; do
     "${tmp_dir}/${asset}" >/dev/null
 done
 
-echo "Release ${tag} checksums, manifest, archive hashes, and Sigstore signatures verified."
+echo "Release ${tag} checksums, manifest, attestation policy, archive hashes, and Sigstore signatures verified."

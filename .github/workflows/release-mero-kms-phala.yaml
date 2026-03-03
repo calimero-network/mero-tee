@@ -45,6 +45,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Validate release helper scripts
+        run: |
+          bash -n scripts/verify_locked_image_release_assets.sh
+          bash -n scripts/verify_mero_kms_release_assets.sh
+          bash -n scripts/generate_merod_kms_attestation_config.sh
+
       - name: Get version info
         id: version_info
         env:
@@ -243,6 +249,7 @@ jobs:
       cancel-in-progress: true
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -255,7 +262,14 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Generate release checksums and manifest
+      - name: Generate release checksums, manifest, and attestation policy
+        env:
+          MERO_KMS_ALLOWED_TCB_STATUSES_JSON: ${{ vars.MERO_KMS_ALLOWED_TCB_STATUSES_JSON }}
+          MERO_KMS_ALLOWED_MRTD_JSON: ${{ vars.MERO_KMS_ALLOWED_MRTD_JSON }}
+          MERO_KMS_ALLOWED_RTMR0_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR0_JSON }}
+          MERO_KMS_ALLOWED_RTMR1_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR1_JSON }}
+          MERO_KMS_ALLOWED_RTMR2_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR2_JSON }}
+          MERO_KMS_ALLOWED_RTMR3_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR3_JSON }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -280,6 +294,36 @@ jobs:
               jq -nc --arg file "$file" --arg checksum "$checksum" '{file: $file, sha256: $checksum}'
             done < release-assets/mero-kms-phala-checksums.txt | jq -s '.'
           )"
+
+          allowed_tcb_statuses_json="${MERO_KMS_ALLOWED_TCB_STATUSES_JSON:-[\"UpToDate\"]}"
+          allowed_mrtd_json="${MERO_KMS_ALLOWED_MRTD_JSON:-[]}"
+          allowed_rtmr0_json="${MERO_KMS_ALLOWED_RTMR0_JSON:-[]}"
+          allowed_rtmr1_json="${MERO_KMS_ALLOWED_RTMR1_JSON:-[]}"
+          allowed_rtmr2_json="${MERO_KMS_ALLOWED_RTMR2_JSON:-[]}"
+          allowed_rtmr3_json="${MERO_KMS_ALLOWED_RTMR3_JSON:-[]}"
+
+          for json_var in \
+            allowed_tcb_statuses_json \
+            allowed_mrtd_json \
+            allowed_rtmr0_json \
+            allowed_rtmr1_json \
+            allowed_rtmr2_json \
+            allowed_rtmr3_json; do
+            if ! jq -e 'type == "array"' <<< "${!json_var}" >/dev/null 2>&1; then
+              echo "::error::${json_var} must be a JSON array. Got: ${!json_var}"
+              exit 1
+            fi
+          done
+
+          read -r default_binding_hex default_binding_b64 < <(
+            python3 - <<'PY'
+import base64
+import hashlib
+
+digest = hashlib.sha256(b"mero-kms-phala-attest-v1").digest()
+print(digest.hex(), base64.b64encode(digest).decode())
+PY
+          )
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
@@ -307,9 +351,59 @@ jobs:
                 report_data_layout: {
                   bytes_0_31: "nonce",
                   bytes_32_63: "binding_or_default_domain_separator"
-                }
+                },
+                attestation_policy_asset: "mero-kms-phala-attestation-policy.json"
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
+
+          jq -n \
+            --arg tag "${{ needs.prepare.outputs.version }}" \
+            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg repository "${{ github.repository }}" \
+            --arg workflow "${{ github.workflow }}" \
+            --arg ref "${{ github.ref }}" \
+            --arg default_binding_hex "${default_binding_hex}" \
+            --arg default_binding_b64 "${default_binding_b64}" \
+            --argjson allowed_tcb_statuses "${allowed_tcb_statuses_json}" \
+            --argjson allowed_mrtd "${allowed_mrtd_json}" \
+            --argjson allowed_rtmr0 "${allowed_rtmr0_json}" \
+            --argjson allowed_rtmr1 "${allowed_rtmr1_json}" \
+            --argjson allowed_rtmr2 "${allowed_rtmr2_json}" \
+            --argjson allowed_rtmr3 "${allowed_rtmr3_json}" \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              source: {
+                repository: $repository,
+                workflow: $workflow,
+                ref: $ref
+              },
+              kms: {
+                provider: "mero-kms-phala",
+                attest_endpoint: "/attest",
+                report_data_layout: {
+                  bytes_0_31: "nonce",
+                  bytes_32_63: "binding_or_default_domain_separator"
+                },
+                default_binding_hex: $default_binding_hex,
+                default_binding_b64: $default_binding_b64
+              },
+              policy: {
+                allowed_tcb_statuses: $allowed_tcb_statuses,
+                allowed_mrtd: $allowed_mrtd,
+                allowed_rtmr0: $allowed_rtmr0,
+                allowed_rtmr1: $allowed_rtmr1,
+                allowed_rtmr2: $allowed_rtmr2,
+                allowed_rtmr3: $allowed_rtmr3
+              },
+              merod_config_path: "tee.kms.phala.attestation"
+            }' > release-assets/mero-kms-phala-attestation-policy.json
 
       - name: Install cosign for keyless signing
         uses: sigstore/cosign-installer@v3
@@ -324,6 +418,7 @@ jobs:
             artifacts/*.tar.gz
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
+            release-assets/mero-kms-phala-attestation-policy.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -346,6 +441,7 @@ jobs:
             artifacts/*.tar.gz
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
+            release-assets/mero-kms-phala-attestation-policy.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -374,3 +470,12 @@ jobs:
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-release-manifest.json.sig
             release-assets/mero-kms-phala-release-manifest.json.pem
+            release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-attestation-policy.json.sig
+            release-assets/mero-kms-phala-attestation-policy.json.pem
+
+      - name: Smoke test published mero-kms release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/verify_mero_kms_release_assets.sh "${{ needs.prepare.outputs.version }}"
