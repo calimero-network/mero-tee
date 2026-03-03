@@ -656,6 +656,7 @@ fn build_attestation_report_data(nonce: &[u8; 32], binding: &[u8; 32]) -> [u8; 6
 mod tests {
     use super::*;
     use crate::AttestationPolicy;
+    use libp2p_identity::Keypair;
 
     #[test]
     fn test_hash_peer_id() {
@@ -811,5 +812,62 @@ mod tests {
         let report_data = build_attestation_report_data(&nonce, &binding);
         assert_eq!(&report_data[..32], &nonce);
         assert_eq!(&report_data[32..], &binding);
+    }
+
+    #[test]
+    fn test_verify_peer_signature_accepts_matching_peer_identity() {
+        let keypair = Keypair::generate_ed25519();
+        let peer_id = keypair.public().to_peer_id().to_base58();
+        let peer_public_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(keypair.public().encode_protobuf());
+        let challenge_id = "challenge-1";
+        let challenge_nonce = [0x7b; 32];
+        let quote_bytes = b"quote-bytes-for-signature";
+        let payload =
+            build_signature_payload(challenge_id, &challenge_nonce, quote_bytes, &peer_id).unwrap();
+        let signature = keypair.sign(&payload).unwrap();
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature);
+
+        let result = verify_peer_signature(
+            &peer_id,
+            &peer_public_key_b64,
+            &signature_b64,
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_peer_signature_rejects_spoofed_peer_id() {
+        let attacker = Keypair::generate_ed25519();
+        let victim = Keypair::generate_ed25519();
+        let claimed_peer_id = victim.public().to_peer_id().to_base58();
+        let attacker_public_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(attacker.public().encode_protobuf());
+
+        let challenge_id = "challenge-2";
+        let challenge_nonce = [0x42; 32];
+        let quote_bytes = b"quote-bytes-for-spoof";
+        let payload = build_signature_payload(
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+            &claimed_peer_id,
+        )
+        .unwrap();
+        let attacker_signature_b64 =
+            base64::engine::general_purpose::STANDARD.encode(attacker.sign(&payload).unwrap());
+
+        let result = verify_peer_signature(
+            &claimed_peer_id,
+            &attacker_public_key_b64,
+            &attacker_signature_b64,
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+        );
+        assert!(matches!(result, Err(ServiceError::PeerIdentityMismatch)));
     }
 }
