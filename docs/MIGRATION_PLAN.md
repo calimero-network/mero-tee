@@ -28,7 +28,7 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 
 ## Phase 4: Release and Signing
 
-- Single release workflow: mero-kms-phala binaries plus locked-image artifacts
+- Single release per version (X.Y.Z): mero-kms-phala binaries + MRTDs + attestation artifacts
 - Publish mrtd-*.json, published-mrtds.json, attestation-artifacts, provenance
 - Add GPG or Sigstore signing for published-mrtds.json
 - Document verification steps for operators

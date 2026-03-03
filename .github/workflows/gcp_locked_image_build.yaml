@@ -964,7 +964,7 @@ jobs:
           fi
 
           jq -n \
-            --arg tag "locked-image-v${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${{ needs.preflight.outputs.image_version }}" \
             --slurpfile debug artifacts/mrtd-debug.json \
             --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
             --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
@@ -979,7 +979,7 @@ jobs:
             }' > artifacts/published-mrtds.json
 
           jq -n \
-            --arg tag "locked-image-v${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${{ needs.preflight.outputs.image_version }}" \
             --arg commit "${GITHUB_SHA}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -1006,7 +1006,7 @@ jobs:
           {
             echo "## Published MRTDs"
             echo ""
-            echo "- Tag: locked-image-v${{ needs.preflight.outputs.image_version }}"
+            echo "- Tag: ${{ needs.preflight.outputs.image_version }}"
             echo "- Debug MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug.json)"
             echo "- Debug read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
             echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
@@ -1019,7 +1019,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          tag_name: locked-image-v${{ needs.preflight.outputs.image_version }}
+          tag_name: ${{ needs.preflight.outputs.image_version }}
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
           files: |
@@ -1034,4 +1034,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/verify_locked_image_release_assets.sh "locked-image-v${{ needs.preflight.outputs.image_version }}"
+          scripts/verify_locked_image_release_assets.sh "${{ needs.preflight.outputs.image_version }}"

@@ -34,7 +34,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 ## Releases
 
 - **mero-kms-phala**: Binaries published per platform
-- **locked-image-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance
+- **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance (same tag as mero-kms-phala)
 
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image.
 

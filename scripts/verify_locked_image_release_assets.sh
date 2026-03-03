@@ -3,7 +3,7 @@ set -euo pipefail
 
 tag="${1:-}"
 if [[ -z "${tag}" ]]; then
-  echo "Usage: $0 <locked-image-vX.Y.Z>"
+  echo "Usage: $0 <X.Y.Z>"
   exit 1
 fi
 
