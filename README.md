@@ -14,6 +14,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 - [Deploy on GCP](docs/deploy-gcp.md) – GCP TDX locked images
 - [Deploy on Phala](docs/deploy-phala.md) – Phala Cloud CVM
+- [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
