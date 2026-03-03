@@ -31,6 +31,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 |--------|-------------|
 | `GCP_SERVICE_ACCOUNT_KEY` | JSON key for GCP (if not using WIF) |
 | OR `GCP_WORKLOAD_IDENTITY_PROVIDER` + `GCP_PACKER_SERVICE_ACCOUNT_EMAIL` | For Workload Identity Federation |
+| `ITA_API_KEY` | Intel Trust Authority API key (required for quote verification and MRTD publishing) |
 
 ## Trigger
 

@@ -613,13 +613,14 @@ jobs:
           cp "${artifacts_dir}/tee-attest-response.json" "${artifacts_dir}/tee-attest-response-${profile}.json"
           cp "${artifacts_dir}/attestation-context.json" "${artifacts_dir}/attestation-context-${profile}.json"
 
-      - name: Note optional external verifier credentials
+      - name: Require Intel Trust Authority API key
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         env:
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
         run: |
           if [[ -z "${ITA_API_KEY}" ]]; then
-            echo "ITA_API_KEY not configured; external verification will be skipped."
+            echo "::error::ITA_API_KEY is required for release-grade quote verification. Refusing to publish unverifiable MRTDs."
+            exit 1
           fi
 
       - name: Verify quote externally (Intel Trust Authority)
@@ -631,15 +632,6 @@ jobs:
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           profile="${{ steps.params.outputs.profile }}"
           ita_url="${ITA_APPRAISAL_URL:-https://api.trustauthority.intel.com/appraisal/v2/attest}"
-
-          if [[ -z "${ITA_API_KEY}" ]]; then
-            echo "ITA_API_KEY not set; writing placeholder mrtd so publish step can assemble artifacts."
-            echo '{"mrtd":"","mrtd_source":"skipped_no_ita"}' > "${artifacts_dir}/mrtd.json"
-            cp "${artifacts_dir}/mrtd.json" "${artifacts_dir}/mrtd-${profile}.json"
-            echo "status=skipped" >> "${GITHUB_OUTPUT}"
-            echo "performed=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
 
           policy_flags=()
           if [[ -n "${ITA_POLICY_IDS:-}" ]]; then
@@ -657,7 +649,17 @@ jobs:
             --ita-api-key "${ITA_API_KEY}" \
             "${policy_flags[@]}"
 
-          mrtd="$(jq -r '.mrtd' "${artifacts_dir}/mrtd.json")"
+          mrtd="$(jq -r '.mrtd // empty' "${artifacts_dir}/mrtd.json" | tr '[:upper:]' '[:lower:]')"
+          mrtd="${mrtd#0x}"
+          if [[ ! "${mrtd}" =~ ^[a-f0-9]{96}$ ]]; then
+            echo "::error::Invalid MRTD in ${artifacts_dir}/mrtd.json for profile '${profile}'. Expected 96 hex characters, got '${mrtd}'."
+            exit 1
+          fi
+
+          tmp_mrtd_json="${artifacts_dir}/mrtd.normalized.json"
+          jq --arg mrtd "${mrtd}" '.mrtd = $mrtd' "${artifacts_dir}/mrtd.json" > "${tmp_mrtd_json}"
+          mv "${tmp_mrtd_json}" "${artifacts_dir}/mrtd.json"
+
           cp "${artifacts_dir}/mrtd.json" "${artifacts_dir}/mrtd-${profile}.json"
           echo "mrtd=${mrtd}" >> "${GITHUB_OUTPUT}"
           echo "status=performed" >> "${GITHUB_OUTPUT}"
@@ -711,15 +713,6 @@ jobs:
                 mrtd: $mrtd
               }
             }' > "${artifacts_dir}/profile-provenance-${profile}.json"
-
-      - name: Note skipped external verification
-        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && steps.verify_external.outputs.performed != 'true' }}
-        run: |
-          {
-            echo "## External quote verification"
-            echo ""
-            echo "- Status: skipped (ITA_API_KEY not configured for this run)"
-          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Record ephemeral target details
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
@@ -919,6 +912,7 @@ jobs:
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -932,6 +926,35 @@ jobs:
 
       - name: Assemble published MRTD payload
         run: |
+          validate_mrtd_file() {
+            local file_path="$1"
+            local label="$2"
+            local mrtd
+            mrtd="$(jq -r '.mrtd // empty' "${file_path}" | tr '[:upper:]' '[:lower:]')"
+            mrtd="${mrtd#0x}"
+            if [[ ! "${mrtd}" =~ ^[a-f0-9]{96}$ ]]; then
+              echo "Invalid MRTD for ${label}: expected 96 hex characters, got '${mrtd}'."
+              exit 1
+            fi
+            local tmp_path
+            tmp_path="$(mktemp)"
+            jq --arg mrtd "${mrtd}" '.mrtd = $mrtd' "${file_path}" > "${tmp_path}"
+            mv "${tmp_path}" "${file_path}"
+          }
+
+          validate_provenance_file() {
+            local file_path="$1"
+            local label="$2"
+            jq -e '
+              .external_verification.status == "performed"
+              and (.external_verification.mrtd | type == "string")
+              and (.external_verification.mrtd | test("^[A-Fa-f0-9]{96}$"))
+            ' "${file_path}" >/dev/null || {
+              echo "Invalid external verification block in ${label}: expected status=performed and a 96-char hex MRTD."
+              exit 1
+            }
+          }
+
           if [[ ! -f artifacts/mrtd-debug.json ]]; then
             echo "Missing artifacts/mrtd-debug.json"
             ls -la artifacts || true
@@ -962,6 +985,13 @@ jobs:
             ls -la artifacts || true
             exit 1
           fi
+
+          validate_mrtd_file "artifacts/mrtd-debug.json" "debug"
+          validate_mrtd_file "artifacts/mrtd-debug-read-only.json" "debug-read-only"
+          validate_mrtd_file "artifacts/mrtd-locked-read-only.json" "locked-read-only"
+          validate_provenance_file "artifacts/profile-provenance-debug.json" "profile-provenance-debug.json"
+          validate_provenance_file "artifacts/profile-provenance-debug-read-only.json" "profile-provenance-debug-read-only.json"
+          validate_provenance_file "artifacts/profile-provenance-locked-read-only.json" "profile-provenance-locked-read-only.json"
 
           jq -n \
             --arg tag "${{ needs.preflight.outputs.image_version }}" \
@@ -1012,6 +1042,57 @@ jobs:
             echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Install cosign for keyless signing
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release assets with Sigstore keyless
+        env:
+          COSIGN_YES: "true"
+        run: |
+          assets=(
+            "artifacts/mrtd-debug.json"
+            "artifacts/mrtd-debug-read-only.json"
+            "artifacts/mrtd-locked-read-only.json"
+            "artifacts/published-mrtds.json"
+            "artifacts/release-provenance.json"
+            "artifacts/attestation-artifacts.tar.gz"
+          )
+
+          for asset in "${assets[@]}"; do
+            if [[ ! -f "${asset}" ]]; then
+              echo "Missing asset to sign: ${asset}"
+              exit 1
+            fi
+            cosign sign-blob \
+              --yes \
+              --output-signature "${asset}.sig" \
+              --output-certificate "${asset}.pem" \
+              "${asset}"
+          done
+
+      - name: Verify generated signatures
+        run: |
+          assets=(
+            "artifacts/mrtd-debug.json"
+            "artifacts/mrtd-debug-read-only.json"
+            "artifacts/mrtd-locked-read-only.json"
+            "artifacts/published-mrtds.json"
+            "artifacts/release-provenance.json"
+            "artifacts/attestation-artifacts.tar.gz"
+          )
+
+          cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$"
+          cert_oidc_issuer="https://token.actions.githubusercontent.com"
+
+          for asset in "${assets[@]}"; do
+            cosign verify-blob \
+              --certificate "${asset}.pem" \
+              --signature "${asset}.sig" \
+              --certificate-identity-regexp "${cert_identity_regex}" \
+              --certificate-oidc-issuer "${cert_oidc_issuer}" \
+              "${asset}"
+          done
+
       # If 403: add RELEASE_TOKEN or GHCR_PUSH_TOKEN (PAT with repo scope). If 404 "discussion category mismatch":
       # disable "Create a discussion for each release" in repo Settings → General → Releases.
       - name: Upload MRTD release assets
@@ -1024,11 +1105,23 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/mrtd-debug.json
+            artifacts/mrtd-debug.json.sig
+            artifacts/mrtd-debug.json.pem
             artifacts/mrtd-debug-read-only.json
+            artifacts/mrtd-debug-read-only.json.sig
+            artifacts/mrtd-debug-read-only.json.pem
             artifacts/mrtd-locked-read-only.json
+            artifacts/mrtd-locked-read-only.json.sig
+            artifacts/mrtd-locked-read-only.json.pem
             artifacts/published-mrtds.json
+            artifacts/published-mrtds.json.sig
+            artifacts/published-mrtds.json.pem
             artifacts/release-provenance.json
+            artifacts/release-provenance.json.sig
+            artifacts/release-provenance.json.pem
             artifacts/attestation-artifacts.tar.gz
+            artifacts/attestation-artifacts.tar.gz.sig
+            artifacts/attestation-artifacts.tar.gz.pem
 
       - name: Smoke test published release assets
         env:
