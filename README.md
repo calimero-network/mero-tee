@@ -60,6 +60,12 @@ Generate a pinned `core` TEE config snippet from signed release policy:
 scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/
 ```
 
+Apply signed policy directly to an existing `merod` node config:
+
+```bash
+scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+```
+
 ## Related Repositories
 
 - [calimero-network/core](https://github.com/calimero-network/core) – merod, node runtime

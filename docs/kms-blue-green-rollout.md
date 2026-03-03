@@ -53,6 +53,12 @@ scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example
 
 This generates `[tee.kms.phala.attestation]` with release-pinned allowlists.
 
+Or apply directly to an existing node config:
+
+```bash
+scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example.com/ /data default
+```
+
 ### 4. Deploy new TEE nodes (green)
 
 - Deploy new TEE nodes using new merod release + generated TEE KMS config.

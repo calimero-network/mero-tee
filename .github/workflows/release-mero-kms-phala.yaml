@@ -50,6 +50,7 @@ jobs:
           bash -n scripts/verify_locked_image_release_assets.sh
           bash -n scripts/verify_mero_kms_release_assets.sh
           bash -n scripts/generate_merod_kms_attestation_config.sh
+          bash -n scripts/apply_merod_kms_attestation_config.sh
 
       - name: Get version info
         id: version_info
