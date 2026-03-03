@@ -57,11 +57,11 @@ Configure merod as per [core tee-mode.md](https://github.com/calimero-network/co
 
 ## Verification
 
-- Use `published-mrtds.json` to verify deployed nodes match the expected image
-- Operators reference this file for attestation checks
+Use `published-mrtds.json` to verify deployed nodes match the expected image. See [Verify MRTD](verify-mrtd.md) for step-by-step instructions (curl commands, comparison script, and full quote verification).
 
 ## See Also
 
 - [packer/gcp/merod/README.md](../packer/gcp/merod/README.md) – Image build
 - [core tee-mode](https://github.com/calimero-network/core/blob/master/docs/tee-mode.md) – merod TEE config
+- [verify-mrtd.md](verify-mrtd.md) – Verify nodes run the attested image
 - [ARCHITECTURE.md](ARCHITECTURE.md) – Verification flow

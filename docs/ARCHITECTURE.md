@@ -29,7 +29,7 @@ mero-tee provides:
 ┌─────────────────────────────────────────────────────────────────┐
 │  Users                                                            │
 │  • Trust: published MRTDs                                        │
-│  • Optional: verify MRTD + attestation themselves                │
+│  • Optional: verify MRTD + attestation themselves (see [verify-mrtd.md](verify-mrtd.md)) │
 │  • Full verification: reproducible build → same MRTD              │
 └─────────────────────────────────────────────────────────────────┘
 ```

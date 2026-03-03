@@ -14,6 +14,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 - [Deploy on GCP](docs/deploy-gcp.md) – GCP TDX locked images
 - [Deploy on Phala](docs/deploy-phala.md) – Phala Cloud CVM
+- [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
 - [Security (no secrets)](SECURITY.md)
@@ -36,7 +37,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala**: Binaries published per platform
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance (same tag as mero-kms-phala)
 
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image.
+Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
 
 ## Related Repositories
 
