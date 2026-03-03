@@ -68,9 +68,9 @@ done
 
 jq -e --arg tag "${tag}" '
   .tag == $tag and
-  (.profiles.debug.mrtd | type == "string") and
-  (.profiles["debug-read-only"].mrtd | type == "string") and
-  (.profiles["locked-read-only"].mrtd | type == "string")
+  (.profiles.debug.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
+  (.profiles["debug-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
+  (.profiles["locked-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$"))
 ' "${tmp_dir}/published-mrtds.json" >/dev/null
 
 jq -e --arg tag "${tag}" '
@@ -79,6 +79,12 @@ jq -e --arg tag "${tag}" '
   (.profiles.debug.image.name | type == "string" and length > 0) and
   (.profiles["debug-read-only"].image.name | type == "string" and length > 0) and
   (.profiles["locked-read-only"].image.name | type == "string" and length > 0) and
+  (.profiles.debug.external_verification.status == "performed") and
+  (.profiles["debug-read-only"].external_verification.status == "performed") and
+  (.profiles["locked-read-only"].external_verification.status == "performed") and
+  (.profiles.debug.external_verification.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
+  (.profiles["debug-read-only"].external_verification.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
+  (.profiles["locked-read-only"].external_verification.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.mrtds.profiles.debug.mrtd == .profiles.debug.external_verification.mrtd) and
   (.mrtds.profiles["debug-read-only"].mrtd == .profiles["debug-read-only"].external_verification.mrtd) and
   (.mrtds.profiles["locked-read-only"].mrtd == .profiles["locked-read-only"].external_verification.mrtd)
