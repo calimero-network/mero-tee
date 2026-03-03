@@ -149,6 +149,9 @@ jobs:
   release-container:
     name: Release mero-kms-phala container
     needs: [prepare, build-binaries]
+    outputs:
+      image_digest: ${{ steps.build_and_push.outputs.digest }}
+      image_tags: ${{ steps.metadata.outputs.tags }}
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-mero-kms-phala-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
@@ -217,6 +220,7 @@ jobs:
             type=raw,value=prerelease,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'true' }}
 
       - name: Build and push image
+        id: build_and_push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -227,3 +231,92 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           provenance: false
           sbom: false
+
+  release-metadata:
+    name: Release Metadata
+    if: needs.prepare.outputs.binary_release == 'true'
+    runs-on: ubuntu-latest
+    needs: [prepare, build-binaries, release-binaries, release-container]
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-${{ needs.prepare.outputs.version }}
+      cancel-in-progress: true
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate release checksums and manifest
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          sha256sum artifacts/*.tar.gz | sort > release-assets/mero-kms-phala-checksums.txt
+
+          image_name="ghcr.io/${{ github.repository_owner }}/mero-kms-phala"
+          image_digest="${{ needs.release-container.outputs.image_digest }}"
+          if [[ -z "${image_digest}" ]]; then
+            echo "::error::Container image digest is empty"
+            exit 1
+          fi
+
+          cat > /tmp/mero-kms-tags.txt <<'EOF'
+          ${{ needs.release-container.outputs.image_tags }}
+          EOF
+          tags_json="$(sed '/^[[:space:]]*$/d' /tmp/mero-kms-tags.txt | jq -R . | jq -s .)"
+
+          binaries_json="$(
+            while read -r checksum filepath; do
+              file="${filepath#artifacts/}"
+              jq -nc --arg file "$file" --arg checksum "$checksum" '{file: $file, sha256: $checksum}'
+            done < release-assets/mero-kms-phala-checksums.txt | jq -s '.'
+          )"
+
+          jq -n \
+            --arg tag "${{ needs.prepare.outputs.version }}" \
+            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg image "${image_name}" \
+            --arg digest "${image_digest}" \
+            --argjson tags "${tags_json}" \
+            --argjson binaries "${binaries_json}" \
+            '{
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              binaries: $binaries,
+              container: {
+                image: $image,
+                digest: $digest,
+                tags: $tags
+              },
+              verification: {
+                kms_attest_endpoint: "/attest",
+                report_data_layout: {
+                  bytes_0_31: "nonce",
+                  bytes_32_63: "binding_or_default_domain_separator"
+                }
+              }
+            }' > release-assets/mero-kms-phala-release-manifest.json
+
+      - name: Upload release metadata assets
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          tag_name: ${{ needs.prepare.outputs.version }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/mero-kms-phala-checksums.txt
+            release-assets/mero-kms-phala-release-manifest.json
