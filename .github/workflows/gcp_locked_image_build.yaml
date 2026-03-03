@@ -912,6 +912,7 @@ jobs:
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -1041,6 +1042,57 @@ jobs:
             echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Install cosign for keyless signing
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release assets with Sigstore keyless
+        env:
+          COSIGN_YES: "true"
+        run: |
+          assets=(
+            "artifacts/mrtd-debug.json"
+            "artifacts/mrtd-debug-read-only.json"
+            "artifacts/mrtd-locked-read-only.json"
+            "artifacts/published-mrtds.json"
+            "artifacts/release-provenance.json"
+            "artifacts/attestation-artifacts.tar.gz"
+          )
+
+          for asset in "${assets[@]}"; do
+            if [[ ! -f "${asset}" ]]; then
+              echo "Missing asset to sign: ${asset}"
+              exit 1
+            fi
+            cosign sign-blob \
+              --yes \
+              --output-signature "${asset}.sig" \
+              --output-certificate "${asset}.pem" \
+              "${asset}"
+          done
+
+      - name: Verify generated signatures
+        run: |
+          assets=(
+            "artifacts/mrtd-debug.json"
+            "artifacts/mrtd-debug-read-only.json"
+            "artifacts/mrtd-locked-read-only.json"
+            "artifacts/published-mrtds.json"
+            "artifacts/release-provenance.json"
+            "artifacts/attestation-artifacts.tar.gz"
+          )
+
+          cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$"
+          cert_oidc_issuer="https://token.actions.githubusercontent.com"
+
+          for asset in "${assets[@]}"; do
+            cosign verify-blob \
+              --certificate "${asset}.pem" \
+              --signature "${asset}.sig" \
+              --certificate-identity-regexp "${cert_identity_regex}" \
+              --certificate-oidc-issuer "${cert_oidc_issuer}" \
+              "${asset}"
+          done
+
       # If 403: add RELEASE_TOKEN or GHCR_PUSH_TOKEN (PAT with repo scope). If 404 "discussion category mismatch":
       # disable "Create a discussion for each release" in repo Settings → General → Releases.
       - name: Upload MRTD release assets
@@ -1053,11 +1105,23 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/mrtd-debug.json
+            artifacts/mrtd-debug.json.sig
+            artifacts/mrtd-debug.json.pem
             artifacts/mrtd-debug-read-only.json
+            artifacts/mrtd-debug-read-only.json.sig
+            artifacts/mrtd-debug-read-only.json.pem
             artifacts/mrtd-locked-read-only.json
+            artifacts/mrtd-locked-read-only.json.sig
+            artifacts/mrtd-locked-read-only.json.pem
             artifacts/published-mrtds.json
+            artifacts/published-mrtds.json.sig
+            artifacts/published-mrtds.json.pem
             artifacts/release-provenance.json
+            artifacts/release-provenance.json.sig
+            artifacts/release-provenance.json.pem
             artifacts/attestation-artifacts.tar.gz
+            artifacts/attestation-artifacts.tar.gz.sig
+            artifacts/attestation-artifacts.tar.gz.pem
 
       - name: Smoke test published release assets
         env:

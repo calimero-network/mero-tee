@@ -2,6 +2,30 @@
 
 This guide explains how end users and operators verify that a GCP TDX merod node is running the expected locked image. A matching MRTD (Measurement Root of Trust for Delivery) proves the node booted from the attested image.
 
+## Verify signed release assets first (Sigstore keyless)
+
+Before trusting `published-mrtds.json`, verify the release assets were signed by this repository's release workflow identity.
+
+```bash
+VERSION="2.1.1"
+REPO="calimero-network/mero-tee"
+BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+# Install cosign if needed: https://docs.sigstore.dev/cosign/system_config/installation/
+curl -sSLO "${BASE_URL}/published-mrtds.json"
+curl -sSLO "${BASE_URL}/published-mrtds.json.sig"
+curl -sSLO "${BASE_URL}/published-mrtds.json.pem"
+
+cosign verify-blob \
+  --certificate published-mrtds.json.pem \
+  --signature published-mrtds.json.sig \
+  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  published-mrtds.json
+```
+
+For full provenance validation, verify `release-provenance.json` and `attestation-artifacts.tar.gz` the same way using their matching `.sig` and `.pem` files.
+
 ## Quick verification (MRTD comparison)
 
 ### 1. Get the node's MRTD
