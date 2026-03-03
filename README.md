@@ -40,10 +40,17 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala release trust bundle**:
   - `mero-kms-phala-checksums.txt` (SHA-256 for binary archives),
   - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata),
-  - Sigstore signature/certificate sidecars for trust-bundle files and binary archives (`*.sig`, `*.pem`)
-- **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and Sigstore signature/certificate sidecars (`*.sig`, `*.pem`) (same tag as mero-kms-phala)
+  - Sigstore keyless signatures/certificates for binary archives, checksums, and manifest (`*.sig`, `*.pem`)
+- **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
+  - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
 
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
+
+Verify KMS release assets:
+
+```bash
+scripts/verify_mero_kms_release_assets.sh X.Y.Z
+```
 
 ## Related Repositories
 

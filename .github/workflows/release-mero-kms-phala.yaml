@@ -123,6 +123,7 @@ jobs:
       cancel-in-progress: true
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -259,7 +260,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
 
-          sha256sum artifacts/*.tar.gz | sort > release-assets/mero-kms-phala-checksums.txt
+          sha256sum artifacts/*.tar.gz | sort | sed 's#  artifacts/#  #' > release-assets/mero-kms-phala-checksums.txt
 
           image_name="ghcr.io/${{ github.repository_owner }}/mero-kms-phala"
           image_digest="${{ needs.release-container.outputs.image_digest }}"
@@ -310,6 +311,53 @@ jobs:
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
 
+      - name: Install cosign for keyless signing
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release metadata and binary archives with Sigstore keyless
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+
+          signed_assets=(
+            artifacts/*.tar.gz
+            release-assets/mero-kms-phala-checksums.txt
+            release-assets/mero-kms-phala-release-manifest.json
+          )
+
+          for asset in "${signed_assets[@]}"; do
+            base_name="$(basename "${asset}")"
+            cosign sign-blob \
+              --yes \
+              --output-signature "release-assets/${base_name}.sig" \
+              --output-certificate "release-assets/${base_name}.pem" \
+              "${asset}"
+          done
+
+      - name: Verify generated signatures (sanity check)
+        env:
+          COSIGN_CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
+        run: |
+          set -euo pipefail
+
+          cert_identity_regex="^https://github.com/${{ github.repository }}/.github/workflows/release-mero-kms-phala.yaml@refs/heads/master$"
+          signed_assets=(
+            artifacts/*.tar.gz
+            release-assets/mero-kms-phala-checksums.txt
+            release-assets/mero-kms-phala-release-manifest.json
+          )
+
+          for asset in "${signed_assets[@]}"; do
+            base_name="$(basename "${asset}")"
+            cosign verify-blob \
+              --certificate "release-assets/${base_name}.pem" \
+              --signature "release-assets/${base_name}.sig" \
+              --certificate-identity-regexp "${cert_identity_regex}" \
+              --certificate-oidc-issuer "${COSIGN_CERTIFICATE_OIDC_ISSUER}" \
+              "${asset}" >/dev/null
+          done
+
       - name: Upload release metadata assets
         uses: softprops/action-gh-release@v2
         with:
@@ -318,5 +366,11 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.version }}
           fail_on_unmatched_files: true
           files: |
+            release-assets/*.tar.gz.sig
+            release-assets/*.tar.gz.pem
             release-assets/mero-kms-phala-checksums.txt
+            release-assets/mero-kms-phala-checksums.txt.sig
+            release-assets/mero-kms-phala-checksums.txt.pem
             release-assets/mero-kms-phala-release-manifest.json
+            release-assets/mero-kms-phala-release-manifest.json.sig
+            release-assets/mero-kms-phala-release-manifest.json.pem
