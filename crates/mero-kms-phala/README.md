@@ -122,4 +122,7 @@ Do not use mock attestation in production.
 
 ## Deployment
 
-For a complete guide on building images, deploying to Phala Cloud, and configuring merod for TEE nodes, see [Deploy merod on Phala Network (TEE)](https://github.com/calimero-network/core/blob/master/docs/phala-tee-deployment.md).
+For deployment guides, see:
+
+- [Deploy on Phala](https://github.com/calimero-network/mero-tee/blob/master/docs/deploy-phala.md) – Phala Cloud CVM with Docker Compose
+- [Deploy on GCP](https://github.com/calimero-network/mero-tee/blob/master/docs/deploy-gcp.md) – GCP TDX locked images
