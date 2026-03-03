@@ -1,6 +1,6 @@
 [package]
 name = "mero-kms-phala"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Calimero Limited <info@calimero.network>"]
 edition = "2021"
 repository = "https://github.com/calimero-network/mero-tee"
@@ -28,6 +28,6 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# From calimero-network/core (git dependency; update rev when upgrading)
-calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "f471763d" }
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "f471763d" }
+# From calimero-network/core (git dependency; 0.10.1-rc.1 bump commit)
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "db829877" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "db829877" }

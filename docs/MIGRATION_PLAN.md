@@ -19,13 +19,12 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 
 ## Phase 3: Migrate Packer Image Build
 
-- Copy infrastructure/packer/gcp/merod to mero-tee/packer/gcp/merod
-- Copy required Ansible roles from infrastructure/ansible/roles
+- Copy packer/gcp/merod to mero-tee/packer/gcp/merod
+- Copy required Ansible roles
 - Adjust playbook paths for ansible roles
 - Copy verify_tdx_quote_ita.py and verify_locked_image_release_assets.sh
 - Add .github/workflows/gcp_locked_image_build.yaml
 - Use GitHub vars/secrets for GCP config (no values in repo)
-- Remove image build from infrastructure
 
 ## Phase 4: Release and Signing
 
@@ -36,14 +35,13 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 
 ## Phase 5: Downstream Updates
 
-- MDMA: Point MDMA_TEE_PUBLISHED_MRTDS_URL to mero-tee releases
+- Operators: Point published MRTDs URL to mero-tee releases
 - Core: Update phala-tee-deployment.md, merod README
 - Docs: Update operator-track index
 
 ## Phase 6: Cleanup
 
 - Remove mero-kms-phala from core
-- Remove packer/gcp/merod from infrastructure
 - Archive or deprecate old release URLs
 
 ## Security Checklist (Before Each Commit)

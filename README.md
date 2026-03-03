@@ -36,13 +36,11 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala**: Binaries published per platform
 - **locked-image-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance
 
-MDMA and operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image.
+Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image.
 
 ## Related Repositories
 
 - [calimero-network/core](https://github.com/calimero-network/core) – merod, node runtime
-- [calimero-network/infrastructure](https://github.com/calimero-network/infrastructure) – Terraform, K8s (image build moved here)
-- [calimero-network/mdma](https://github.com/calimero-network/mdma) – Node provisioning (uses published MRTDs)
 
 ## License
 

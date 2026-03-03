@@ -3,4 +3,4 @@ resolver = "2"
 members = ["./crates/mero-kms-phala"]
 
 [workspace.metadata.workspaces]
-version = "0.1.0"
+version = "0.1.1"

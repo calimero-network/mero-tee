@@ -19,7 +19,7 @@ mero-tee provides:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  MDMA / Operators                                                 │
+│  Operators                                                        │
 │  • Fetch published-mrtds.json from mero-tee releases             │
 │  • Post-boot: compare node MRTD to published                     │
 │  • Match → node runs expected image                               │
@@ -28,7 +28,7 @@ mero-tee provides:
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Users                                                            │
-│  • Trust: MDMA + published MRTDs                                 │
+│  • Trust: published MRTDs                                        │
 │  • Optional: verify MRTD + attestation themselves                │
 │  • Full verification: reproducible build → same MRTD              │
 └─────────────────────────────────────────────────────────────────┘
