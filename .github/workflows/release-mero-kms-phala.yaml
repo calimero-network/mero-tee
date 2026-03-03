@@ -17,6 +17,7 @@ on:
       - "crates/**"
       - ".github/workflows/release-mero-kms-phala.yaml"
       - ".github/workflows/deps/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
