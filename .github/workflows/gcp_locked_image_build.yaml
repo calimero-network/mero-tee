@@ -1012,11 +1012,13 @@ jobs:
             echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      # If release fails with 403, add RELEASE_TOKEN or GHCR_PUSH_TOKEN (PAT with repo scope) as repo secret.
+      # If 403: add RELEASE_TOKEN or GHCR_PUSH_TOKEN (PAT with repo scope). If 404 "discussion category mismatch":
+      # disable "Create a discussion for each release" in repo Settings → General → Releases.
       - name: Upload MRTD release assets
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
           tag_name: locked-image-v${{ needs.preflight.outputs.image_version }}
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
