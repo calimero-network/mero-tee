@@ -1,0 +1,14 @@
+# Default ownership
+* @chefsale
+
+# Security-sensitive workflows
+/.github/workflows/release-mero-kms-phala.yaml @chefsale
+/.github/workflows/gcp_locked_image_build.yaml @chefsale
+/.github/workflows/kms_staging_probe_phala.yaml @chefsale
+/.github/workflows/kms_policy_promotion_pr.yaml @chefsale
+
+# KMS crate
+/crates/mero-kms-phala/ @chefsale
+
+# Attestation/release scripts
+/scripts/ @chefsale

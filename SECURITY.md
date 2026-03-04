@@ -22,3 +22,21 @@
 - `published-mrtds.json`, `release-provenance.json`, and `attestation-artifacts.tar.gz` are shipped with Sigstore signatures (`.sig`) and certificates (`.pem`).
 - Users verify MRTDs before trusting deployed nodes.
 - See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the trust model.
+
+## Reporting Vulnerabilities
+
+Please do **not** open public GitHub issues for suspected vulnerabilities.
+
+- Contact: info@calimero.network
+- Include:
+  - affected component/path
+  - reproduction steps or proof-of-concept
+  - potential impact
+  - proposed mitigations (if any)
+
+We will acknowledge receipt and triage as quickly as possible.
+
+## Supported Versions
+
+Security fixes are generally applied to the latest `master` branch and latest
+released version stream.

@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a new feature or improvement
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement.
+        Please describe the problem and desired outcome clearly.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe your proposed approach.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional - other approaches you considered
+  - type: textarea
+    id: impact
+    attributes:
+      label: Security/operational impact
+      description: Any expected impact on attestation, release process, or operators
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked existing issues/PRs for similar proposals.
+          required: true
