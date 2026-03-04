@@ -54,6 +54,9 @@ Legend:
   - `mero-kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
 - [x] Automate staging measurement collection for policy candidates.
   - `kms_staging_probe_phala.yaml` + `scripts/extract_tdx_policy_candidates.py`.
+- [x] Gate policy promotion through reviewed PR updates.
+  - `kms_policy_promotion_pr.yaml` writes `policies/mero-kms-phala/<tag>.json`
+    and opens a pull request for approval before release publication.
 
 ## Phase 3: rollout and operational hardening
 

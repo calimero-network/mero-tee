@@ -1,0 +1,245 @@
+name: Promote KMS policy candidate (PR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe_run_id:
+        description: "GitHub Actions run ID of kms_staging_probe_phala workflow"
+        required: true
+      release_tag:
+        description: "Target mero-kms-phala release tag (for example 1.2.3)"
+        required: true
+      probe_artifact_name:
+        description: "Optional artifact name override (auto-detected when empty)"
+        required: false
+        default: ""
+      base_branch:
+        description: "Base branch for the PR"
+        required: true
+        default: "master"
+      draft_pr:
+        description: "Open as draft pull request"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  promote:
+    name: Promote staged policy into PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_branch }}
+
+      - name: Resolve and download probe artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_RUN_ID: ${{ inputs.probe_run_id }}
+          PROBE_ARTIFACT_NAME: ${{ inputs.probe_artifact_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${PROBE_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::probe_run_id must be numeric. Got '${PROBE_RUN_ID}'."
+            exit 1
+          fi
+
+          artifact_name="${PROBE_ARTIFACT_NAME}"
+          if [[ -z "${artifact_name}" ]]; then
+            artifact_name="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PROBE_RUN_ID}/artifacts" \
+                --jq '.artifacts
+                | map(select(.expired == false and (.name | startswith("kms-staging-probe-"))))
+                | sort_by(.created_at)
+                | reverse
+                | .[0].name // ""'
+            )"
+          fi
+
+          if [[ -z "${artifact_name}" ]]; then
+            echo "::error::Could not resolve a non-expired kms-staging-probe artifact for run ${PROBE_RUN_ID}."
+            exit 1
+          fi
+
+          artifact_dir="${RUNNER_TEMP}/kms-probe-artifact-${PROBE_RUN_ID}"
+          mkdir -p "${artifact_dir}"
+          gh run download "${PROBE_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${artifact_name}" \
+            --dir "${artifact_dir}"
+
+          if [[ ! -f "${artifact_dir}/kms-policy-candidates.json" ]]; then
+            echo "::error::Downloaded artifact does not contain kms-policy-candidates.json"
+            exit 1
+          fi
+
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_dir=${artifact_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build versioned policy files
+        id: policy
+        env:
+          PROBE_RUN_ID: ${{ inputs.probe_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.artifact_name }}
+          ARTIFACT_DIR: ${{ steps.artifact.outputs.artifact_dir }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "::error::release_tag is required"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "::error::release_tag contains unsupported characters: '${RELEASE_TAG}'"
+            exit 1
+          fi
+
+          candidates_file="${ARTIFACT_DIR}/kms-policy-candidates.json"
+          context_file="${ARTIFACT_DIR}/attestation-context.json"
+          policy_dir="policies/mero-kms-phala"
+          policy_file="${policy_dir}/${RELEASE_TAG}.json"
+          index_file="${policy_dir}/index.json"
+
+          mkdir -p "${policy_dir}"
+          if [[ ! -f "${index_file}" ]]; then
+            echo '{"schema_version":1,"policies":[]}' > "${index_file}"
+          fi
+
+          if ! jq -e '
+            .schema_version == 1 and
+            (.policy.allowed_tcb_statuses | type == "array" and length > 0) and
+            (.policy.allowed_mrtd | type == "array" and length > 0) and
+            (.policy.allowed_rtmr0 | type == "array") and
+            (.policy.allowed_rtmr1 | type == "array") and
+            (.policy.allowed_rtmr2 | type == "array") and
+            (.policy.allowed_rtmr3 | type == "array") and
+            (.github_repository_variables | type == "object")
+          ' "${candidates_file}" >/dev/null; then
+            echo "::error::kms-policy-candidates.json failed schema validation"
+            exit 1
+          fi
+
+          probe_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PROBE_RUN_ID}"
+          context_json='{}'
+          if [[ -f "${context_file}" ]]; then
+            context_json="$(jq -c . "${context_file}")"
+          fi
+
+          jq -n \
+            --arg tag "${RELEASE_TAG}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg source_workflow "kms_staging_probe_phala.yaml" \
+            --arg source_run_id "${PROBE_RUN_ID}" \
+            --arg source_run_url "${probe_run_url}" \
+            --arg source_artifact "${ARTIFACT_NAME}" \
+            --argjson context "${context_json}" \
+            --slurpfile candidates "${candidates_file}" \
+            '{
+              schema_version: 1,
+              release_tag: $tag,
+              generated_at: (now | todate),
+              source: {
+                repository: $repository,
+                workflow: $source_workflow,
+                run_id: $source_run_id,
+                run_url: $source_run_url,
+                artifact_name: $source_artifact,
+                attestation_context: $context
+              },
+              candidate_policy: $candidates[0].policy,
+              github_repository_variables: $candidates[0].github_repository_variables
+            }' > "${policy_file}"
+
+          tmp_index="$(mktemp)"
+          jq \
+            --arg tag "${RELEASE_TAG}" \
+            --arg path "${policy_file}" \
+            --arg run_id "${PROBE_RUN_ID}" \
+            --arg run_url "${probe_run_url}" \
+            --arg artifact "${ARTIFACT_NAME}" \
+            '
+            .schema_version = 1 |
+            .policies = (.policies // []) |
+            .policies = (
+              [ .policies[] | select(.release_tag != $tag) ] + [
+                {
+                  release_tag: $tag,
+                  path: $path,
+                  source_probe_run_id: $run_id,
+                  source_probe_run_url: $run_url,
+                  source_probe_artifact_name: $artifact,
+                  updated_at: (now | todate)
+                }
+              ] | sort_by(.release_tag)
+            )
+            ' "${index_file}" > "${tmp_index}"
+          mv "${tmp_index}" "${index_file}"
+
+          pr_body="${RUNNER_TEMP}/kms-policy-promotion-pr-body.md"
+          {
+            echo "## Promote staged KMS policy candidate"
+            echo
+            echo "- Release tag: \`${RELEASE_TAG}\`"
+            echo "- Source probe run: ${probe_run_url}"
+            echo "- Source artifact: \`${ARTIFACT_NAME}\`"
+            echo
+            echo "### Updated files"
+            echo
+            echo "- \`${policy_file}\`"
+            echo "- \`policies/mero-kms-phala/index.json\`"
+            echo
+            echo "### Candidate GitHub repository variables"
+            echo
+            echo '```bash'
+            jq -r '.github_repository_variables | to_entries[] | "\(.key)=\(.value)"' "${policy_file}"
+            echo '```'
+            echo
+            echo "Review this policy carefully before merge."
+          } > "${pr_body}"
+
+          echo "policy_file=${policy_file}" >> "${GITHUB_OUTPUT}"
+          echo "index_file=${index_file}" >> "${GITHUB_OUTPUT}"
+          echo "pr_body=${pr_body}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create promotion pull request
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ github.token }}
+          base: ${{ inputs.base_branch }}
+          branch: automation/kms-policy-${{ inputs.release_tag }}-${{ inputs.probe_run_id }}
+          delete-branch: true
+          draft: ${{ inputs.draft_pr }}
+          title: "chore(policy): promote KMS policy candidate for ${{ inputs.release_tag }}"
+          commit-message: "chore(policy): promote KMS policy candidate for ${{ inputs.release_tag }}"
+          body-path: ${{ steps.policy.outputs.pr_body }}
+          add-paths: |
+            ${{ steps.policy.outputs.policy_file }}
+            ${{ steps.policy.outputs.index_file }}
+
+      - name: Summarize result
+        if: ${{ always() }}
+        env:
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          PR_OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
+        run: |
+          {
+            echo "## KMS policy promotion"
+            echo
+            if [[ -n "${PR_NUMBER}" ]]; then
+              echo "- PR #${PR_NUMBER}: ${PR_URL}"
+              echo "- Operation: ${PR_OPERATION}"
+            else
+              echo "- No pull request created (no diff or action could not open PR)."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

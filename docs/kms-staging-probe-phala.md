@@ -48,3 +48,16 @@ The workflow uploads an artifact bundle `kms-staging-probe-<run_id>-<attempt>` c
   - `kms-policy-candidates.env`
 
 The run summary also prints copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values.
+
+## Promotion to governed policy PR
+
+After collecting probe artifacts, run:
+
+- `.github/workflows/kms_policy_promotion_pr.yaml`
+
+with the probe run ID and target release tag. This creates/updates:
+
+- `policies/mero-kms-phala/<tag>.json`
+- `policies/mero-kms-phala/index.json`
+
+in a pull request for review before release publication.

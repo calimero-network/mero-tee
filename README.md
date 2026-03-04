@@ -19,6 +19,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Phala KMS attestation task list (mero-tee)](docs/phala-kms-attestation-task-list.md)
 - [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
+- [KMS policy promotion workflow (PR)](docs/kms-policy-promotion-pr.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
@@ -73,6 +74,12 @@ Collect candidate KMS allowlists automatically from a staged Phala deployment:
 - Run GitHub Actions workflow `.github/workflows/kms_staging_probe_phala.yaml`
 - Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
 - Produces copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values and probe artifacts
+
+Promote staged candidates into a reviewable, versioned policy PR:
+
+- Run GitHub Actions workflow `.github/workflows/kms_policy_promotion_pr.yaml`
+- Input the probe run ID and target release tag
+- Workflow updates `policies/mero-kms-phala/<tag>.json` + `index.json` and opens a PR
 
 ## Related Repositories
 
