@@ -18,9 +18,10 @@ to `master`, so operators do not need to manually dispatch workflows.
 
 1. Resolves target `mero-kms-phala` version from Cargo metadata.
 2. Skips if:
-   - release already exists for that tag,
    - policy registry entry already exists, or
    - an open promotion PR already exists for that tag.
+   If release already exists but policy entry is missing, it still backfills the
+   missing policy PR.
 3. Waits for `release-mero-kms-phala.yaml` run on the same commit (push mode).
 4. Dispatches `kms_staging_probe_phala.yaml` (using `ghcr.io/<owner>/mero-kms-phala:edge`).
 5. Waits for probe completion.

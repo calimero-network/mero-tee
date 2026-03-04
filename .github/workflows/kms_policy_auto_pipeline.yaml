@@ -41,10 +41,9 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
+          release_exists="false"
           if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "should_run=false" >> "${GITHUB_OUTPUT}"
-            echo "reason=release_exists" >> "${GITHUB_OUTPUT}"
-            exit 0
+            release_exists="true"
           fi
 
           if scripts/read_mero_kms_policy_registry.sh "${version}" >/dev/null 2>&1; then
@@ -68,7 +67,11 @@ jobs:
           fi
 
           echo "should_run=true" >> "${GITHUB_OUTPUT}"
-          echo "reason=policy_missing" >> "${GITHUB_OUTPUT}"
+          if [[ "${release_exists}" == "true" ]]; then
+            echo "reason=policy_missing_release_already_exists" >> "${GITHUB_OUTPUT}"
+          else
+            echo "reason=policy_missing" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Wait for release workflow on current push
         if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' }}
@@ -83,10 +86,10 @@ jobs:
                 --workflow "release-mero-kms-phala.yaml" \
                 --event push \
                 --branch master \
+                --commit "${GITHUB_SHA}" \
                 --limit 50 \
                 --json databaseId,headSha,createdAt \
-                --jq --arg sha "${GITHUB_SHA}" \
-                  '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | last | .databaseId // empty'
+                --jq 'sort_by(.createdAt) | last | .databaseId // empty'
             )"
             if [[ -n "${release_run_id}" ]]; then
               break
@@ -114,17 +117,16 @@ jobs:
             local run_id=""
 
             for _ in $(seq 1 60); do
-              run_id="$(
+              run_json="$(
                 gh run list \
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "${workflow_file}" \
                   --event workflow_dispatch \
                   --branch master \
                   --limit 50 \
-                  --json databaseId,createdAt \
-                  --jq --arg started "${started_at}" \
-                    '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty'
+                  --json databaseId,createdAt
               )"
+              run_id="$(jq -r --arg started "${started_at}" '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty' <<< "${run_json}")"
               if [[ -n "${run_id}" ]]; then
                 echo "${run_id}"
                 return 0
@@ -163,17 +165,16 @@ jobs:
             local run_id=""
 
             for _ in $(seq 1 60); do
-              run_id="$(
+              run_json="$(
                 gh run list \
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "${workflow_file}" \
                   --event workflow_dispatch \
                   --branch master \
                   --limit 50 \
-                  --json databaseId,createdAt \
-                  --jq --arg started "${started_at}" \
-                    '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty'
+                  --json databaseId,createdAt
               )"
+              run_id="$(jq -r --arg started "${started_at}" '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty' <<< "${run_json}")"
               if [[ -n "${run_id}" ]]; then
                 echo "${run_id}"
                 return 0
