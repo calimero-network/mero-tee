@@ -32,6 +32,8 @@ jobs:
   promote:
     name: Promote staged policy into PR
     runs-on: ubuntu-latest
+    env:
+      PROMOTION_BRANCH: automation/kms-policy-${{ inputs.release_tag }}-${{ inputs.probe_run_id }}
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v4
@@ -212,11 +214,12 @@ jobs:
 
       - name: Create promotion pull request
         id: cpr
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ github.token }}
           base: ${{ inputs.base_branch }}
-          branch: automation/kms-policy-${{ inputs.release_tag }}-${{ inputs.probe_run_id }}
+          branch: ${{ env.PROMOTION_BRANCH }}
           delete-branch: true
           draft: ${{ inputs.draft_pr }}
           title: "chore(policy): promote KMS policy candidate for ${{ inputs.release_tag }}"
@@ -226,12 +229,49 @@ jobs:
             ${{ steps.policy.outputs.policy_file }}
             ${{ steps.policy.outputs.index_file }}
 
+      - name: Validate PR/branch promotion outcome
+        id: pr_result
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CPR_OUTCOME: ${{ steps.cpr.outcome }}
+          CPR_PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+          CPR_PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          set -euo pipefail
+
+          manual_compare_url="https://github.com/${GITHUB_REPOSITORY}/compare/${BASE_BRANCH}...${PROMOTION_BRANCH}?expand=1"
+          echo "manual_compare_url=${manual_compare_url}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${CPR_OUTCOME}" == "success" && -n "${CPR_PR_NUMBER}" && -n "${CPR_PR_URL}" ]]; then
+            echo "result=pr_created" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Some repositories disallow PR creation from GitHub Actions.
+          # In that case, keep workflow green if the branch was still pushed.
+          if gh api "repos/${GITHUB_REPOSITORY}/branches/${PROMOTION_BRANCH}" >/dev/null 2>&1; then
+            echo "::warning::Automatic PR creation is not permitted for this repository token."
+            echo "::warning::Promotion branch was pushed. Open PR manually: ${manual_compare_url}"
+            echo "result=branch_pushed_manual_pr_required" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "::error::Promotion branch '${PROMOTION_BRANCH}' was not found after PR step failure."
+          echo "::error::Cannot proceed; inspect the create-pull-request logs."
+          echo "result=failure" >> "${GITHUB_OUTPUT}"
+          exit 1
+
       - name: Summarize result
         if: ${{ always() }}
         env:
           PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
           PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
           PR_OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
+          PROMOTION_BRANCH: ${{ env.PROMOTION_BRANCH }}
+          PR_RESULT: ${{ steps.pr_result.outputs.result }}
+          MANUAL_COMPARE_URL: ${{ steps.pr_result.outputs.manual_compare_url }}
         run: |
           {
             echo "## KMS policy promotion"
@@ -239,6 +279,10 @@ jobs:
             if [[ -n "${PR_NUMBER}" ]]; then
               echo "- PR #${PR_NUMBER}: ${PR_URL}"
               echo "- Operation: ${PR_OPERATION}"
+            elif [[ "${PR_RESULT}" == "branch_pushed_manual_pr_required" ]]; then
+              echo "- PR creation is disabled for GitHub Actions in this repository."
+              echo "- Promotion branch pushed: \`${PROMOTION_BRANCH}\`"
+              echo "- Open PR manually: ${MANUAL_COMPARE_URL}"
             else
               echo "- No pull request created (no diff or action could not open PR)."
             fi

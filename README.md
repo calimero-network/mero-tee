@@ -81,6 +81,7 @@ Promote staged candidates into a reviewable, versioned policy PR:
 - Run GitHub Actions workflow `.github/workflows/kms_policy_promotion_pr.yaml`
 - Input the probe run ID and target release tag
 - Workflow updates `policies/mero-kms-phala/<tag>.json` + `index.json` and opens a PR
+  (or prints a manual PR compare URL if Actions PR creation is disabled)
 
 ## Related Repositories
 

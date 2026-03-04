@@ -34,6 +34,9 @@ Then it opens/updates a PR with:
 - artifact name
 - copy/paste candidate `MERO_KMS_ALLOWED_*_JSON` values
 
+If repository policy blocks PR creation from GitHub Actions, the workflow still
+pushes the promotion branch and prints a manual compare URL in the job summary.
+
 ## Recommended flow
 
 1. Run `kms_staging_probe_phala.yaml`
