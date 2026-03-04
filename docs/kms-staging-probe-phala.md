@@ -22,6 +22,9 @@ Workflow file:
 6. Uploads full probe artifacts.
 7. Deletes the CVM unless `keep_cvm=true`.
 
+When resolving from a release tag, the workflow first validates that the release
+manifest declares `verification.kms_attest_endpoint == "/attest"`.
+
 ## Required GitHub secrets
 
 - `PHALA_CLOUD_API_KEY` – API key for Phala Cloud CLI auth.
@@ -31,13 +34,16 @@ Workflow file:
 
 Run the workflow manually (`workflow_dispatch`) and provide:
 
-- `kms_image` pinned to a reviewed tag/digest that includes `/attest`
+- `kms_release_tag`:
+  - `latest` (default) to auto-use the latest GitHub release tag, or
+  - explicit release tag (for example `2.1.2`)
+- optional `kms_image` override pinned to a reviewed tag/digest that includes `/attest`
   (for example `ghcr.io/calimero-network/mero-kms-phala:pr-1`)
 - optional `region`
 - optional `ita_policy_ids`
 - optional `kms_url_override` if your endpoint format differs from default derivation
 
-Do not use mutable `:latest` for this workflow.
+Do not use mutable container tag `:latest` for `kms_image` overrides.
 
 ## Outputs
 

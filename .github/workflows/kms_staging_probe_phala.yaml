@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       kms_image:
-        description: "Pinned mero-kms-phala image tag/digest (no :latest), for example ghcr.io/calimero-network/mero-kms-phala:pr-1"
+        description: "Optional explicit pinned image override (for example ghcr.io/calimero-network/mero-kms-phala:pr-1). If empty, workflow derives image from kms_release_tag."
+        required: false
+        default: ""
+      kms_release_tag:
+        description: "Release tag to deploy when kms_image is empty. Use 'latest' to auto-pick the latest GitHub release tag."
         required: true
+        default: "latest"
       instance_type:
         description: "Phala instance type (for example tdx.small)"
         required: true
@@ -103,19 +108,75 @@ jobs:
       - name: Prepare probe compose
         id: prepare
         env:
-          KMS_IMAGE: ${{ inputs.kms_image }}
+          GH_TOKEN: ${{ github.token }}
+          KMS_IMAGE_INPUT: ${{ inputs.kms_image }}
+          KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_release_tag }}
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
           set -euo pipefail
-          if [[ -z "${KMS_IMAGE}" ]]; then
-            echo "::error::kms_image input is required."
+
+          resolved_kms_image=""
+          resolved_release_tag=""
+
+          if [[ -n "${KMS_IMAGE_INPUT}" ]]; then
+            resolved_kms_image="${KMS_IMAGE_INPUT}"
+          else
+            if [[ "${KMS_RELEASE_TAG_INPUT}" == "latest" ]]; then
+              resolved_release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+              if [[ -z "${resolved_release_tag}" ]]; then
+                echo "::error::Could not resolve latest release tag for ${GITHUB_REPOSITORY}."
+                echo "::error::Provide kms_image override or explicit kms_release_tag."
+                exit 1
+              fi
+            else
+              resolved_release_tag="${KMS_RELEASE_TAG_INPUT}"
+              if ! gh release view "${resolved_release_tag}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; then
+                echo "::error::Release tag '${resolved_release_tag}' not found in ${GITHUB_REPOSITORY}."
+                exit 1
+              fi
+            fi
+
+            resolved_kms_image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:${resolved_release_tag}"
+          fi
+
+          if [[ -z "${resolved_kms_image}" ]]; then
+            echo "::error::Failed to resolve KMS image."
             exit 1
           fi
-          if [[ "${KMS_IMAGE}" =~ :latest$ ]]; then
+
+          if [[ "${resolved_kms_image}" =~ :latest$ ]]; then
             echo "::error::Refusing mutable image tag ':latest'. Provide a pinned image tag/digest that includes /attest."
             echo "Example: ghcr.io/calimero-network/mero-kms-phala:pr-1"
             exit 1
           fi
+
+          if [[ -n "${resolved_release_tag}" ]]; then
+            manifest_tmp_dir="$(mktemp -d)"
+            cleanup_manifest_tmp() { rm -rf "${manifest_tmp_dir}"; }
+            trap cleanup_manifest_tmp EXIT
+
+            if ! gh release download "${resolved_release_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "mero-kms-phala-release-manifest.json" \
+              --dir "${manifest_tmp_dir}" >/dev/null 2>&1; then
+              echo "::error::Could not download mero-kms-phala-release-manifest.json from release ${resolved_release_tag}."
+              echo "::error::Cannot confirm /attest support for resolved image."
+              exit 1
+            fi
+
+            if ! jq -e '.verification.kms_attest_endpoint == "/attest"' \
+              "${manifest_tmp_dir}/mero-kms-phala-release-manifest.json" >/dev/null 2>&1; then
+              echo "::error::Release ${resolved_release_tag} manifest does not declare /attest support."
+              echo "::error::Use a newer release tag or explicit kms_image override that includes /attest."
+              exit 1
+            fi
+          fi
+
+          echo "Using KMS image: ${resolved_kms_image}"
+          if [[ -n "${resolved_release_tag}" ]]; then
+            echo "Resolved from release tag: ${resolved_release_tag}"
+          fi
+
           artifacts_dir="${RUNNER_TEMP}/kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           compose_file="${artifacts_dir}/docker-compose.kms-probe.yaml"
           mkdir -p "${artifacts_dir}"
@@ -123,7 +184,7 @@ jobs:
           cat > "${compose_file}" <<EOF
           services:
             mero-kms:
-              image: ${KMS_IMAGE}
+              image: ${resolved_kms_image}
               restart: unless-stopped
               ports:
                 - "${SERVICE_PORT}:8080"
@@ -139,6 +200,8 @@ jobs:
 
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
+          echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
+          echo "kms_release_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Deploy ephemeral CVM
         id: deploy
@@ -457,6 +520,8 @@ jobs:
           BASE_URL: ${{ steps.probe.outputs.base_url }}
           VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
           APP_ID: ${{ steps.deploy.outputs.app_id }}
+          RESOLVED_KMS_IMAGE: ${{ steps.prepare.outputs.kms_image }}
+          RESOLVED_KMS_RELEASE_TAG: ${{ steps.prepare.outputs.kms_release_tag }}
           KEEP_CVM: ${{ inputs.keep_cvm }}
         run: |
           set -euo pipefail
@@ -465,6 +530,8 @@ jobs:
             echo ""
             echo "- VM UUID: ${VM_UUID:-n/a}"
             echo "- App ID: ${APP_ID:-n/a}"
+            echo "- KMS image: ${RESOLVED_KMS_IMAGE:-n/a}"
+            echo "- KMS release tag: ${RESOLVED_KMS_RELEASE_TAG:-n/a}"
             echo "- KMS URL: ${BASE_URL:-n/a}"
             echo "- Keep CVM: ${KEEP_CVM}"
             echo ""
