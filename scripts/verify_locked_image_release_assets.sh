@@ -84,7 +84,16 @@ for required in \
   "published-mrtds.json" \
   "release-provenance.json" \
   "attestation-artifacts.tar.gz"; do
-  if ! awk '{print $2}' "${tmp_dir}/locked-image-checksums.txt" | rg -x "${required}" >/dev/null 2>&1; then
+  if ! awk -v req="${required}" '
+    {
+      # Handle optional CRLF artifacts safely when reading from downloaded assets.
+      gsub(/\r$/, "", $2)
+      if ($2 == req) {
+        found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${tmp_dir}/locked-image-checksums.txt" >/dev/null 2>&1; then
     echo "Checksums file missing entry for ${required}"
     exit 1
   fi
