@@ -318,12 +318,12 @@ jobs:
 
           read -r default_binding_hex default_binding_b64 < <(
             python3 - <<'PY'
-import base64
-import hashlib
+          import base64
+          import hashlib
 
-digest = hashlib.sha256(b"mero-kms-phala-attest-v1").digest()
-print(digest.hex(), base64.b64encode(digest).decode())
-PY
+          digest = hashlib.sha256(b"mero-kms-phala-attest-v1").digest()
+          print(digest.hex(), base64.b64encode(digest).decode())
+          PY
           )
 
           jq -n \
