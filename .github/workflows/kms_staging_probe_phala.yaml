@@ -482,7 +482,7 @@ jobs:
             --ita-api-key "${ITA_API_KEY}" \
             "${policy_flags[@]}"
 
-      - name: Derive MERO_KMS_ALLOWED_* candidate values
+      - name: Derive candidate policy values
         id: derive_candidates
         if: ${{ success() }}
         env:
@@ -546,13 +546,13 @@ jobs:
               else:
                   payload = json.loads(candidates_path.read_text(encoding="utf-8"))
                   vars_map = payload["github_repository_variables"]
-                  summary.write("### Candidate repository variable values\n\n")
+                  summary.write("### Candidate policy values (compatibility env form)\n\n")
                   summary.write("```bash\n")
                   for key in sorted(vars_map.keys()):
                       summary.write(f"{key}='{vars_map[key]}'\n")
                   summary.write("```\n\n")
                   summary.write(
-                      "Use these as GitHub repository variables for `release-mero-kms-phala.yaml` after review.\n"
+                      "Use these for policy review context; publish through `kms_policy_promotion_pr.yaml`.\n"
                   )
           PY
 

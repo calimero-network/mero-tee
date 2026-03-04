@@ -89,6 +89,13 @@ Promote staged candidates into a reviewable, versioned policy PR:
 Release automation reads the policy registry directly (`policies/mero-kms-phala`)
 for the target crate version, so version bump + promoted policy stay aligned.
 
+Recommended release order:
+
+1. Run staging probe for target KMS image/tag.
+2. Run policy promotion workflow and merge policy PR.
+3. Merge version bump PR for the same release tag.
+4. Let release workflow publish signed artifacts from the merged policy registry entry.
+
 ## Related Repositories
 
 - [calimero-network/core](https://github.com/calimero-network/core) – merod, node runtime

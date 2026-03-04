@@ -42,7 +42,8 @@ Then it opens/updates a PR with:
 
 - source probe run URL
 - artifact name
-- copy/paste candidate `MERO_KMS_ALLOWED_*_JSON` values
+- policy digest (`policy_sha256`)
+- candidate values for reviewer inspection
 
 If repository policy blocks PR creation from GitHub Actions, the workflow still
 pushes the promotion branch and prints a manual compare URL in the job summary.
@@ -55,3 +56,9 @@ pushes the promotion branch and prints a manual compare URL in the job summary.
 4. Review and merge PR
 5. Merge version bump PR for same release tag
 6. Release workflow reads `policies/mero-kms-phala/<tag>.json` automatically
+
+## Notes
+
+- Promotion PRs are the governance checkpoint.
+- Release artifacts are generated from merged policy registry files, not from
+  manual repository variable inputs.

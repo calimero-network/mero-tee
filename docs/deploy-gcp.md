@@ -35,7 +35,7 @@ See [packer/gcp/merod/README.md](../packer/gcp/merod/README.md) for build detail
 
 ### Option 1: Use Pre-built Images
 
-1. Fetch the latest release from [mero-tee releases](https://github.com/calimero-network/mero-tee/releases)
+1. Select a pinned release tag from [mero-tee releases](https://github.com/calimero-network/mero-tee/releases)
 2. Download `published-mrtds.json` for verification
 3. Use the GCP image built by the workflow (configure manually or via your provisioning tool)
 4. Configure merod for TEE (see [core tee-mode docs](https://github.com/calimero-network/core/blob/master/docs/tee-mode.md))
