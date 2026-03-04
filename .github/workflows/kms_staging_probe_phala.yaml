@@ -48,11 +48,6 @@ on:
         description: "Timeout for /health readiness check"
         required: true
         default: "20"
-      keep_cvm:
-        description: "Keep the staging CVM (skip delete) for debugging"
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -522,7 +517,6 @@ jobs:
           APP_ID: ${{ steps.deploy.outputs.app_id }}
           RESOLVED_KMS_IMAGE: ${{ steps.prepare.outputs.kms_image }}
           RESOLVED_KMS_RELEASE_TAG: ${{ steps.prepare.outputs.kms_release_tag }}
-          KEEP_CVM: ${{ inputs.keep_cvm }}
         run: |
           set -euo pipefail
           {
@@ -533,7 +527,6 @@ jobs:
             echo "- KMS image: ${RESOLVED_KMS_IMAGE:-n/a}"
             echo "- KMS release tag: ${RESOLVED_KMS_RELEASE_TAG:-n/a}"
             echo "- KMS URL: ${BASE_URL:-n/a}"
-            echo "- Keep CVM: ${KEEP_CVM}"
             echo ""
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -577,13 +570,8 @@ jobs:
           VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
           APP_ID: ${{ steps.deploy.outputs.app_id }}
           DEPLOY_NAME: ${{ steps.deploy.outputs.deploy_name }}
-          KEEP_CVM: ${{ inputs.keep_cvm }}
         run: |
           set -euo pipefail
-          if [[ "${KEEP_CVM}" == "true" ]]; then
-            echo "Skipping cleanup because keep_cvm=true"
-            exit 0
-          fi
 
           deleted="false"
           if [[ -n "${VM_UUID}" ]]; then

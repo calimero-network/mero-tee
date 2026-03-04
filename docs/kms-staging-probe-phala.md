@@ -20,7 +20,7 @@ Workflow file:
    - `MERO_KMS_ALLOWED_RTMR2_JSON`
    - `MERO_KMS_ALLOWED_RTMR3_JSON`
 6. Uploads full probe artifacts.
-7. Deletes the CVM unless `keep_cvm=true`.
+7. Always deletes the ephemeral CVM during cleanup (on both success and failure paths).
 
 When resolving from a release tag, the workflow first validates that the release
 manifest declares `verification.kms_attest_endpoint == "/attest"`.
