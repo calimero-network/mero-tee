@@ -81,6 +81,31 @@ pub struct GetKeyResponse {
     pub key: String,
 }
 
+/// Request body for the KMS attestation endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KmsAttestRequest {
+    /// Base64-encoded 32-byte client nonce for freshness.
+    pub nonce_b64: String,
+    /// Optional base64-encoded 32-byte binding value for channel/session binding.
+    #[serde(default)]
+    pub binding_b64: Option<String>,
+}
+
+/// Response body for the KMS attestation endpoint.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KmsAttestResponse {
+    /// Base64-encoded raw TDX quote bytes.
+    pub quote_b64: String,
+    /// Hex-encoded 64-byte report_data used for quote generation.
+    pub report_data_hex: String,
+    /// Parsed event log entries associated with the quote.
+    pub event_log: serde_json::Value,
+    /// VM config string returned by dstack quote API.
+    pub vm_config: String,
+}
+
 /// Error response body.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +119,7 @@ pub struct ErrorResponse {
 #[derive(Debug)]
 pub enum ServiceError {
     InvalidBase64(String),
+    InvalidAttestationRequest(String),
     InvalidChallenge(String),
     InvalidPeerPublicKey(String),
     InvalidSignature(String),
@@ -113,6 +139,13 @@ impl IntoResponse for ServiceError {
                 StatusCode::BAD_REQUEST,
                 ErrorResponse {
                     error: "invalid_request".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
+            ServiceError::InvalidAttestationRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "invalid_attestation_request".to_string(),
                     details: Some(msg.clone()),
                 },
             ),
@@ -211,6 +244,7 @@ pub fn create_router(config: Config) -> Router {
         .route("/health", get(health_handler))
         .route("/challenge", post(challenge_handler))
         .route("/get-key", post(get_key_handler))
+        .route("/attest", post(attest_kms_handler))
         .with_state(state)
 }
 
@@ -219,6 +253,47 @@ async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "alive",
         "service": "mero-kms-phala"
+    }))
+}
+
+/// Handler for KMS self-attestation.
+///
+/// This endpoint allows callers (for example, merod) to verify the KMS instance
+/// measurement with a fresh nonce before requesting key material.
+async fn attest_kms_handler(
+    State(state): State<AppState>,
+    Json(request): Json<KmsAttestRequest>,
+) -> Result<Json<KmsAttestResponse>, ServiceError> {
+    let nonce = decode_fixed_b64_32("nonceB64", &request.nonce_b64)?;
+    let binding = resolve_attestation_binding(request.binding_b64.as_deref())?;
+    let report_data = build_attestation_report_data(&nonce, &binding);
+
+    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
+    let quote_response = client
+        .get_quote(report_data.to_vec())
+        .await
+        .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?;
+
+    let quote_bytes = hex::decode(&quote_response.quote).map_err(|e| {
+        ServiceError::AttestationVerificationFailed(format!(
+            "dstack returned invalid quote hex: {}",
+            e
+        ))
+    })?;
+
+    let parsed_event_log = serde_json::from_str::<serde_json::Value>(&quote_response.event_log)
+        .map_err(|e| {
+            ServiceError::AttestationVerificationFailed(format!(
+                "dstack returned invalid event log json: {}",
+                e
+            ))
+        })?;
+
+    Ok(Json(KmsAttestResponse {
+        quote_b64: base64::engine::general_purpose::STANDARD.encode(quote_bytes),
+        report_data_hex: hex::encode(report_data),
+        event_log: parsed_event_log,
+        vm_config: quote_response.vm_config,
     }))
 }
 
@@ -547,10 +622,41 @@ fn normalize_measurement(value: &str) -> String {
     value.trim().trim_start_matches("0x").to_ascii_lowercase()
 }
 
+fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], ServiceError> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|e| ServiceError::InvalidAttestationRequest(format!("{}: {}", field_name, e)))?;
+    decoded.try_into().map_err(|_| {
+        ServiceError::InvalidAttestationRequest(format!(
+            "{} must be exactly 32 bytes",
+            field_name
+        ))
+    })
+}
+
+fn default_attestation_binding() -> [u8; 32] {
+    Sha256::digest(b"mero-kms-phala-attest-v1").into()
+}
+
+fn resolve_attestation_binding(binding_b64: Option<&str>) -> Result<[u8; 32], ServiceError> {
+    match binding_b64 {
+        Some(value) => decode_fixed_b64_32("bindingB64", value),
+        None => Ok(default_attestation_binding()),
+    }
+}
+
+fn build_attestation_report_data(nonce: &[u8; 32], binding: &[u8; 32]) -> [u8; 64] {
+    let mut report_data = [0u8; 64];
+    report_data[..32].copy_from_slice(nonce);
+    report_data[32..].copy_from_slice(binding);
+    report_data
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::AttestationPolicy;
+    use libp2p_identity::Keypair;
 
     #[test]
     fn test_hash_peer_id() {
@@ -680,5 +786,88 @@ mod tests {
         let payload2 = build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
 
         assert_eq!(payload1, payload2);
+    }
+
+    #[test]
+    fn test_decode_fixed_b64_32_rejects_invalid_length() {
+        let bad = base64::engine::general_purpose::STANDARD.encode([0u8; 31]);
+        let err = decode_fixed_b64_32("nonceB64", &bad).unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidAttestationRequest(_)));
+    }
+
+    #[test]
+    fn test_resolve_attestation_binding_defaults_to_domain_separator() {
+        let binding = resolve_attestation_binding(None).unwrap();
+        assert_eq!(binding.len(), 32);
+        assert_ne!(binding, [0u8; 32]);
+
+        let binding2 = resolve_attestation_binding(None).unwrap();
+        assert_eq!(binding, binding2);
+    }
+
+    #[test]
+    fn test_build_attestation_report_data_layout() {
+        let nonce = [0x11; 32];
+        let binding = [0x22; 32];
+        let report_data = build_attestation_report_data(&nonce, &binding);
+        assert_eq!(&report_data[..32], &nonce);
+        assert_eq!(&report_data[32..], &binding);
+    }
+
+    #[test]
+    fn test_verify_peer_signature_accepts_matching_peer_identity() {
+        let keypair = Keypair::generate_ed25519();
+        let peer_id = keypair.public().to_peer_id().to_base58();
+        let peer_public_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(keypair.public().encode_protobuf());
+        let challenge_id = "challenge-1";
+        let challenge_nonce = [0x7b; 32];
+        let quote_bytes = b"quote-bytes-for-signature";
+        let payload =
+            build_signature_payload(challenge_id, &challenge_nonce, quote_bytes, &peer_id).unwrap();
+        let signature = keypair.sign(&payload).unwrap();
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature);
+
+        let result = verify_peer_signature(
+            &peer_id,
+            &peer_public_key_b64,
+            &signature_b64,
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_peer_signature_rejects_spoofed_peer_id() {
+        let attacker = Keypair::generate_ed25519();
+        let victim = Keypair::generate_ed25519();
+        let claimed_peer_id = victim.public().to_peer_id().to_base58();
+        let attacker_public_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(attacker.public().encode_protobuf());
+
+        let challenge_id = "challenge-2";
+        let challenge_nonce = [0x42; 32];
+        let quote_bytes = b"quote-bytes-for-spoof";
+        let payload = build_signature_payload(
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+            &claimed_peer_id,
+        )
+        .unwrap();
+        let attacker_signature_b64 =
+            base64::engine::general_purpose::STANDARD.encode(attacker.sign(&payload).unwrap());
+
+        let result = verify_peer_signature(
+            &claimed_peer_id,
+            &attacker_public_key_b64,
+            &attacker_signature_b64,
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+        );
+        assert!(matches!(result, Err(ServiceError::PeerIdentityMismatch)));
     }
 }

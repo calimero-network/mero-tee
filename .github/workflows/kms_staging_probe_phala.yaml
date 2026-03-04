@@ -1,0 +1,424 @@
+name: KMS staging probe (Phala)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kms_image:
+        description: "mero-kms-phala image tag/digest (for example ghcr.io/org/mero-kms-phala:1.2.3)"
+        required: true
+        default: "ghcr.io/calimero-network/mero-kms-phala:latest"
+      instance_type:
+        description: "Phala instance type (for example tdx.small)"
+        required: true
+        default: "tdx.small"
+      region:
+        description: "Optional Phala region (for example us-west)"
+        required: false
+        default: ""
+      service_port:
+        description: "Public service port exposed by KMS in compose"
+        required: true
+        default: "8080"
+      phala_public_domain_suffix:
+        description: "Default Phala endpoint suffix used to derive service URL"
+        required: true
+        default: "dstack-prod5.phala.network"
+      kms_url_override:
+        description: "Optional explicit KMS base URL override (for example https://app_x-8080.example)"
+        required: false
+        default: ""
+      ita_appraisal_url:
+        description: "Intel Trust Authority appraisal endpoint"
+        required: true
+        default: "https://api.trustauthority.intel.com/appraisal/v2/attest"
+      ita_policy_ids:
+        description: "Optional comma-separated ITA policy UUIDs"
+        required: false
+        default: ""
+      ita_policy_must_match:
+        description: "Require policy match when ITA policy IDs are supplied"
+        required: true
+        type: boolean
+        default: true
+      wait_timeout_minutes:
+        description: "Timeout for /health readiness check"
+        required: true
+        default: "20"
+      keep_cvm:
+        description: "Keep the staging CVM (skip delete) for debugging"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Deploy + attest + extract policy candidates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+      ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          if [[ -z "${PHALA_CLOUD_API_KEY}" ]]; then
+            echo "::error::Missing required secret PHALA_CLOUD_API_KEY"
+            exit 1
+          fi
+          if [[ -z "${ITA_API_KEY}" ]]; then
+            echo "::error::Missing required secret ITA_API_KEY"
+            exit 1
+          fi
+
+      - name: Install probe dependencies
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/verify_tdx_quote_ita.py scripts/extract_tdx_policy_candidates.py
+          npm install -g phala@latest
+          phala --version
+          jq --version
+
+      - name: Authenticate to Phala Cloud
+        run: |
+          set -euo pipefail
+          phala login "${PHALA_CLOUD_API_KEY}" >/dev/null
+          phala status
+
+      - name: Prepare probe compose
+        id: prepare
+        env:
+          KMS_IMAGE: ${{ inputs.kms_image }}
+          SERVICE_PORT: ${{ inputs.service_port }}
+        run: |
+          set -euo pipefail
+          artifacts_dir="${RUNNER_TEMP}/kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose_file="${artifacts_dir}/docker-compose.kms-probe.yaml"
+          mkdir -p "${artifacts_dir}"
+
+          cat > "${compose_file}" <<EOF
+          services:
+            mero-kms:
+              image: ${KMS_IMAGE}
+              restart: unless-stopped
+              ports:
+                - "${SERVICE_PORT}:8080"
+              environment:
+                LISTEN_ADDR: "0.0.0.0:8080"
+                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
+                CHALLENGE_TTL_SECS: "60"
+                ACCEPT_MOCK_ATTESTATION: "false"
+                ENFORCE_MEASUREMENT_POLICY: "false"
+              volumes:
+                - /var/run/dstack.sock:/var/run/dstack.sock
+          EOF
+
+          echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
+          echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: Deploy ephemeral CVM
+        id: deploy
+        env:
+          INSTANCE_TYPE: ${{ inputs.instance_type }}
+          REGION: ${{ inputs.region }}
+          COMPOSE_FILE: ${{ steps.prepare.outputs.compose_file }}
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          deploy_name="kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          deploy_json="${ARTIFACTS_DIR}/phala-deploy.json"
+
+          deploy_cmd=(
+            phala
+            deploy
+            --json
+            --name "${deploy_name}"
+            --compose "${COMPOSE_FILE}"
+            --instance-type "${INSTANCE_TYPE}"
+            --wait
+            --no-listed
+            --no-public-logs
+            --no-public-sysinfo
+          )
+          if [[ -n "${REGION}" ]]; then
+            deploy_cmd+=(--region "${REGION}")
+          fi
+
+          "${deploy_cmd[@]}" > "${deploy_json}"
+          if ! jq -e . "${deploy_json}" >/dev/null 2>&1; then
+            echo "::error::phala deploy --json did not return valid JSON"
+            cat "${deploy_json}"
+            exit 1
+          fi
+
+          vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
+          app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
+          if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then
+            echo "::error::Missing vm_uuid/app_id in deploy result"
+            cat "${deploy_json}"
+            exit 1
+          fi
+
+          echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
+          echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
+          echo "deploy_name=${deploy_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect CVM metadata
+        if: ${{ success() }}
+        env:
+          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm.json" || true
+          phala cvms attestation "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-attestation.json" || true
+
+      - name: Probe /health and /attest
+        id: probe
+        if: ${{ success() }}
+        env:
+          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
+          APP_ID: ${{ steps.deploy.outputs.app_id }}
+          SERVICE_PORT: ${{ inputs.service_port }}
+          DOMAIN_SUFFIX: ${{ inputs.phala_public_domain_suffix }}
+          KMS_URL_OVERRIDE: ${{ inputs.kms_url_override }}
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY' > "${ARTIFACTS_DIR}/candidate-urls.json"
+          import json
+          import os
+
+          override = os.environ.get("KMS_URL_OVERRIDE", "").strip().rstrip("/")
+          if override:
+              urls = [override]
+          else:
+              app_id_raw = os.environ["APP_ID"].strip()
+              port = os.environ["SERVICE_PORT"].strip()
+              suffix = os.environ["DOMAIN_SUFFIX"].strip()
+
+              with_prefix = app_id_raw if app_id_raw.startswith("app_") else f"app_{app_id_raw}"
+              without_prefix = with_prefix.removeprefix("app_")
+              hosts = [f"{with_prefix}-{port}.{suffix}", f"{without_prefix}-{port}.{suffix}"]
+              urls = []
+              for scheme in ("https", "http"):
+                  for host in hosts:
+                      urls.append(f"{scheme}://{host}")
+
+          print(json.dumps({"urls": urls}, indent=2))
+          PY
+
+          mapfile -t candidate_urls < <(jq -r '.urls[]' "${ARTIFACTS_DIR}/candidate-urls.json")
+          if [[ "${#candidate_urls[@]}" -eq 0 ]]; then
+            echo "::error::No candidate KMS URLs available"
+            exit 1
+          fi
+
+          timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
+          deadline=$(( $(date +%s) + timeout_seconds ))
+          base_url=""
+
+          while [[ "$(date +%s)" -lt "${deadline}" ]]; do
+            for candidate in "${candidate_urls[@]}"; do
+              health_code="$(curl -k -sS --max-time 8 -o "${ARTIFACTS_DIR}/health.json" -w "%{http_code}" "${candidate}/health" || true)"
+              if [[ "${health_code}" == "200" ]]; then
+                if jq -e '.status == "alive"' "${ARTIFACTS_DIR}/health.json" >/dev/null 2>&1; then
+                  base_url="${candidate}"
+                  break
+                fi
+              fi
+            done
+            if [[ -n "${base_url}" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ -z "${base_url}" ]]; then
+            echo "::error::Timed out waiting for KMS /health on candidate URLs"
+            phala logs --cvm-id "${VM_UUID}" --serial --tail 400 > "${ARTIFACTS_DIR}/cvm-serial.log" || true
+            phala logs --cvm-id "${VM_UUID}" --tail 400 > "${ARTIFACTS_DIR}/cvm-container.log" || true
+            exit 1
+          fi
+
+          nonce_b64="$(python3 - <<'PY'
+          import base64
+          import os
+          print(base64.b64encode(os.urandom(32)).decode("ascii"))
+          PY
+          )"
+          jq -n --arg nonceB64 "${nonce_b64}" '{nonceB64: $nonceB64}' > "${ARTIFACTS_DIR}/attest-request.json"
+
+          attest_code="$(curl -k -sS --max-time 20 -o "${ARTIFACTS_DIR}/attest-response.json" -w "%{http_code}" \
+            -X POST "${base_url}/attest" \
+            -H "Content-Type: application/json" \
+            -d @"${ARTIFACTS_DIR}/attest-request.json" || true)"
+
+          if [[ "${attest_code}" != "200" ]]; then
+            echo "::error::KMS /attest failed with HTTP ${attest_code}"
+            exit 1
+          fi
+          if ! jq -e . "${ARTIFACTS_DIR}/attest-response.json" >/dev/null 2>&1; then
+            echo "::error::KMS /attest response was not JSON"
+            exit 1
+          fi
+
+          jq -n \
+            --arg base_url "${base_url}" \
+            --arg nonce_b64 "${nonce_b64}" \
+            --arg vm_uuid "${VM_UUID}" \
+            --arg app_id "${APP_ID}" \
+            '{base_url: $base_url, nonce_b64: $nonce_b64, vm_uuid: $vm_uuid, app_id: $app_id}' \
+            > "${ARTIFACTS_DIR}/attestation-context.json"
+
+          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify quote externally (Intel Trust Authority)
+        id: verify_external
+        if: ${{ success() }}
+        env:
+          ITA_APPRAISAL_URL: ${{ inputs.ita_appraisal_url }}
+          ITA_POLICY_IDS: ${{ inputs.ita_policy_ids }}
+          ITA_POLICY_MUST_MATCH: ${{ inputs.ita_policy_must_match }}
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          policy_flags=()
+          if [[ -n "${ITA_POLICY_IDS}" ]]; then
+            policy_flags+=(--policy-ids "${ITA_POLICY_IDS}")
+          fi
+          if [[ "${ITA_POLICY_MUST_MATCH}" == "true" ]]; then
+            policy_flags+=(--policy-must-match)
+          fi
+
+          python3 scripts/verify_tdx_quote_ita.py \
+            --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
+            --output-dir "${ARTIFACTS_DIR}" \
+            --ita-url "${ITA_APPRAISAL_URL}" \
+            --ita-api-key "${ITA_API_KEY}" \
+            "${policy_flags[@]}"
+
+      - name: Derive MERO_KMS_ALLOWED_* candidate values
+        id: derive_candidates
+        if: ${{ success() }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          python3 scripts/extract_tdx_policy_candidates.py \
+            --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
+            --output-json "${ARTIFACTS_DIR}/kms-policy-candidates.json" \
+            --output-env "${ARTIFACTS_DIR}/kms-policy-candidates.env"
+
+          python3 - <<'PY'
+          import json
+          import os
+
+          candidates_path = os.path.join(os.environ["ARTIFACTS_DIR"], "kms-policy-candidates.json")
+          payload = json.load(open(candidates_path, "r", encoding="utf-8"))
+          repo_vars = payload["github_repository_variables"]
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key, value in repo_vars.items():
+                  output_name = key.lower()
+                  output.write(f"{output_name}={value}\n")
+          PY
+
+      - name: Summarize probe outputs
+        if: ${{ always() }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+          BASE_URL: ${{ steps.probe.outputs.base_url }}
+          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
+          APP_ID: ${{ steps.deploy.outputs.app_id }}
+          KEEP_CVM: ${{ inputs.keep_cvm }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Phala KMS staging probe"
+            echo ""
+            echo "- VM UUID: ${VM_UUID:-n/a}"
+            echo "- App ID: ${APP_ID:-n/a}"
+            echo "- KMS URL: ${BASE_URL:-n/a}"
+            echo "- Keep CVM: ${KEEP_CVM}"
+            echo ""
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ -f "${ARTIFACTS_DIR}/kms-policy-candidates.json" ]]; then
+            python3 - <<'PY'
+            import json
+            import os
+
+            payload = json.load(
+                open(
+                    os.path.join(os.environ["ARTIFACTS_DIR"], "kms-policy-candidates.json"),
+                    "r",
+                    encoding="utf-8",
+                )
+            )
+            vars_map = payload["github_repository_variables"]
+
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                summary.write("### Candidate repository variable values\n\n")
+                summary.write("```bash\n")
+                for key in sorted(vars_map.keys()):
+                    summary.write(f"{key}='{vars_map[key]}'\n")
+                summary.write("```\n\n")
+                summary.write(
+                    "Use these as GitHub repository variables for `release-mero-kms-phala.yaml` after review.\n"
+                )
+            PY
+          else
+            echo "Candidate policy output not available (probe likely failed before extraction)." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload probe artifacts
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kms-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.prepare.outputs.artifacts_dir }}/
+          retention-days: 14
+
+      - name: Cleanup ephemeral CVM
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        env:
+          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
+          APP_ID: ${{ steps.deploy.outputs.app_id }}
+          KEEP_CVM: ${{ inputs.keep_cvm }}
+        run: |
+          set -euo pipefail
+          if [[ "${KEEP_CVM}" == "true" ]]; then
+            echo "Skipping cleanup because keep_cvm=true"
+            exit 0
+          fi
+
+          if [[ -z "${VM_UUID}" ]]; then
+            echo "No VM UUID recorded; nothing to clean up."
+            exit 0
+          fi
+
+          if ! phala cvms delete "${VM_UUID}" --force --yes; then
+            echo "Delete by VM UUID failed; retrying with app ID."
+            if [[ -n "${APP_ID}" ]]; then
+              phala cvms delete "${APP_ID}" --force --yes
+            fi
+          fi

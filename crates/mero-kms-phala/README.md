@@ -59,6 +59,44 @@ The service verifies:
   - `sha256(peer_id)` in bytes `[32..64]`,
 - quote measurements/TCB satisfy configured policy.
 
+### `POST /attest`
+
+Generate a fresh KMS quote so callers can verify KMS code/measurement before
+requesting keys.
+
+Request:
+
+```json
+{
+  "nonceB64": "base64-32-byte-nonce",
+  "bindingB64": "optional-base64-32-byte-binding"
+}
+```
+
+Response:
+
+```json
+{
+  "quoteB64": "...",
+  "reportDataHex": "64-byte-report-data-hex",
+  "eventLog": [],
+  "vmConfig": "{...}"
+}
+```
+
+`reportData` layout:
+
+- bytes `[0..32]`: caller-provided nonce (freshness),
+- bytes `[32..64]`: caller binding (or KMS default domain separator if omitted).
+
+Recommended caller verification:
+
+1. Verify quote cryptographically.
+2. Verify `reportData[0..32]` matches nonce.
+3. Verify `reportData[32..64]` matches expected binding.
+4. Verify KMS measurements (MRTD/RTMR/TCB) against governed allowlist.
+5. Only then call `/challenge` + `/get-key`.
+
 ## Configuration
 
 Environment variables:
