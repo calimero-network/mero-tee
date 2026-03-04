@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       kms_image:
-        description: "mero-kms-phala image tag/digest (for example ghcr.io/org/mero-kms-phala:1.2.3)"
+        description: "Pinned mero-kms-phala image tag/digest (no :latest), for example ghcr.io/calimero-network/mero-kms-phala:pr-1"
         required: true
-        default: "ghcr.io/calimero-network/mero-kms-phala:latest"
       instance_type:
         description: "Phala instance type (for example tdx.small)"
         required: true
@@ -108,6 +107,15 @@ jobs:
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
           set -euo pipefail
+          if [[ -z "${KMS_IMAGE}" ]]; then
+            echo "::error::kms_image input is required."
+            exit 1
+          fi
+          if [[ "${KMS_IMAGE}" =~ :latest$ ]]; then
+            echo "::error::Refusing mutable image tag ':latest'. Provide a pinned image tag/digest that includes /attest."
+            echo "Example: ghcr.io/calimero-network/mero-kms-phala:pr-1"
+            exit 1
+          fi
           artifacts_dir="${RUNNER_TEMP}/kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           compose_file="${artifacts_dir}/docker-compose.kms-probe.yaml"
           mkdir -p "${artifacts_dir}"
@@ -364,7 +372,16 @@ jobs:
             -d @"${ARTIFACTS_DIR}/attest-request.json" || true)"
 
           if [[ "${attest_code}" != "200" ]]; then
+            if [[ "${attest_code}" == "404" ]]; then
+              echo "::error::KMS /attest returned HTTP 404."
+              echo "::error::The selected image likely does not expose /attest (older build)."
+              echo "::error::Use a pinned image tag/digest that includes /attest (for example ghcr.io/calimero-network/mero-kms-phala:pr-1)."
+            fi
             echo "::error::KMS /attest failed with HTTP ${attest_code}"
+            if [[ -s "${ARTIFACTS_DIR}/attest-response.json" ]]; then
+              echo "attest-response body preview:"
+              sed -n '1,40p' "${ARTIFACTS_DIR}/attest-response.json"
+            fi
             exit 1
           fi
           if ! jq -e . "${ARTIFACTS_DIR}/attest-response.json" >/dev/null 2>&1; then

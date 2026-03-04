@@ -31,10 +31,13 @@ Workflow file:
 
 Run the workflow manually (`workflow_dispatch`) and provide:
 
-- `kms_image` (for example `ghcr.io/calimero-network/mero-kms-phala:1.2.3`)
+- `kms_image` pinned to a reviewed tag/digest that includes `/attest`
+  (for example `ghcr.io/calimero-network/mero-kms-phala:pr-1`)
 - optional `region`
 - optional `ita_policy_ids`
 - optional `kms_url_override` if your endpoint format differs from default derivation
+
+Do not use mutable `:latest` for this workflow.
 
 ## Outputs
 

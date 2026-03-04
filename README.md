@@ -73,6 +73,7 @@ Collect candidate KMS allowlists automatically from a staged Phala deployment:
 
 - Run GitHub Actions workflow `.github/workflows/kms_staging_probe_phala.yaml`
 - Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
+- Use a pinned `kms_image` tag/digest that exposes `/attest` (do not use `:latest`)
 - Produces copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values and probe artifacts
 
 Promote staged candidates into a reviewable, versioned policy PR:
