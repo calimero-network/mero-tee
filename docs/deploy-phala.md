@@ -40,7 +40,7 @@ All services run in the same CVM. Example:
 ```yaml
 services:
   mero-kms:
-    image: ghcr.io/calimero-network/mero-kms-phala:latest
+    image: ghcr.io/calimero-network/mero-kms-phala:2.1.3
     ports:
       - "8080:8080"
     environment:
@@ -58,7 +58,7 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
 
   merod:
-    image: ghcr.io/calimero-network/merod:latest
+    image: ghcr.io/calimero-network/merod:2.1.3
     ports:
       - "2428:2428"
       - "2528:2528"
@@ -71,6 +71,7 @@ services:
 ```
 
 **Important:** KMS must start before merod so the key can be fetched at startup.
+Use pinned tags or digests for production; avoid mutable tags such as `:latest`.
 
 ## Deploying to Phala Cloud
 
@@ -104,6 +105,12 @@ merod --home /data --node default init \
 ```bash
 merod --home /data --node default config \
   'tee.kms.phala.url="http://mero-kms:8080/"'
+```
+
+For production, apply release-pinned attestation policy from signed artifacts:
+
+```bash
+scripts/apply_merod_kms_attestation_config.sh 2.1.3 http://mero-kms:8080/ /data default
 ```
 
 ### 3. Run merod

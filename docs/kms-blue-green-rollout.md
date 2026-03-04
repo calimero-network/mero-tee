@@ -43,6 +43,15 @@ scripts/verify_mero_kms_release_assets.sh X.Y.Z
 - Use a new service endpoint (DNS/URL) and independent rollout controls.
 - Publish verified release assets for this tag.
 
+### 2.5 Promote policy entry for this release tag
+
+- Recommended: let `kms_policy_auto_pipeline.yaml` dispatch probe + promotion
+  automatically after version bump merge.
+- Fallback: run `kms_staging_probe_phala.yaml` and then `kms_policy_promotion_pr.yaml` manually.
+- Merge the policy PR so `policies/mero-kms-phala/<X.Y.Z>.json` is present.
+- Keep `policies/mero-kms-phala/index.json` updated as the historical registry.
+- Release automation reads this registry entry for policy values.
+
 ### 3. Generate pinned merod TEE config
 
 Generate config from signed policy artifact:

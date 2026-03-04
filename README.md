@@ -20,6 +20,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
 - [KMS policy promotion workflow (PR)](docs/kms-policy-promotion-pr.md)
+- [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
@@ -45,7 +46,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala**: Binaries published per platform
 - **mero-kms-phala release trust bundle**:
   - `mero-kms-phala-checksums.txt` (SHA-256 for binary archives),
-  - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata),
+  - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path),
   - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
@@ -76,7 +77,7 @@ Collect candidate KMS allowlists automatically from a staged Phala deployment:
 - Run GitHub Actions workflow `.github/workflows/kms_staging_probe_phala.yaml`
 - Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
 - By default, workflow resolves image from latest release tag; optional `kms_image` override must be pinned and expose `/attest` (do not use container `:latest`)
-- Produces copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values and probe artifacts
+- Produces policy candidate artifacts for PR promotion
 
 Promote staged candidates into a reviewable, versioned policy PR:
 
@@ -84,6 +85,19 @@ Promote staged candidates into a reviewable, versioned policy PR:
 - Input the probe run ID and target release tag
 - Workflow updates `policies/mero-kms-phala/<tag>.json` + `index.json` and opens a PR
   (or prints a manual PR compare URL if Actions PR creation is disabled)
+- `index.json` keeps a historical list of versioned policy entries (with SHA-256)
+- Automatic option: `.github/workflows/kms_policy_auto_pipeline.yaml` dispatches
+  probe + promotion workflows after version bumps merged to `master`
+
+Release automation reads the policy registry directly (`policies/mero-kms-phala`)
+for the target crate version, so version bump + promoted policy stay aligned.
+
+Recommended release order:
+
+1. Merge version bump PR for the target release tag.
+2. Auto policy pipeline dispatches probe + promotion PR (or run those manually).
+3. Review and merge policy PR for the same release tag.
+4. Release workflow publishes signed artifacts from the merged policy registry entry.
 
 ## Related Repositories
 

@@ -1,0 +1,214 @@
+name: Auto KMS policy promotion
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "crates/mero-kms-phala/Cargo.toml"
+      - ".github/workflows/kms_policy_auto_pipeline.yaml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  auto-promote:
+    name: Probe + promote policy automatically
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Resolve target version and gate conditions
+        id: gate
+        run: |
+          set -euo pipefail
+
+          version="$(
+            cargo metadata --format-version 1 --no-deps 2>/dev/null \
+              | jq -r '.packages[] | select(.name=="mero-kms-phala") | .version'
+          )"
+          if [[ -z "${version}" || "${version}" == "null" ]]; then
+            echo "::error::Could not resolve mero-kms-phala version from Cargo metadata."
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+          if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "should_run=false" >> "${GITHUB_OUTPUT}"
+            echo "reason=release_exists" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if scripts/read_mero_kms_policy_registry.sh "${version}" >/dev/null 2>&1; then
+            echo "should_run=false" >> "${GITHUB_OUTPUT}"
+            echo "reason=policy_entry_exists" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          existing_pr="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --state open \
+              --search "\"chore(policy): promote KMS policy candidate for ${version}\" in:title" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [[ -n "${existing_pr}" ]]; then
+            echo "should_run=false" >> "${GITHUB_OUTPUT}"
+            echo "reason=promotion_pr_open_${existing_pr}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "should_run=true" >> "${GITHUB_OUTPUT}"
+          echo "reason=policy_missing" >> "${GITHUB_OUTPUT}"
+
+      - name: Wait for release workflow on current push
+        if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+
+          release_run_id=""
+          for _ in $(seq 1 60); do
+            release_run_id="$(
+              gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "release-mero-kms-phala.yaml" \
+                --event push \
+                --branch master \
+                --limit 50 \
+                --json databaseId,headSha,createdAt \
+                --jq --arg sha "${GITHUB_SHA}" \
+                  '[.[] | select(.headSha == $sha)] | sort_by(.createdAt) | last | .databaseId // empty'
+            )"
+            if [[ -n "${release_run_id}" ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ -z "${release_run_id}" ]]; then
+            echo "::error::Could not find release workflow run for commit ${GITHUB_SHA}."
+            exit 1
+          fi
+
+          echo "Waiting for release workflow run ${release_run_id} to complete..."
+          gh run watch "${release_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+      - name: Dispatch staging probe and wait for completion
+        if: ${{ steps.gate.outputs.should_run == 'true' }}
+        id: probe
+        run: |
+          set -euo pipefail
+
+          resolve_dispatched_run_id() {
+            local workflow_file="$1"
+            local started_at="$2"
+            local run_id=""
+
+            for _ in $(seq 1 60); do
+              run_id="$(
+                gh run list \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --workflow "${workflow_file}" \
+                  --event workflow_dispatch \
+                  --branch master \
+                  --limit 50 \
+                  --json databaseId,createdAt \
+                  --jq --arg started "${started_at}" \
+                    '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty'
+              )"
+              if [[ -n "${run_id}" ]]; then
+                echo "${run_id}"
+                return 0
+              fi
+              sleep 10
+            done
+
+            return 1
+          }
+
+          probe_image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:edge"
+          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          gh workflow run "kms_staging_probe_phala.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f kms_image="${probe_image}" \
+            -f kms_release_tag=latest
+
+          probe_run_id="$(resolve_dispatched_run_id "kms_staging_probe_phala.yaml" "${dispatch_started_at}")" || {
+            echo "::error::Could not resolve dispatched probe run id."
+            exit 1
+          }
+
+          echo "probe_run_id=${probe_run_id}" >> "${GITHUB_OUTPUT}"
+          gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+      - name: Dispatch policy promotion workflow
+        if: ${{ steps.gate.outputs.should_run == 'true' }}
+        run: |
+          set -euo pipefail
+
+          resolve_dispatched_run_id() {
+            local workflow_file="$1"
+            local started_at="$2"
+            local run_id=""
+
+            for _ in $(seq 1 60); do
+              run_id="$(
+                gh run list \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --workflow "${workflow_file}" \
+                  --event workflow_dispatch \
+                  --branch master \
+                  --limit 50 \
+                  --json databaseId,createdAt \
+                  --jq --arg started "${started_at}" \
+                    '[.[] | select(.createdAt >= $started)] | sort_by(.createdAt) | last | .databaseId // empty'
+              )"
+              if [[ -n "${run_id}" ]]; then
+                echo "${run_id}"
+                return 0
+              fi
+              sleep 10
+            done
+
+            return 1
+          }
+
+          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          gh workflow run "kms_policy_promotion_pr.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f probe_run_id="${{ steps.probe.outputs.probe_run_id }}" \
+            -f release_tag="${{ steps.gate.outputs.version }}" \
+            -f base_branch=master \
+            -f draft_pr=true
+
+          promotion_run_id="$(resolve_dispatched_run_id "kms_policy_promotion_pr.yaml" "${dispatch_started_at}")" || {
+            echo "::error::Could not resolve dispatched policy promotion run id."
+            exit 1
+          }
+
+          gh run watch "${promotion_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Auto KMS policy promotion"
+            echo
+            echo "- Version: \`${{ steps.gate.outputs.version || 'n/a' }}\`"
+            echo "- Should run: \`${{ steps.gate.outputs.should_run || 'false' }}\`"
+            echo "- Gate reason: \`${{ steps.gate.outputs.reason || 'n/a' }}\`"
+            echo "- Probe run: \`${{ steps.probe.outputs.probe_run_id || 'n/a' }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

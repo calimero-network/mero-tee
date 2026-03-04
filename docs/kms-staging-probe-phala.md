@@ -12,13 +12,9 @@ Workflow file:
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
 4. Verifies the quote via Intel Trust Authority (`scripts/verify_tdx_quote_ita.py`).
-5. Extracts candidate policy values (`scripts/extract_tdx_policy_candidates.py`) for:
-   - `MERO_KMS_ALLOWED_TCB_STATUSES_JSON`
-   - `MERO_KMS_ALLOWED_MRTD_JSON`
-   - `MERO_KMS_ALLOWED_RTMR0_JSON`
-   - `MERO_KMS_ALLOWED_RTMR1_JSON`
-   - `MERO_KMS_ALLOWED_RTMR2_JSON`
-   - `MERO_KMS_ALLOWED_RTMR3_JSON`
+5. Extracts candidate policy values (`scripts/extract_tdx_policy_candidates.py`) and writes:
+   - `kms-policy-candidates.json` (canonical candidate policy payload),
+   - `kms-policy-candidates.env` (compatibility/env export form).
 6. Uploads full probe artifacts.
 7. Always deletes the ephemeral CVM during cleanup (on both success and failure paths).
 
@@ -32,11 +28,12 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
 ## Running it
 
-Run the workflow manually (`workflow_dispatch`) and provide:
+This workflow is used by the automatic pipeline (`kms_policy_auto_pipeline.yaml`)
+and can also be run manually (`workflow_dispatch`) with:
 
 - `kms_release_tag`:
-  - `latest` (default) to auto-use the latest GitHub release tag, or
-  - explicit release tag (for example `2.1.2`)
+  - explicit release tag (recommended, for example `2.1.3`), or
+  - `latest` (default) to auto-use the latest GitHub release tag (staging convenience only)
 - optional `kms_image` override pinned to a reviewed tag/digest that includes `/attest`
   (for example `ghcr.io/calimero-network/mero-kms-phala:pr-1`)
 - optional `region`
@@ -55,8 +52,7 @@ The workflow uploads an artifact bundle `kms-staging-probe-<run_id>-<attempt>` c
 - generated policy candidates:
   - `kms-policy-candidates.json`
   - `kms-policy-candidates.env`
-
-The run summary also prints copy/paste-ready `MERO_KMS_ALLOWED_*_JSON` values.
+- run summary metadata, including candidate values and probe context
 
 ## Promotion to governed policy PR
 
@@ -70,3 +66,7 @@ with the probe run ID and target release tag. This creates/updates:
 - `policies/mero-kms-phala/index.json`
 
 in a pull request for review before release publication.
+
+After merge, release automation reads this policy registry entry for the same
+release tag. Repository variable updates are no longer required for policy
+allowlist publication.

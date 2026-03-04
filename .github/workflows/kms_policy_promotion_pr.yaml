@@ -146,8 +146,10 @@ jobs:
             --argjson context "${context_json}" \
             --slurpfile candidates "${candidates_file}" \
             '{
-              schema_version: 1,
+              schema_version: 2,
+              policy_id: ("mero-kms-phala/" + $tag),
               release_tag: $tag,
+              status: "approved",
               generated_at: (now | todate),
               source: {
                 repository: $repository,
@@ -157,9 +159,12 @@ jobs:
                 artifact_name: $source_artifact,
                 attestation_context: $context
               },
+              policy: $candidates[0].policy,
               candidate_policy: $candidates[0].policy,
               github_repository_variables: $candidates[0].github_repository_variables
             }' > "${policy_file}"
+
+          policy_sha256="$(sha256sum "${policy_file}" | awk '{print $1}')"
 
           tmp_index="$(mktemp)"
           jq \
@@ -168,14 +173,18 @@ jobs:
             --arg run_id "${PROBE_RUN_ID}" \
             --arg run_url "${probe_run_url}" \
             --arg artifact "${ARTIFACT_NAME}" \
+            --arg policy_sha256 "${policy_sha256}" \
             '
             .schema_version = 1 |
             .policies = (.policies // []) |
             .policies = (
               [ .policies[] | select(.release_tag != $tag) ] + [
                 {
+                  policy_id: ("mero-kms-phala/" + $tag),
                   release_tag: $tag,
                   path: $path,
+                  status: "approved",
+                  policy_sha256: $policy_sha256,
                   source_probe_run_id: $run_id,
                   source_probe_run_url: $run_url,
                   source_probe_artifact_name: $artifact,
@@ -198,6 +207,7 @@ jobs:
             echo
             echo "- \`${policy_file}\`"
             echo "- \`policies/mero-kms-phala/index.json\`"
+            echo "- Policy SHA-256: \`${policy_sha256}\`"
             echo
             echo "### Candidate GitHub repository variables"
             echo
