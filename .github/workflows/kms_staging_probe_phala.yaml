@@ -143,6 +143,10 @@ jobs:
           set -euo pipefail
           deploy_name="kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           deploy_json="${ARTIFACTS_DIR}/phala-deploy.json"
+          deploy_raw="${ARTIFACTS_DIR}/phala-deploy.raw.log"
+
+          # Emit deploy_name early so cleanup can still run on partial failures.
+          echo "deploy_name=${deploy_name}" >> "${GITHUB_OUTPUT}"
 
           deploy_cmd=(
             phala
@@ -160,10 +164,45 @@ jobs:
             deploy_cmd+=(--region "${REGION}")
           fi
 
-          "${deploy_cmd[@]}" > "${deploy_json}"
-          if ! jq -e . "${deploy_json}" >/dev/null 2>&1; then
-            echo "::error::phala deploy --json did not return valid JSON"
-            cat "${deploy_json}"
+          if ! "${deploy_cmd[@]}" > "${deploy_raw}" 2>&1; then
+            echo "::error::phala deploy command failed"
+            cat "${deploy_raw}"
+            exit 1
+          fi
+
+          # phala CLI may print progress lines around JSON; extract structured payload robustly.
+          if ! python3 - "${deploy_raw}" "${deploy_json}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          raw_path = pathlib.Path(sys.argv[1])
+          out_path = pathlib.Path(sys.argv[2])
+          content = raw_path.read_text(encoding="utf-8", errors="replace")
+          decoder = json.JSONDecoder()
+
+          selected = None
+          for index, char in enumerate(content):
+              if char != "{":
+                  continue
+              try:
+                  candidate, _ = decoder.raw_decode(content[index:])
+              except json.JSONDecodeError:
+                  continue
+              if isinstance(candidate, dict) and "vm_uuid" in candidate and "app_id" in candidate:
+                  selected = candidate
+                  break
+
+          if selected is None:
+              print("Could not extract deploy JSON payload from phala output", file=sys.stderr)
+              print(content, file=sys.stderr)
+              sys.exit(1)
+
+          out_path.write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
+          PY
+          then
+            echo "::error::phala deploy --json did not return parseable JSON payload"
+            cat "${deploy_raw}"
             exit 1
           fi
 
@@ -177,7 +216,6 @@ jobs:
 
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
-          echo "deploy_name=${deploy_name}" >> "${GITHUB_OUTPUT}"
 
       - name: Collect CVM metadata
         if: ${{ success() }}
@@ -362,33 +400,31 @@ jobs:
             echo ""
           } >> "${GITHUB_STEP_SUMMARY}"
 
-          if [[ -f "${ARTIFACTS_DIR}/kms-policy-candidates.json" ]]; then
-            python3 - <<'PY'
-            import json
-            import os
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
 
-            payload = json.load(
-                open(
-                    os.path.join(os.environ["ARTIFACTS_DIR"], "kms-policy-candidates.json"),
-                    "r",
-                    encoding="utf-8",
-                )
-            )
-            vars_map = payload["github_repository_variables"]
+          summary_path = pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"])
+          candidates_path = pathlib.Path(os.environ["ARTIFACTS_DIR"]) / "kms-policy-candidates.json"
 
-            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-                summary.write("### Candidate repository variable values\n\n")
-                summary.write("```bash\n")
-                for key in sorted(vars_map.keys()):
-                    summary.write(f"{key}='{vars_map[key]}'\n")
-                summary.write("```\n\n")
-                summary.write(
-                    "Use these as GitHub repository variables for `release-mero-kms-phala.yaml` after review.\n"
-                )
-            PY
-          else
-            echo "Candidate policy output not available (probe likely failed before extraction)." >> "${GITHUB_STEP_SUMMARY}"
-          fi
+          with summary_path.open("a", encoding="utf-8") as summary:
+              if not candidates_path.exists():
+                  summary.write(
+                      "Candidate policy output not available (probe likely failed before extraction).\n"
+                  )
+              else:
+                  payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+                  vars_map = payload["github_repository_variables"]
+                  summary.write("### Candidate repository variable values\n\n")
+                  summary.write("```bash\n")
+                  for key in sorted(vars_map.keys()):
+                      summary.write(f"{key}='{vars_map[key]}'\n")
+                  summary.write("```\n\n")
+                  summary.write(
+                      "Use these as GitHub repository variables for `release-mero-kms-phala.yaml` after review.\n"
+                  )
+          PY
 
       - name: Upload probe artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
@@ -399,10 +435,11 @@ jobs:
           retention-days: 14
 
       - name: Cleanup ephemeral CVM
-        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
         env:
           VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
           APP_ID: ${{ steps.deploy.outputs.app_id }}
+          DEPLOY_NAME: ${{ steps.deploy.outputs.deploy_name }}
           KEEP_CVM: ${{ inputs.keep_cvm }}
         run: |
           set -euo pipefail
@@ -411,14 +448,32 @@ jobs:
             exit 0
           fi
 
-          if [[ -z "${VM_UUID}" ]]; then
-            echo "No VM UUID recorded; nothing to clean up."
-            exit 0
+          deleted="false"
+          if [[ -n "${VM_UUID}" ]]; then
+            if phala cvms delete "${VM_UUID}" --force --yes; then
+              deleted="true"
+            else
+              echo "Delete by VM UUID failed; retrying with app ID."
+            fi
           fi
 
-          if ! phala cvms delete "${VM_UUID}" --force --yes; then
-            echo "Delete by VM UUID failed; retrying with app ID."
-            if [[ -n "${APP_ID}" ]]; then
-              phala cvms delete "${APP_ID}" --force --yes
+          if [[ "${deleted}" != "true" && -n "${APP_ID}" ]]; then
+            if phala cvms delete "${APP_ID}" --force --yes; then
+              deleted="true"
+            else
+              echo "Delete by app ID failed; retrying with deploy name."
             fi
+          fi
+
+          if [[ "${deleted}" != "true" ]]; then
+            fallback_name="${DEPLOY_NAME:-kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+            if phala cvms delete "${fallback_name}" --force --yes; then
+              deleted="true"
+            fi
+          fi
+
+          if [[ "${deleted}" == "true" ]]; then
+            echo "Ephemeral CVM cleanup completed."
+          else
+            echo "::warning::Could not confirm cleanup of staging CVM. Please verify manually."
           fi
