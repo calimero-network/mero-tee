@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Wait for release workflow on current push
-        if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' }}
+        if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' && steps.gate.outputs.reason == 'policy_missing' }}
         run: |
           set -euo pipefail
 
