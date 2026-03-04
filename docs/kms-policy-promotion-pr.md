@@ -50,12 +50,23 @@ pushes the promotion branch and prints a manual compare URL in the job summary.
 
 ## Recommended flow
 
-1. Run `kms_staging_probe_phala.yaml`
-2. Review probe artifacts and summary
-3. Run `kms_policy_promotion_pr.yaml` with the probe run ID
-4. Review and merge PR
-5. Merge version bump PR for same release tag
-6. Release workflow reads `policies/mero-kms-phala/<tag>.json` automatically
+### Automatic mode (recommended)
+
+1. Merge version bump PR for target `mero-kms-phala` release tag.
+2. `kms_policy_auto_pipeline.yaml` dispatches:
+   - `kms_staging_probe_phala.yaml`
+   - `kms_policy_promotion_pr.yaml`
+3. Review and merge generated policy PR.
+4. Release workflow runs on policy merge and publishes signed artifacts.
+
+### Manual mode (fallback)
+
+1. Merge version bump PR for same release tag.
+2. Run `kms_staging_probe_phala.yaml`.
+3. Review probe artifacts and summary.
+4. Run `kms_policy_promotion_pr.yaml` with the probe run ID.
+5. Review and merge policy PR.
+6. Release workflow runs on policy merge and publishes signed artifacts.
 
 ## Notes
 

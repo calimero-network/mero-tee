@@ -28,7 +28,8 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
 ## Running it
 
-Run the workflow manually (`workflow_dispatch`) and provide:
+This workflow is used by the automatic pipeline (`kms_policy_auto_pipeline.yaml`)
+and can also be run manually (`workflow_dispatch`) with:
 
 - `kms_release_tag`:
   - explicit release tag (recommended, for example `2.1.3`), or

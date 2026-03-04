@@ -8,6 +8,8 @@ on:
       - Cargo.toml
       - Cargo.lock
       - "crates/**"
+      - "policies/mero-kms-phala/**"
+      - "scripts/read_mero_kms_policy_registry.sh"
       - ".github/workflows/release-mero-kms-phala.yaml"
       - ".github/workflows/deps/**"
   pull_request:
@@ -15,6 +17,8 @@ on:
       - Cargo.toml
       - Cargo.lock
       - "crates/**"
+      - "policies/mero-kms-phala/**"
+      - "scripts/read_mero_kms_policy_registry.sh"
       - ".github/workflows/release-mero-kms-phala.yaml"
       - ".github/workflows/deps/**"
   workflow_dispatch:
@@ -73,8 +77,12 @@ jobs:
               prerelease=true
             fi
             if ! gh release view "$version" --repo ${{ github.repository }} >/dev/null 2>&1; then
-              binary_release=true
-              docker_release=true
+              if scripts/read_mero_kms_policy_registry.sh "$version" >/dev/null 2>&1; then
+                binary_release=true
+                docker_release=true
+              else
+                echo "::warning::Policy registry entry for ${version} not found; skipping release publication until policy PR is merged."
+              fi
             fi
           elif [ "${{ github.event_name }}" == "pull_request" ]; then
             docker_release=true

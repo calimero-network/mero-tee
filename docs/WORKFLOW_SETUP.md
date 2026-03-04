@@ -36,3 +36,11 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 ## Trigger
 
 The workflow runs on push to `master` when `packer/gcp/merod/versions.json` changes.
+
+## KMS policy automation
+
+Policy probe/promotion automation (`kms_policy_auto_pipeline.yaml`) reuses the
+same secrets as `kms_staging_probe_phala.yaml`:
+
+- `PHALA_CLOUD_API_KEY`
+- `ITA_API_KEY`
