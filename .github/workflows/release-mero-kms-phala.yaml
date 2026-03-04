@@ -49,6 +49,7 @@ jobs:
         run: |
           bash -n scripts/verify_locked_image_release_assets.sh
           bash -n scripts/verify_mero_kms_release_assets.sh
+          bash -n scripts/read_mero_kms_policy_registry.sh
           bash -n scripts/generate_merod_kms_attestation_config.sh
           bash -n scripts/apply_merod_kms_attestation_config.sh
 
@@ -264,13 +265,6 @@ jobs:
           merge-multiple: true
 
       - name: Generate release checksums, manifest, and attestation policy
-        env:
-          MERO_KMS_ALLOWED_TCB_STATUSES_JSON: ${{ vars.MERO_KMS_ALLOWED_TCB_STATUSES_JSON }}
-          MERO_KMS_ALLOWED_MRTD_JSON: ${{ vars.MERO_KMS_ALLOWED_MRTD_JSON }}
-          MERO_KMS_ALLOWED_RTMR0_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR0_JSON }}
-          MERO_KMS_ALLOWED_RTMR1_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR1_JSON }}
-          MERO_KMS_ALLOWED_RTMR2_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR2_JSON }}
-          MERO_KMS_ALLOWED_RTMR3_JSON: ${{ vars.MERO_KMS_ALLOWED_RTMR3_JSON }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -296,12 +290,16 @@ jobs:
             done < release-assets/mero-kms-phala-checksums.txt | jq -s '.'
           )"
 
-          allowed_tcb_statuses_json="${MERO_KMS_ALLOWED_TCB_STATUSES_JSON:-[\"UpToDate\"]}"
-          allowed_mrtd_json="${MERO_KMS_ALLOWED_MRTD_JSON:-[]}"
-          allowed_rtmr0_json="${MERO_KMS_ALLOWED_RTMR0_JSON:-[]}"
-          allowed_rtmr1_json="${MERO_KMS_ALLOWED_RTMR1_JSON:-[]}"
-          allowed_rtmr2_json="${MERO_KMS_ALLOWED_RTMR2_JSON:-[]}"
-          allowed_rtmr3_json="${MERO_KMS_ALLOWED_RTMR3_JSON:-[]}"
+          policy_registry_json="$(
+            scripts/read_mero_kms_policy_registry.sh "${{ needs.prepare.outputs.version }}"
+          )"
+          policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
+          allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
+          allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' <<< "${policy_registry_json}")"
+          allowed_rtmr0_json="$(jq -c '.policy.allowed_rtmr0' <<< "${policy_registry_json}")"
+          allowed_rtmr1_json="$(jq -c '.policy.allowed_rtmr1' <<< "${policy_registry_json}")"
+          allowed_rtmr2_json="$(jq -c '.policy.allowed_rtmr2' <<< "${policy_registry_json}")"
+          allowed_rtmr3_json="$(jq -c '.policy.allowed_rtmr3' <<< "${policy_registry_json}")"
 
           for json_var in \
             allowed_tcb_statuses_json \
@@ -333,6 +331,7 @@ jobs:
             --arg run_attempt "${{ github.run_attempt }}" \
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
+            --arg policy_registry_source_path "${policy_registry_source_path}" \
             --argjson tags "${tags_json}" \
             --argjson binaries "${binaries_json}" \
             '{
@@ -353,6 +352,7 @@ jobs:
                   bytes_0_31: "nonce",
                   bytes_32_63: "binding_or_default_domain_separator"
                 },
+                policy_registry_entry_path: $policy_registry_source_path,
                 attestation_policy_asset: "mero-kms-phala-attestation-policy.json"
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
@@ -365,6 +365,7 @@ jobs:
             --arg repository "${{ github.repository }}" \
             --arg workflow "${{ github.workflow }}" \
             --arg ref "${{ github.ref }}" \
+            --arg policy_registry_source_path "${policy_registry_source_path}" \
             --arg default_binding_hex "${default_binding_hex}" \
             --arg default_binding_b64 "${default_binding_b64}" \
             --argjson allowed_tcb_statuses "${allowed_tcb_statuses_json}" \
@@ -385,6 +386,7 @@ jobs:
                 workflow: $workflow,
                 ref: $ref
               },
+              policy_registry_entry_path: $policy_registry_source_path,
               kms: {
                 provider: "mero-kms-phala",
                 attest_endpoint: "/attest",
