@@ -241,25 +241,72 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Query live CVM metadata right before probing so endpoint discovery
+          # follows the actual gateway domain assigned by Phala.
+          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-live.json" || true
+
           python3 - <<'PY' > "${ARTIFACTS_DIR}/candidate-urls.json"
           import json
           import os
+          from pathlib import Path
+
+          def normalize_url(value: str) -> str:
+              return value.strip().rstrip("/")
+
+          seen = set()
+          urls = []
+
+          def add(url: str | None) -> None:
+              if not url:
+                  return
+              normalized = normalize_url(url)
+              if not normalized:
+                  return
+              if normalized in seen:
+                  return
+              seen.add(normalized)
+              urls.append(normalized)
+
+          def load_json_if_exists(path: Path):
+              if not path.exists():
+                  return None
+              try:
+                  return json.loads(path.read_text(encoding="utf-8"))
+              except Exception:
+                  return None
 
           override = os.environ.get("KMS_URL_OVERRIDE", "").strip().rstrip("/")
           if override:
-              urls = [override]
+              add(override)
           else:
               app_id_raw = os.environ["APP_ID"].strip()
               port = os.environ["SERVICE_PORT"].strip()
               suffix = os.environ["DOMAIN_SUFFIX"].strip()
+              artifacts_dir = Path(os.environ["ARTIFACTS_DIR"])
+
+              for metadata_name in ("phala-cvm-live.json", "phala-cvm.json"):
+                  metadata = load_json_if_exists(artifacts_dir / metadata_name)
+                  if not isinstance(metadata, dict):
+                      continue
+
+                  for endpoint in metadata.get("endpoints", []):
+                      if isinstance(endpoint, dict):
+                          add(endpoint.get("app"))
+                          add(endpoint.get("instance"))
+
+                  gateway = metadata.get("gateway")
+                  if isinstance(gateway, dict):
+                      base_domain = str(gateway.get("base_domain") or "").strip()
+                      if base_domain:
+                          add(f"https://{app_id_raw}-{port}.{base_domain}")
+                          add(f"http://{app_id_raw}-{port}.{base_domain}")
 
               with_prefix = app_id_raw if app_id_raw.startswith("app_") else f"app_{app_id_raw}"
               without_prefix = with_prefix.removeprefix("app_")
               hosts = [f"{with_prefix}-{port}.{suffix}", f"{without_prefix}-{port}.{suffix}"]
-              urls = []
               for scheme in ("https", "http"):
                   for host in hosts:
-                      urls.append(f"{scheme}://{host}")
+                      add(f"{scheme}://{host}")
 
           print(json.dumps({"urls": urls}, indent=2))
           PY
@@ -269,14 +316,19 @@ jobs:
             echo "::error::No candidate KMS URLs available"
             exit 1
           fi
+          printf "Candidate probe URLs:\n"
+          printf "  - %s\n" "${candidate_urls[@]}"
 
           timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
           deadline=$(( $(date +%s) + timeout_seconds ))
           base_url=""
+          attempt=0
 
           while [[ "$(date +%s)" -lt "${deadline}" ]]; do
             for candidate in "${candidate_urls[@]}"; do
+              attempt=$((attempt + 1))
               health_code="$(curl -k -sS --max-time 8 -o "${ARTIFACTS_DIR}/health.json" -w "%{http_code}" "${candidate}/health" || true)"
+              echo "Probe attempt ${attempt}: ${candidate}/health -> HTTP ${health_code}"
               if [[ "${health_code}" == "200" ]]; then
                 if jq -e '.status == "alive"' "${ARTIFACTS_DIR}/health.json" >/dev/null 2>&1; then
                   base_url="${candidate}"
@@ -292,6 +344,7 @@ jobs:
 
           if [[ -z "${base_url}" ]]; then
             echo "::error::Timed out waiting for KMS /health on candidate URLs"
+            phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-late.json" || true
             phala logs --cvm-id "${VM_UUID}" --serial --tail 400 > "${ARTIFACTS_DIR}/cvm-serial.log" || true
             phala logs --cvm-id "${VM_UUID}" --tail 400 > "${ARTIFACTS_DIR}/cvm-container.log" || true
             exit 1
