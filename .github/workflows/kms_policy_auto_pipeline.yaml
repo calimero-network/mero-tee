@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Wait for release workflow on current push
-        if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' }}
+        if: ${{ steps.gate.outputs.should_run == 'true' && github.event_name == 'push' && steps.gate.outputs.reason == 'policy_missing' }}
         run: |
           set -euo pipefail
 
@@ -98,8 +98,8 @@ jobs:
           done
 
           if [[ -z "${release_run_id}" ]]; then
-            echo "::error::Could not find release workflow run for commit ${GITHUB_SHA}."
-            exit 1
+            echo "::warning::Could not find release workflow run for commit ${GITHUB_SHA}; continuing with probe dispatch."
+            exit 0
           fi
 
           echo "Waiting for release workflow run ${release_run_id} to complete..."
