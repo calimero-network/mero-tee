@@ -1177,6 +1177,33 @@ jobs:
             | sed 's#  artifacts/#  #' \
             > artifacts/locked-image-checksums.txt
 
+          debug_mrtd="$(jq -r '.mrtd' artifacts/mrtd-debug.json)"
+          debug_ro_mrtd="$(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
+          locked_ro_mrtd="$(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
+          locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/merod-locked-image-policy.json)"
+
+          {
+            echo "## Locked image release ${{ needs.preflight.outputs.image_version }}"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo ""
+            echo "### Profile measurements"
+            echo ""
+            echo "| Profile | MRTD |"
+            echo "|---|---|"
+            echo "| debug | \`${debug_mrtd}\` |"
+            echo "| debug-read-only | \`${debug_ro_mrtd}\` |"
+            echo "| locked-read-only | \`${locked_ro_mrtd}\` |"
+            echo ""
+            echo "- locked-read-only RTMR0: \`${locked_ro_rtmr0}\`"
+            echo ""
+            echo "### Verify release assets"
+            echo ""
+            echo "\`\`\`bash"
+            echo "scripts/verify_locked_image_release_assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "\`\`\`"
+          } > artifacts/release-notes.md
+
           {
             echo "## Published MRTDs"
             echo ""
@@ -1251,6 +1278,7 @@ jobs:
           repository: ${{ github.repository }}
           tag_name: ${{ needs.preflight.outputs.image_version }}
           target_commitish: ${{ github.sha }}
+          body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
           files: |
             artifacts/mrtd-debug.json
