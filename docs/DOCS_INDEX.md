@@ -17,6 +17,7 @@ When changing release automation, policy workflows, or verification scripts:
 | Document | Primary source | Related workflows/scripts | Audience |
 |---|---|---|---|
 | `docs/ARCHITECTURE.md` | System trust model and component boundaries | `release-mero-kms-phala.yaml`, `gcp_locked_image_build.yaml` | Operators, auditors |
+| `docs/TRUST_AND_VERIFICATION.md` | Consolidated trust guarantees and verification entry point | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
 | `docs/deploy-phala.md` | Phala deployment runbook | `scripts/apply_merod_kms_attestation_config.sh` | Operators |
 | `docs/deploy-gcp.md` | GCP locked-image deployment runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml` | Operators |
 | `docs/verify-mrtd.md` | End-user/operator verification flow | `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_tdx_quote_ita.py` | Operators, auditors |

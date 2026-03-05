@@ -69,6 +69,8 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
 
+For a consolidated trust model and verification entry point, see [Trust & Verification](docs/TRUST_AND_VERIFICATION.md).
+
 Verify KMS release assets:
 
 ```bash
