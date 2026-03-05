@@ -25,7 +25,7 @@ Configure via GitHub repo variables or environment:
 ## Build
 
 ```bash
-cd node-image-gcp
+cd mero-tee
 packer build -var-file=ubuntu-intel.pkrvars.hcl ubuntu.pkr.hcl
 ```
 

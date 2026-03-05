@@ -23,7 +23,7 @@ root = pathlib.Path(".")
 
 cargo_toml_path = root / "mero-kms/Cargo.toml"
 cargo_lock_path = root / "Cargo.lock"
-versions_json_path = root / "node-image-gcp/versions.json"
+versions_json_path = root / "mero-tee/versions.json"
 policy_index_path = root / "policies/index.json"
 
 try:
@@ -42,7 +42,7 @@ except Exception as exc:
 
 image_version = versions_json.get("imageVersion")
 if not isinstance(image_version, str) or not image_version:
-    fail("Missing node-image-gcp/versions.json imageVersion")
+    fail("Missing mero-tee/versions.json imageVersion")
 
 if kms_version != image_version:
     fail(

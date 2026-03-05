@@ -56,7 +56,7 @@ Avoid mutable deployment references.
 
 For image build and publishing details, see:
 
-- [node-image-gcp/README.md](../../../node-image-gcp/README.md)
+- [mero-tee/README.md](../../../mero-tee/README.md)
 
 ---
 

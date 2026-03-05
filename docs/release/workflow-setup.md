@@ -36,7 +36,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 ## Trigger
 
-The workflow runs on push to `master` when `node-image-gcp/versions.json` changes.
+The workflow runs on push to `master` when `mero-tee/versions.json` changes.
 
 ## PR documentation guard
 
@@ -47,7 +47,7 @@ documentation update in `docs/**` or `README.md`:
 - `scripts/release/**`
 - `scripts/policy/**`
 - `scripts/attestation/**`
-- `node-image-gcp/**`
+- `mero-tee/**`
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
 
@@ -60,7 +60,7 @@ It validates the following are synchronized for the active release version:
 
 - `mero-kms/Cargo.toml` package version
 - `Cargo.lock` `mero-kms-phala` package version
-- `node-image-gcp/versions.json` `imageVersion`
+- `mero-tee/versions.json` `imageVersion`
 - `policies/index.json` release entry for that version
 - `policies/kms-phala/<version>.json`
 - `policies/node-image-gcp/<version>.json`

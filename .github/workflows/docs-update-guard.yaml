@@ -7,7 +7,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
-      - "node-image-gcp/**"
+      - "mero-tee/**"
       - "docs/**"
       - "README.md"
 
@@ -43,7 +43,7 @@ jobs:
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == node-image-gcp/* ]]; then
+            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 

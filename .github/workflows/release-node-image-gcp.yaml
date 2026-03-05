@@ -5,7 +5,7 @@ on:
     branches:
       - master
     paths:
-      - "node-image-gcp/versions.json"
+      - "mero-tee/versions.json"
   workflow_dispatch:
 
 concurrency:
@@ -47,8 +47,8 @@ jobs:
 
       - name: Validate packer helper scripts
         run: |
-          bash -n node-image-gcp/init.sh
-          bash -n node-image-gcp/build-and-release.sh
+          bash -n mero-tee/init.sh
+          bash -n mero-tee/build-and-release.sh
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/verify-kms-phala-release-assets.sh
           bash -n scripts/policy/read-node-image-gcp-policy-registry.sh
@@ -60,14 +60,14 @@ jobs:
       - name: Validate version manifest shape
         id: version_manifest
         run: |
-          image_version="$(jq -er '.imageVersion' node-image-gcp/versions.json)"
+          image_version="$(jq -er '.imageVersion' mero-tee/versions.json)"
           jq -e '
             has("imageVersion")
             and has("traefikVersion")
             and has("nodeExporterVersion")
             and has("vmagentVersion")
             and has("vectorVersion")
-          ' node-image-gcp/versions.json >/dev/null
+          ' mero-tee/versions.json >/dev/null
           echo "image_version=${image_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve merod release gate (master only)
@@ -111,7 +111,7 @@ jobs:
           done
 
           run_pipeline="true"
-          reason="Detected node-image-gcp/versions.json change on master."
+          reason="Detected mero-tee/versions.json change on master."
 
           echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
           echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -270,7 +270,7 @@ jobs:
       - name: Build profile image from node-image-gcp
         id: build_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        working-directory: node-image-gcp
+        working-directory: mero-tee
         run: |
           export PACKER_FORCE_BUILD=true
           ./init.sh
@@ -280,7 +280,7 @@ jobs:
       - name: Resolve image and VM parameters
         id: params
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        working-directory: node-image-gcp
+        working-directory: mero-tee
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

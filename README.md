@@ -7,7 +7,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 | Component | Description |
 |-----------|-------------|
 | **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVM |
-| **node-image-gcp/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
+| **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
 | **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
 
 ## Quick Links
@@ -49,7 +49,7 @@ Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-p
 
 ## Building GCP Images
 
-See [node-image-gcp/README.md](node-image-gcp/README.md). Requires Packer, Ansible, and GCP credentials.
+See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP credentials.
 
 ## Releases
 

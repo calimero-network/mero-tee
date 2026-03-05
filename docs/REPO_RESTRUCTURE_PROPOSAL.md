@@ -86,7 +86,7 @@ Avoid mixing lane names inside one artifact family.
 ```text
 Cargo.toml
 mero-kms/
-node-image-gcp/
+mero-tee/
 scripts/release/
 scripts/policy/
 scripts/attestation/
