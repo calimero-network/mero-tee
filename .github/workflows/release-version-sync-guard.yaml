@@ -1,0 +1,43 @@
+name: Release version sync guard
+
+on:
+  pull_request:
+    paths:
+      - "crates/mero-kms-phala/Cargo.toml"
+      - "Cargo.lock"
+      - "packer/gcp/merod/versions.json"
+      - "policies/index.json"
+      - "policies/mero-kms-phala/**"
+      - "policies/merod-locked-image/**"
+      - "scripts/check_release_version_sync.sh"
+      - ".github/workflows/release-version-sync-guard.yaml"
+  push:
+    branches:
+      - master
+    paths:
+      - "crates/mero-kms-phala/Cargo.toml"
+      - "Cargo.lock"
+      - "packer/gcp/merod/versions.json"
+      - "policies/index.json"
+      - "policies/mero-kms-phala/**"
+      - "policies/merod-locked-image/**"
+      - "scripts/check_release_version_sync.sh"
+      - ".github/workflows/release-version-sync-guard.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-sync:
+    name: Ensure KMS and merod versions stay in sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate sync script syntax
+        run: bash -n scripts/check_release_version_sync.sh
+
+      - name: Run release version sync guard
+        run: scripts/check_release_version_sync.sh

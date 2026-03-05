@@ -49,6 +49,28 @@ documentation update in `docs/**` or `README.md`:
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
 
+## Release version sync guard
+
+`release-version-sync-guard.yaml` enforces that KMS and merod release versions
+are bumped together.
+
+It validates the following are synchronized for the active release version:
+
+- `crates/mero-kms-phala/Cargo.toml` package version
+- `Cargo.lock` `mero-kms-phala` package version
+- `packer/gcp/merod/versions.json` `imageVersion`
+- `policies/index.json` release entry for that version
+- `policies/mero-kms-phala/<version>.json`
+- `policies/merod-locked-image/<version>.json`
+
+For `policies/index.json`, `merod_release_tag` may be either:
+
+- `<version>` or
+- `locked-image-v<version>`
+
+This keeps release metadata internally consistent while supporting prefixed
+locked-image release tags.
+
 ## KMS policy automation
 
 Policy probe/promotion automation (`kms_policy_auto_pipeline.yaml`) reuses the
