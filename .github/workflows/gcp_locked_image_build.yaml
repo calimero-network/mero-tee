@@ -1167,6 +1167,36 @@ jobs:
               measurement_policy: $policy[0]
             }' > artifacts/release-provenance.json
 
+          compatibility_entry_json="$(
+            jq -c --arg tag "${{ needs.preflight.outputs.image_version }}" '
+              [.releases[] | select(.version == $tag or .kms_release_tag == $tag or .merod_release_tag == $tag)] | first // empty
+            ' policies/index.json
+          )"
+          if [[ -z "${compatibility_entry_json}" ]]; then
+            echo "::error::Could not resolve compatibility map entry for tag ${{ needs.preflight.outputs.image_version }}"
+            exit 1
+          fi
+
+          jq -n \
+            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --argjson entry "${compatibility_entry_json}" \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              compatibility: {
+                version: $entry.version,
+                kms_release_tag: $entry.kms_release_tag,
+                merod_release_tag: $entry.merod_release_tag,
+                kms_policy_path: $entry.kms_policy_path,
+                merod_policy_path: $entry.merod_policy_path
+              }
+            }' > artifacts/mero-tee-compatibility-map.json
+
           tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
           syft dir:artifacts -o "spdx-json=artifacts/locked-image-release-sbom.spdx.json"
 
@@ -1177,6 +1207,7 @@ jobs:
             artifacts/published-mrtds.json \
             artifacts/merod-locked-image-policy.json \
             artifacts/release-provenance.json \
+            artifacts/mero-tee-compatibility-map.json \
             artifacts/attestation-artifacts.tar.gz \
             artifacts/locked-image-release-sbom.spdx.json \
             | sed 's#  artifacts/#  #' \
@@ -1233,6 +1264,7 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
+            "artifacts/mero-tee-compatibility-map.json"
             "artifacts/attestation-artifacts.tar.gz"
             "artifacts/locked-image-release-sbom.spdx.json"
             "artifacts/locked-image-checksums.txt"
@@ -1259,6 +1291,7 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
+            "artifacts/mero-tee-compatibility-map.json"
             "artifacts/attestation-artifacts.tar.gz"
             "artifacts/locked-image-release-sbom.spdx.json"
             "artifacts/locked-image-checksums.txt"
@@ -1306,6 +1339,9 @@ jobs:
             artifacts/release-provenance.json
             artifacts/release-provenance.json.sig
             artifacts/release-provenance.json.pem
+            artifacts/mero-tee-compatibility-map.json
+            artifacts/mero-tee-compatibility-map.json.sig
+            artifacts/mero-tee-compatibility-map.json.pem
             artifacts/attestation-artifacts.tar.gz
             artifacts/attestation-artifacts.tar.gz.sig
             artifacts/attestation-artifacts.tar.gz.pem

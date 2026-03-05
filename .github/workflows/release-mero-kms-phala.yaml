@@ -327,6 +327,36 @@ jobs:
           policy_registry_json="$(
             scripts/read_mero_kms_policy_registry.sh "${{ needs.prepare.outputs.version }}"
           )"
+          compatibility_entry_json="$(
+            jq -c --arg tag "${{ needs.prepare.outputs.version }}" '
+              [.releases[] | select(.version == $tag or .kms_release_tag == $tag or .merod_release_tag == $tag)] | first // empty
+            ' policies/index.json
+          )"
+          if [[ -z "${compatibility_entry_json}" ]]; then
+            echo "::error::Could not resolve compatibility map entry for tag ${{ needs.prepare.outputs.version }}"
+            exit 1
+          fi
+
+          jq -n \
+            --arg tag "${{ needs.prepare.outputs.version }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --argjson entry "${compatibility_entry_json}" \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              compatibility: {
+                version: $entry.version,
+                kms_release_tag: $entry.kms_release_tag,
+                merod_release_tag: $entry.merod_release_tag,
+                kms_policy_path: $entry.kms_policy_path,
+                merod_policy_path: $entry.merod_policy_path
+              }
+            }' > release-assets/mero-tee-compatibility-map.json
+
           policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
           allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
           allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' <<< "${policy_registry_json}")"
@@ -497,6 +527,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
+            release-assets/mero-tee-compatibility-map.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -523,6 +554,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
+            release-assets/mero-tee-compatibility-map.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -564,6 +596,9 @@ jobs:
             release-assets/mero-kms-phala-trust-bundle.tar.gz
             release-assets/mero-kms-phala-trust-bundle.tar.gz.sig
             release-assets/mero-kms-phala-trust-bundle.tar.gz.pem
+            release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-tee-compatibility-map.json.sig
+            release-assets/mero-tee-compatibility-map.json.pem
 
       - name: Smoke test published mero-kms release assets
         env:
