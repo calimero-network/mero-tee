@@ -72,6 +72,12 @@ Verify KMS release assets:
 scripts/verify_mero_kms_release_assets.sh X.Y.Z
 ```
 
+Verify all available release trust assets for a tag (KMS and/or locked-image):
+
+```bash
+scripts/verify_all_release_assets.sh X.Y.Z
+```
+
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
