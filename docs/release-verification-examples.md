@@ -20,6 +20,9 @@ It also publishes `mero-kms-phala-rekor-index.json`, which records Rekor
 metadata for each signed asset (`log_index`, `integrated_time`, `log_id`).
 `log_id` is read from Sigstore bundle JSON at
 `.verificationMaterial.tlogEntries[0].logId.keyId` (protobuf JSON camelCase).
+Each index entry also includes `hash` and `sigstore_search_url`, so operators
+can directly open public transparency search pages such as
+`https://search.sigstore.dev/?hash=sha256:<artifact-hash>`.
 
 Additionally, `mero-kms-phala-container-metadata.json` is published and signed
 as a standalone container metadata artifact and cross-checked by the verifier.
