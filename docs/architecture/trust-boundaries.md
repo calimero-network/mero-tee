@@ -36,8 +36,8 @@ The repo contains two lanes that are related but different:
 
 Runbooks:
 
-- [Phala KMS lane](platforms/phala-kms.md)
-- [GCP node-image-gcp lane](platforms/gcp-merod.md)
+- [Phala KMS lane](../runbooks/platforms/phala-kms.md)
+- [GCP node-image-gcp lane](../runbooks/platforms/gcp-merod.md)
 
 ---
 
@@ -110,6 +110,6 @@ Then enforce runtime attestation in deployed services.
 
 See:
 
-- [Trust & verification](TRUST_AND_VERIFICATION.md)
-- [TEE verification for beginners](TEE_VERIFICATION_FOR_BEGINNERS.md)
-- [Verify MRTD](verify-mrtd.md)
+- [Trust & verification](../release/trust-and-verification.md)
+- [TEE verification for beginners](../release/verification-beginner.md)
+- [Verify MRTD](../runbooks/operations/verify-mrtd.md)

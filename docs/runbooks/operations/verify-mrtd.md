@@ -1,6 +1,6 @@
 # Verify MRTD: Is the Node Running the Claimed Image?
 
-This guide explains how end users and operators verify that a GCP TDX merod node is running the expected locked image. A matching MRTD (Measurement Root of Trust for Delivery) proves the node booted from the attested image.
+This guide explains how end users and operators verify that a GCP TDX merod node is running the expected `node-image-gcp` image. A matching MRTD (Measurement Root of Trust for Delivery) proves the node booted from the attested image.
 
 ## Verify signed release assets first (Sigstore keyless)
 
@@ -9,8 +9,9 @@ verify the release assets were signed by this repository's release workflow iden
 
 ```bash
 VERSION="2.1.1"
+NODE_IMAGE_TAG="node-image-gcp-v${VERSION}"
 REPO="calimero-network/mero-tee"
-BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+BASE_URL="https://github.com/${REPO}/releases/download/${NODE_IMAGE_TAG}"
 
 # Install cosign if needed: https://docs.sigstore.dev/cosign/system_config/installation/
 curl -sSLO "${BASE_URL}/published-mrtds.json"
@@ -65,25 +66,25 @@ The response also includes `cloudProvider`, `osImage`, and `profile`. Note the `
 
 ```bash
 # Replace X.Y.Z with the release version (e.g. 2.1.1)
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/X.Y.Z/published-mrtds.json | jq
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-vX.Y.Z/published-mrtds.json | jq
 ```
 
 Extract the expected MRTD for your profile:
 
 ```bash
 # For locked-read-only (production)
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/2.1.1/published-mrtds.json | jq -r '.profiles["locked-read-only"].mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles["locked-read-only"].mrtd'
 
 # For debug
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/2.1.1/published-mrtds.json | jq -r '.profiles.debug.mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles.debug.mrtd'
 
 # For debug-read-only
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/2.1.1/published-mrtds.json | jq -r '.profiles["debug-read-only"].mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles["debug-read-only"].mrtd'
 ```
 
 ### 3. Compare
 
-If the node's MRTD **matches** the expected MRTD for that profile, the node is running the attested locked image.
+If the node's MRTD **matches** the expected MRTD for that profile, the node is running the attested node-image-gcp image.
 
 Optional hardening: compare RTMRs using `node-image-gcp-policy.json` when
 your attestation verifier exposes RTMR0..3 from a verified quote.
@@ -95,9 +96,10 @@ your attestation verifier exposes RTMR0..3 from a verified quote.
 NODE_URL="${1:-http://localhost/admin-api}"
 VERSION="${2:-2.1.1}"
 PROFILE="${3:-locked-read-only}"
+NODE_IMAGE_TAG="node-image-gcp-v${VERSION}"
 
 OBSERVED=$(curl -s "${NODE_URL}/tee/info" | jq -r '.mrtd')
-EXPECTED=$(curl -sL "https://github.com/calimero-network/mero-tee/releases/download/${VERSION}/published-mrtds.json" | jq -r --arg p "$PROFILE" '.profiles[$p].mrtd')
+EXPECTED=$(curl -sL "https://github.com/calimero-network/mero-tee/releases/download/${NODE_IMAGE_TAG}/published-mrtds.json" | jq -r --arg p "$PROFILE" '.profiles[$p].mrtd')
 
 if [[ -z "$OBSERVED" ]]; then
   echo "Error: Node did not report MRTD"
@@ -148,10 +150,10 @@ See [core tee-attestation](https://github.com/calimero-network/core/tree/master/
 | Init service behavior | |
 | Baked binaries (traefik, vmagent, vector) | |
 
-A matching MRTD proves the node booted from the locked image. The merod binary is downloaded at runtime from [calimero-network/core](https://github.com/calimero-network/core) releases and is trusted separately.
+A matching MRTD proves the node booted from the node-image-gcp image. The merod binary is downloaded at runtime from [calimero-network/core](https://github.com/calimero-network/core) releases and is trusted separately.
 
 ## See Also
 
-- [platforms/gcp-merod.md](platforms/gcp-merod.md) – GCP node-plane deployment overview
-- [ARCHITECTURE.md](ARCHITECTURE.md) – Trust boundaries and enforcement points
+- [platforms/gcp-merod.md](../platforms/gcp-merod.md) – GCP node-plane deployment overview
+- [architecture/trust-boundaries.md](../../architecture/trust-boundaries.md) – Trust boundaries and enforcement points
 - [core tee-mode](https://github.com/calimero-network/core/blob/master/docs/tee-mode.md) – merod TEE configuration

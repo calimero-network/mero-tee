@@ -10,7 +10,7 @@ generic "deploy X on Y" pattern.
 1. **Phala lane (KMS plane)**  
    You deploy and operate `mero-kms-phala` (attestation + key release service).
 2. **GCP lane (node image plane)**  
-   You consume/deploy locked `merod` images and verify published measurements.
+   You consume/deploy `node-image-gcp` artifacts and verify published measurements.
 
 These are related but not symmetric. Treating them as two equivalent deployment
 guides causes confusion.
@@ -18,10 +18,10 @@ guides causes confusion.
 ## Runbooks
 
 - [Phala: deploy and operate `mero-kms-phala` (KMS plane)](phala-kms.md)
-- [GCP: deploy `merod` locked images (node plane)](gcp-merod.md)
+- [GCP: deploy `merod` node-image-gcp artifacts (node plane)](gcp-merod.md)
 
 ## Related cross-cutting docs
 
-- [Architecture & verification boundaries](../ARCHITECTURE.md)
-- [Trust & verification entry point](../TRUST_AND_VERIFICATION.md)
-- [TEE verification for beginners](../TEE_VERIFICATION_FOR_BEGINNERS.md)
+- [Architecture & verification boundaries](../../architecture/trust-boundaries.md)
+- [Trust & verification entry point](../../release/trust-and-verification.md)
+- [TEE verification for beginners](../../release/verification-beginner.md)

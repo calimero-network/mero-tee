@@ -67,9 +67,9 @@ Legend:
   - old merod cohort -> old KMS deployment
   - new merod cohort -> new KMS deployment
   - avoid mixed cohorts by default
-  - See `docs/kms-blue-green-rollout.md`.
+  - See `docs/runbooks/operations/kms-blue-green-rollout.md`.
 - [x] Provide blue/green rollout playbook and rollback procedure.
-  - See `docs/kms-blue-green-rollout.md`.
+  - See `docs/runbooks/operations/kms-blue-green-rollout.md`.
 - [ ] Document load-balancer/session requirements so challenge state remains valid.
   - Needed because challenge state is in-memory and consumed per KMS instance.
 - [ ] Define emergency measurement revoke process and communication runbook.

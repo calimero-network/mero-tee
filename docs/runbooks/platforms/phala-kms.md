@@ -2,7 +2,7 @@
 
 This runbook is for operating the **KMS plane** on Phala CVMs.
 
-It is **not** the GCP node-image-gcp node deployment path.  
+It is **not** the GCP node-image-gcp deployment path.  
 For GCP node-plane deployment, use [gcp-merod.md](gcp-merod.md).
 
 ---
@@ -106,7 +106,7 @@ self-attestation (`/attest`) and enforces policy before key fetch.
   - `POST /get-key`
 
 The expected runtime sequence is documented in
-[Architecture](../ARCHITECTURE.md#attestation-enforcement-points).
+[Architecture](../../architecture/trust-boundaries.md#attestation-enforcement-points).
 
 ---
 
@@ -122,6 +122,6 @@ The expected runtime sequence is documented in
 ## Related docs
 
 - [Platform runbooks index](README.md)
-- [Trust & verification](../TRUST_AND_VERIFICATION.md)
-- [Generate release-pinned `merod` config](../../scripts/generate-merod-kms-phala-attestation-config.sh)
-- [KMS service reference](../../crates/mero-kms-phala/README.md)
+- [Trust & verification](../../release/trust-and-verification.md)
+- [Generate release-pinned `merod` config](../../../scripts/generate-merod-kms-phala-attestation-config.sh)
+- [KMS service reference](../../../crates/mero-kms-phala/README.md)

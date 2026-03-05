@@ -12,26 +12,26 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 ## Quick Links
 
-- [Platform runbooks](docs/platforms/README.md) – deployment lanes by responsibility
-- [Phala KMS lane](docs/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` (KMS plane)
-- [GCP node lane](docs/platforms/gcp-merod.md) – deploy locked `merod` images (node plane)
-- [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
-- [Direct Phala KMS design](docs/phala-direct-kms-design.md)
-- [Phala KMS attestation task list (mero-tee)](docs/phala-kms-attestation-task-list.md)
-- [KMS blue/green rollout runbook](docs/kms-blue-green-rollout.md)
-- [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
-- [KMS policy promotion workflow (PR)](docs/kms-policy-promotion-pr.md)
-- [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
-- [node-image-gcp policy promotion workflow (PR)](docs/node-image-gcp-policy-promotion-pr.md)
-- [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
-- [Release verification output examples](docs/release-verification-examples.md)
-- [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
-- [Architecture & verification boundaries](docs/ARCHITECTURE.md)
-- [TEE verification for beginners](docs/TEE_VERIFICATION_FOR_BEGINNERS.md)
+- [Platform runbooks](docs/runbooks/platforms/README.md) – deployment lanes by responsibility
+- [Phala KMS lane](docs/runbooks/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` (KMS plane)
+- [GCP node lane](docs/runbooks/platforms/gcp-merod.md) – deploy locked `merod` images (node plane)
+- [Phala KMS hardening proposal](docs/architecture/phala-kms-key-protection-proposal.md)
+- [Direct Phala KMS design](docs/architecture/phala-direct-kms-design.md)
+- [Phala KMS attestation task list (mero-tee)](docs/policies/kms-phala-attestation-task-list.md)
+- [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
+- [KMS staging probe workflow (Phala)](docs/policies/kms-phala-staging-probe.md)
+- [KMS policy promotion workflow (PR)](docs/policies/kms-phala-policy-promotion.md)
+- [KMS policy auto pipeline](docs/policies/kms-phala-policy-auto-pipeline.md)
+- [node-image-gcp policy promotion workflow (PR)](docs/policies/node-image-gcp-policy-promotion.md)
+- [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) – Verify nodes run the attested image
+- [Release verification output examples](docs/release/verification-examples.md)
+- [Migration & Implementation Plan](docs/architecture/migration-plan.md)
+- [Architecture & verification boundaries](docs/architecture/trust-boundaries.md)
+- [TEE verification for beginners](docs/release/verification-beginner.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
-- [Release pipeline sequence diagrams](docs/RELEASE_PIPELINE_SEQUENCE_DIAGRAMS.md)
-- [Release taxonomy](docs/RELEASE_TAXONOMY.md)
+- [Release pipeline sequence diagrams](docs/release/pipeline-sequence-diagrams.md)
+- [Release taxonomy](docs/release/taxonomy.md)
 - [Repo restructure proposal](docs/REPO_RESTRUCTURE_PROPOSAL.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
@@ -75,9 +75,9 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy, but still does not cover every environment/control-plane risk outside the attested boundary.
 - **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
+Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) for step-by-step instructions.
 
-For a consolidated trust model and verification entry point, see [Trust & Verification](docs/TRUST_AND_VERIFICATION.md).
+For a consolidated trust model and verification entry point, see [Trust & Verification](docs/release/trust-and-verification.md).
 
 Verify KMS release assets:
 
@@ -91,7 +91,7 @@ Verify all available release trust assets for a tag (KMS and/or node-image-gcp):
 scripts/verify-release-assets.sh X.Y.Z
 ```
 
-Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/MINIMAL_DOWNLOAD_SETS.md) for quick-verify vs full-audit bundles.
+Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/release/minimal-download-sets.md) for quick-verify vs full-audit bundles.
 
 Generate a pinned `core` TEE config snippet from signed release policy:
 

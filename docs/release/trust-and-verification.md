@@ -11,8 +11,8 @@ This repository publishes two trust-asset families per release tag:
 
 These map to two deployment lanes with different responsibilities:
 
-- **Phala KMS lane** (operate `mero-kms-phala`): [platforms/phala-kms.md](platforms/phala-kms.md)
-- **GCP node lane** (deploy locked `merod` image): [platforms/gcp-merod.md](platforms/gcp-merod.md)
+- **Phala KMS lane** (operate `mero-kms-phala`): [../runbooks/platforms/phala-kms.md](../runbooks/platforms/phala-kms.md)
+- **GCP node lane** (deploy locked `merod` image): [../runbooks/platforms/gcp-merod.md](../runbooks/platforms/gcp-merod.md)
 
 ## What signatures prove (and do not prove)
 
@@ -54,10 +54,10 @@ OIDC issuer is expected to be:
 
 ## Related docs
 
-- [TEE verification for beginners](TEE_VERIFICATION_FOR_BEGINNERS.md)
-- [Platform runbooks](platforms/README.md)
-- [Verify MRTD](verify-mrtd.md)
-- [Release verification examples](release-verification-examples.md)
-- [Architecture](ARCHITECTURE.md)
-- [Release taxonomy](RELEASE_TAXONOMY.md)
-- [Documentation source index](DOCS_INDEX.md)
+- [TEE verification for beginners](verification-beginner.md)
+- [Platform runbooks](../runbooks/platforms/README.md)
+- [Verify MRTD](../runbooks/operations/verify-mrtd.md)
+- [Release verification examples](verification-examples.md)
+- [Architecture](../architecture/trust-boundaries.md)
+- [Release taxonomy](taxonomy.md)
+- [Documentation source index](../DOCS_INDEX.md)

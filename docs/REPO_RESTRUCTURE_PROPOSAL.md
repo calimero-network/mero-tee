@@ -14,8 +14,8 @@ This proposal defines a cleaner information architecture and naming scheme for
 ## Status
 
 - [x] Phase A completed (workflow/script/policy-path naming baseline)
-- [ ] Phase B pending (release asset/tag normalization)
-- [ ] Phase C pending (docs tree split by intent)
+- [x] Phase B completed (release asset/tag normalization)
+- [x] Phase C completed (docs tree split by intent)
 
 ---
 

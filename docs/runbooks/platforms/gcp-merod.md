@@ -56,7 +56,7 @@ Avoid mutable deployment references.
 
 For image build and publishing details, see:
 
-- [packer/gcp/merod/README.md](../../packer/gcp/merod/README.md)
+- [packer/gcp/merod/README.md](../../../packer/gcp/merod/README.md)
 
 ---
 
@@ -64,7 +64,7 @@ For image build and publishing details, see:
 
 Use published measurements to verify running node state:
 
-- [Verify MRTD guide](../verify-mrtd.md)
+- [Verify MRTD guide](../operations/verify-mrtd.md)
 
 This confirms the deployed node measurement matches the signed allowlist for the
 selected release/profile.
@@ -95,5 +95,5 @@ Reference:
 ## Related docs
 
 - [Platform runbooks index](README.md)
-- [Architecture & verification boundaries](../ARCHITECTURE.md)
-- [Trust & verification](../TRUST_AND_VERIFICATION.md)
+- [Architecture & verification boundaries](../../architecture/trust-boundaries.md)
+- [Trust & verification](../../release/trust-and-verification.md)

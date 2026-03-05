@@ -162,5 +162,5 @@ Do not use mock attestation in production.
 
 For deployment guides, see:
 
-- [Phala KMS lane](https://github.com/calimero-network/mero-tee/blob/master/docs/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` on Phala
-- [GCP node lane](https://github.com/calimero-network/mero-tee/blob/master/docs/platforms/gcp-merod.md) – deploy locked `merod` images on GCP
+- [Phala KMS lane](https://github.com/calimero-network/mero-tee/blob/master/docs/runbooks/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` on Phala
+- [GCP node lane](https://github.com/calimero-network/mero-tee/blob/master/docs/runbooks/platforms/gcp-merod.md) – deploy locked `merod` images on GCP
