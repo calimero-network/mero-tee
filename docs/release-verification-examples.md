@@ -12,6 +12,10 @@ Script:
 scripts/verify_mero_kms_release_assets.sh X.Y.Z
 ```
 
+The KMS release workflow also publishes a signed convenience archive:
+`mero-kms-phala-trust-bundle.tar.gz` (+ `.sig` / `.pem`), which packages
+checksums, release manifest, and attestation policy.
+
 ### Expected success output
 
 ```text

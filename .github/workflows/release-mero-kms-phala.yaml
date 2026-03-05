@@ -442,6 +442,12 @@ jobs:
               merod_config_path: "tee.kms.phala.attestation"
             }' > release-assets/mero-kms-phala-attestation-policy.json
 
+          tar -czf release-assets/mero-kms-phala-trust-bundle.tar.gz \
+            -C release-assets \
+            mero-kms-phala-checksums.txt \
+            mero-kms-phala-release-manifest.json \
+            mero-kms-phala-attestation-policy.json
+
           {
             echo "## mero-kms-phala release ${{ needs.prepare.outputs.version }}"
             echo ""
@@ -462,6 +468,10 @@ jobs:
             echo "\`\`\`bash"
             echo "scripts/verify_mero_kms_release_assets.sh ${{ needs.prepare.outputs.version }}"
             echo "\`\`\`"
+            echo ""
+            echo "### Trust bundle"
+            echo ""
+            echo "- \`mero-kms-phala-trust-bundle.tar.gz\` (checksums, manifest, policy)"
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
@@ -486,6 +496,7 @@ jobs:
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
+            release-assets/mero-kms-phala-trust-bundle.tar.gz
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -511,6 +522,7 @@ jobs:
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
+            release-assets/mero-kms-phala-trust-bundle.tar.gz
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -549,6 +561,9 @@ jobs:
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.sig
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
+            release-assets/mero-kms-phala-trust-bundle.tar.gz
+            release-assets/mero-kms-phala-trust-bundle.tar.gz.sig
+            release-assets/mero-kms-phala-trust-bundle.tar.gz.pem
 
       - name: Smoke test published mero-kms release assets
         env:
