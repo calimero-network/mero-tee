@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "Cargo.toml"
+      - "mero-kms/Cargo.toml"
       - "Cargo.lock"
       - "node-image-gcp/versions.json"
       - "policies/index.json"
@@ -16,6 +17,7 @@ on:
       - master
     paths:
       - "Cargo.toml"
+      - "mero-kms/Cargo.toml"
       - "Cargo.lock"
       - "node-image-gcp/versions.json"
       - "policies/index.json"

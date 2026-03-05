@@ -16,7 +16,7 @@ This proposal defines a cleaner information architecture and naming scheme for
 - [x] Phase A completed (workflow/script/policy-path naming baseline)
 - [x] Phase B completed (release asset/tag normalization)
 - [x] Phase C completed (docs tree split by intent)
-- [x] Phase D completed (root package + flat top-level domains)
+- [x] Phase D completed (dedicated `mero-kms/` package + flat top-level domains)
 
 ---
 
@@ -85,7 +85,7 @@ Avoid mixing lane names inside one artifact family.
 
 ```text
 Cargo.toml
-src/
+mero-kms/
 node-image-gcp/
 scripts/release/
 scripts/policy/

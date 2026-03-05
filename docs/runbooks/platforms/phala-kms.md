@@ -19,7 +19,7 @@ In the Phala lane:
 Implementation references:
 
 - KMS verification and policy enforcement:
-  - `src/handlers.rs`
+  - `mero-kms/src/handlers.rs`
 - `merod` KMS client and KMS self-attestation verification:
   - `core/crates/merod/src/kms.rs`
 
@@ -124,4 +124,4 @@ The expected runtime sequence is documented in
 - [Platform runbooks index](README.md)
 - [Trust & verification](../../release/trust-and-verification.md)
 - [Generate release-pinned `merod` config](../../../scripts/policy/generate-merod-kms-phala-attestation-config.sh)
-- [KMS service reference](../../../KMS_PHALA.md)
+- [KMS service reference](../../../mero-kms/README.md)

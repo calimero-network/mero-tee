@@ -21,7 +21,7 @@ def fail(message: str) -> None:
 
 root = pathlib.Path(".")
 
-cargo_toml_path = root / "Cargo.toml"
+cargo_toml_path = root / "mero-kms/Cargo.toml"
 cargo_lock_path = root / "Cargo.lock"
 versions_json_path = root / "node-image-gcp/versions.json"
 policy_index_path = root / "policies/index.json"
@@ -33,7 +33,7 @@ except Exception as exc:
 
 kms_version = cargo_toml.get("package", {}).get("version")
 if not isinstance(kms_version, str) or not kms_version:
-    fail("Missing Cargo.toml package.version")
+    fail("Missing mero-kms/Cargo.toml package.version")
 
 try:
     versions_json = json.loads(versions_json_path.read_text())
@@ -47,7 +47,7 @@ if not isinstance(image_version, str) or not image_version:
 if kms_version != image_version:
     fail(
         "KMS and merod versions must be bumped together: "
-        f"Cargo.toml has {kms_version}, versions.json has {image_version}"
+        f"mero-kms/Cargo.toml has {kms_version}, versions.json has {image_version}"
     )
 
 try:

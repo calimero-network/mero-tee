@@ -58,7 +58,7 @@ are bumped together.
 
 It validates the following are synchronized for the active release version:
 
-- `Cargo.toml` package version
+- `mero-kms/Cargo.toml` package version
 - `Cargo.lock` `mero-kms-phala` package version
 - `node-image-gcp/versions.json` `imageVersion`
 - `policies/index.json` release entry for that version

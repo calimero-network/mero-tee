@@ -6,8 +6,9 @@ on:
       - master
     paths:
       - Cargo.toml
+      - "mero-kms/Cargo.toml"
       - Cargo.lock
-      - "src/**"
+      - "mero-kms/src/**"
       - "policies/kms-phala/**"
       - "scripts/policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
@@ -15,8 +16,9 @@ on:
   pull_request:
     paths:
       - Cargo.toml
+      - "mero-kms/Cargo.toml"
       - Cargo.lock
-      - "src/**"
+      - "mero-kms/src/**"
       - "policies/kms-phala/**"
       - "scripts/policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
@@ -115,7 +117,7 @@ jobs:
 
       - name: Build binary
         run: |
-          cargo build --release --target ${{ matrix.target }}
+          cargo build -p mero-kms-phala --release --target ${{ matrix.target }}
 
       - name: Compress artifact
         run: |

@@ -10,8 +10,8 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 
 ## Phase 2: Migrate mero-kms-phala
 
-- Copy core `mero-kms-phala` service code into mero-tee root package
-- Configure root `Cargo.toml` with git dependency on core
+- Copy core `mero-kms-phala` service code into `mero-tee/mero-kms`
+- Configure `mero-kms/Cargo.toml` with git dependency on core
 - Add rust-toolchain.toml (match core)
 - Verify cargo build succeeds
 - Add mero-kms-phala release workflow

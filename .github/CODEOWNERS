@@ -8,7 +8,7 @@
 /.github/workflows/kms-phala-policy-promotion-pr.yaml @chefsale
 
 # KMS package
-/ @chefsale
+/mero-kms/ @chefsale
 
 # Attestation/release scripts
 /scripts/release/ @chefsale

@@ -57,7 +57,7 @@ download_asset() {
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"${script_dir}/../scripts/release/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
+"${script_dir}/../release/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }

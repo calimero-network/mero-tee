@@ -17,14 +17,14 @@ Legend:
 ## Phase 1: KMS contract + compatibility
 
 - [x] Confirm `/attest` API contract is stable and documented.
-  - Documented in `KMS_PHALA.md`:
+  - Documented in `mero-kms/README.md`:
     - request: `nonceB64`, optional `bindingB64`
     - response: `quoteB64`, `reportDataHex` (plus `eventLog`, `vmConfig`)
   - Note: wire format is camelCase (`nonceB64`), not snake_case.
 - [x] Guarantee `report_data_hex` layout is exactly:
   - bytes `[0..32]` = nonce
   - bytes `[32..64]` = binding
-  - Enforced by implementation and unit test in `src/handlers.rs`.
+  - Enforced by implementation and unit test in `mero-kms/src/handlers.rs`.
 - [~] Ensure `/attest` + `/challenge` + `/get-key` compatibility.
   - Endpoints are implemented and compatible by design.
   - Missing full end-to-end integration test in this repo.

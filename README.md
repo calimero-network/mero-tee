@@ -37,7 +37,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Changelog](CHANGELOG.md)
-- [mero-kms-phala README](KMS_PHALA.md)
+- [mero-kms-phala README](mero-kms/README.md)
 
 ## Building mero-kms-phala
 

@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - "Cargo.toml"
+      - "mero-kms/Cargo.toml"
       - ".github/workflows/kms-phala-policy-auto-pipeline.yaml"
   workflow_dispatch:
 

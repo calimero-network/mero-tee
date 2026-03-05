@@ -11,7 +11,7 @@ to `master`, so operators do not need to manually dispatch workflows.
 
 ## Trigger
 
-- Push to `master` that changes `Cargo.toml`
+- Push to `master` that changes `mero-kms/Cargo.toml`
 - Manual fallback via `workflow_dispatch`
 
 ## What it does
