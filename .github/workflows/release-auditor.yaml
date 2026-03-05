@@ -1,0 +1,102 @@
+name: Release auditor
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      max_releases:
+        description: "How many recent releases to audit"
+        required: false
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-auditor-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Verify recent published releases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Audit release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_RELEASES: ${{ github.event_name == 'workflow_dispatch' && inputs.max_releases || '5' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${MAX_RELEASES}" =~ ^[0-9]+$ ]] || [[ "${MAX_RELEASES}" -lt 1 ]]; then
+            echo "MAX_RELEASES must be a positive integer. Got: ${MAX_RELEASES}"
+            exit 1
+          fi
+
+          mapfile -t tags < <(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=${MAX_RELEASES}" --jq '.[].tag_name')
+          if [[ "${#tags[@]}" -eq 0 ]]; then
+            echo "No releases found for ${GITHUB_REPOSITORY}"
+            exit 1
+          fi
+
+          failures=()
+          audited=()
+
+          for tag in "${tags[@]}"; do
+            echo "Auditing release ${tag}..."
+            assets_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name]')"
+
+            has_kms_assets="$(jq -r 'any(.[]; . == "mero-kms-phala-checksums.txt")' <<< "${assets_json}")"
+            has_locked_assets="$(jq -r 'any(.[]; . == "locked-image-checksums.txt")' <<< "${assets_json}")"
+
+            if [[ "${has_kms_assets}" != "true" && "${has_locked_assets}" != "true" ]]; then
+              echo "Skipping ${tag}: no known trust-asset set found."
+              continue
+            fi
+
+            if [[ "${has_kms_assets}" == "true" ]]; then
+              if ! scripts/verify_mero_kms_release_assets.sh "${tag}"; then
+                failures+=("${tag}:kms")
+              fi
+            fi
+
+            if [[ "${has_locked_assets}" == "true" ]]; then
+              if ! scripts/verify_locked_image_release_assets.sh "${tag}"; then
+                failures+=("${tag}:locked-image")
+              fi
+            fi
+
+            audited+=("${tag}")
+          done
+
+          if [[ "${#audited[@]}" -eq 0 ]]; then
+            echo "No releases matched known audit asset sets."
+            exit 1
+          fi
+
+          {
+            echo "## Release auditor"
+            echo ""
+            echo "- Repository: ${GITHUB_REPOSITORY}"
+            echo "- Requested releases: ${MAX_RELEASES}"
+            echo "- Audited releases: ${#audited[@]}"
+            for tag in "${audited[@]}"; do
+              echo "  - ${tag}"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${#failures[@]}" -gt 0 ]]; then
+            echo "Release audit failures:"
+            for failure in "${failures[@]}"; do
+              echo "  - ${failure}"
+            done
+            exit 1
+          fi
