@@ -88,6 +88,9 @@ jobs:
           fi
 
           release_json="$(curl -fsSL \
+            --retry 5 \
+            --retry-delay 2 \
+            --retry-all-errors \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/calimero-network/core/releases/latest")"
