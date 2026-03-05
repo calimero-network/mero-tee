@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          changed_files_output="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          changed_files_output="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
           if [[ -z "${changed_files_output}" ]]; then
             echo "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
             exit 1
