@@ -63,7 +63,7 @@ It validates the following are synchronized for the active release version:
 - `mero-tee/versions.json` `imageVersion`
 - `policies/index.json` release entry for that version
 - `policies/kms-phala/<version>.json`
-- `policies/node-image-gcp/<version>.json`
+- `policies/mero-tee/<version>.json`
 
 For `policies/index.json`, `node_image_tag` must be:
 

@@ -25,7 +25,7 @@ asset publication, and can also be run manually for backfills.
 3. Falls back to synthesizing policy from `published-mrtds.json` (RTMR arrays
    empty) for older releases.
 4. Updates:
-   - `policies/node-image-gcp/<tag>.json`
+   - `policies/mero-tee/<tag>.json`
    - `policies/index.json`
 5. Opens (or attempts to open) a PR.
 

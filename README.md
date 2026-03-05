@@ -125,7 +125,7 @@ Promote staged candidates into a reviewable, versioned policy PR:
 Release automation reads the policy registry directly (`policies/kms-phala`)
 for the target package version, so version bump + promoted policy stay aligned.
 
-node-image-gcp policy history is tracked under `policies/node-image-gcp` and
+node-image-gcp policy history is tracked under `policies/mero-tee` and
 can be promoted from release assets using
 `.github/workflows/node-image-gcp-policy-promotion-pr.yaml` (auto-dispatched by
 `release-node-image-gcp.yaml` after release publish, with manual fallback).

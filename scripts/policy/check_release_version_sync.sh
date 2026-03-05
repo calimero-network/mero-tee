@@ -97,7 +97,7 @@ if entry.get("node_image_tag") != expected_merod_tag:
     )
 
 expected_kms_policy_file = f"policies/kms-phala/{kms_version}.json"
-expected_node_image_policy_file = f"policies/node-image-gcp/{kms_version}.json"
+expected_node_image_policy_file = f"policies/mero-tee/{kms_version}.json"
 
 if entry.get("kms_policy_file") != expected_kms_policy_file:
     fail(

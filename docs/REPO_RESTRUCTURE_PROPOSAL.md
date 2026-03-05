@@ -49,7 +49,7 @@ Avoid mixing lane names inside one artifact family.
 |---|---|
 | `mero-kms-phala` (service name) | `kms-phala` (short canonical lane name) |
 | `policies/mero-kms-phala/` | `policies/kms-phala/` |
-| `policies/merod-locked-image/` | `policies/node-image-gcp/` |
+| `policies/merod-locked-image/` | `policies/mero-tee/` |
 
 ## Release asset prefixes
 

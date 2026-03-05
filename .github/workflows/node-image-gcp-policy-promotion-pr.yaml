@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          policy_dir="policies/node-image-gcp"
+          policy_dir="policies/mero-tee"
           policy_file="${policy_dir}/${RELEASE_TAG}.json"
           index_file="policies/index.json"
           mkdir -p "${policy_dir}"
