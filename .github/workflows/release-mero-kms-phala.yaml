@@ -324,6 +324,30 @@ jobs:
               }
             }' > release-assets/mero-tee-compatibility-map.json
 
+          jq -n \
+            --arg tag "${{ needs.prepare.outputs.version }}" \
+            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg image "${image_name}" \
+            --arg digest "${image_digest}" \
+            --argjson tags "${tags_json}" \
+            --arg compat_asset "mero-tee-compatibility-map.json" \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              container: {
+                image: $image,
+                digest: $digest,
+                tags: $tags
+              },
+              compatibility_map_asset: $compat_asset
+            }' > release-assets/mero-kms-phala-container-metadata.json
+
           policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
           allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
           allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' <<< "${policy_registry_json}")"
@@ -385,6 +409,7 @@ jobs:
                 },
                 policy_registry_entry_path: $policy_registry_source_path,
                 attestation_policy_asset: "mero-kms-phala-attestation-policy.json",
+                container_metadata_asset: "mero-kms-phala-container-metadata.json",
                 rekor: {
                   index_asset: "mero-kms-phala-rekor-index.json"
                 }
@@ -393,6 +418,7 @@ jobs:
                 "mero-kms-phala-checksums.txt": ["operator-required", "auditor-required"],
                 "mero-kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
                 "mero-kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
+                "mero-kms-phala-container-metadata.json": ["operator-required", "auditor-required"],
                 "mero-kms-phala-rekor-index.json": ["auditor-required"],
                 "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
                 "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
@@ -518,6 +544,7 @@ jobs:
             echo ""
             echo "- \`mero-kms-phala-trust-bundle.tar.gz\` (\`MANIFEST.txt\`, checksums, manifest, policy)"
             echo "- \`mero-kms-phala-release-manifest.json\` and \`.sig/.pem/.bundle.json\`"
+            echo "- Container metadata asset: \`mero-kms-phala-container-metadata.json\`"
             echo "- \`mero-kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
             echo "- \`mero-kms-phala-container-sbom.spdx.json\` and \`mero-kms-phala-binaries-sbom.spdx.json\`"
             echo "- \`mero-tee-compatibility-map.json\`"
@@ -542,6 +569,7 @@ jobs:
             artifacts/*.tar.gz
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-metadata.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
@@ -621,6 +649,7 @@ jobs:
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-metadata.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
@@ -660,6 +689,10 @@ jobs:
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-attestation-policy.json.sig
             release-assets/mero-kms-phala-attestation-policy.json.pem
+            release-assets/mero-kms-phala-container-metadata.json
+            release-assets/mero-kms-phala-container-metadata.json.sig
+            release-assets/mero-kms-phala-container-metadata.json.pem
+            release-assets/mero-kms-phala-container-metadata.json.bundle.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-container-sbom.spdx.json.sig
             release-assets/mero-kms-phala-container-sbom.spdx.json.pem

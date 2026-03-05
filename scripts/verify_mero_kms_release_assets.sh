@@ -111,6 +111,7 @@ base_signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
   "mero-kms-phala-attestation-policy.json"
+  "mero-kms-phala-container-metadata.json"
   "mero-kms-phala-container-sbom.spdx.json"
   "mero-kms-phala-binaries-sbom.spdx.json"
 )
@@ -203,8 +204,18 @@ jq -e --arg tag "${tag}" '
   (.container.image | type == "string" and length > 0) and
   (.container.digest | type == "string" and length > 0) and
   (.verification.kms_attest_endpoint == "/attest") and
-  (.verification.attestation_policy_asset == "mero-kms-phala-attestation-policy.json")
+  (.verification.attestation_policy_asset == "mero-kms-phala-attestation-policy.json") and
+  (.verification.container_metadata_asset == "mero-kms-phala-container-metadata.json")
 ' "${tmp_dir}/mero-kms-phala-release-manifest.json" >/dev/null
+
+jq -e --arg tag "${tag}" '
+  .schema_version == 1 and
+  .tag == $tag and
+  (.commit_sha | type == "string" and length > 0) and
+  (.container.image | type == "string" and length > 0) and
+  (.container.digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container.tags | type == "array")
+' "${tmp_dir}/mero-kms-phala-container-metadata.json" >/dev/null
 
 jq -e --arg tag "${tag}" '
   .schema_version == 1 and
@@ -224,10 +235,26 @@ jq -e --arg tag "${tag}" '
 
 manifest_commit="$(jq -r '.commit_sha' "${tmp_dir}/mero-kms-phala-release-manifest.json")"
 policy_commit="$(jq -r '.commit_sha' "${tmp_dir}/mero-kms-phala-attestation-policy.json")"
+container_metadata_commit="$(jq -r '.commit_sha' "${tmp_dir}/mero-kms-phala-container-metadata.json")"
 if [[ "${manifest_commit}" != "${policy_commit}" ]]; then
   echo "Manifest and policy commit mismatch"
   echo "  manifest: ${manifest_commit}"
   echo "  policy:   ${policy_commit}"
+  exit 1
+fi
+if [[ "${manifest_commit}" != "${container_metadata_commit}" ]]; then
+  echo "Manifest and container metadata commit mismatch"
+  echo "  manifest:  ${manifest_commit}"
+  echo "  metadata:  ${container_metadata_commit}"
+  exit 1
+fi
+
+manifest_container_digest="$(jq -r '.container.digest' "${tmp_dir}/mero-kms-phala-release-manifest.json")"
+metadata_container_digest="$(jq -r '.container.digest' "${tmp_dir}/mero-kms-phala-container-metadata.json")"
+if [[ "${manifest_container_digest}" != "${metadata_container_digest}" ]]; then
+  echo "Manifest and container metadata digest mismatch"
+  echo "  manifest: ${manifest_container_digest}"
+  echo "  metadata: ${metadata_container_digest}"
   exit 1
 fi
 
@@ -258,6 +285,7 @@ signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
   "mero-kms-phala-attestation-policy.json"
+  "mero-kms-phala-container-metadata.json"
   "mero-kms-phala-container-sbom.spdx.json"
   "mero-kms-phala-binaries-sbom.spdx.json"
 )
@@ -274,4 +302,4 @@ for asset in "${signed_assets[@]}"; do
     "${tmp_dir}/${asset}" >/dev/null
 done
 
-echo "Release ${tag} checksums, manifest, attestation policy, archive hashes, and Sigstore signatures verified."
+echo "Release ${tag} checksums, manifest, attestation policy, container metadata, archive hashes, and Sigstore signatures verified."
