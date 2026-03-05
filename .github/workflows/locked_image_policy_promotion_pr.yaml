@@ -28,7 +28,7 @@ jobs:
       PROMOTION_BRANCH: automation/locked-image-policy-${{ inputs.release_tag }}
     steps:
       - name: Checkout base branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.base_branch }}
 
