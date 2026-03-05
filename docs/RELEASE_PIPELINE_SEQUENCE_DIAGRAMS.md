@@ -2,7 +2,7 @@
 
 This document visualizes the main release paths and verification loops.
 
-## 1) `release-mero-kms-phala.yaml`
+## 1) `release-kms-phala.yaml`
 
 ```mermaid
 sequenceDiagram
@@ -26,7 +26,7 @@ sequenceDiagram
   GitHubActions->>GitHubActions: Smoke-test with verify script
 ```
 
-## 2) `gcp_locked_image_build.yaml`
+## 2) `release-node-image-gcp.yaml`
 
 ```mermaid
 sequenceDiagram
@@ -62,10 +62,10 @@ sequenceDiagram
   loop each tag
     AuditorWorkflow->>GitHubReleases: Inspect asset set
     alt KMS assets present
-      AuditorWorkflow->>VerifierScripts: verify_mero_kms_release_assets.sh
+      AuditorWorkflow->>VerifierScripts: verify-kms-phala-release-assets.sh
     end
     alt Locked-image assets present
-      AuditorWorkflow->>VerifierScripts: verify_locked_image_release_assets.sh
+      AuditorWorkflow->>VerifierScripts: verify-node-image-gcp-release-assets.sh
     end
   end
   AuditorWorkflow->>AuditorWorkflow: Publish summary + fail on mismatches

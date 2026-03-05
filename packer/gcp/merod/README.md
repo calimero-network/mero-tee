@@ -31,4 +31,4 @@ packer build -var-file=ubuntu-intel.pkrvars.hcl ubuntu.pkr.hcl
 
 ## Release
 
-The GitHub workflow `gcp_locked_image_build.yaml` builds images, runs attestation, and publishes MRTDs, attestation artifacts, and provenance to releases. Configure repo variables and secrets before running.
+The GitHub workflow `release-node-image-gcp.yaml` builds images, runs attestation, and publishes MRTDs, attestation artifacts, and provenance to releases. Configure repo variables and secrets before running.

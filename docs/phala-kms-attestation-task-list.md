@@ -39,26 +39,26 @@ Legend:
 ## Phase 2: signed policy/governance artifacts
 
 - [x] Publish trusted KMS measurements (MRTD, optional RTMR0..3) as release artifacts.
-  - `release-mero-kms-phala.yaml` publishes `mero-kms-phala-attestation-policy.json`.
+  - `release-kms-phala.yaml` publishes `mero-kms-phala-attestation-policy.json`.
 - [x] Ship artifacts per pinned release tag (never `latest`).
   - Release assets are tag-based and verifier scripts require explicit tag input.
 - [x] Sign artifacts (`.sig`/`.pem`) and provide verification flow.
   - Sigstore keyless signing in release workflow.
-  - Verification scripts: `scripts/verify_mero_kms_release_assets.sh`,
-    `scripts/generate_merod_kms_attestation_config.sh`,
-    `scripts/apply_merod_kms_attestation_config.sh`.
+  - Verification scripts: `scripts/verify-kms-phala-release-assets.sh`,
+    `scripts/generate-merod-kms-phala-attestation-config.sh`,
+    `scripts/apply-merod-kms-phala-attestation-config.sh`.
 - [~] Document signature identity constraints (OIDC issuer + workflow identity).
   - Implemented in verification scripts and release workflow sanity checks.
   - Follow-up: add an explicit dedicated section in docs for these identity constraints.
 - [x] Provide machine-readable policy format for downstream ingestion by core.
   - `mero-kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
 - [x] Automate staging measurement collection for policy candidates.
-  - `kms_staging_probe_phala.yaml` + `scripts/extract_tdx_policy_candidates.py`.
+  - `kms-phala-staging-probe.yaml` + `scripts/extract_tdx_policy_candidates.py`.
 - [x] Gate policy promotion through reviewed PR updates.
-  - `kms_policy_promotion_pr.yaml` writes `policies/mero-kms-phala/<tag>.json`
+  - `kms-phala-policy-promotion-pr.yaml` writes `policies/kms-phala/<tag>.json`
     and opens a pull request for approval before release publication.
 - [x] Use versioned policy registry as release input source of truth.
-  - `release-mero-kms-phala.yaml` reads `policies/index.json` and the mapped
+  - `release-kms-phala.yaml` reads `policies/index.json` and the mapped
     per-tag policy file instead of repository variable overrides.
 
 ## Phase 3: rollout and operational hardening

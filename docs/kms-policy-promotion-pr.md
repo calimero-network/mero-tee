@@ -5,11 +5,11 @@ reviewable pull request that updates versioned policy files in this repository.
 
 Workflow file:
 
-- `.github/workflows/kms_policy_promotion_pr.yaml`
+- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
 
 ## Purpose
 
-`kms_staging_probe_phala.yaml` collects **candidate** values from a staged CVM.
+`kms-phala-staging-probe.yaml` collects **candidate** values from a staged CVM.
 This workflow turns those candidates into a PR so policy changes are reviewed
 before release publication/signing.
 
@@ -18,7 +18,7 @@ release lines active at the same time and audit policy history later.
 
 ## Inputs
 
-- `probe_run_id` (required): run ID of `kms_staging_probe_phala.yaml`
+- `probe_run_id` (required): run ID of `kms-phala-staging-probe.yaml`
 - `release_tag` (required): target policy tag (for example `1.2.3`)
 - `probe_artifact_name` (optional): artifact name override
 - `base_branch` (default `master`)
@@ -28,7 +28,7 @@ release lines active at the same time and audit policy history later.
 
 The workflow updates:
 
-- `policies/mero-kms-phala/<release_tag>.json`
+- `policies/kms-phala/<release_tag>.json`
 - `policies/index.json`
 
 The `<release_tag>.json` file contains canonical `policy` values used by release
@@ -60,18 +60,18 @@ this secret is not set.
 ### Automatic mode (recommended)
 
 1. Merge version bump PR for target `mero-kms-phala` release tag.
-2. `kms_policy_auto_pipeline.yaml` dispatches:
-   - `kms_staging_probe_phala.yaml`
-   - `kms_policy_promotion_pr.yaml`
+2. `kms-phala-policy-auto-pipeline.yaml` dispatches:
+   - `kms-phala-staging-probe.yaml`
+   - `kms-phala-policy-promotion-pr.yaml`
 3. Review and merge generated policy PR.
 4. Release workflow runs on policy merge and publishes signed artifacts.
 
 ### Manual mode (fallback)
 
 1. Merge version bump PR for same release tag.
-2. Run `kms_staging_probe_phala.yaml`.
+2. Run `kms-phala-staging-probe.yaml`.
 3. Review probe artifacts and summary.
-4. Run `kms_policy_promotion_pr.yaml` with the probe run ID.
+4. Run `kms-phala-policy-promotion-pr.yaml` with the probe run ID.
 5. Review and merge policy PR.
 6. Release workflow runs on policy merge and publishes signed artifacts.
 

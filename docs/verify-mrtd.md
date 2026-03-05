@@ -23,14 +23,14 @@ curl -sSLO "${BASE_URL}/merod-locked-image-policy.json.pem"
 cosign verify-blob \
   --certificate published-mrtds.json.pem \
   --signature published-mrtds.json.sig \
-  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$" \
+  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   published-mrtds.json
 
 cosign verify-blob \
   --certificate merod-locked-image-policy.json.pem \
   --signature merod-locked-image-policy.json.sig \
-  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$" \
+  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   merod-locked-image-policy.json
 ```

@@ -1,12 +1,12 @@
 {
   "schema_version": 2,
-  "policy_id": "mero-kms-phala/2.1.10",
-  "release_tag": "2.1.10",
+  "policy_id": "mero-kms-phala/2.1.4",
+  "release_tag": "2.1.4",
   "status": "approved",
-  "generated_at": "2026-03-05T16:07:04Z",
+  "generated_at": "2026-03-04T23:01:55Z",
   "source": {
     "repository": "calimero-network/mero-tee",
-    "workflow": "kms_staging_probe_phala.yaml",
+    "workflow": "kms-phala-staging-probe.yaml",
     "run_id": "22693432387",
     "run_url": "https://github.com/calimero-network/mero-tee/actions/runs/22693432387",
     "artifact_name": "kms-staging-probe-22693432387-1",

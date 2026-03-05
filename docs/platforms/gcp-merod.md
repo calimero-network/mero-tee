@@ -36,7 +36,7 @@ Locked-image assets are published under tag `locked-image-vX.Y.Z` and include:
 
 ```bash
 TAG=2.1.10
-scripts/verify_locked_image_release_assets.sh "${TAG}"
+scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
 The verifier resolves `locked-image-v${TAG}` automatically when needed.

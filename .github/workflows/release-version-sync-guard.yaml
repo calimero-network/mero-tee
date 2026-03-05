@@ -7,8 +7,8 @@ on:
       - "Cargo.lock"
       - "packer/gcp/merod/versions.json"
       - "policies/index.json"
-      - "policies/mero-kms-phala/**"
-      - "policies/merod-locked-image/**"
+      - "policies/kms-phala/**"
+      - "policies/node-image-gcp/**"
       - "scripts/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   push:
@@ -19,8 +19,8 @@ on:
       - "Cargo.lock"
       - "packer/gcp/merod/versions.json"
       - "policies/index.json"
-      - "policies/mero-kms-phala/**"
-      - "policies/merod-locked-image/**"
+      - "policies/kms-phala/**"
+      - "policies/node-image-gcp/**"
       - "scripts/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   workflow_dispatch:

@@ -81,9 +81,9 @@ runtime safety by themselves.
 
 Use:
 
-- `scripts/verify_mero_kms_release_assets.sh`
-- `scripts/verify_locked_image_release_assets.sh`
-- `scripts/verify_all_release_assets.sh`
+- `scripts/verify-kms-phala-release-assets.sh`
+- `scripts/verify-node-image-gcp-release-assets.sh`
+- `scripts/verify-release-assets.sh`
 
 Then enforce runtime attestation in deployed services.
 

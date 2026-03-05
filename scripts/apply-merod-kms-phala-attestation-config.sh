@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/apply_merod_kms_attestation_config.sh [--dry-run] <release-tag> <kms-url> <merod-home> [node-name]
+  scripts/apply-merod-kms-phala-attestation-config.sh [--dry-run] <release-tag> <kms-url> <merod-home> [node-name]
 
 Examples:
-  scripts/apply_merod_kms_attestation_config.sh 1.2.3 https://kms-green.example.com/ /data default
-  scripts/apply_merod_kms_attestation_config.sh --dry-run 1.2.3 http://127.0.0.1:8080/ ~/.calimero default
+  scripts/apply-merod-kms-phala-attestation-config.sh 1.2.3 https://kms-green.example.com/ /data default
+  scripts/apply-merod-kms-phala-attestation-config.sh --dry-run 1.2.3 http://127.0.0.1:8080/ ~/.calimero default
 EOF
 }
 
@@ -57,7 +57,7 @@ download_asset() {
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"${script_dir}/verify_mero_kms_release_assets.sh" "${release_tag}" >/dev/null
+"${script_dir}/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
@@ -78,7 +78,7 @@ if [[ -z "${repo}" ]]; then
   repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 fi
 
-cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-mero-kms-phala.yaml@refs/heads/master$}"
+cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-kms-phala.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
 policy_file="${tmp_dir}/mero-kms-phala-attestation-policy.json"

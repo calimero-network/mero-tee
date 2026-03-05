@@ -28,17 +28,17 @@ Use signatures together with:
 ## Canonical verification commands
 
 ```bash
-scripts/verify_mero_kms_release_assets.sh <tag>
-scripts/verify_locked_image_release_assets.sh <tag>
-scripts/verify_all_release_assets.sh <tag>
+scripts/verify-kms-phala-release-assets.sh <tag>
+scripts/verify-node-image-gcp-release-assets.sh <tag>
+scripts/verify-release-assets.sh <tag>
 ```
 
 ## Verification workflow identities
 
 Keyless signatures are expected from these workflow identities on `master`:
 
-- `https://github.com/<org>/<repo>/.github/workflows/release-mero-kms-phala.yaml@refs/heads/master`
-- `https://github.com/<org>/<repo>/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master`
+- `https://github.com/<org>/<repo>/.github/workflows/release-kms-phala.yaml@refs/heads/master`
+- `https://github.com/<org>/<repo>/.github/workflows/release-node-image-gcp.yaml@refs/heads/master`
 
 OIDC issuer is expected to be:
 
@@ -47,9 +47,9 @@ OIDC issuer is expected to be:
 ## Recommended operator flow
 
 1. Pick the release tag you plan to deploy.
-2. Run `scripts/verify_all_release_assets.sh <tag>`.
+2. Run `scripts/verify-release-assets.sh <tag>`.
 3. Generate release-pinned config snippets for `merod` using:
-   - `scripts/generate_merod_kms_attestation_config.sh`
+   - `scripts/generate-merod-kms-phala-attestation-config.sh`
 4. Roll out with digest-pinned images and release-pinned policy/config.
 
 ## Related docs

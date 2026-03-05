@@ -6,7 +6,7 @@ on:
       - master
     paths:
       - "crates/mero-kms-phala/Cargo.toml"
-      - ".github/workflows/kms_policy_auto_pipeline.yaml"
+      - ".github/workflows/kms-phala-policy-auto-pipeline.yaml"
   workflow_dispatch:
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
             release_exists="true"
           fi
 
-          if scripts/read_mero_kms_policy_registry.sh "${version}" >/dev/null 2>&1; then
+          if scripts/read-kms-phala-policy-registry.sh "${version}" >/dev/null 2>&1; then
             echo "should_run=false" >> "${GITHUB_OUTPUT}"
             echo "reason=policy_entry_exists" >> "${GITHUB_OUTPUT}"
             exit 0
@@ -83,7 +83,7 @@ jobs:
             release_run_id="$(
               gh run list \
                 --repo "${GITHUB_REPOSITORY}" \
-                --workflow "release-mero-kms-phala.yaml" \
+                --workflow "release-kms-phala.yaml" \
                 --event push \
                 --branch master \
                 --commit "${GITHUB_SHA}" \
@@ -140,13 +140,13 @@ jobs:
           probe_image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:edge"
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          gh workflow run "kms_staging_probe_phala.yaml" \
+          gh workflow run "kms-phala-staging-probe.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref master \
             -f kms_image="${probe_image}" \
             -f kms_release_tag=latest
 
-          probe_run_id="$(resolve_dispatched_run_id "kms_staging_probe_phala.yaml" "${dispatch_started_at}")" || {
+          probe_run_id="$(resolve_dispatched_run_id "kms-phala-staging-probe.yaml" "${dispatch_started_at}")" || {
             echo "::error::Could not resolve dispatched probe run id."
             exit 1
           }
@@ -187,7 +187,7 @@ jobs:
 
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          gh workflow run "kms_policy_promotion_pr.yaml" \
+          gh workflow run "kms-phala-policy-promotion-pr.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref master \
             -f probe_run_id="${{ steps.probe.outputs.probe_run_id }}" \
@@ -195,7 +195,7 @@ jobs:
             -f base_branch=master \
             -f draft_pr=true
 
-          promotion_run_id="$(resolve_dispatched_run_id "kms_policy_promotion_pr.yaml" "${dispatch_started_at}")" || {
+          promotion_run_id="$(resolve_dispatched_run_id "kms-phala-policy-promotion-pr.yaml" "${dispatch_started_at}")" || {
             echo "::error::Could not resolve dispatched policy promotion run id."
             exit 1
           }

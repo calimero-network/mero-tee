@@ -63,9 +63,9 @@ Conventional-style commit prefixes are preferred (for example `fix:`, `feat:`, `
 
 Release and attestation workflows are security-sensitive. If you modify:
 
-- `.github/workflows/release-mero-kms-phala.yaml`
-- `.github/workflows/gcp_locked_image_build.yaml`
-- `.github/workflows/kms_staging_probe_phala.yaml`
-- `.github/workflows/kms_policy_promotion_pr.yaml`
+- `.github/workflows/release-kms-phala.yaml`
+- `.github/workflows/release-node-image-gcp.yaml`
+- `.github/workflows/kms-phala-staging-probe.yaml`
+- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
 
 please include a brief risk assessment in the PR description.

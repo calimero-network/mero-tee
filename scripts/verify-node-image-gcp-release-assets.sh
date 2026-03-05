@@ -286,7 +286,7 @@ jq -e --arg tag "${logical_tag}" '
   (.measurement_policy.tag == $tag)
 ' "${tmp_dir}/release-provenance.json" >/dev/null
 
-cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$}"
+cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
 for asset in "${signed_assets[@]}"; do

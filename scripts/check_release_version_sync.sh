@@ -96,8 +96,8 @@ if entry.get("merod_release_tag") not in expected_merod_tags:
         f"{entry.get('merod_release_tag')}"
     )
 
-expected_kms_policy_path = f"policies/mero-kms-phala/{kms_version}.json"
-expected_merod_policy_path = f"policies/merod-locked-image/{kms_version}.json"
+expected_kms_policy_path = f"policies/kms-phala/{kms_version}.json"
+expected_merod_policy_path = f"policies/node-image-gcp/{kms_version}.json"
 
 if entry.get("kms_policy_path") != expected_kms_policy_path:
     fail(

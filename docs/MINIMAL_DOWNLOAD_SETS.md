@@ -53,9 +53,9 @@ Everything in quick verify, plus:
 If you have network access to GitHub Releases, use:
 
 ```bash
-scripts/verify_mero_kms_release_assets.sh <tag>
-scripts/verify_locked_image_release_assets.sh <tag>
-scripts/verify_all_release_assets.sh <tag>
+scripts/verify-kms-phala-release-assets.sh <tag>
+scripts/verify-node-image-gcp-release-assets.sh <tag>
+scripts/verify-release-assets.sh <tag>
 ```
 
 Those scripts fetch required artifacts automatically and run policy/signature checks end-to-end.

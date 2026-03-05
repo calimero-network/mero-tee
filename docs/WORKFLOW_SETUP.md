@@ -60,8 +60,8 @@ It validates the following are synchronized for the active release version:
 - `Cargo.lock` `mero-kms-phala` package version
 - `packer/gcp/merod/versions.json` `imageVersion`
 - `policies/index.json` release entry for that version
-- `policies/mero-kms-phala/<version>.json`
-- `policies/merod-locked-image/<version>.json`
+- `policies/kms-phala/<version>.json`
+- `policies/node-image-gcp/<version>.json`
 
 For `policies/index.json`, `merod_release_tag` may be either:
 
@@ -73,17 +73,17 @@ locked-image release tags.
 
 ## KMS policy automation
 
-Policy probe/promotion automation (`kms_policy_auto_pipeline.yaml`) reuses the
-same secrets as `kms_staging_probe_phala.yaml`:
+Policy probe/promotion automation (`kms-phala-policy-auto-pipeline.yaml`) reuses the
+same secrets as `kms-phala-staging-probe.yaml`:
 
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`
 
-Locked-image policy promotion (`locked_image_policy_promotion_pr.yaml`) reads
+Locked-image policy promotion (`node-image-gcp-policy-promotion-pr.yaml`) reads
 release assets and opens a policy PR. For repositories where `github.token`
 cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
 
-`gcp_locked_image_build.yaml` auto-dispatches this promotion workflow after
+`release-node-image-gcp.yaml` auto-dispatches this promotion workflow after
 publishing release assets.
 
 ## Release SBOM assets
@@ -91,10 +91,10 @@ publishing release assets.
 Release workflows now install Syft and publish signed SPDX SBOM assets together
 with the existing release checksums/manifest artifacts.
 
-- `gcp_locked_image_build.yaml` publishes
+- `release-node-image-gcp.yaml` publishes
   `merod-locked-image-release-sbom.spdx.json` (plus matching `.sig` and `.pem`
   assets) and includes it in `merod-locked-image-checksums.txt`.
-- `release-mero-kms-phala.yaml` publishes:
+- `release-kms-phala.yaml` publishes:
   - `mero-kms-phala-container-sbom.spdx.json`
   - `mero-kms-phala-binaries-sbom.spdx.json`
   - matching `.sig` and `.pem` files for each SBOM
@@ -104,13 +104,13 @@ with the existing release checksums/manifest artifacts.
 Release workflows generate release notes from workflow metadata and publish them
 as the GitHub Release body (`body_path`).
 
-- `release-mero-kms-phala.yaml` includes:
+- `release-kms-phala.yaml` includes:
   - tag and commit SHA
   - workflow run reference
   - container digest reference
   - compatibility/policy source pointers
   - verification command snippets
-- `gcp_locked_image_build.yaml` includes:
+- `release-node-image-gcp.yaml` includes:
   - tag and commit SHA
   - workflow run reference
   - profile MRTD summary

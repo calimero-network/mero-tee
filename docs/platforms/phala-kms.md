@@ -40,7 +40,7 @@ Always verify signed assets before rollout:
 
 ```bash
 TAG=2.1.10
-scripts/verify_mero_kms_release_assets.sh "${TAG}"
+scripts/verify-kms-phala-release-assets.sh "${TAG}"
 ```
 
 This validates signatures, checksums, release manifest, attestation policy, and
@@ -87,7 +87,7 @@ Production guidance:
 Use signed policy from the same reviewed release:
 
 ```bash
-scripts/apply_merod_kms_attestation_config.sh "${TAG}" http://mero-kms:8080/ /data default
+scripts/apply-merod-kms-phala-attestation-config.sh "${TAG}" http://mero-kms:8080/ /data default
 ```
 
 This writes `tee.kms.phala.attestation.*` config values so `merod` verifies KMS
@@ -123,5 +123,5 @@ The expected runtime sequence is documented in
 
 - [Platform runbooks index](README.md)
 - [Trust & verification](../TRUST_AND_VERIFICATION.md)
-- [Generate release-pinned `merod` config](../../scripts/generate_merod_kms_attestation_config.sh)
+- [Generate release-pinned `merod` config](../../scripts/generate-merod-kms-phala-attestation-config.sh)
 - [KMS service reference](../../crates/mero-kms-phala/README.md)

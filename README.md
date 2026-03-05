@@ -82,13 +82,13 @@ For a consolidated trust model and verification entry point, see [Trust & Verifi
 Verify KMS release assets:
 
 ```bash
-scripts/verify_mero_kms_release_assets.sh X.Y.Z
+scripts/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 Verify all available release trust assets for a tag (KMS and/or locked-image):
 
 ```bash
-scripts/verify_all_release_assets.sh X.Y.Z
+scripts/verify-release-assets.sh X.Y.Z
 ```
 
 Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/MINIMAL_DOWNLOAD_SETS.md) for quick-verify vs full-audit bundles.
@@ -96,39 +96,39 @@ Need an explicit artifact list for air-gapped or bandwidth-limited environments?
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
-scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/
+scripts/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
 ```
 
 Apply signed policy directly to an existing `merod` node config:
 
 ```bash
-scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+scripts/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
 Collect candidate KMS allowlists automatically from a staged Phala deployment:
 
-- Run GitHub Actions workflow `.github/workflows/kms_staging_probe_phala.yaml`
+- Run GitHub Actions workflow `.github/workflows/kms-phala-staging-probe.yaml`
 - Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
 - By default, workflow resolves image from latest release tag; optional `kms_image` override must be pinned and expose `/attest` (do not use container `:latest`)
 - Produces policy candidate artifacts for PR promotion
 
 Promote staged candidates into a reviewable, versioned policy PR:
 
-- Run GitHub Actions workflow `.github/workflows/kms_policy_promotion_pr.yaml`
+- Run GitHub Actions workflow `.github/workflows/kms-phala-policy-promotion-pr.yaml`
 - Input the probe run ID and target release tag
-- Workflow updates `policies/mero-kms-phala/<tag>.json` + `index.json` and opens a PR
+- Workflow updates `policies/kms-phala/<tag>.json` + `index.json` and opens a PR
   (or prints a manual PR compare URL if Actions PR creation is disabled)
 - `index.json` keeps a historical list of versioned policy entries (with SHA-256)
-- Automatic option: `.github/workflows/kms_policy_auto_pipeline.yaml` dispatches
+- Automatic option: `.github/workflows/kms-phala-policy-auto-pipeline.yaml` dispatches
   probe + promotion workflows after version bumps merged to `master`
 
-Release automation reads the policy registry directly (`policies/mero-kms-phala`)
+Release automation reads the policy registry directly (`policies/kms-phala`)
 for the target crate version, so version bump + promoted policy stay aligned.
 
-Locked-image policy history is tracked under `policies/merod-locked-image` and
+Locked-image policy history is tracked under `policies/node-image-gcp` and
 can be promoted from release assets using
-`.github/workflows/locked_image_policy_promotion_pr.yaml` (auto-dispatched by
-`gcp_locked_image_build.yaml` after release publish, with manual fallback).
+`.github/workflows/node-image-gcp-policy-promotion-pr.yaml` (auto-dispatched by
+`release-node-image-gcp.yaml` after release publish, with manual fallback).
 
 Recommended release order:
 

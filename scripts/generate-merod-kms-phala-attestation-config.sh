@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/generate_merod_kms_attestation_config.sh <release-tag> <kms-url> [output-file]
+  scripts/generate-merod-kms-phala-attestation-config.sh <release-tag> <kms-url> [output-file]
 
 Examples:
-  scripts/generate_merod_kms_attestation_config.sh 1.2.3 http://kms.internal:8080/
-  scripts/generate_merod_kms_attestation_config.sh 1.2.3 https://kms.example.com/ ./tee-kms.toml
+  scripts/generate-merod-kms-phala-attestation-config.sh 1.2.3 http://kms.internal:8080/
+  scripts/generate-merod-kms-phala-attestation-config.sh 1.2.3 https://kms.example.com/ ./tee-kms.toml
 EOF
 }
 
@@ -30,7 +30,7 @@ for cmd in "${required_commands[@]}"; do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"${script_dir}/verify_mero_kms_release_assets.sh" "${tag}" >/dev/null
+"${script_dir}/verify-kms-phala-release-assets.sh" "${tag}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
@@ -57,7 +57,7 @@ if [[ -z "${repo}" ]]; then
   repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 fi
 
-cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-mero-kms-phala.yaml@refs/heads/master$}"
+cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-kms-phala.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
 policy_file="${tmp_dir}/mero-kms-phala-attestation-policy.json"

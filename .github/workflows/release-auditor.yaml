@@ -63,13 +63,13 @@ jobs:
             fi
 
             if [[ "${has_kms_assets}" == "true" ]]; then
-              if ! scripts/verify_mero_kms_release_assets.sh "${tag}"; then
+              if ! scripts/verify-kms-phala-release-assets.sh "${tag}"; then
                 failures+=("${tag}:kms")
               fi
             fi
 
             if [[ "${has_locked_assets}" == "true" ]]; then
-              if ! scripts/verify_locked_image_release_assets.sh "${tag}"; then
+              if ! scripts/verify-node-image-gcp-release-assets.sh "${tag}"; then
                 failures+=("${tag}:locked-image")
               fi
             fi

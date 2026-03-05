@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/read_merod_locked_image_policy_registry.sh <release-tag> [policy-index]
+  scripts/read-node-image-gcp-policy-registry.sh <release-tag> [policy-index]
 
 Examples:
-  scripts/read_merod_locked_image_policy_registry.sh 2.1.4
-  scripts/read_merod_locked_image_policy_registry.sh 2.1.4 policies/index.json
+  scripts/read-node-image-gcp-policy-registry.sh 2.1.4
+  scripts/read-node-image-gcp-policy-registry.sh 2.1.4 policies/index.json
 
 Prints normalized JSON to stdout:
 {

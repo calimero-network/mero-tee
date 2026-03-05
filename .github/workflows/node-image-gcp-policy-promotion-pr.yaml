@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          policy_dir="policies/merod-locked-image"
+          policy_dir="policies/node-image-gcp"
           policy_file="${policy_dir}/${RELEASE_TAG}.json"
           index_file="policies/index.json"
           mkdir -p "${policy_dir}"
@@ -125,7 +125,7 @@ jobs:
             jq -n \
               --arg tag "${RELEASE_TAG}" \
               --arg repository "${GITHUB_REPOSITORY}" \
-              --arg source_workflow "gcp_locked_image_build.yaml" \
+              --arg source_workflow "release-node-image-gcp.yaml" \
               --arg source_kind "direct_release_policy" \
               --slurpfile policy "${direct_policy_file}" \
               '{
@@ -162,7 +162,7 @@ jobs:
             jq -n \
               --arg tag "${RELEASE_TAG}" \
               --arg repository "${GITHUB_REPOSITORY}" \
-              --arg source_workflow "gcp_locked_image_build.yaml" \
+              --arg source_workflow "release-node-image-gcp.yaml" \
               --arg source_kind "published_mrtds_fallback" \
               --arg source_run_id "${source_run_id}" \
               --arg source_commit "${source_commit}" \

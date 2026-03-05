@@ -107,7 +107,7 @@ jobs:
 
           candidates_file="${ARTIFACT_DIR}/kms-policy-candidates.json"
           context_file="${ARTIFACT_DIR}/attestation-context.json"
-          policy_dir="policies/mero-kms-phala"
+          policy_dir="policies/kms-phala"
           policy_file="${policy_dir}/${RELEASE_TAG}.json"
           index_file="policies/index.json"
 
@@ -139,7 +139,7 @@ jobs:
           jq -n \
             --arg tag "${RELEASE_TAG}" \
             --arg repository "${GITHUB_REPOSITORY}" \
-            --arg source_workflow "kms_staging_probe_phala.yaml" \
+            --arg source_workflow "kms-phala-staging-probe.yaml" \
             --arg source_run_id "${PROBE_RUN_ID}" \
             --arg source_run_url "${probe_run_url}" \
             --arg source_artifact "${ARTIFACT_NAME}" \

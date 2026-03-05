@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/read_mero_kms_policy_registry.sh <release-tag> [policy-index]
+  scripts/read-kms-phala-policy-registry.sh <release-tag> [policy-index]
 
 Examples:
-  scripts/read_mero_kms_policy_registry.sh 2.1.3
-  scripts/read_mero_kms_policy_registry.sh 2.1.3 policies/index.json
+  scripts/read-kms-phala-policy-registry.sh 2.1.3
+  scripts/read-kms-phala-policy-registry.sh 2.1.3 policies/index.json
 
 Prints normalized JSON to stdout:
 {

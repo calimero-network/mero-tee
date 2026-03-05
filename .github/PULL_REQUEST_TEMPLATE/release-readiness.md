@@ -22,15 +22,15 @@ assignees: ""
 - [ ] Version bump and policy mapping are aligned for this release tag.
 - [ ] Workflow changes (if any) were reviewed by code owners.
 - [ ] Release helper scripts still pass shell syntax checks:
-  - [ ] `scripts/verify_mero_kms_release_assets.sh`
-  - [ ] `scripts/verify_locked_image_release_assets.sh`
+  - [ ] `scripts/verify-kms-phala-release-assets.sh`
+  - [ ] `scripts/verify-node-image-gcp-release-assets.sh`
 - [ ] Operator-facing docs were updated for behavior changes.
 - [ ] Deployment snippets use pinned tag/digest references (no mutable `:latest`).
 
 ## Verification plan
 
-- [ ] `scripts/verify_mero_kms_release_assets.sh <X.Y.Z>` succeeds (if KMS assets are expected).
-- [ ] `scripts/verify_locked_image_release_assets.sh <X.Y.Z>` succeeds (if locked-image assets are expected).
+- [ ] `scripts/verify-kms-phala-release-assets.sh <X.Y.Z>` succeeds (if KMS assets are expected).
+- [ ] `scripts/verify-node-image-gcp-release-assets.sh <X.Y.Z>` succeeds (if locked-image assets are expected).
 - [ ] Sigstore identity expectations were checked against workflow identity:
   - [ ] KMS workflow identity regex
   - [ ] locked-image workflow identity regex

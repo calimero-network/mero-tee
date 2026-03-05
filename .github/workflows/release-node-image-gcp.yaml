@@ -49,11 +49,11 @@ jobs:
         run: |
           bash -n packer/gcp/merod/init.sh
           bash -n packer/gcp/merod/build-and-release.sh
-          bash -n scripts/verify_locked_image_release_assets.sh
-          bash -n scripts/verify_mero_kms_release_assets.sh
-          bash -n scripts/read_merod_locked_image_policy_registry.sh
-          bash -n scripts/generate_merod_kms_attestation_config.sh
-          bash -n scripts/apply_merod_kms_attestation_config.sh
+          bash -n scripts/verify-node-image-gcp-release-assets.sh
+          bash -n scripts/verify-kms-phala-release-assets.sh
+          bash -n scripts/read-node-image-gcp-policy-registry.sh
+          bash -n scripts/generate-merod-kms-phala-attestation-config.sh
+          bash -n scripts/apply-merod-kms-phala-attestation-config.sh
           python3 -m py_compile scripts/verify_tdx_quote_ita.py
           python3 -m py_compile scripts/extract_tdx_policy_candidates.py
 
@@ -1286,12 +1286,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/verify_locked_image_release_assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts/verify_all_release_assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
           } > artifacts/release-notes.md
 
@@ -1352,7 +1352,7 @@ jobs:
             "artifacts/merod-locked-image-checksums.txt"
           )
 
-          cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$"
+          cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$"
           cert_oidc_issuer="https://token.actions.githubusercontent.com"
 
           for asset in "${assets[@]}"; do
@@ -1410,13 +1410,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/verify_locked_image_release_assets.sh "${{ needs.preflight.outputs.image_version }}"
+          scripts/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
 
       - name: Trigger locked-image policy promotion workflow
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh workflow run "locked_image_policy_promotion_pr.yaml" \
+          if gh workflow run "node-image-gcp-policy-promotion-pr.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref master \
             -f release_tag="${{ needs.preflight.outputs.image_version }}" \

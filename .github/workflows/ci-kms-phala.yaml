@@ -8,13 +8,13 @@ on:
       - Cargo.toml
       - Cargo.lock
       - "crates/mero-kms-phala/**"
-      - ".github/workflows/ci-mero-kms-phala.yaml"
+      - ".github/workflows/ci-kms-phala.yaml"
   pull_request:
     paths:
       - Cargo.toml
       - Cargo.lock
       - "crates/mero-kms-phala/**"
-      - ".github/workflows/ci-mero-kms-phala.yaml"
+      - ".github/workflows/ci-kms-phala.yaml"
 
 permissions:
   contents: read

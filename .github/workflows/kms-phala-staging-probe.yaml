@@ -552,7 +552,7 @@ jobs:
                       summary.write(f"{key}='{vars_map[key]}'\n")
                   summary.write("```\n\n")
                   summary.write(
-                      "Use these for policy review context; publish through `kms_policy_promotion_pr.yaml`.\n"
+                      "Use these for policy review context; publish through `kms-phala-policy-promotion-pr.yaml`.\n"
                   )
           PY
 

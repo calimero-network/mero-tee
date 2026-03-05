@@ -11,6 +11,14 @@ This proposal defines a cleaner information architecture and naming scheme for
 
 ---
 
+## Status
+
+- [x] Phase A completed (workflow/script/policy-path naming baseline)
+- [ ] Phase B pending (release asset/tag normalization)
+- [ ] Phase C pending (docs tree split by intent)
+
+---
+
 ## 1) Naming principles
 
 1. **Name by responsibility first**, platform second.
@@ -32,7 +40,7 @@ Avoid mixing lane names inside one artifact family.
 
 ---
 
-## 3) Proposed rename map (services/assets/workflows/scripts)
+## 3) Rename map (Phase A implemented where noted; Phase B pending for assets)
 
 ## Services and policy registries
 

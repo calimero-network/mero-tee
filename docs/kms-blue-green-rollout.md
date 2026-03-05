@@ -27,7 +27,7 @@ For a target `mero-tee` tag `X.Y.Z`:
 All assets must be verified with:
 
 ```bash
-scripts/verify_mero_kms_release_assets.sh X.Y.Z
+scripts/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 ## Decision tree
@@ -61,7 +61,7 @@ flowchart TD
 Required gate:
 
 ```bash
-scripts/verify_mero_kms_release_assets.sh X.Y.Z
+scripts/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 - **No**: stop. Do not deploy.
@@ -69,9 +69,9 @@ scripts/verify_mero_kms_release_assets.sh X.Y.Z
 
 ### D2. Policy entry promoted?
 
-- Recommended: `kms_policy_auto_pipeline.yaml` handles probe + promotion after version bump merge.
-- Manual fallback: run `kms_staging_probe_phala.yaml`, then `kms_policy_promotion_pr.yaml`.
-- Gate condition: `policies/mero-kms-phala/<X.Y.Z>.json` exists and `policies/index.json` references it.
+- Recommended: `kms-phala-policy-auto-pipeline.yaml` handles probe + promotion after version bump merge.
+- Manual fallback: run `kms-phala-staging-probe.yaml`, then `kms-phala-policy-promotion-pr.yaml`.
+- Gate condition: `policies/kms-phala/<X.Y.Z>.json` exists and `policies/index.json` references it.
 
 ### D3. Green KMS healthy?
 
@@ -84,13 +84,13 @@ scripts/verify_mero_kms_release_assets.sh X.Y.Z
 Generate pinned config from signed release policy:
 
 ```bash
-scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example.com/ ./tee-kms.toml
+scripts/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ ./tee-kms.toml
 ```
 
 Or apply directly to an existing node config:
 
 ```bash
-scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example.com/ /data default
+scripts/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ /data default
 ```
 
 ### D5. Canary validation pass?

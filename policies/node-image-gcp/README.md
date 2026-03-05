@@ -13,5 +13,5 @@ GCP locked merod images.
 
 These files provide the governance layer between:
 
-1. **GCP locked image build + attestation evidence** (`gcp_locked_image_build.yaml`), and
+1. **GCP locked image build + attestation evidence** (`release-node-image-gcp.yaml`), and
 2. **release trust artifacts** (`published-mrtds.json`, `merod-locked-image-policy.json`).

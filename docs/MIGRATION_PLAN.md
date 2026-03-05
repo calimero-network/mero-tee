@@ -22,8 +22,8 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 - Copy packer/gcp/merod to mero-tee/packer/gcp/merod
 - Copy required Ansible roles
 - Adjust playbook paths for ansible roles
-- Copy verify_tdx_quote_ita.py and verify_locked_image_release_assets.sh
-- Add .github/workflows/gcp_locked_image_build.yaml
+- Copy verify_tdx_quote_ita.py and verify-node-image-gcp-release-assets.sh
+- Add .github/workflows/release-node-image-gcp.yaml
 - Use GitHub vars/secrets for GCP config (no values in repo)
 
 ## Phase 4: Release and Signing

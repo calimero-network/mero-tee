@@ -6,7 +6,7 @@
   "generated_at": "2026-03-05T11:51:14Z",
   "source": {
     "repository": "calimero-network/mero-tee",
-    "workflow": "kms_staging_probe_phala.yaml",
+    "workflow": "kms-phala-staging-probe.yaml",
     "run_id": "22693432387",
     "run_url": "https://github.com/calimero-network/mero-tee/actions/runs/22693432387",
     "artifact_name": "kms-staging-probe-22693432387-1",

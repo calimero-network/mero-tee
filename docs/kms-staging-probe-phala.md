@@ -4,7 +4,7 @@ This workflow automates collection of candidate KMS attestation policy values fr
 
 Workflow file:
 
-- `.github/workflows/kms_staging_probe_phala.yaml`
+- `.github/workflows/kms-phala-staging-probe.yaml`
 
 ## What it does
 
@@ -28,7 +28,7 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
 ## Running it
 
-This workflow is used by the automatic pipeline (`kms_policy_auto_pipeline.yaml`)
+This workflow is used by the automatic pipeline (`kms-phala-policy-auto-pipeline.yaml`)
 and can also be run manually (`workflow_dispatch`) with:
 
 - `kms_release_tag`:
@@ -58,11 +58,11 @@ The workflow uploads an artifact bundle `kms-staging-probe-<run_id>-<attempt>` c
 
 After collecting probe artifacts, run:
 
-- `.github/workflows/kms_policy_promotion_pr.yaml`
+- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
 
 with the probe run ID and target release tag. This creates/updates:
 
-- `policies/mero-kms-phala/<tag>.json`
+- `policies/kms-phala/<tag>.json`
 - `policies/index.json`
 
 in a pull request for review before release publication.

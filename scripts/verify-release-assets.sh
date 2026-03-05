@@ -103,7 +103,7 @@ echo "Verifying release ${tag} in ${repo}..."
 
 if [[ "${has_kms_assets}" == "true" ]]; then
   echo "-> Verifying KMS release asset set"
-  scripts/verify_mero_kms_release_assets.sh "${tag}"
+  scripts/verify-kms-phala-release-assets.sh "${tag}"
 else
   echo "-> KMS asset set not present; skipping"
 fi
@@ -114,7 +114,7 @@ if [[ "${has_locked_assets}" == "true" ]]; then
   else
     echo "-> Verifying locked-image release asset set from ${locked_release_tag}"
   fi
-  scripts/verify_locked_image_release_assets.sh "${locked_release_tag}"
+  scripts/verify-node-image-gcp-release-assets.sh "${locked_release_tag}"
 else
   echo "-> Locked-image asset set not present; skipping"
 fi

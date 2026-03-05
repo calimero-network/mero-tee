@@ -13,5 +13,5 @@ published release is tied to a reviewed policy record for the same tag.
 
 These files are the reviewable governance layer between:
 
-1. **probe evidence collection** (`kms_staging_probe_phala.yaml`), and
-2. **release publication/signing** (`release-mero-kms-phala.yaml`).
+1. **probe evidence collection** (`kms-phala-staging-probe.yaml`), and
+2. **release publication/signing** (`release-kms-phala.yaml`).
