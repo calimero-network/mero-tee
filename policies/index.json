@@ -6,10 +6,10 @@
       "kms_release_tag": "2.1.7",
       "kms_policy_path": "policies/mero-kms-phala/2.1.7.json",
       "kms_policy_sha256": "5fc303bd9142a5fc41e7725685e9dc5af1279f81973d034d7155cf09b87ef04b",
-      "merod_release_tag": "2.1.6",
-      "merod_policy_path": "policies/merod-locked-image/2.1.6.json",
-      "merod_policy_sha256": "a5e0278b4487a9a8a35dcdeb86d9ca10dac4af264879c95419bf1549228126ff",
-      "updated_at": "2026-03-05T14:37:19Z"
+      "merod_release_tag": "2.1.7",
+      "merod_policy_path": "policies/merod-locked-image/2.1.7.json",
+      "merod_policy_sha256": "bca633717af7412afeb0ffcd13743899f48eb254b3100a62e80c40d7a1261139",
+      "updated_at": "2026-03-05T15:04:37Z"
     },
     {
       "version": "2.1.6",
