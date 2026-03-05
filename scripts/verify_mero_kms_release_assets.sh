@@ -154,7 +154,7 @@ for asset in "${base_signed_assets[@]}"; do
 done
 
 normalized_checksums="${tmp_dir}/normalized-checksums.txt"
-> "${normalized_checksums}"
+: > "${normalized_checksums}"
 
 while read -r checksum filepath; do
   if [[ -z "${checksum}" || -z "${filepath}" ]]; then
