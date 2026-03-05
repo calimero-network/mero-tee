@@ -48,6 +48,14 @@ Then it opens/updates a PR with:
 If repository policy blocks PR creation from GitHub Actions, the workflow still
 pushes the promotion branch and prints a manual compare URL in the job summary.
 
+To enable automatic PR creation in restricted repositories, configure one of:
+
+- `PR_CREATION_TOKEN` (recommended PAT secret), or
+- `GH_TOKEN` (PAT secret)
+
+with repository write access. The workflow falls back to `github.token` when
+these secrets are not set.
+
 ## Recommended flow
 
 ### Automatic mode (recommended)
