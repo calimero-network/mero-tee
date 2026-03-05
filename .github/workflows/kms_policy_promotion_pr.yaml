@@ -109,11 +109,11 @@ jobs:
           context_file="${ARTIFACT_DIR}/attestation-context.json"
           policy_dir="policies/mero-kms-phala"
           policy_file="${policy_dir}/${RELEASE_TAG}.json"
-          index_file="${policy_dir}/index.json"
+          index_file="policies/index.json"
 
           mkdir -p "${policy_dir}"
           if [[ ! -f "${index_file}" ]]; then
-            echo '{"schema_version":1,"policies":[]}' > "${index_file}"
+            echo '{"schema_version":1,"releases":[]}' > "${index_file}"
           fi
 
           if ! jq -e '
@@ -168,29 +168,30 @@ jobs:
 
           tmp_index="$(mktemp)"
           jq \
-            --arg tag "${RELEASE_TAG}" \
-            --arg path "${policy_file}" \
+            --arg version "${RELEASE_TAG}" \
+            --arg kms_release_tag "${RELEASE_TAG}" \
+            --arg kms_policy_path "${policy_file}" \
             --arg run_id "${PROBE_RUN_ID}" \
             --arg run_url "${probe_run_url}" \
             --arg artifact "${ARTIFACT_NAME}" \
-            --arg policy_sha256 "${policy_sha256}" \
+            --arg kms_policy_sha256 "${policy_sha256}" \
             '
             .schema_version = 1 |
-            .policies = (.policies // []) |
-            .policies = (
-              [ .policies[] | select(.release_tag != $tag) ] + [
-                {
-                  policy_id: ("mero-kms-phala/" + $tag),
-                  release_tag: $tag,
-                  path: $path,
-                  status: "approved",
-                  policy_sha256: $policy_sha256,
-                  source_probe_run_id: $run_id,
-                  source_probe_run_url: $run_url,
-                  source_probe_artifact_name: $artifact,
-                  updated_at: (now | todate)
-                }
-              ] | sort_by(.release_tag)
+            .releases = (.releases // []) |
+            .releases = (
+              [ .releases[] | select(.version != $version) ] + [
+                (
+                  ([ .releases[] | select(.version == $version) ] | first // {}) |
+                  .version = $version |
+                  .kms_release_tag = $kms_release_tag |
+                  .kms_policy_path = $kms_policy_path |
+                  .kms_policy_sha256 = $kms_policy_sha256 |
+                  .kms_source_probe_run_id = $run_id |
+                  .kms_source_probe_run_url = $run_url |
+                  .kms_source_probe_artifact_name = $artifact |
+                  .updated_at = (now | todate)
+                )
+              ] | sort_by(.version)
             )
             ' "${index_file}" > "${tmp_index}"
           mv "${tmp_index}" "${index_file}"
@@ -206,7 +207,7 @@ jobs:
             echo "### Updated files"
             echo
             echo "- \`${policy_file}\`"
-            echo "- \`policies/mero-kms-phala/index.json\`"
+            echo "- \`${index_file}\`"
             echo "- Policy SHA-256: \`${policy_sha256}\`"
             echo
             echo "### Candidate GitHub repository variables"
@@ -225,7 +226,7 @@ jobs:
       - name: Create promotion pull request
         id: cpr
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GHCR_PUSH_TOKEN || github.token }}
           base: ${{ inputs.base_branch }}
