@@ -147,7 +147,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
@@ -184,14 +184,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download x86_64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: artifacts-x86_64-unknown-linux-gnu
           path: binaries/
           merge-multiple: true
 
       - name: Download aarch64 binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         if: ${{ env.INCLUDE_AARCH64 == 'true' }}
         with:
           pattern: artifacts-aarch64-unknown-linux-gnu
@@ -267,7 +267,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Download binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
