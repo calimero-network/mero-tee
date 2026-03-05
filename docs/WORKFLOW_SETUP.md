@@ -32,6 +32,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 | `GCP_SERVICE_ACCOUNT_KEY` | JSON key for GCP (if not using WIF) |
 | OR `GCP_WORKLOAD_IDENTITY_PROVIDER` + `GCP_PACKER_SERVICE_ACCOUNT_EMAIL` | For Workload Identity Federation |
 | `ITA_API_KEY` | Intel Trust Authority API key (required for quote verification and MRTD publishing) |
+| `GHCR_PUSH_TOKEN` (optional) | PAT for policy promotion PR creation when `github.token` PR creation is restricted |
 
 ## Trigger
 
