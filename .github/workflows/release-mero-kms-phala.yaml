@@ -173,7 +173,9 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-mero-kms-phala-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -249,6 +251,14 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           provenance: false
           sbom: false
+
+      - name: Attest container image build provenance
+        if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_and_push.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          subject-digest: ${{ steps.build_and_push.outputs.digest }}
+          push-to-registry: true
 
   release-metadata:
     name: Release Metadata
