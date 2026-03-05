@@ -30,7 +30,7 @@ cargo build --release -p mero-kms-phala
 Or use the prebuilt container from [mero-tee releases](https://github.com/calimero-network/mero-tee/releases):
 
 ```bash
-docker pull ghcr.io/calimero-network/mero-kms-phala:<version>
+docker pull ghcr.io/calimero-network/mero-kms-phala@sha256:<kms-image-digest>
 ```
 
 ## Docker Compose for Phala CVM
@@ -40,7 +40,7 @@ All services run in the same CVM. Example:
 ```yaml
 services:
   mero-kms:
-    image: ghcr.io/calimero-network/mero-kms-phala:2.1.3
+    image: ghcr.io/calimero-network/mero-kms-phala@sha256:<kms-image-digest>
     ports:
       - "8080:8080"
     environment:
@@ -58,7 +58,7 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
 
   merod:
-    image: ghcr.io/calimero-network/merod:2.1.3
+    image: ghcr.io/calimero-network/merod@sha256:<merod-image-digest>
     ports:
       - "2428:2428"
       - "2528:2528"
@@ -72,6 +72,13 @@ services:
 
 **Important:** KMS must start before merod so the key can be fetched at startup.
 Use pinned tags or digests for production; avoid mutable tags such as `:latest`.
+Prefer digest-pinned references (`@sha256:...`) for both KMS and merod in production.
+
+You can obtain the KMS image digest from:
+
+- release asset `mero-kms-phala-release-manifest.json` in this repository (field: `container.digest`)
+
+You can obtain the merod image digest from the corresponding release/source that publishes your chosen merod container image.
 
 ## Deploying to Phala Cloud
 

@@ -35,7 +35,7 @@ and can also be run manually (`workflow_dispatch`) with:
   - explicit release tag (recommended, for example `2.1.3`), or
   - `latest` (default) to auto-use the latest GitHub release tag (staging convenience only)
 - optional `kms_image` override pinned to a reviewed tag/digest that includes `/attest`
-  (for example `ghcr.io/calimero-network/mero-kms-phala:pr-1`)
+  (for example `ghcr.io/calimero-network/mero-kms-phala@sha256:<digest>`)
 - optional `region`
 - optional `ita_policy_ids`
 - optional `kms_url_override` if your endpoint format differs from default derivation
