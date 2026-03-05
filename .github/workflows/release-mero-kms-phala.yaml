@@ -271,6 +271,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      packages: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -285,6 +286,13 @@ jobs:
 
       - name: Install Syft for SBOM generation
         uses: anchore/sbom-action/download-syft@v0
+
+      - name: Log in to GitHub Container Registry for Syft
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Generate release checksums, manifest, and attestation policy
         run: |
