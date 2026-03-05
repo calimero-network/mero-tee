@@ -120,17 +120,22 @@ If scripts pass, you have strong evidence that:
 - artifacts are signed by the expected GitHub workflow identity,
 - downloaded files match signed hashes/manifests/policies,
 - transparency and metadata references are present.
+- the signed attestation policy/config material needed by `merod`/KMS is present and internally consistent.
 
-It does **not** prove:
+When runtime attestation is actually enforced by `merod` + KMS, you also gain
+evidence that the TEE measurements (MRTD/RTMR) match the approved policy.
+
+It still does **not** prove:
 
 - code is bug-free,
-- runtime configuration is safe for your environment,
-- your own infrastructure is uncompromised.
+- every environment-specific config choice is safe (network policy, secret handling, endpoint exposure),
+- every system outside the attested TEE boundary is uncompromised (CI, control plane, DNS, host networking, etc.).
 
 You should still do:
 
 - staged rollout,
 - policy review,
+- runtime quote/attestation enforcement in production paths,
 - operational monitoring.
 
 ---
