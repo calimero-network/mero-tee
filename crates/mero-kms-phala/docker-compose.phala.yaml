@@ -4,6 +4,6 @@ services:
     ports:
       - 8080:8080
     environment:
-      ACCEPT_MOCK_ATTESTATION: "true"
+      ACCEPT_MOCK_ATTESTATION: "false"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock

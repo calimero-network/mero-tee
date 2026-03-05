@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 axum = "0.7"
 base64 = "0.22"
-dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git" }
+dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "14b850d9da172cc6cf943365bc37771c550c881f" }
 eyre = "0.6"
 hex = "0.4"
 libp2p-identity = "0.2"
@@ -31,3 +31,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # From calimero-network/core (git dependency; 0.10.1-rc.1 bump commit)
 calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "db829877" }
 calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "db829877" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
