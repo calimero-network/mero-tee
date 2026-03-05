@@ -30,11 +30,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t changed_files < <(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")
-          if [[ "${#changed_files[@]}" -eq 0 ]]; then
-            echo "No changed files detected."
-            exit 0
+          changed_files_output="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          if [[ -z "${changed_files_output}" ]]; then
+            echo "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
+            exit 1
           fi
+          mapfile -t changed_files <<< "${changed_files_output}"
 
           requires_docs_update="false"
           has_docs_update="false"
