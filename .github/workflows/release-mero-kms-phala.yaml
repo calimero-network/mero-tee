@@ -40,7 +40,7 @@ jobs:
       version: ${{ steps.version_info.outputs.version }}
       binary_release: ${{ steps.version_info.outputs.binary_release }}
       docker_release: ${{ steps.version_info.outputs.docker_release }}
-      docker_push: ${{ github.event.pull_request && !github.event.pull_request.head.repo.fork || !github.event.pull_request }}
+      docker_push: ${{ github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork) }}
       prerelease: ${{ steps.version_info.outputs.prerelease }}
       target_commit: ${{ steps.version_info.outputs.target_commit }}
     steps:
@@ -217,6 +217,7 @@ jobs:
 
       # GITHUB_TOKEN often lacks packages write in orgs. Add GHCR_PUSH_TOKEN (PAT with write:packages) if push fails.
       - name: Log in to GitHub Container Registry
+        if: ${{ needs.prepare.outputs.docker_push == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
