@@ -227,7 +227,7 @@ jobs:
         continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.PR_CREATION_TOKEN || secrets.GH_TOKEN || github.token }}
+          token: ${{ secrets.GHCR_PUSH_TOKEN || github.token }}
           base: ${{ inputs.base_branch }}
           branch: ${{ env.PROMOTION_BRANCH }}
           delete-branch: true
