@@ -21,13 +21,13 @@ if command -v gh >/dev/null 2>&1; then
 fi
 
 resolve_repo() {
-  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
-    printf "%s\n" "${GITHUB_REPOSITORY}"
+  if [[ -n "${COSIGN_REPOSITORY:-}" ]]; then
+    printf "%s\n" "${COSIGN_REPOSITORY}"
     return
   fi
 
-  if [[ -n "${COSIGN_REPOSITORY:-}" ]]; then
-    printf "%s\n" "${COSIGN_REPOSITORY}"
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    printf "%s\n" "${GITHUB_REPOSITORY}"
     return
   fi
 
