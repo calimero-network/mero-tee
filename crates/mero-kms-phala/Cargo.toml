@@ -13,7 +13,7 @@ name = "mero-kms-phala"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
 base64 = "0.22"
 dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "14b850d9da172cc6cf943365bc37771c550c881f" }
 eyre = "0.6"
