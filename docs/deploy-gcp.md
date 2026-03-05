@@ -20,6 +20,7 @@ merod runs in a TDX Confidential VM with:
 mero-tee builds locked merod node images via Packer. The workflow publishes:
 
 - `published-mrtds.json` – Trusted measurements for verification
+- `merod-locked-image-policy.json` – Profile measurement policy (MRTD + optional RTMR allowlists)
 - `mrtd-*.json` – Per-profile MRTD values
 - Attestation artifacts and provenance
 

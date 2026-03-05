@@ -21,6 +21,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
 - [KMS policy promotion workflow (PR)](docs/kms-policy-promotion-pr.md)
 - [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
+- [Locked-image policy promotion workflow (PR)](docs/locked-image-policy-promotion-pr.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
@@ -50,6 +51,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
   - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
+  - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
 
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
@@ -91,6 +93,11 @@ Promote staged candidates into a reviewable, versioned policy PR:
 
 Release automation reads the policy registry directly (`policies/mero-kms-phala`)
 for the target crate version, so version bump + promoted policy stay aligned.
+
+Locked-image policy history is tracked under `policies/merod-locked-image` and
+can be promoted from release assets using
+`.github/workflows/locked_image_policy_promotion_pr.yaml` (auto-dispatched by
+`gcp_locked_image_build.yaml` after release publish, with manual fallback).
 
 Recommended release order:
 

@@ -12,6 +12,7 @@ signed_assets=(
   "mrtd-debug-read-only.json"
   "mrtd-locked-read-only.json"
   "published-mrtds.json"
+  "merod-locked-image-policy.json"
   "release-provenance.json"
   "attestation-artifacts.tar.gz"
   "locked-image-checksums.txt"
@@ -82,6 +83,7 @@ for required in \
   "mrtd-debug-read-only.json" \
   "mrtd-locked-read-only.json" \
   "published-mrtds.json" \
+  "merod-locked-image-policy.json" \
   "release-provenance.json" \
   "attestation-artifacts.tar.gz"; do
   if ! awk -v req="${required}" '
@@ -107,6 +109,26 @@ jq -e --arg tag "${tag}" '
 ' "${tmp_dir}/published-mrtds.json" >/dev/null
 
 jq -e --arg tag "${tag}" '
+  .schema_version == 1 and
+  .tag == $tag and
+  (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
+  (.profiles.debug.allowed_rtmr0 | type == "array") and
+  (.profiles.debug.allowed_rtmr1 | type == "array") and
+  (.profiles.debug.allowed_rtmr2 | type == "array") and
+  (.profiles.debug.allowed_rtmr3 | type == "array") and
+  (.profiles["debug-read-only"].allowed_mrtd | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_rtmr0 | type == "array") and
+  (.profiles["debug-read-only"].allowed_rtmr1 | type == "array") and
+  (.profiles["debug-read-only"].allowed_rtmr2 | type == "array") and
+  (.profiles["debug-read-only"].allowed_rtmr3 | type == "array") and
+  (.profiles["locked-read-only"].allowed_mrtd | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_rtmr0 | type == "array") and
+  (.profiles["locked-read-only"].allowed_rtmr1 | type == "array") and
+  (.profiles["locked-read-only"].allowed_rtmr2 | type == "array") and
+  (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
+' "${tmp_dir}/merod-locked-image-policy.json" >/dev/null
+
+jq -e --arg tag "${tag}" '
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
   (.profiles.debug.image.name | type == "string" and length > 0) and
@@ -120,7 +142,8 @@ jq -e --arg tag "${tag}" '
   (.profiles["locked-read-only"].external_verification.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.mrtds.profiles.debug.mrtd == .profiles.debug.external_verification.mrtd) and
   (.mrtds.profiles["debug-read-only"].mrtd == .profiles["debug-read-only"].external_verification.mrtd) and
-  (.mrtds.profiles["locked-read-only"].mrtd == .profiles["locked-read-only"].external_verification.mrtd)
+  (.mrtds.profiles["locked-read-only"].mrtd == .profiles["locked-read-only"].external_verification.mrtd) and
+  (.measurement_policy.tag == $tag)
 ' "${tmp_dir}/release-provenance.json" >/dev/null
 
 repo="${COSIGN_REPOSITORY:-}"

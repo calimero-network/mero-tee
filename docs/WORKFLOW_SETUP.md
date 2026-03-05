@@ -45,3 +45,10 @@ same secrets as `kms_staging_probe_phala.yaml`:
 
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`
+
+Locked-image policy promotion (`locked_image_policy_promotion_pr.yaml`) reads
+release assets and opens a policy PR. For repositories where `github.token`
+cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
+
+`gcp_locked_image_build.yaml` auto-dispatches this promotion workflow after
+publishing release assets.
