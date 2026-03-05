@@ -397,7 +397,7 @@ jobs:
                 "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
                 "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
                 "mero-kms-phala-binaries-sbom.spdx.json": ["auditor-required"],
-                "mero-tee-compatibility-map.json": ["operator-required", "auditor-required"]
+                "mero-kms-phala-compatibility-map.json": ["operator-required", "auditor-required"]
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
 
@@ -466,10 +466,10 @@ jobs:
             mero-kms-phala-release-manifest.json \
             mero-kms-phala-attestation-policy.json
 
-          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/mero-tee-compatibility-map.json)"
+          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
@@ -520,7 +520,7 @@ jobs:
             echo "- \`mero-kms-phala-release-manifest.json\` and \`.sig/.pem/.bundle.json\`"
             echo "- \`mero-kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
             echo "- \`mero-kms-phala-container-sbom.spdx.json\` and \`mero-kms-phala-binaries-sbom.spdx.json\`"
-            echo "- \`mero-tee-compatibility-map.json\`"
+            echo "- \`mero-kms-phala-compatibility-map.json\`"
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
