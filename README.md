@@ -23,11 +23,15 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
 - [Locked-image policy promotion workflow (PR)](docs/locked-image-policy-promotion-pr.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
+- [Release verification output examples](docs/release-verification-examples.md)
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
+- [Documentation source index](docs/DOCS_INDEX.md)
+- [Release taxonomy](docs/RELEASE_TAXONOMY.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
 - [mero-kms-phala README](crates/mero-kms-phala/README.md)
 
 ## Building mero-kms-phala
@@ -53,6 +57,12 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
   - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
+
+### What signatures prove (and do not prove)
+
+- **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
+- **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
+- **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
 

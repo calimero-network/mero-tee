@@ -37,6 +37,12 @@ cosign verify-blob \
 
 For full provenance validation, verify `release-provenance.json` and `attestation-artifacts.tar.gz` the same way using their matching `.sig` and `.pem` files.
 
+### What signatures prove (and do not prove)
+
+- **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
+- **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
+- **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
+
 ## Quick verification (MRTD comparison)
 
 ### 1. Get the node's MRTD
