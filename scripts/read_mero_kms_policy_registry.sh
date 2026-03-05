@@ -4,16 +4,18 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/read_mero_kms_policy_registry.sh <release-tag> [policy-root]
+  scripts/read_mero_kms_policy_registry.sh <release-tag> [policy-index]
 
 Examples:
   scripts/read_mero_kms_policy_registry.sh 2.1.3
-  scripts/read_mero_kms_policy_registry.sh 2.1.3 policies/mero-kms-phala
+  scripts/read_mero_kms_policy_registry.sh 2.1.3 policies/index.json
 
 Prints normalized JSON to stdout:
 {
   "schema_version": 1,
   "release_tag": "...",
+  "mapped_version": "...",
+  "kms_release_tag": "...",
   "source_policy_path": "...",
   "policy": {
     "allowed_tcb_statuses": [...],
@@ -28,7 +30,7 @@ EOF
 }
 
 release_tag="${1:-}"
-policy_root="${2:-policies/mero-kms-phala}"
+policy_index="${2:-policies/index.json}"
 
 if [[ "${release_tag}" == "-h" || "${release_tag}" == "--help" ]]; then
   usage
@@ -45,25 +47,44 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-index_file="${policy_root}/index.json"
+index_file="${policy_index}"
 if [[ ! -f "${index_file}" ]]; then
   echo "Policy index file not found: ${index_file}"
   exit 1
 fi
 
-if ! jq -e '.schema_version == 1 and (.policies | type == "array")' "${index_file}" >/dev/null; then
+if ! jq -e '.schema_version == 1 and (.releases | type == "array")' "${index_file}" >/dev/null; then
   echo "Policy index has invalid schema: ${index_file}"
   exit 1
 fi
 
-policy_rel_path="$(
-  jq -r --arg tag "${release_tag}" '
-    [.policies[] | select(.release_tag == $tag) | .path] | first // empty
+release_entry_json="$(
+  jq -c --arg tag "${release_tag}" '
+    [.releases[] | select(.version == $tag or .kms_release_tag == $tag)] | first // empty
   ' "${index_file}"
 )"
 
+if [[ -z "${release_entry_json}" ]]; then
+  echo "No KMS policy mapping found for release tag ${release_tag} in ${index_file}"
+  exit 1
+fi
+
+policy_rel_path="$(jq -r '.kms_policy_path // empty' <<< "${release_entry_json}")"
+expected_policy_tag="$(jq -r '.kms_release_tag // .version // empty' <<< "${release_entry_json}")"
+mapped_version="$(jq -r '.version // empty' <<< "${release_entry_json}")"
+
 if [[ -z "${policy_rel_path}" ]]; then
-  echo "No policy entry found for release tag ${release_tag} in ${index_file}"
+  echo "KMS policy path is missing for release tag ${release_tag} in ${index_file}"
+  exit 1
+fi
+
+if [[ -z "${expected_policy_tag}" ]]; then
+  echo "KMS release tag mapping is missing for release tag ${release_tag} in ${index_file}"
+  exit 1
+fi
+
+if [[ -z "${mapped_version}" ]]; then
+  echo "Version mapping is missing for release tag ${release_tag} in ${index_file}"
   exit 1
 fi
 
@@ -73,8 +94,8 @@ if [[ ! -f "${policy_rel_path}" ]]; then
 fi
 
 declared_tag="$(jq -r '.release_tag // .tag // empty' "${policy_rel_path}")"
-if [[ -n "${declared_tag}" && "${declared_tag}" != "${release_tag}" ]]; then
-  echo "Policy file tag mismatch for ${policy_rel_path}: expected ${release_tag}, found ${declared_tag}"
+if [[ -n "${declared_tag}" && "${declared_tag}" != "${expected_policy_tag}" ]]; then
+  echo "Policy file tag mismatch for ${policy_rel_path}: expected ${expected_policy_tag}, found ${declared_tag}"
   exit 1
 fi
 
@@ -109,11 +130,15 @@ fi
 
 jq -n \
   --arg release_tag "${release_tag}" \
+  --arg mapped_version "${mapped_version}" \
+  --arg kms_release_tag "${expected_policy_tag}" \
   --arg source_policy_path "${policy_rel_path}" \
   --argjson policy "${policy_json}" \
   '{
     schema_version: 1,
     release_tag: $release_tag,
+    mapped_version: $mapped_version,
+    kms_release_tag: $kms_release_tag,
     source_policy_path: $source_policy_path,
     policy: $policy
   }'
