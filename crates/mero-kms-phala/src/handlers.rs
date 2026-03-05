@@ -384,7 +384,7 @@ async fn get_key_handler(
     let peer_id_hash = hash_peer_id(&request.peer_id);
     debug!(
         peer_id = %request.peer_id,
-        peer_id_hash = %hex::encode(&peer_id_hash),
+        peer_id_hash = %hex::encode(peer_id_hash),
         "Created peer ID hash for verification"
     );
 
@@ -627,10 +627,7 @@ fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], Servic
         .decode(value)
         .map_err(|e| ServiceError::InvalidAttestationRequest(format!("{}: {}", field_name, e)))?;
     decoded.try_into().map_err(|_| {
-        ServiceError::InvalidAttestationRequest(format!(
-            "{} must be exactly 32 bytes",
-            field_name
-        ))
+        ServiceError::InvalidAttestationRequest(format!("{} must be exactly 32 bytes", field_name))
     })
 }
 
@@ -656,7 +653,10 @@ fn build_attestation_report_data(nonce: &[u8; 32], binding: &[u8; 32]) -> [u8; 6
 mod tests {
     use super::*;
     use crate::AttestationPolicy;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
     use libp2p_identity::Keypair;
+    use tower::util::ServiceExt;
 
     #[test]
     fn test_hash_peer_id() {
@@ -869,5 +869,129 @@ mod tests {
             quote_bytes,
         );
         assert!(matches!(result, Err(ServiceError::PeerIdentityMismatch)));
+    }
+
+    async fn read_json_body(response: axum::response::Response) -> serde_json::Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("failed to read response body");
+        serde_json::from_slice(&body).expect("response body must be valid json")
+    }
+
+    #[tokio::test]
+    async fn test_health_endpoint_response() {
+        let app = create_router(Config::default());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload["status"], "alive");
+        assert_eq!(payload["service"], "mero-kms-phala");
+    }
+
+    #[tokio::test]
+    async fn test_attest_endpoint_rejects_invalid_nonce_length() {
+        let app = create_router(Config::default());
+        let bad_nonce_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 31]);
+        let body = serde_json::json!({
+            "nonceB64": bad_nonce_b64
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/attest")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload["error"], "invalid_attestation_request");
+    }
+
+    #[tokio::test]
+    async fn test_challenge_is_single_use_even_when_signature_fails() {
+        let app = create_router(Config::default());
+        let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
+        let challenge_body = serde_json::json!({
+            "peerId": peer_id
+        });
+
+        let challenge_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/challenge")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(challenge_body.to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(challenge_response.status(), StatusCode::OK);
+        let challenge_payload = read_json_body(challenge_response).await;
+
+        let challenge_id = challenge_payload["challengeId"]
+            .as_str()
+            .expect("challengeId should be a string");
+        let quote_b64 = base64::engine::general_purpose::STANDARD.encode(b"dummy-quote");
+        let bad_public_key_b64 = base64::engine::general_purpose::STANDARD.encode(b"not-protobuf");
+        let bad_signature_b64 = base64::engine::general_purpose::STANDARD.encode(b"bad-signature");
+
+        let request_body = serde_json::json!({
+            "challengeId": challenge_id,
+            "quoteB64": quote_b64,
+            "peerId": peer_id,
+            "peerPublicKeyB64": bad_public_key_b64,
+            "signatureB64": bad_signature_b64
+        });
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/get-key")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(first.status(), StatusCode::BAD_REQUEST);
+        let first_payload = read_json_body(first).await;
+        assert_eq!(first_payload["error"], "invalid_peer_public_key");
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .uri("/get-key")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+        let second_payload = read_json_body(second).await;
+        assert_eq!(second_payload["error"], "invalid_challenge");
     }
 }

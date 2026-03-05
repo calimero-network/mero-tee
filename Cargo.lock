@@ -2215,7 +2215,7 @@ dependencies = [
 [[package]]
 name = "dstack-sdk"
 version = "0.1.2"
-source = "git+https://github.com/Dstack-TEE/dstack.git#14b850d9da172cc6cf943365bc37771c550c881f"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=14b850d9da172cc6cf943365bc37771c550c881f#14b850d9da172cc6cf943365bc37771c550c881f"
 dependencies = [
  "alloy",
  "anyhow",
@@ -2234,7 +2234,7 @@ dependencies = [
 [[package]]
 name = "dstack-sdk-types"
 version = "0.1.2"
-source = "git+https://github.com/Dstack-TEE/dstack.git#14b850d9da172cc6cf943365bc37771c550c881f"
+source = "git+https://github.com/Dstack-TEE/dstack.git?rev=14b850d9da172cc6cf943365bc37771c550c881f#14b850d9da172cc6cf943365bc37771c550c881f"
 dependencies = [
  "anyhow",
  "bon",
@@ -3766,6 +3766,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tower",
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
