@@ -29,14 +29,14 @@ release lines active at the same time and audit policy history later.
 The workflow updates:
 
 - `policies/mero-kms-phala/<release_tag>.json`
-- `policies/mero-kms-phala/index.json`
+- `policies/index.json`
 
 The `<release_tag>.json` file contains canonical `policy` values used by release
-automation. The `index.json` file acts as the historical registry and includes:
+automation. The shared `policies/index.json` file acts as the historical registry and includes:
 
-- release tag -> policy file path mapping
-- policy status
-- policy SHA-256 digest
+- release version -> KMS/merod tag mapping
+- KMS and merod policy file paths
+- policy SHA-256 digests
 
 Then it opens/updates a PR with:
 

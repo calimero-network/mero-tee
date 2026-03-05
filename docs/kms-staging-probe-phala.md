@@ -63,7 +63,7 @@ After collecting probe artifacts, run:
 with the probe run ID and target release tag. This creates/updates:
 
 - `policies/mero-kms-phala/<tag>.json`
-- `policies/mero-kms-phala/index.json`
+- `policies/index.json`
 
 in a pull request for review before release publication.
 
