@@ -28,6 +28,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Architecture & Verification](docs/ARCHITECTURE.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
+- [Interactive verification frontend (GitHub Pages source)](site/index.html)
 - [Release pipeline sequence diagrams](docs/RELEASE_PIPELINE_SEQUENCE_DIAGRAMS.md)
 - [Release taxonomy](docs/RELEASE_TAXONOMY.md)
 - [Security policy](SECURITY.md)

@@ -30,6 +30,7 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/kms-policy-auto-pipeline.md` | Automatic KMS policy pipeline behavior | `kms_policy_auto_pipeline.yaml` | Release engineers |
 | `docs/locked-image-policy-promotion-pr.md` | Locked-image policy promotion flow | `locked_image_policy_promotion_pr.yaml` | Release engineers |
 | `docs/RELEASE_PIPELINE_SEQUENCE_DIAGRAMS.md` | Visual sequence diagrams for release workflows and auditing | `release-mero-kms-phala.yaml`, `gcp_locked_image_build.yaml`, `release-auditor.yaml` | Maintainers, release engineers |
+| `site/index.html` | Interactive click-through release verification frontend | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh`, `.github/workflows/github-pages.yaml` | Operators, auditors |
 | `docs/WORKFLOW_SETUP.md` | Required GitHub variables/secrets | All release/policy workflows | Maintainers |
 | `docs/phala-kms-attestation-task-list.md` | KMS attestation implementation checklist | `crates/mero-kms-phala/*`, release scripts | Maintainers |
 | `docs/phala-kms-key-protection-proposal.md` | Key protection direction/proposal | N/A (design doc) | Maintainers |
