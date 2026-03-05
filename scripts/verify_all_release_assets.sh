@@ -81,6 +81,18 @@ fi
 
 has_kms_assets="$(jq -r 'any(.[]; . == "mero-kms-phala-checksums.txt")' <<< "${assets_json}")"
 has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${assets_json}")"
+locked_release_tag="${tag}"
+if [[ "${has_locked_assets}" != "true" && "${tag}" != locked-image-v* ]]; then
+  prefixed_tag="locked-image-v${tag}"
+  prefixed_assets_json="$(fetch_release_assets "${prefixed_tag}")"
+  if [[ -n "${prefixed_assets_json}" && "${prefixed_assets_json}" != "null" ]]; then
+    prefixed_has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${prefixed_assets_json}")"
+    if [[ "${prefixed_has_locked_assets}" == "true" ]]; then
+      has_locked_assets="true"
+      locked_release_tag="${prefixed_tag}"
+    fi
+  fi
+fi
 
 if [[ "${has_kms_assets}" != "true" && "${has_locked_assets}" != "true" ]]; then
   echo "No known trust asset sets found for release '${tag}' in ${repo}"
@@ -97,8 +109,12 @@ else
 fi
 
 if [[ "${has_locked_assets}" == "true" ]]; then
-  echo "-> Verifying locked-image release asset set"
-  scripts/verify_locked_image_release_assets.sh "${tag}"
+  if [[ "${locked_release_tag}" == "${tag}" ]]; then
+    echo "-> Verifying locked-image release asset set"
+  else
+    echo "-> Verifying locked-image release asset set from ${locked_release_tag}"
+  fi
+  scripts/verify_locked_image_release_assets.sh "${locked_release_tag}"
 else
   echo "-> Locked-image asset set not present; skipping"
 fi

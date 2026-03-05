@@ -7,6 +7,11 @@ if [[ -z "${tag}" ]]; then
   exit 1
 fi
 
+logical_tag="${tag}"
+if [[ "${logical_tag}" == locked-image-v* ]]; then
+  logical_tag="${logical_tag#locked-image-v}"
+fi
+
 required_commands=(jq cosign curl git awk)
 for cmd in "${required_commands[@]}"; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -137,33 +142,60 @@ download_asset() {
 
 echo "Inspecting release ${tag}..."
 echo "Repository: ${repo} (download mode: $([[ "${has_gh}" == "true" ]] && echo "gh" || echo "curl"))"
+release_tag="${tag}"
+release_tag_candidates=("${tag}")
+if [[ "${tag}" != locked-image-v* ]]; then
+  release_tag_candidates+=("locked-image-v${tag}")
+fi
 release_json=""
 for attempt in $(seq 1 10); do
-  release_json="$(fetch_release_json "${tag}")"
-  if [[ -n "${release_json}" ]]; then
-    bundle_asset="$(select_release_asset "${release_json}" "merod-locked-image-attestation-bundle.tar.gz" "attestation-artifacts.tar.gz" || true)"
-    sbom_asset="$(select_release_asset "${release_json}" "merod-locked-image-release-sbom.spdx.json" "locked-image-release-sbom.spdx.json" || true)"
-    checksums_asset="$(select_release_asset "${release_json}" "merod-locked-image-checksums.txt" "locked-image-checksums.txt" || true)"
-
-    if [[ -n "${bundle_asset}" && -n "${sbom_asset}" && -n "${checksums_asset}" ]]; then
-      signed_assets=("${base_signed_assets[@]}" "${bundle_asset}" "${sbom_asset}" "${checksums_asset}")
-      required_assets=("${signed_assets[@]}")
-      for asset in "${signed_assets[@]}"; do
-        required_assets+=("${asset}.sig")
-        required_assets+=("${asset}.pem")
-      done
+  release_json=""
+  missing_asset=""
+  for candidate_tag in "${release_tag_candidates[@]}"; do
+    candidate_json="$(fetch_release_json "${candidate_tag}")"
+    if [[ -z "${candidate_json}" ]]; then
+      continue
     fi
 
-    missing_asset=""
-    for asset in "${required_assets[@]}"; do
-      if ! jq -e --arg asset "${asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
-        missing_asset="${asset}"
+    candidate_bundle_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-attestation-bundle.tar.gz" "attestation-artifacts.tar.gz" || true)"
+    candidate_sbom_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-release-sbom.spdx.json" "locked-image-release-sbom.spdx.json" || true)"
+    candidate_checksums_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-checksums.txt" "locked-image-checksums.txt" || true)"
+
+    if [[ -z "${candidate_bundle_asset}" || -z "${candidate_sbom_asset}" || -z "${candidate_checksums_asset}" ]]; then
+      continue
+    fi
+
+    candidate_signed_assets=("${base_signed_assets[@]}" "${candidate_bundle_asset}" "${candidate_sbom_asset}" "${candidate_checksums_asset}")
+    candidate_required_assets=("${candidate_signed_assets[@]}")
+    for asset in "${candidate_signed_assets[@]}"; do
+      candidate_required_assets+=("${asset}.sig")
+      candidate_required_assets+=("${asset}.pem")
+    done
+
+    candidate_missing_asset=""
+    for asset in "${candidate_required_assets[@]}"; do
+      if ! jq -e --arg asset "${asset}" '.assets | any(.name == $asset)' <<< "${candidate_json}" >/dev/null; then
+        candidate_missing_asset="${asset}"
         break
       fi
     done
-    if [[ -n "${bundle_asset}" && -n "${sbom_asset}" && -n "${checksums_asset}" && -z "${missing_asset}" ]]; then
-      break
+    if [[ -n "${candidate_missing_asset}" ]]; then
+      missing_asset="${candidate_missing_asset}"
+      continue
     fi
+
+    release_tag="${candidate_tag}"
+    release_json="${candidate_json}"
+    bundle_asset="${candidate_bundle_asset}"
+    sbom_asset="${candidate_sbom_asset}"
+    checksums_asset="${candidate_checksums_asset}"
+    signed_assets=("${candidate_signed_assets[@]}")
+    required_assets=("${candidate_required_assets[@]}")
+    break
+  done
+
+  if [[ -n "${release_json}" ]]; then
+    break
   fi
 
   if [[ "${attempt}" -eq 10 ]]; then
@@ -173,12 +205,13 @@ for attempt in $(seq 1 10); do
   sleep 6
 done
 
+echo "Resolved release tag for locked-image assets: ${release_tag}"
 echo "Locked-image checksums asset: ${checksums_asset}"
 echo "Locked-image SBOM asset: ${sbom_asset}"
 echo "Locked-image attestation bundle asset: ${bundle_asset}"
 
 for pattern in "${required_assets[@]}"; do
-  if ! download_asset "${tag}" "${pattern}" "${tmp_dir}"; then
+  if ! download_asset "${release_tag}" "${pattern}" "${tmp_dir}"; then
     echo "Failed to download required asset ${pattern}"
     exit 1
   fi
@@ -208,14 +241,14 @@ for required in \
   fi
 done
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .tag == $tag and
   (.profiles.debug.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["debug-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["locked-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$"))
 ' "${tmp_dir}/published-mrtds.json" >/dev/null
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
@@ -235,7 +268,7 @@ jq -e --arg tag "${tag}" '
   (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
 ' "${tmp_dir}/merod-locked-image-policy.json" >/dev/null
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
   (.profiles.debug.image.name | type == "string" and length > 0) and
@@ -265,4 +298,4 @@ for asset in "${signed_assets[@]}"; do
     "${tmp_dir}/${asset}" >/dev/null
 done
 
-echo "Release ${tag} asset set, provenance checks, and Sigstore signature verification passed."
+echo "Release ${logical_tag} asset set, provenance checks, and Sigstore signature verification passed."

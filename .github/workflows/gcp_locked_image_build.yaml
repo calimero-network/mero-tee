@@ -1368,7 +1368,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          tag_name: ${{ needs.preflight.outputs.image_version }}
+          tag_name: locked-image-v${{ needs.preflight.outputs.image_version }}
           body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
           files: |

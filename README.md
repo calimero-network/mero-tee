@@ -61,7 +61,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **Compatibility map artifact**:
   - `mero-kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
   - Sigstore keyless signature/certificate sidecars (`mero-kms-phala-compatibility-map.json.sig`, `mero-kms-phala-compatibility-map.json.pem`)
-- **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `merod-locked-image-checksums.txt` (same tag as mero-kms-phala)
+- **locked-image-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `merod-locked-image-checksums.txt`
   - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
 
