@@ -480,6 +480,8 @@ jobs:
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
           )
 
@@ -504,6 +506,8 @@ jobs:
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
           )
 
@@ -537,6 +541,12 @@ jobs:
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-attestation-policy.json.sig
             release-assets/mero-kms-phala-attestation-policy.json.pem
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json.sig
+            release-assets/mero-kms-phala-container-sbom.spdx.json.pem
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json.sig
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
             release-assets/mero-kms-phala-trust-bundle.tar.gz
             release-assets/mero-kms-phala-trust-bundle.tar.gz.sig
             release-assets/mero-kms-phala-trust-bundle.tar.gz.pem
