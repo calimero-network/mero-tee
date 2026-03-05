@@ -21,11 +21,14 @@ metadata for each signed asset (`log_index`, `integrated_time`, `log_id`).
 `log_id` is read from Sigstore bundle JSON at
 `.verificationMaterial.tlogEntries[0].logId.keyId` (protobuf JSON camelCase).
 
+Additionally, `mero-kms-phala-container-metadata.json` is published and signed
+as a standalone container metadata artifact and cross-checked by the verifier.
+
 ### Expected success output
 
 ```text
 Inspecting mero-kms-phala release X.Y.Z...
-Release X.Y.Z checksums, manifest, attestation policy, archive hashes, and Sigstore signatures verified.
+Release X.Y.Z checksums, manifest, attestation policy, container metadata, archive hashes, and Sigstore signatures verified.
 ```
 
 ### Common failure patterns
