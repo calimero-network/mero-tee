@@ -322,7 +322,7 @@ jobs:
                 kms_policy_path: $entry.kms_policy_path,
                 merod_policy_path: $entry.merod_policy_path
               }
-            }' > release-assets/mero-tee-compatibility-map.json
+            }' > release-assets/mero-kms-phala-compatibility-map.json
 
           policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
           allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
@@ -545,7 +545,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json
           )
 
           for asset in "${assets_for_rekor[@]}"; do
@@ -624,7 +624,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json
             release-assets/mero-kms-phala-rekor-index.json
           )
 
@@ -669,10 +669,10 @@ jobs:
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.bundle.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
-            release-assets/mero-tee-compatibility-map.json.sig
-            release-assets/mero-tee-compatibility-map.json.pem
-            release-assets/mero-tee-compatibility-map.json.bundle.json
+            release-assets/mero-kms-phala-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json.sig
+            release-assets/mero-kms-phala-compatibility-map.json.pem
+            release-assets/mero-kms-phala-compatibility-map.json.bundle.json
             release-assets/mero-kms-phala-attestation-policy.json.bundle.json
             release-assets/mero-kms-phala-rekor-index.json
             release-assets/mero-kms-phala-rekor-index.json.sig

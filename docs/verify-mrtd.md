@@ -35,7 +35,7 @@ cosign verify-blob \
   merod-locked-image-policy.json
 ```
 
-For full provenance validation, verify `release-provenance.json` and `attestation-artifacts.tar.gz` the same way using their matching `.sig` and `.pem` files.
+For full provenance validation, verify `release-provenance.json` and `merod-locked-image-attestation-bundle.tar.gz` the same way using their matching `.sig` and `.pem` files.
 
 ### What signatures prove (and do not prove)
 

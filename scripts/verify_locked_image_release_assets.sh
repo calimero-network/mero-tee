@@ -61,23 +61,20 @@ if [[ -n "${api_token}" ]]; then
   api_headers+=(-H "Authorization: Bearer ${api_token}")
 fi
 
-signed_assets=(
+base_signed_assets=(
   "mrtd-debug.json"
   "mrtd-debug-read-only.json"
   "mrtd-locked-read-only.json"
   "published-mrtds.json"
   "merod-locked-image-policy.json"
   "release-provenance.json"
-  "attestation-artifacts.tar.gz"
-  "locked-image-release-sbom.spdx.json"
-  "locked-image-checksums.txt"
 )
 
-required_assets=("${signed_assets[@]}")
-for asset in "${signed_assets[@]}"; do
-  required_assets+=("${asset}.sig")
-  required_assets+=("${asset}.pem")
-done
+bundle_asset=""
+sbom_asset=""
+checksums_asset=""
+signed_assets=()
+required_assets=()
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
@@ -92,6 +89,20 @@ fetch_release_json() {
 
   curl -fsSL "${api_headers[@]}" \
     "https://api.github.com/repos/${repo}/releases/tags/${release_tag}" 2>/dev/null || true
+}
+
+select_release_asset() {
+  local release_payload="$1"
+  shift
+
+  local candidate
+  for candidate in "$@"; do
+    if jq -e --arg asset "${candidate}" '.assets | any(.name == $asset)' <<< "${release_payload}" >/dev/null 2>&1; then
+      printf "%s\n" "${candidate}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 download_asset() {
@@ -130,6 +141,19 @@ release_json=""
 for attempt in $(seq 1 10); do
   release_json="$(fetch_release_json "${tag}")"
   if [[ -n "${release_json}" ]]; then
+    bundle_asset="$(select_release_asset "${release_json}" "merod-locked-image-attestation-bundle.tar.gz" "attestation-artifacts.tar.gz" || true)"
+    sbom_asset="$(select_release_asset "${release_json}" "merod-locked-image-release-sbom.spdx.json" "locked-image-release-sbom.spdx.json" || true)"
+    checksums_asset="$(select_release_asset "${release_json}" "merod-locked-image-checksums.txt" "locked-image-checksums.txt" || true)"
+
+    if [[ -n "${bundle_asset}" && -n "${sbom_asset}" && -n "${checksums_asset}" ]]; then
+      signed_assets=("${base_signed_assets[@]}" "${bundle_asset}" "${sbom_asset}" "${checksums_asset}")
+      required_assets=("${signed_assets[@]}")
+      for asset in "${signed_assets[@]}"; do
+        required_assets+=("${asset}.sig")
+        required_assets+=("${asset}.pem")
+      done
+    fi
+
     missing_asset=""
     for asset in "${required_assets[@]}"; do
       if ! jq -e --arg asset "${asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
@@ -137,7 +161,7 @@ for attempt in $(seq 1 10); do
         break
       fi
     done
-    if [[ -z "${missing_asset}" ]]; then
+    if [[ -n "${bundle_asset}" && -n "${sbom_asset}" && -n "${checksums_asset}" && -z "${missing_asset}" ]]; then
       break
     fi
   fi
@@ -148,6 +172,10 @@ for attempt in $(seq 1 10); do
   fi
   sleep 6
 done
+
+echo "Locked-image checksums asset: ${checksums_asset}"
+echo "Locked-image SBOM asset: ${sbom_asset}"
+echo "Locked-image attestation bundle asset: ${bundle_asset}"
 
 for pattern in "${required_assets[@]}"; do
   if ! download_asset "${tag}" "${pattern}" "${tmp_dir}"; then
@@ -163,8 +191,8 @@ for required in \
   "published-mrtds.json" \
   "merod-locked-image-policy.json" \
   "release-provenance.json" \
-  "attestation-artifacts.tar.gz" \
-  "locked-image-release-sbom.spdx.json"; do
+  "${bundle_asset}" \
+  "${sbom_asset}"; do
   if ! awk -v req="${required}" '
     {
       # Handle optional CRLF artifacts safely when reading from downloaded assets.
@@ -174,7 +202,7 @@ for required in \
       }
     }
     END { exit(found ? 0 : 1) }
-  ' "${tmp_dir}/locked-image-checksums.txt" >/dev/null 2>&1; then
+  ' "${tmp_dir}/${checksums_asset}" >/dev/null 2>&1; then
     echo "Checksums file missing entry for ${required}"
     exit 1
   fi

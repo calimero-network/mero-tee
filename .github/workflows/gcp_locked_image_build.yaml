@@ -1207,7 +1207,7 @@ jobs:
                 kms_policy_path: $entry.kms_policy_path,
                 merod_policy_path: $entry.merod_policy_path
               }
-            }' > artifacts/mero-tee-compatibility-map.json
+            }' > artifacts/merod-locked-image-compatibility-map.json
 
           bundle_assets=(
             "mrtd-debug.json"
@@ -1216,13 +1216,13 @@ jobs:
             "published-mrtds.json"
             "merod-locked-image-policy.json"
             "release-provenance.json"
-            "mero-tee-compatibility-map.json"
+            "merod-locked-image-compatibility-map.json"
           )
           sha256sum "${bundle_assets[@]/#/artifacts/}" | sed 's#  artifacts/#  #' > artifacts/MANIFEST.txt
-          tar -czf artifacts/attestation-artifacts.tar.gz -C artifacts \
+          tar -czf artifacts/merod-locked-image-attestation-bundle.tar.gz -C artifacts \
             MANIFEST.txt \
             "${bundle_assets[@]}"
-          syft dir:artifacts -o "spdx-json=artifacts/locked-image-release-sbom.spdx.json"
+          syft dir:artifacts -o "spdx-json=artifacts/merod-locked-image-release-sbom.spdx.json"
 
           sha256sum \
             artifacts/mrtd-debug.json \
@@ -1231,11 +1231,11 @@ jobs:
             artifacts/published-mrtds.json \
             artifacts/merod-locked-image-policy.json \
             artifacts/release-provenance.json \
-            artifacts/mero-tee-compatibility-map.json \
-            artifacts/attestation-artifacts.tar.gz \
-            artifacts/locked-image-release-sbom.spdx.json \
+            artifacts/merod-locked-image-compatibility-map.json \
+            artifacts/merod-locked-image-attestation-bundle.tar.gz \
+            artifacts/merod-locked-image-release-sbom.spdx.json \
             | sed 's#  artifacts/#  #' \
-            > artifacts/locked-image-checksums.txt
+            > artifacts/merod-locked-image-checksums.txt
 
           debug_mrtd="$(jq -r '.mrtd' artifacts/mrtd-debug.json)"
           debug_ro_mrtd="$(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
@@ -1316,10 +1316,10 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
-            "artifacts/mero-tee-compatibility-map.json"
-            "artifacts/attestation-artifacts.tar.gz"
-            "artifacts/locked-image-release-sbom.spdx.json"
-            "artifacts/locked-image-checksums.txt"
+            "artifacts/merod-locked-image-compatibility-map.json"
+            "artifacts/merod-locked-image-attestation-bundle.tar.gz"
+            "artifacts/merod-locked-image-release-sbom.spdx.json"
+            "artifacts/merod-locked-image-checksums.txt"
           )
 
           for asset in "${assets[@]}"; do
@@ -1343,10 +1343,10 @@ jobs:
             "artifacts/published-mrtds.json"
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
-            "artifacts/mero-tee-compatibility-map.json"
-            "artifacts/attestation-artifacts.tar.gz"
-            "artifacts/locked-image-release-sbom.spdx.json"
-            "artifacts/locked-image-checksums.txt"
+            "artifacts/merod-locked-image-compatibility-map.json"
+            "artifacts/merod-locked-image-attestation-bundle.tar.gz"
+            "artifacts/merod-locked-image-release-sbom.spdx.json"
+            "artifacts/merod-locked-image-checksums.txt"
           )
 
           cert_identity_regex="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$"
@@ -1391,18 +1391,18 @@ jobs:
             artifacts/release-provenance.json
             artifacts/release-provenance.json.sig
             artifacts/release-provenance.json.pem
-            artifacts/mero-tee-compatibility-map.json
-            artifacts/mero-tee-compatibility-map.json.sig
-            artifacts/mero-tee-compatibility-map.json.pem
-            artifacts/attestation-artifacts.tar.gz
-            artifacts/attestation-artifacts.tar.gz.sig
-            artifacts/attestation-artifacts.tar.gz.pem
-            artifacts/locked-image-release-sbom.spdx.json
-            artifacts/locked-image-release-sbom.spdx.json.sig
-            artifacts/locked-image-release-sbom.spdx.json.pem
-            artifacts/locked-image-checksums.txt
-            artifacts/locked-image-checksums.txt.sig
-            artifacts/locked-image-checksums.txt.pem
+            artifacts/merod-locked-image-compatibility-map.json
+            artifacts/merod-locked-image-compatibility-map.json.sig
+            artifacts/merod-locked-image-compatibility-map.json.pem
+            artifacts/merod-locked-image-attestation-bundle.tar.gz
+            artifacts/merod-locked-image-attestation-bundle.tar.gz.sig
+            artifacts/merod-locked-image-attestation-bundle.tar.gz.pem
+            artifacts/merod-locked-image-release-sbom.spdx.json
+            artifacts/merod-locked-image-release-sbom.spdx.json.sig
+            artifacts/merod-locked-image-release-sbom.spdx.json.pem
+            artifacts/merod-locked-image-checksums.txt
+            artifacts/merod-locked-image-checksums.txt.sig
+            artifacts/merod-locked-image-checksums.txt.pem
 
       - name: Smoke test published release assets
         env:

@@ -80,7 +80,7 @@ if [[ -z "${assets_json}" || "${assets_json}" == "null" ]]; then
 fi
 
 has_kms_assets="$(jq -r 'any(.[]; . == "mero-kms-phala-checksums.txt")' <<< "${assets_json}")"
-has_locked_assets="$(jq -r 'any(.[]; . == "locked-image-checksums.txt")' <<< "${assets_json}")"
+has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${assets_json}")"
 
 if [[ "${has_kms_assets}" != "true" && "${has_locked_assets}" != "true" ]]; then
   echo "No known trust asset sets found for release '${tag}' in ${repo}"
