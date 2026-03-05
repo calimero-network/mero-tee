@@ -649,15 +649,18 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-container-sbom.spdx.json.sig
             release-assets/mero-kms-phala-container-sbom.spdx.json.pem
+            release-assets/mero-kms-phala-container-sbom.spdx.json.bundle.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.sig
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json.bundle.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
             release-assets/mero-kms-phala-trust-bundle.tar.gz.sig
             release-assets/mero-kms-phala-trust-bundle.tar.gz.pem
             release-assets/mero-tee-compatibility-map.json
             release-assets/mero-tee-compatibility-map.json.sig
             release-assets/mero-tee-compatibility-map.json.pem
+            release-assets/mero-tee-compatibility-map.json.bundle.json
             release-assets/mero-kms-phala-attestation-policy.json.bundle.json
             release-assets/mero-kms-phala-rekor-index.json
             release-assets/mero-kms-phala-rekor-index.json.sig
