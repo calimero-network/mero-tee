@@ -257,7 +257,7 @@ jobs:
       - name: Create promotion pull request
         id: cpr
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GHCR_PUSH_TOKEN || github.token }}
           base: ${{ inputs.base_branch }}
