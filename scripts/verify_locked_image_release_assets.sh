@@ -7,6 +7,60 @@ if [[ -z "${tag}" ]]; then
   exit 1
 fi
 
+required_commands=(jq cosign curl git awk)
+for cmd in "${required_commands[@]}"; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "${cmd} is required"
+    exit 1
+  fi
+done
+
+has_gh="false"
+if command -v gh >/dev/null 2>&1; then
+  has_gh="true"
+fi
+
+resolve_repo() {
+  if [[ -n "${COSIGN_REPOSITORY:-}" ]]; then
+    printf "%s\n" "${COSIGN_REPOSITORY}"
+    return
+  fi
+
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    printf "%s\n" "${GITHUB_REPOSITORY}"
+    return
+  fi
+
+  if [[ "${has_gh}" == "true" ]]; then
+    local gh_repo
+    gh_repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null || true)"
+    if [[ -n "${gh_repo}" ]]; then
+      printf "%s\n" "${gh_repo}"
+      return
+    fi
+  fi
+
+  local origin_url
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [[ "${origin_url}" =~ ^https://github.com/([^/]+/[^/.]+)(\.git)?$ ]]; then
+    printf "%s\n" "${BASH_REMATCH[1]}"
+    return
+  fi
+  if [[ "${origin_url}" =~ ^git@github.com:([^/]+/[^/.]+)(\.git)?$ ]]; then
+    printf "%s\n" "${BASH_REMATCH[1]}"
+    return
+  fi
+
+  printf "%s\n" "calimero-network/mero-tee"
+}
+
+repo="$(resolve_repo)"
+api_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+api_headers=(-H "Accept: application/vnd.github+json")
+if [[ -n "${api_token}" ]]; then
+  api_headers+=(-H "Authorization: Bearer ${api_token}")
+fi
+
 signed_assets=(
   "mrtd-debug.json"
   "mrtd-debug-read-only.json"
@@ -24,27 +78,56 @@ for asset in "${signed_assets[@]}"; do
   required_assets+=("${asset}.pem")
 done
 
-if ! command -v gh >/dev/null 2>&1; then
-  echo "gh CLI is required"
-  exit 1
-fi
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq is required"
-  exit 1
-fi
-if ! command -v cosign >/dev/null 2>&1; then
-  echo "cosign is required"
-  exit 1
-fi
-
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
 trap cleanup EXIT
 
+fetch_release_json() {
+  local release_tag="$1"
+  if [[ "${has_gh}" == "true" ]]; then
+    gh release view "${release_tag}" --repo "${repo}" --json tagName,targetCommitish,assets 2>/dev/null || true
+    return
+  fi
+
+  curl -fsSL "${api_headers[@]}" \
+    "https://api.github.com/repos/${repo}/releases/tags/${release_tag}" 2>/dev/null || true
+}
+
+download_asset() {
+  local release_tag="$1"
+  local asset_name="$2"
+  local output_dir="$3"
+  for attempt in $(seq 1 5); do
+    if [[ "${has_gh}" == "true" ]]; then
+      if gh release download "${release_tag}" --repo "${repo}" --pattern "${asset_name}" --dir "${output_dir}" >/dev/null 2>&1; then
+        return 0
+      fi
+    else
+      local asset_url
+      asset_url="$(
+        jq -r --arg asset "${asset_name}" '
+          .assets[] | select(.name == $asset) | .browser_download_url
+        ' <<< "${release_json}" | awk 'NR==1'
+      )"
+      if [[ -n "${asset_url}" && "${asset_url}" != "null" ]]; then
+        if curl -fsSL "${api_headers[@]}" -o "${output_dir}/${asset_name}" "${asset_url}" >/dev/null 2>&1; then
+          return 0
+        fi
+      fi
+    fi
+
+    if [[ "${attempt}" -eq 5 ]]; then
+      return 1
+    fi
+    sleep 3
+  done
+}
+
 echo "Inspecting release ${tag}..."
+echo "Repository: ${repo} (download mode: $([[ "${has_gh}" == "true" ]] && echo "gh" || echo "curl"))"
 release_json=""
 for attempt in $(seq 1 10); do
-  release_json="$(gh release view "${tag}" --json tagName,targetCommitish,assets 2>/dev/null || true)"
+  release_json="$(fetch_release_json "${tag}")"
   if [[ -n "${release_json}" ]]; then
     missing_asset=""
     for asset in "${required_assets[@]}"; do
@@ -66,16 +149,10 @@ for attempt in $(seq 1 10); do
 done
 
 for pattern in "${required_assets[@]}"; do
-  for attempt in $(seq 1 5); do
-    if gh release download "${tag}" --pattern "${pattern}" --dir "${tmp_dir}" >/dev/null 2>&1; then
-      break
-    fi
-    if [[ "${attempt}" -eq 5 ]]; then
-      echo "Failed to download required asset ${pattern}"
-      exit 1
-    fi
-    sleep 3
-  done
+  if ! download_asset "${tag}" "${pattern}" "${tmp_dir}"; then
+    echo "Failed to download required asset ${pattern}"
+    exit 1
+  fi
 done
 
 for required in \
@@ -145,11 +222,6 @@ jq -e --arg tag "${tag}" '
   (.mrtds.profiles["locked-read-only"].mrtd == .profiles["locked-read-only"].external_verification.mrtd) and
   (.measurement_policy.tag == $tag)
 ' "${tmp_dir}/release-provenance.json" >/dev/null
-
-repo="${COSIGN_REPOSITORY:-}"
-if [[ -z "${repo}" ]]; then
-  repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
-fi
 
 cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
