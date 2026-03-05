@@ -1208,10 +1208,10 @@ jobs:
             echo "## Published MRTDs"
             echo ""
             echo "- Tag: ${{ needs.preflight.outputs.image_version }}"
-            echo "- Debug MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug.json)"
-            echo "- Debug read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
-            echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
-            echo "- Locked read-only RTMR0: $(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/merod-locked-image-policy.json)"
+            echo "- Debug MRTD: ${debug_mrtd}"
+            echo "- Debug read-only MRTD: ${debug_ro_mrtd}"
+            echo "- Locked read-only MRTD: ${locked_ro_mrtd}"
+            echo "- Locked read-only RTMR0: ${locked_ro_rtmr0}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing
