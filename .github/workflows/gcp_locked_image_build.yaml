@@ -941,6 +941,9 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Install Syft for SBOM generation
+        uses: anchore/sbom-action/download-syft@v0
+
       - name: Assemble published MRTD payload
         run: |
           validate_mrtd_file() {
@@ -1165,6 +1168,7 @@ jobs:
             }' > artifacts/release-provenance.json
 
           tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
+          syft dir:artifacts -o "spdx-json=artifacts/locked-image-release-sbom.spdx.json"
 
           sha256sum \
             artifacts/mrtd-debug.json \
@@ -1174,6 +1178,7 @@ jobs:
             artifacts/merod-locked-image-policy.json \
             artifacts/release-provenance.json \
             artifacts/attestation-artifacts.tar.gz \
+            artifacts/locked-image-release-sbom.spdx.json \
             | sed 's#  artifacts/#  #' \
             > artifacts/locked-image-checksums.txt
 
@@ -1229,6 +1234,7 @@ jobs:
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
+            "artifacts/locked-image-release-sbom.spdx.json"
             "artifacts/locked-image-checksums.txt"
           )
 
@@ -1254,6 +1260,7 @@ jobs:
             "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
+            "artifacts/locked-image-release-sbom.spdx.json"
             "artifacts/locked-image-checksums.txt"
           )
 
@@ -1302,6 +1309,9 @@ jobs:
             artifacts/attestation-artifacts.tar.gz
             artifacts/attestation-artifacts.tar.gz.sig
             artifacts/attestation-artifacts.tar.gz.pem
+            artifacts/locked-image-release-sbom.spdx.json
+            artifacts/locked-image-release-sbom.spdx.json.sig
+            artifacts/locked-image-release-sbom.spdx.json.pem
             artifacts/locked-image-checksums.txt
             artifacts/locked-image-checksums.txt.sig
             artifacts/locked-image-checksums.txt.pem

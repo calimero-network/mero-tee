@@ -111,6 +111,8 @@ base_signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
   "mero-kms-phala-attestation-policy.json"
+  "mero-kms-phala-container-sbom.spdx.json"
+  "mero-kms-phala-binaries-sbom.spdx.json"
 )
 
 release_json=""
@@ -256,6 +258,8 @@ signed_assets=(
   "mero-kms-phala-checksums.txt"
   "mero-kms-phala-release-manifest.json"
   "mero-kms-phala-attestation-policy.json"
+  "mero-kms-phala-container-sbom.spdx.json"
+  "mero-kms-phala-binaries-sbom.spdx.json"
 )
 for archive in "${archives[@]}"; do
   signed_assets+=("${archive}")

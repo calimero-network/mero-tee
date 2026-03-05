@@ -271,6 +271,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      packages: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -282,6 +283,16 @@ jobs:
         with:
           path: artifacts/
           merge-multiple: true
+
+      - name: Install Syft for SBOM generation
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Log in to GitHub Container Registry for Syft
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Generate release checksums, manifest, and attestation policy
         run: |
@@ -297,6 +308,9 @@ jobs:
             exit 1
           fi
           image_ref="${image_name}@${image_digest}"
+
+          syft "${image_ref}" -o "spdx-json=release-assets/mero-kms-phala-container-sbom.spdx.json"
+          syft dir:artifacts -o "spdx-json=release-assets/mero-kms-phala-binaries-sbom.spdx.json"
 
           cat > /tmp/mero-kms-tags.txt <<'EOF'
           ${{ needs.release-container.outputs.image_tags }}
@@ -470,6 +484,8 @@ jobs:
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -493,6 +509,8 @@ jobs:
             release-assets/mero-kms-phala-checksums.txt
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -525,6 +543,12 @@ jobs:
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-attestation-policy.json.sig
             release-assets/mero-kms-phala-attestation-policy.json.pem
+            release-assets/mero-kms-phala-container-sbom.spdx.json
+            release-assets/mero-kms-phala-container-sbom.spdx.json.sig
+            release-assets/mero-kms-phala-container-sbom.spdx.json.pem
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json.sig
+            release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
 
       - name: Smoke test published mero-kms release assets
         env:

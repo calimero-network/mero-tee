@@ -63,3 +63,16 @@ cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
 
 `gcp_locked_image_build.yaml` auto-dispatches this promotion workflow after
 publishing release assets.
+
+## Release SBOM assets
+
+Release workflows now install Syft and publish signed SPDX SBOM assets together
+with the existing release checksums/manifest artifacts.
+
+- `gcp_locked_image_build.yaml` publishes
+  `locked-image-release-sbom.spdx.json` (plus matching `.sig` and `.pem`
+  assets) and includes it in `locked-image-checksums.txt`.
+- `release-mero-kms-phala.yaml` publishes:
+  - `mero-kms-phala-container-sbom.spdx.json`
+  - `mero-kms-phala-binaries-sbom.spdx.json`
+  - matching `.sig` and `.pem` files for each SBOM
