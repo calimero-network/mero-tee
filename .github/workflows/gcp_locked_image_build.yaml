@@ -1197,7 +1197,19 @@ jobs:
               }
             }' > artifacts/mero-tee-compatibility-map.json
 
-          tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
+          bundle_assets=(
+            "mrtd-debug.json"
+            "mrtd-debug-read-only.json"
+            "mrtd-locked-read-only.json"
+            "published-mrtds.json"
+            "merod-locked-image-policy.json"
+            "release-provenance.json"
+            "mero-tee-compatibility-map.json"
+          )
+          sha256sum "${bundle_assets[@]/#/artifacts/}" | sed 's#  artifacts/#  #' > artifacts/MANIFEST.txt
+          tar -czf artifacts/attestation-artifacts.tar.gz -C artifacts \
+            MANIFEST.txt \
+            "${bundle_assets[@]}"
           syft dir:artifacts -o "spdx-json=artifacts/locked-image-release-sbom.spdx.json"
 
           sha256sum \
