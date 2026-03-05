@@ -11,6 +11,7 @@ When changing release automation, policy workflows, or verification scripts:
 1. Update the affected workflow/script.
 2. Update the corresponding docs in this index.
 3. Confirm README quick links remain accurate.
+4. Refresh deep links in `docs/DOCS_NAVIGATION_MAP.md` if headings changed.
 
 ## Source mapping
 
@@ -20,6 +21,7 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/deploy-phala.md` | Phala deployment runbook | `scripts/apply_merod_kms_attestation_config.sh` | Operators |
 | `docs/deploy-gcp.md` | GCP locked-image deployment runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml` | Operators |
 | `docs/verify-mrtd.md` | End-user/operator verification flow | `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_tdx_quote_ita.py` | Operators, auditors |
+| `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |
 | `docs/kms-blue-green-rollout.md` | Decision-tree rollout and rollback procedure | `scripts/verify_mero_kms_release_assets.sh`, `scripts/generate_merod_kms_attestation_config.sh` | Operators |
 | `docs/kms-staging-probe-phala.md` | Staging probe process for KMS policy candidates | `kms_staging_probe_phala.yaml`, `scripts/extract_tdx_policy_candidates.py` | Release engineers |
 | `docs/kms-policy-promotion-pr.md` | Manual PR promotion of KMS policy candidates | `kms_policy_promotion_pr.yaml` | Release engineers |
