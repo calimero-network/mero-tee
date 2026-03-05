@@ -51,9 +51,11 @@ jobs:
           bash -n packer/gcp/merod/build-and-release.sh
           bash -n scripts/verify_locked_image_release_assets.sh
           bash -n scripts/verify_mero_kms_release_assets.sh
+          bash -n scripts/read_merod_locked_image_policy_registry.sh
           bash -n scripts/generate_merod_kms_attestation_config.sh
           bash -n scripts/apply_merod_kms_attestation_config.sh
           python3 -m py_compile scripts/verify_tdx_quote_ita.py
+          python3 -m py_compile scripts/extract_tdx_policy_candidates.py
 
       - name: Validate version manifest shape
         id: version_manifest
@@ -652,6 +654,16 @@ jobs:
             --ita-api-key "${ITA_API_KEY}" \
             "${policy_flags[@]}"
 
+          claims_file="${artifacts_dir}/external-attestation-token-claims.json"
+          if [[ ! -f "${claims_file}" ]]; then
+            echo "::error::Missing external attestation claims file: ${claims_file}"
+            exit 1
+          fi
+          python3 scripts/extract_tdx_policy_candidates.py \
+            --claims "${claims_file}" \
+            --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
+            --allow-missing-tcb
+
           mrtd="$(jq -r '.mrtd // empty' "${artifacts_dir}/mrtd.json" | tr '[:upper:]' '[:lower:]')"
           mrtd="${mrtd#0x}"
           if [[ ! "${mrtd}" =~ ^[a-f0-9]{96}$ ]]; then
@@ -664,6 +676,7 @@ jobs:
           mv "${tmp_mrtd_json}" "${artifacts_dir}/mrtd.json"
 
           cp "${artifacts_dir}/mrtd.json" "${artifacts_dir}/mrtd-${profile}.json"
+          cp "${artifacts_dir}/measurement-policy-candidates.json" "${artifacts_dir}/measurement-policy-candidates-${profile}.json"
           echo "mrtd=${mrtd}" >> "${GITHUB_OUTPUT}"
           echo "status=performed" >> "${GITHUB_OUTPUT}"
           echo "performed=true" >> "${GITHUB_OUTPUT}"
@@ -914,6 +927,7 @@ jobs:
     needs: [preflight, profile_pipeline, cleanup_attestation_resources]
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
     permissions:
+      actions: write
       contents: write
       id-token: write
     steps:
@@ -958,6 +972,39 @@ jobs:
             }
           }
 
+          validate_measurement_policy_file() {
+            local file_path="$1"
+            local label="$2"
+            jq -e '
+              .schema_version == 1
+              and (.policy.allowed_mrtd | type == "array" and length > 0)
+              and (.policy.allowed_rtmr0 | type == "array")
+              and (.policy.allowed_rtmr1 | type == "array")
+              and (.policy.allowed_rtmr2 | type == "array")
+              and (.policy.allowed_rtmr3 | type == "array")
+            ' "${file_path}" >/dev/null || {
+              echo "Invalid measurement policy candidate in ${label}"
+              exit 1
+            }
+          }
+
+          ensure_policy_matches_mrtd() {
+            local mrtd_file="$1"
+            local policy_file="$2"
+            local label="$3"
+            local mrtd_value policy_mrtd
+
+            mrtd_value="$(jq -r '.mrtd // empty' "${mrtd_file}" | tr '[:upper:]' '[:lower:]')"
+            mrtd_value="${mrtd_value#0x}"
+            policy_mrtd="$(jq -r '.policy.allowed_mrtd[0] // empty' "${policy_file}" | tr '[:upper:]' '[:lower:]')"
+            policy_mrtd="${policy_mrtd#0x}"
+
+            if [[ -z "${policy_mrtd}" || "${policy_mrtd}" != "${mrtd_value}" ]]; then
+              echo "Measurement policy mismatch for ${label}: first allowed_mrtd='${policy_mrtd}' but mrtd='${mrtd_value}'"
+              exit 1
+            fi
+          }
+
           if [[ ! -f artifacts/mrtd-debug.json ]]; then
             echo "Missing artifacts/mrtd-debug.json"
             ls -la artifacts || true
@@ -988,6 +1035,21 @@ jobs:
             ls -la artifacts || true
             exit 1
           fi
+          if [[ ! -f artifacts/measurement-policy-candidates-debug.json ]]; then
+            echo "Missing artifacts/measurement-policy-candidates-debug.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/measurement-policy-candidates-debug-read-only.json ]]; then
+            echo "Missing artifacts/measurement-policy-candidates-debug-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
+          if [[ ! -f artifacts/measurement-policy-candidates-locked-read-only.json ]]; then
+            echo "Missing artifacts/measurement-policy-candidates-locked-read-only.json"
+            ls -la artifacts || true
+            exit 1
+          fi
 
           validate_mrtd_file "artifacts/mrtd-debug.json" "debug"
           validate_mrtd_file "artifacts/mrtd-debug-read-only.json" "debug-read-only"
@@ -995,21 +1057,87 @@ jobs:
           validate_provenance_file "artifacts/profile-provenance-debug.json" "profile-provenance-debug.json"
           validate_provenance_file "artifacts/profile-provenance-debug-read-only.json" "profile-provenance-debug-read-only.json"
           validate_provenance_file "artifacts/profile-provenance-locked-read-only.json" "profile-provenance-locked-read-only.json"
+          validate_measurement_policy_file "artifacts/measurement-policy-candidates-debug.json" "measurement-policy-candidates-debug.json"
+          validate_measurement_policy_file "artifacts/measurement-policy-candidates-debug-read-only.json" "measurement-policy-candidates-debug-read-only.json"
+          validate_measurement_policy_file "artifacts/measurement-policy-candidates-locked-read-only.json" "measurement-policy-candidates-locked-read-only.json"
+          ensure_policy_matches_mrtd "artifacts/mrtd-debug.json" "artifacts/measurement-policy-candidates-debug.json" "debug"
+          ensure_policy_matches_mrtd "artifacts/mrtd-debug-read-only.json" "artifacts/measurement-policy-candidates-debug-read-only.json" "debug-read-only"
+          ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
 
           jq -n \
             --arg tag "${{ needs.preflight.outputs.image_version }}" \
             --slurpfile debug artifacts/mrtd-debug.json \
             --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
             --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
+            --slurpfile debug_policy artifacts/measurement-policy-candidates-debug.json \
+            --slurpfile debug_ro_policy artifacts/measurement-policy-candidates-debug-read-only.json \
+            --slurpfile locked_ro_policy artifacts/measurement-policy-candidates-locked-read-only.json \
             '{
               tag: $tag,
               generated_at: (now | todate),
               profiles: {
-                debug: $debug[0],
-                "debug-read-only": $debug_ro[0],
-                "locked-read-only": $locked_ro[0]
+                debug: (
+                  $debug[0] + {
+                    allowed_mrtd: ($debug_policy[0].policy.allowed_mrtd // []),
+                    allowed_rtmr0: ($debug_policy[0].policy.allowed_rtmr0 // []),
+                    allowed_rtmr1: ($debug_policy[0].policy.allowed_rtmr1 // []),
+                    allowed_rtmr2: ($debug_policy[0].policy.allowed_rtmr2 // []),
+                    allowed_rtmr3: ($debug_policy[0].policy.allowed_rtmr3 // []),
+                    allowed_tcb_statuses: ($debug_policy[0].policy.allowed_tcb_statuses // [])
+                  }
+                ),
+                "debug-read-only": (
+                  $debug_ro[0] + {
+                    allowed_mrtd: ($debug_ro_policy[0].policy.allowed_mrtd // []),
+                    allowed_rtmr0: ($debug_ro_policy[0].policy.allowed_rtmr0 // []),
+                    allowed_rtmr1: ($debug_ro_policy[0].policy.allowed_rtmr1 // []),
+                    allowed_rtmr2: ($debug_ro_policy[0].policy.allowed_rtmr2 // []),
+                    allowed_rtmr3: ($debug_ro_policy[0].policy.allowed_rtmr3 // []),
+                    allowed_tcb_statuses: ($debug_ro_policy[0].policy.allowed_tcb_statuses // [])
+                  }
+                ),
+                "locked-read-only": (
+                  $locked_ro[0] + {
+                    allowed_mrtd: ($locked_ro_policy[0].policy.allowed_mrtd // []),
+                    allowed_rtmr0: ($locked_ro_policy[0].policy.allowed_rtmr0 // []),
+                    allowed_rtmr1: ($locked_ro_policy[0].policy.allowed_rtmr1 // []),
+                    allowed_rtmr2: ($locked_ro_policy[0].policy.allowed_rtmr2 // []),
+                    allowed_rtmr3: ($locked_ro_policy[0].policy.allowed_rtmr3 // []),
+                    allowed_tcb_statuses: ($locked_ro_policy[0].policy.allowed_tcb_statuses // [])
+                  }
+                )
               }
             }' > artifacts/published-mrtds.json
+
+          jq -n \
+            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg commit "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg workflow "${GITHUB_WORKFLOW}" \
+            --arg ref "${GITHUB_REF}" \
+            --slurpfile debug_policy artifacts/measurement-policy-candidates-debug.json \
+            --slurpfile debug_ro_policy artifacts/measurement-policy-candidates-debug-read-only.json \
+            --slurpfile locked_ro_policy artifacts/measurement-policy-candidates-locked-read-only.json \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              commit_sha: $commit,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              source: {
+                repository: $repository,
+                workflow: $workflow,
+                ref: $ref
+              },
+              profiles: {
+                debug: $debug_policy[0].policy,
+                "debug-read-only": $debug_ro_policy[0].policy,
+                "locked-read-only": $locked_ro_policy[0].policy
+              }
+            }' > artifacts/merod-locked-image-policy.json
 
           jq -n \
             --arg tag "${{ needs.preflight.outputs.image_version }}" \
@@ -1020,6 +1148,7 @@ jobs:
             --slurpfile debug_ro artifacts/profile-provenance-debug-read-only.json \
             --slurpfile locked_ro artifacts/profile-provenance-locked-read-only.json \
             --slurpfile mrtds artifacts/published-mrtds.json \
+            --slurpfile policy artifacts/merod-locked-image-policy.json \
             '{
               tag: $tag,
               commit_sha: $commit,
@@ -1031,7 +1160,8 @@ jobs:
                 "debug-read-only": $debug_ro[0],
                 "locked-read-only": $locked_ro[0]
               },
-              mrtds: $mrtds[0]
+              mrtds: $mrtds[0],
+              measurement_policy: $policy[0]
             }' > artifacts/release-provenance.json
 
           tar --exclude='attestation-artifacts.tar.gz' -czf attestation-artifacts.tar.gz -C artifacts . && mv attestation-artifacts.tar.gz artifacts/
@@ -1041,6 +1171,7 @@ jobs:
             artifacts/mrtd-debug-read-only.json \
             artifacts/mrtd-locked-read-only.json \
             artifacts/published-mrtds.json \
+            artifacts/merod-locked-image-policy.json \
             artifacts/release-provenance.json \
             artifacts/attestation-artifacts.tar.gz \
             | sed 's#  artifacts/#  #' \
@@ -1053,6 +1184,7 @@ jobs:
             echo "- Debug MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug.json)"
             echo "- Debug read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-debug-read-only.json)"
             echo "- Locked read-only MRTD: $(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
+            echo "- Locked read-only RTMR0: $(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/merod-locked-image-policy.json)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing
@@ -1067,6 +1199,7 @@ jobs:
             "artifacts/mrtd-debug-read-only.json"
             "artifacts/mrtd-locked-read-only.json"
             "artifacts/published-mrtds.json"
+            "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
             "artifacts/locked-image-checksums.txt"
@@ -1091,6 +1224,7 @@ jobs:
             "artifacts/mrtd-debug-read-only.json"
             "artifacts/mrtd-locked-read-only.json"
             "artifacts/published-mrtds.json"
+            "artifacts/merod-locked-image-policy.json"
             "artifacts/release-provenance.json"
             "artifacts/attestation-artifacts.tar.gz"
             "artifacts/locked-image-checksums.txt"
@@ -1131,6 +1265,9 @@ jobs:
             artifacts/published-mrtds.json
             artifacts/published-mrtds.json.sig
             artifacts/published-mrtds.json.pem
+            artifacts/merod-locked-image-policy.json
+            artifacts/merod-locked-image-policy.json.sig
+            artifacts/merod-locked-image-policy.json.pem
             artifacts/release-provenance.json
             artifacts/release-provenance.json.sig
             artifacts/release-provenance.json.pem
@@ -1146,3 +1283,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/verify_locked_image_release_assets.sh "${{ needs.preflight.outputs.image_version }}"
+
+      - name: Trigger locked-image policy promotion workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh workflow run "locked_image_policy_promotion_pr.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f release_tag="${{ needs.preflight.outputs.image_version }}" \
+            -f base_branch=master \
+            -f draft_pr=true; then
+            echo "Triggered locked-image policy promotion workflow."
+          else
+            echo "::warning::Failed to auto-dispatch locked-image policy promotion workflow. Run it manually for tag ${{ needs.preflight.outputs.image_version }}."
+          fi

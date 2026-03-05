@@ -4,7 +4,8 @@ This guide explains how end users and operators verify that a GCP TDX merod node
 
 ## Verify signed release assets first (Sigstore keyless)
 
-Before trusting `published-mrtds.json`, verify the release assets were signed by this repository's release workflow identity.
+Before trusting `published-mrtds.json` or `merod-locked-image-policy.json`,
+verify the release assets were signed by this repository's release workflow identity.
 
 ```bash
 VERSION="2.1.1"
@@ -15,6 +16,9 @@ BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 curl -sSLO "${BASE_URL}/published-mrtds.json"
 curl -sSLO "${BASE_URL}/published-mrtds.json.sig"
 curl -sSLO "${BASE_URL}/published-mrtds.json.pem"
+curl -sSLO "${BASE_URL}/merod-locked-image-policy.json"
+curl -sSLO "${BASE_URL}/merod-locked-image-policy.json.sig"
+curl -sSLO "${BASE_URL}/merod-locked-image-policy.json.pem"
 
 cosign verify-blob \
   --certificate published-mrtds.json.pem \
@@ -22,6 +26,13 @@ cosign verify-blob \
   --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   published-mrtds.json
+
+cosign verify-blob \
+  --certificate merod-locked-image-policy.json.pem \
+  --signature merod-locked-image-policy.json.sig \
+  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/gcp_locked_image_build.yaml@refs/heads/master$" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  merod-locked-image-policy.json
 ```
 
 For full provenance validation, verify `release-provenance.json` and `attestation-artifacts.tar.gz` the same way using their matching `.sig` and `.pem` files.
@@ -44,7 +55,7 @@ curl -s http://<node-ip>/admin-api/tee/info | jq -r '.mrtd'
 
 The response also includes `cloudProvider`, `osImage`, and `profile`. Note the `profile` (e.g. `locked-read-only`) for the next step.
 
-### 2. Fetch expected MRTDs from mero-tee releases
+### 2. Fetch expected measurements from mero-tee releases
 
 ```bash
 # Replace X.Y.Z with the release version (e.g. 2.1.1)
@@ -67,6 +78,9 @@ curl -sL https://github.com/calimero-network/mero-tee/releases/download/2.1.1/pu
 ### 3. Compare
 
 If the node's MRTD **matches** the expected MRTD for that profile, the node is running the attested locked image.
+
+Optional hardening: compare RTMRs using `merod-locked-image-policy.json` when
+your attestation verifier exposes RTMR0..3 from a verified quote.
 
 **Example script:**
 

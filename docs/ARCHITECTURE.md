@@ -63,4 +63,4 @@ mero-tee provides:
 | **TEE** | Intel TDX | dstack (TDX) |
 | **Image** | Packer (this repo) | Docker Compose |
 | **KMS** | None (no dstack) | mero-kms-phala (this repo) |
-| **MRTDs** | Published here | Per-deployment (RTMR3) |
+| **Measurements** | `published-mrtds.json` + `merod-locked-image-policy.json` | Per-deployment (MRTD/RTMR policy) |
