@@ -23,6 +23,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
 - [Locked-image policy promotion workflow (PR)](docs/locked-image-policy-promotion-pr.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
+- [Release verification output examples](docs/release-verification-examples.md)
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
 - [Security policy](SECURITY.md)
