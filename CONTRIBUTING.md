@@ -6,8 +6,8 @@ Thanks for your interest in contributing.
 
 This repository contains TEE infrastructure for Calimero, including:
 
-- `crates/mero-kms-phala` (Phala KMS service)
-- `packer/gcp/merod` (locked image build pipeline)
+- `mero-kms-phala` (Phala KMS service, root Rust package)
+- `node-image-gcp` (locked image build pipeline)
 - release verification scripts and workflows
 
 ## Development setup
@@ -28,14 +28,14 @@ Some workflows/scripts also rely on:
 ### Build
 
 ```bash
-cargo build --release -p mero-kms-phala
+cargo build --release
 ```
 
 ### Basic checks
 
 ```bash
-cargo check -p mero-kms-phala
-cargo test -p mero-kms-phala
+cargo check
+cargo test
 ```
 
 ## Pull requests

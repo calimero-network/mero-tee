@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/apply-merod-kms-phala-attestation-config.sh [--dry-run] <release-tag> <kms-url> <merod-home> [node-name]
+  scripts-policy/apply-merod-kms-phala-attestation-config.sh [--dry-run] <release-tag> <kms-url> <merod-home> [node-name]
 
 Examples:
-  scripts/apply-merod-kms-phala-attestation-config.sh 1.2.3 https://kms-green.example.com/ /data default
-  scripts/apply-merod-kms-phala-attestation-config.sh --dry-run 1.2.3 http://127.0.0.1:8080/ ~/.calimero default
+  scripts-policy/apply-merod-kms-phala-attestation-config.sh 1.2.3 https://kms-green.example.com/ /data default
+  scripts-policy/apply-merod-kms-phala-attestation-config.sh --dry-run 1.2.3 http://127.0.0.1:8080/ ~/.calimero default
 EOF
 }
 
@@ -57,7 +57,7 @@ download_asset() {
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"${script_dir}/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
+"${script_dir}/../scripts-release/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }

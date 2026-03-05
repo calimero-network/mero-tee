@@ -5,7 +5,7 @@ on:
     branches:
       - master
     paths:
-      - "packer/gcp/merod/versions.json"
+      - "node-image-gcp/versions.json"
   workflow_dispatch:
 
 concurrency:
@@ -47,27 +47,27 @@ jobs:
 
       - name: Validate packer helper scripts
         run: |
-          bash -n packer/gcp/merod/init.sh
-          bash -n packer/gcp/merod/build-and-release.sh
-          bash -n scripts/verify-node-image-gcp-release-assets.sh
-          bash -n scripts/verify-kms-phala-release-assets.sh
-          bash -n scripts/read-node-image-gcp-policy-registry.sh
-          bash -n scripts/generate-merod-kms-phala-attestation-config.sh
-          bash -n scripts/apply-merod-kms-phala-attestation-config.sh
-          python3 -m py_compile scripts/verify_tdx_quote_ita.py
-          python3 -m py_compile scripts/extract_tdx_policy_candidates.py
+          bash -n node-image-gcp/init.sh
+          bash -n node-image-gcp/build-and-release.sh
+          bash -n scripts-release/verify-node-image-gcp-release-assets.sh
+          bash -n scripts-release/verify-kms-phala-release-assets.sh
+          bash -n scripts-policy/read-node-image-gcp-policy-registry.sh
+          bash -n scripts-policy/generate-merod-kms-phala-attestation-config.sh
+          bash -n scripts-policy/apply-merod-kms-phala-attestation-config.sh
+          python3 -m py_compile scripts-attestation/verify_tdx_quote_ita.py
+          python3 -m py_compile scripts-attestation/extract_tdx_policy_candidates.py
 
       - name: Validate version manifest shape
         id: version_manifest
         run: |
-          image_version="$(jq -er '.imageVersion' packer/gcp/merod/versions.json)"
+          image_version="$(jq -er '.imageVersion' node-image-gcp/versions.json)"
           jq -e '
             has("imageVersion")
             and has("traefikVersion")
             and has("nodeExporterVersion")
             and has("vmagentVersion")
             and has("vectorVersion")
-          ' packer/gcp/merod/versions.json >/dev/null
+          ' node-image-gcp/versions.json >/dev/null
           echo "image_version=${image_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Resolve merod release gate (master only)
@@ -111,7 +111,7 @@ jobs:
           done
 
           run_pipeline="true"
-          reason="Detected packer/gcp/merod/versions.json change on master."
+          reason="Detected node-image-gcp/versions.json change on master."
 
           echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
           echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -267,10 +267,10 @@ jobs:
           gcloud --version
           jq --version
 
-      - name: Build profile image from packer/gcp/merod
+      - name: Build profile image from node-image-gcp
         id: build_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        working-directory: packer/gcp/merod
+        working-directory: node-image-gcp
         run: |
           export PACKER_FORCE_BUILD=true
           ./init.sh
@@ -280,7 +280,7 @@ jobs:
       - name: Resolve image and VM parameters
         id: params
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        working-directory: packer/gcp/merod
+        working-directory: node-image-gcp
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -649,7 +649,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts/verify_tdx_quote_ita.py \
+          python3 scripts-attestation/verify_tdx_quote_ita.py \
             --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --tee-info "${artifacts_dir}/tee-info.json" \
             --output-dir "${artifacts_dir}" \
@@ -662,7 +662,7 @@ jobs:
             echo "::error::Missing external attestation claims file: ${claims_file}"
             exit 1
           fi
-          python3 scripts/extract_tdx_policy_candidates.py \
+          python3 scripts-attestation/extract_tdx_policy_candidates.py \
             --claims "${claims_file}" \
             --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
             --allow-missing-tcb
@@ -1184,7 +1184,7 @@ jobs:
 
           compatibility_entry_json="$(
             jq -c --arg tag "${{ needs.preflight.outputs.image_version }}" '
-              [.releases[] | select(.version == $tag or .kms_release_tag == $tag or .merod_release_tag == $tag)] | first // empty
+              [.releases[] | select(.version == $tag or .kms_tag == $tag or .node_image_tag == $tag)] | first // empty
             ' policies/index.json
           )"
           if [[ -z "${compatibility_entry_json}" ]]; then
@@ -1205,10 +1205,10 @@ jobs:
               generated_at: (now | todate),
               compatibility: {
                 version: $entry.version,
-                kms_release_tag: $entry.kms_release_tag,
-                merod_release_tag: $entry.merod_release_tag,
-                kms_policy_path: $entry.kms_policy_path,
-                merod_policy_path: $entry.merod_policy_path
+                kms_tag: $entry.kms_tag,
+                node_image_tag: $entry.node_image_tag,
+                kms_policy_file: $entry.kms_policy_file,
+                node_image_policy_file: $entry.node_image_policy_file
               }
             }' > artifacts/node-image-gcp-compatibility-map.json
 
@@ -1245,10 +1245,10 @@ jobs:
           locked_ro_mrtd="$(jq -r '.mrtd' artifacts/mrtd-locked-read-only.json)"
           locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/node-image-gcp-policy.json)"
 
-          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' artifacts/node-image-gcp-compatibility-map.json)"
-          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' artifacts/node-image-gcp-compatibility-map.json)"
-          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' artifacts/node-image-gcp-compatibility-map.json)"
-          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_kms_tag="$(jq -r '.compatibility.kms_tag' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_merod_tag="$(jq -r '.compatibility.node_image_tag' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_kms_policy_file="$(jq -r '.compatibility.kms_policy_file' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_node_image_policy_file="$(jq -r '.compatibility.node_image_policy_file' artifacts/node-image-gcp-compatibility-map.json)"
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           {
@@ -1269,8 +1269,8 @@ jobs:
             echo "|---|---|"
             echo "| KMS release tag | \`${compatibility_kms_tag}\` |"
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
-            echo "| KMS policy path | \`${compatibility_kms_policy_path}\` |"
-            echo "| merod policy path | \`${compatibility_merod_policy_path}\` |"
+            echo "| KMS policy path | \`${compatibility_kms_policy_file}\` |"
+            echo "| merod policy path | \`${compatibility_node_image_policy_file}\` |"
             echo ""
             echo "### Profile measurements"
             echo ""
@@ -1286,12 +1286,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts-release/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts-release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
           } > artifacts/release-notes.md
 
@@ -1410,7 +1410,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
+          scripts-release/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
 
       - name: Trigger node-image-gcp policy promotion workflow
         env:

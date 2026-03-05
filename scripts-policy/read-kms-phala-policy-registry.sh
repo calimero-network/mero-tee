@@ -4,18 +4,18 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/read-kms-phala-policy-registry.sh <release-tag> [policy-index]
+  scripts-policy/read-kms-phala-policy-registry.sh <release-tag> [policy-index]
 
 Examples:
-  scripts/read-kms-phala-policy-registry.sh 2.1.3
-  scripts/read-kms-phala-policy-registry.sh 2.1.3 policies/index.json
+  scripts-policy/read-kms-phala-policy-registry.sh 2.1.3
+  scripts-policy/read-kms-phala-policy-registry.sh 2.1.3 policies/index.json
 
 Prints normalized JSON to stdout:
 {
   "schema_version": 1,
   "release_tag": "...",
   "mapped_version": "...",
-  "kms_release_tag": "...",
+  "kms_tag": "...",
   "source_policy_path": "...",
   "policy": {
     "allowed_tcb_statuses": [...],
@@ -60,7 +60,7 @@ fi
 
 release_entry_json="$(
   jq -c --arg tag "${release_tag}" '
-    [.releases[] | select(.version == $tag or .kms_release_tag == $tag)] | first // empty
+    [.releases[] | select(.version == $tag or .kms_tag == $tag)] | first // empty
   ' "${index_file}"
 )"
 
@@ -69,8 +69,8 @@ if [[ -z "${release_entry_json}" ]]; then
   exit 1
 fi
 
-policy_rel_path="$(jq -r '.kms_policy_path // empty' <<< "${release_entry_json}")"
-expected_policy_tag="$(jq -r '.kms_release_tag // .version // empty' <<< "${release_entry_json}")"
+policy_rel_path="$(jq -r '.kms_policy_file // empty' <<< "${release_entry_json}")"
+expected_policy_tag="$(jq -r '.kms_tag // .version // empty' <<< "${release_entry_json}")"
 mapped_version="$(jq -r '.version // empty' <<< "${release_entry_json}")"
 
 if [[ -z "${policy_rel_path}" ]]; then
@@ -131,14 +131,14 @@ fi
 jq -n \
   --arg release_tag "${release_tag}" \
   --arg mapped_version "${mapped_version}" \
-  --arg kms_release_tag "${expected_policy_tag}" \
+  --arg kms_tag "${expected_policy_tag}" \
   --arg source_policy_path "${policy_rel_path}" \
   --argjson policy "${policy_json}" \
   '{
     schema_version: 1,
     release_tag: $release_tag,
     mapped_version: $mapped_version,
-    kms_release_tag: $kms_release_tag,
+    kms_tag: $kms_tag,
     source_policy_path: $source_policy_path,
     policy: $policy
   }'

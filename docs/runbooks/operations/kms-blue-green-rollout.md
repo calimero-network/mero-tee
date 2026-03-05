@@ -27,7 +27,7 @@ For a target `mero-tee` tag `X.Y.Z`:
 All assets must be verified with:
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh X.Y.Z
+scripts-release/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 ## Decision tree
@@ -61,7 +61,7 @@ flowchart TD
 Required gate:
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh X.Y.Z
+scripts-release/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 - **No**: stop. Do not deploy.
@@ -84,13 +84,13 @@ scripts/verify-kms-phala-release-assets.sh X.Y.Z
 Generate pinned config from signed release policy:
 
 ```bash
-scripts/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ ./tee-kms.toml
+scripts-policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ ./tee-kms.toml
 ```
 
 Or apply directly to an existing node config:
 
 ```bash
-scripts/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ /data default
+scripts-policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://kms-green.example.com/ /data default
 ```
 
 ### D5. Canary validation pass?

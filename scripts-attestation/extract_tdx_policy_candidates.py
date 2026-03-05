@@ -2,7 +2,7 @@
 """Extract KMS policy candidate values from ITA attestation token claims.
 
 This helper reads `external-attestation-token-claims.json` produced by
-`scripts/verify_tdx_quote_ita.py` and derives candidate values for:
+`scripts-attestation/verify_tdx_quote_ita.py` and derives candidate values for:
 
   - MERO_KMS_ALLOWED_TCB_STATUSES_JSON
   - MERO_KMS_ALLOWED_MRTD_JSON

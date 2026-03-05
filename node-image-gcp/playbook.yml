@@ -9,7 +9,7 @@
         update_cache: yes
         cache_valid_time: 3600
   roles:
-    - role: ../../../ansible/roles/mero-traefik
+    - role: ansible/roles/mero-traefik
       vars:
         cpu_architecture: "{{ cpu_architecture }}"
         traefik_version: "{{ traefik_version }}"
@@ -18,25 +18,25 @@
       vars:
         image_profile: "{{ lockdown_profile | default('locked-read-only') }}"
 
-    - role: ../../../ansible/roles/node-exporter
+    - role: ansible/roles/node-exporter
       vars:
         version: "{{ node_exporter_version }}"
         cpu_architecture: "{{ cpu_architecture }}"
 
-    - role: ../../../ansible/roles/vmagent
+    - role: ansible/roles/vmagent
       vars:
         vmagent_version: "{{ vmagent_version }}"
         cpu_architecture: "{{ cpu_architecture }}"
 
-    - role: ../../../ansible/roles/vector
+    - role: ansible/roles/vector
       vars:
         version: "{{ vector_version }}"
         cpu_architecture: "{{ cpu_architecture }}"
 
-    - role: ../../../ansible/roles/cleanup
+    - role: ansible/roles/cleanup
 
     # Lockdown (no SSH, no getty, etc.) only for production profile so MRTD differs per profile
-    - role: ../../../ansible/roles/merod-lockdown
+    - role: ansible/roles/merod-lockdown
       when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
 
     - role: ansible/roles/merotee-conformance
@@ -50,6 +50,6 @@
         mode: "0644"
     - name: Remove ubuntu user after conformance checks (R4)
       include_role:
-        name: ../../../ansible/roles/merod-lockdown
+        name: ansible/roles/merod-lockdown
         tasks_from: remove_ubuntu
       when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'

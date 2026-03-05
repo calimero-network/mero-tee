@@ -65,7 +65,7 @@ TAG=2.1.10
 ## Step A — Verify KMS release assets
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh "${TAG}"
+scripts-release/verify-kms-phala-release-assets.sh "${TAG}"
 ```
 
 What this checks:
@@ -85,7 +85,7 @@ Why it matters:
 ## Step B — Verify node-image-gcp release assets
 
 ```bash
-scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
+scripts-release/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
 What this checks:
@@ -104,7 +104,7 @@ Why it matters:
 ## Step C — Run the aggregate verifier
 
 ```bash
-scripts/verify-release-assets.sh "${TAG}"
+scripts-release/verify-release-assets.sh "${TAG}"
 ```
 
 What this checks:
@@ -170,7 +170,7 @@ You should still do:
 - Generate release-pinned merod attestation config:
 
 ```bash
-scripts/generate-merod-kms-phala-attestation-config.sh "${TAG}" https://<kms-url>/
+scripts-policy/generate-merod-kms-phala-attestation-config.sh "${TAG}" https://<kms-url>/
 ```
 
 ---
@@ -180,7 +180,7 @@ scripts/generate-merod-kms-phala-attestation-config.sh "${TAG}" https://<kms-url
 If you only run one command, run:
 
 ```bash
-scripts/verify-release-assets.sh "${TAG}"
+scripts-release/verify-release-assets.sh "${TAG}"
 ```
 
 If it passes, proceed with rollout using release-pinned config and digest-pinned artifacts.

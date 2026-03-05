@@ -169,8 +169,8 @@ jobs:
           tmp_index="$(mktemp)"
           jq \
             --arg version "${RELEASE_TAG}" \
-            --arg kms_release_tag "${RELEASE_TAG}" \
-            --arg kms_policy_path "${policy_file}" \
+            --arg kms_tag "${RELEASE_TAG}" \
+            --arg kms_policy_file "${policy_file}" \
             --arg run_id "${PROBE_RUN_ID}" \
             --arg run_url "${probe_run_url}" \
             --arg artifact "${ARTIFACT_NAME}" \
@@ -183,8 +183,8 @@ jobs:
                 (
                   ([ .releases[] | select(.version == $version) ] | first // {}) |
                   .version = $version |
-                  .kms_release_tag = $kms_release_tag |
-                  .kms_policy_path = $kms_policy_path |
+                  .kms_tag = $kms_tag |
+                  .kms_policy_file = $kms_policy_file |
                   .kms_policy_sha256 = $kms_policy_sha256 |
                   .kms_source_probe_run_id = $run_id |
                   .kms_source_probe_run_url = $run_url |

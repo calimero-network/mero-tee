@@ -103,7 +103,7 @@ echo "Verifying release ${tag} in ${repo}..."
 
 if [[ "${has_kms_assets}" == "true" ]]; then
   echo "-> Verifying KMS release asset set"
-  scripts/verify-kms-phala-release-assets.sh "${tag}"
+  scripts-release/verify-kms-phala-release-assets.sh "${tag}"
 else
   echo "-> KMS asset set not present; skipping"
 fi
@@ -114,7 +114,7 @@ if [[ "${has_node_image_assets}" == "true" ]]; then
   else
     echo "-> Verifying node-image-gcp release asset set from ${node_image_release_tag}"
   fi
-  scripts/verify-node-image-gcp-release-assets.sh "${node_image_release_tag}"
+  scripts-release/verify-node-image-gcp-release-assets.sh "${node_image_release_tag}"
 else
   echo "-> Node-image-gcp asset set not present; skipping"
 fi

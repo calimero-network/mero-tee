@@ -28,9 +28,9 @@ Use signatures together with:
 ## Canonical verification commands
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh <tag>
-scripts/verify-node-image-gcp-release-assets.sh <tag>
-scripts/verify-release-assets.sh <tag>
+scripts-release/verify-kms-phala-release-assets.sh <tag>
+scripts-release/verify-node-image-gcp-release-assets.sh <tag>
+scripts-release/verify-release-assets.sh <tag>
 ```
 
 ## Verification workflow identities
@@ -47,9 +47,9 @@ OIDC issuer is expected to be:
 ## Recommended operator flow
 
 1. Pick the release tag you plan to deploy.
-2. Run `scripts/verify-release-assets.sh <tag>`.
+2. Run `scripts-release/verify-release-assets.sh <tag>`.
 3. Generate release-pinned config snippets for `merod` using:
-   - `scripts/generate-merod-kms-phala-attestation-config.sh`
+   - `scripts-policy/generate-merod-kms-phala-attestation-config.sh`
 4. Roll out with digest-pinned images and release-pinned policy/config.
 
 ## Related docs

@@ -10,16 +10,16 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 
 ## Phase 2: Migrate mero-kms-phala
 
-- Copy core/crates/mero-kms-phala to mero-tee/crates/mero-kms-phala
-- Create mero-tee/Cargo.toml workspace with git dependency on core
+- Copy core `mero-kms-phala` service code into mero-tee root package
+- Configure root `Cargo.toml` with git dependency on core
 - Add rust-toolchain.toml (match core)
-- Verify cargo build -p mero-kms-phala succeeds
+- Verify cargo build succeeds
 - Add mero-kms-phala release workflow
 - Remove mero-kms-phala from core; update core docs
 
 ## Phase 3: Migrate Packer Image Build
 
-- Copy packer/gcp/merod to mero-tee/packer/gcp/merod
+- Copy node-image-gcp to mero-tee/node-image-gcp
 - Copy required Ansible roles
 - Adjust playbook paths for ansible roles
 - Copy verify_tdx_quote_ita.py and verify-node-image-gcp-release-assets.sh

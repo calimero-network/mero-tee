@@ -7,7 +7,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 | Component | Description |
 |-----------|-------------|
 | **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVM |
-| **packer/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
+| **node-image-gcp/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
 | **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
 
 ## Quick Links
@@ -37,19 +37,19 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Changelog](CHANGELOG.md)
-- [mero-kms-phala README](crates/mero-kms-phala/README.md)
+- [mero-kms-phala README](KMS_PHALA.md)
 
 ## Building mero-kms-phala
 
 ```bash
-cargo build --release -p mero-kms-phala
+cargo build --release
 ```
 
 Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` are satisfied via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
 
 ## Building GCP Images
 
-See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, Ansible, and GCP credentials.
+See [node-image-gcp/README.md](node-image-gcp/README.md). Requires Packer, Ansible, and GCP credentials.
 
 ## Releases
 
@@ -82,13 +82,13 @@ For a consolidated trust model and verification entry point, see [Trust & Verifi
 Verify KMS release assets:
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh X.Y.Z
+scripts-release/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 Verify all available release trust assets for a tag (KMS and/or node-image-gcp):
 
 ```bash
-scripts/verify-release-assets.sh X.Y.Z
+scripts-release/verify-release-assets.sh X.Y.Z
 ```
 
 Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/release/minimal-download-sets.md) for quick-verify vs full-audit bundles.
@@ -96,13 +96,13 @@ Need an explicit artifact list for air-gapped or bandwidth-limited environments?
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
-scripts/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
+scripts-policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
 ```
 
 Apply signed policy directly to an existing `merod` node config:
 
 ```bash
-scripts/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+scripts-policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
 Collect candidate KMS allowlists automatically from a staged Phala deployment:
@@ -123,7 +123,7 @@ Promote staged candidates into a reviewable, versioned policy PR:
   probe + promotion workflows after version bumps merged to `master`
 
 Release automation reads the policy registry directly (`policies/kms-phala`)
-for the target crate version, so version bump + promoted policy stay aligned.
+for the target package version, so version bump + promoted policy stay aligned.
 
 node-image-gcp policy history is tracked under `policies/node-image-gcp` and
 can be promoted from release assets using

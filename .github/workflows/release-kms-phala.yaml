@@ -7,18 +7,18 @@ on:
     paths:
       - Cargo.toml
       - Cargo.lock
-      - "crates/**"
+      - "src/**"
       - "policies/kms-phala/**"
-      - "scripts/read-kms-phala-policy-registry.sh"
+      - "scripts-policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
       - ".github/workflows/deps/**"
   pull_request:
     paths:
       - Cargo.toml
       - Cargo.lock
-      - "crates/**"
+      - "src/**"
       - "policies/kms-phala/**"
-      - "scripts/read-kms-phala-policy-registry.sh"
+      - "scripts-policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
       - ".github/workflows/deps/**"
   workflow_dispatch:
@@ -51,11 +51,11 @@ jobs:
 
       - name: Validate release helper scripts
         run: |
-          bash -n scripts/verify-node-image-gcp-release-assets.sh
-          bash -n scripts/verify-kms-phala-release-assets.sh
-          bash -n scripts/read-kms-phala-policy-registry.sh
-          bash -n scripts/generate-merod-kms-phala-attestation-config.sh
-          bash -n scripts/apply-merod-kms-phala-attestation-config.sh
+          bash -n scripts-release/verify-node-image-gcp-release-assets.sh
+          bash -n scripts-release/verify-kms-phala-release-assets.sh
+          bash -n scripts-policy/read-kms-phala-policy-registry.sh
+          bash -n scripts-policy/generate-merod-kms-phala-attestation-config.sh
+          bash -n scripts-policy/apply-merod-kms-phala-attestation-config.sh
 
       - name: Get version info
         id: version_info
@@ -77,7 +77,7 @@ jobs:
               prerelease=true
             fi
             if ! gh release view "$version" --repo ${{ github.repository }} >/dev/null 2>&1; then
-              if scripts/read-kms-phala-policy-registry.sh "$version" >/dev/null 2>&1; then
+              if scripts-policy/read-kms-phala-policy-registry.sh "$version" >/dev/null 2>&1; then
                 binary_release=true
                 docker_release=true
               else
@@ -115,7 +115,7 @@ jobs:
 
       - name: Build binary
         run: |
-          cargo build -p mero-kms-phala --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Compress artifact
         run: |
@@ -292,11 +292,11 @@ jobs:
           )"
 
           policy_registry_json="$(
-            scripts/read-kms-phala-policy-registry.sh "${{ needs.prepare.outputs.version }}"
+            scripts-policy/read-kms-phala-policy-registry.sh "${{ needs.prepare.outputs.version }}"
           )"
           compatibility_entry_json="$(
             jq -c --arg tag "${{ needs.prepare.outputs.version }}" '
-              [.releases[] | select(.version == $tag or .kms_release_tag == $tag or .merod_release_tag == $tag)] | first // empty
+              [.releases[] | select(.version == $tag or .kms_tag == $tag or .node_image_tag == $tag)] | first // empty
             ' policies/index.json
           )"
           if [[ -z "${compatibility_entry_json}" ]]; then
@@ -317,10 +317,10 @@ jobs:
               generated_at: (now | todate),
               compatibility: {
                 version: $entry.version,
-                kms_release_tag: $entry.kms_release_tag,
-                merod_release_tag: $entry.merod_release_tag,
-                kms_policy_path: $entry.kms_policy_path,
-                merod_policy_path: $entry.merod_policy_path
+                kms_tag: $entry.kms_tag,
+                node_image_tag: $entry.node_image_tag,
+                kms_policy_file: $entry.kms_policy_file,
+                node_image_policy_file: $entry.node_image_policy_file
               }
             }' > release-assets/kms-phala-compatibility-map.json
 
@@ -492,10 +492,10 @@ jobs:
             kms-phala-release-manifest.json \
             kms-phala-attestation-policy.json
 
-          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_tag="$(jq -r '.compatibility.kms_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_merod_tag="$(jq -r '.compatibility.node_image_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_file="$(jq -r '.compatibility.kms_policy_file' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_node_image_policy_file="$(jq -r '.compatibility.node_image_policy_file' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
@@ -517,8 +517,8 @@ jobs:
             echo "|---|---|"
             echo "| KMS release tag | \`${compatibility_kms_tag}\` |"
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
-            echo "| KMS policy path | \`${compatibility_kms_policy_path}\` |"
-            echo "| merod policy path | \`${compatibility_merod_policy_path}\` |"
+            echo "| KMS policy path | \`${compatibility_kms_policy_file}\` |"
+            echo "| merod policy path | \`${compatibility_node_image_policy_file}\` |"
             echo ""
             echo "### Binary archives (SHA-256)"
             echo ""
@@ -532,12 +532,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/verify-kms-phala-release-assets.sh ${{ needs.prepare.outputs.version }}"
+            echo "scripts-release/verify-kms-phala-release-assets.sh ${{ needs.prepare.outputs.version }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts/verify-release-assets.sh ${{ needs.prepare.outputs.version }}"
+            echo "scripts-release/verify-release-assets.sh ${{ needs.prepare.outputs.version }}"
             echo "\`\`\`"
             echo ""
             echo "### Trust assets"
@@ -552,7 +552,7 @@ jobs:
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
             echo "\`\`\`bash"
-            echo "scripts/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.version }} https://<kms-url>/"
+            echo "scripts-policy/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.version }} https://<kms-url>/"
             echo "\`\`\`"
           } > release-assets/release-notes.md
 
@@ -724,4 +724,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/verify-kms-phala-release-assets.sh "${{ needs.prepare.outputs.version }}"
+          scripts-release/verify-kms-phala-release-assets.sh "${{ needs.prepare.outputs.version }}"

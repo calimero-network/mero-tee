@@ -9,7 +9,7 @@ Use these examples to quickly identify successful verification vs common failure
 Script:
 
 ```bash
-scripts/verify-kms-phala-release-assets.sh X.Y.Z
+scripts-release/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 The KMS release workflow also publishes a signed convenience archive:
@@ -59,7 +59,7 @@ Error: no matching signatures:
 Script:
 
 ```bash
-scripts/verify-node-image-gcp-release-assets.sh X.Y.Z
+scripts-release/verify-node-image-gcp-release-assets.sh X.Y.Z
 ```
 
 ### Expected success output

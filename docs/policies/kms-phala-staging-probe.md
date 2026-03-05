@@ -11,8 +11,8 @@ Workflow file:
 1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image.
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
-4. Verifies the quote via Intel Trust Authority (`scripts/verify_tdx_quote_ita.py`).
-5. Extracts candidate policy values (`scripts/extract_tdx_policy_candidates.py`) and writes:
+4. Verifies the quote via Intel Trust Authority (`scripts-attestation/verify_tdx_quote_ita.py`).
+5. Extracts candidate policy values (`scripts-attestation/extract_tdx_policy_candidates.py`) and writes:
    - `kms-policy-candidates.json` (canonical candidate policy payload),
    - `kms-policy-candidates.env` (compatibility/env export form).
 6. Uploads full probe artifacts.
@@ -31,7 +31,7 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 This workflow is used by the automatic pipeline (`kms-phala-policy-auto-pipeline.yaml`)
 and can also be run manually (`workflow_dispatch`) with:
 
-- `kms_release_tag`:
+- `kms_tag`:
   - explicit release tag (recommended, for example `2.1.3`), or
   - `latest` (default) to auto-use the latest GitHub release tag (staging convenience only)
 - optional `kms_image` override pinned to a reviewed tag/digest that includes `/attest`

@@ -16,6 +16,7 @@ This proposal defines a cleaner information architecture and naming scheme for
 - [x] Phase A completed (workflow/script/policy-path naming baseline)
 - [x] Phase B completed (release asset/tag normalization)
 - [x] Phase C completed (docs tree split by intent)
+- [x] Phase D completed (root package + flat top-level domains)
 
 ---
 
@@ -40,7 +41,7 @@ Avoid mixing lane names inside one artifact family.
 
 ---
 
-## 3) Rename map (Phase A implemented where noted; Phase B pending for assets)
+## 3) Rename map (implemented)
 
 ## Services and policy registries
 
@@ -80,44 +81,17 @@ Avoid mixing lane names inside one artifact family.
 
 ---
 
-## 4) Proposed repository structure
+## 4) Repository structure (current)
 
 ```text
-docs/
-  architecture/
-    trust-boundaries.md
-    attestation-enforcement.md
-  runbooks/
-    platforms/
-      phala-kms.md
-      gcp-node-image.md
-    operations/
-      kms-blue-green-rollout.md
-  release/
-    verification-beginner.md
-    verification-examples.md
-    taxonomy.md
-    pipeline-sequence-diagrams.md
-  policies/
-    kms-phala-policy-promotion.md
-    kms-phala-policy-auto-pipeline.md
-    node-image-gcp-policy-promotion.md
-
-scripts/
-  release/
-    verify-kms-phala-release-assets.sh
-    verify-node-image-gcp-release-assets.sh
-    verify-release-assets.sh
-  policy/
-    read-kms-phala-policy-registry.sh
-    read-node-image-gcp-policy-registry.sh
-    apply-merod-kms-phala-attestation-config.sh
-    generate-merod-kms-phala-attestation-config.sh
-
+Cargo.toml
+src/
+node-image-gcp/
+scripts-release/
+scripts-policy/
+scripts-attestation/
 policies/
-  index.json
-  kms-phala/
-  node-image-gcp/
+docs/
 ```
 
 ---

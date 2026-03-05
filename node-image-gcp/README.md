@@ -25,7 +25,7 @@ Configure via GitHub repo variables or environment:
 ## Build
 
 ```bash
-cd packer/gcp/merod
+cd node-image-gcp
 packer build -var-file=ubuntu-intel.pkrvars.hcl ubuntu.pkr.hcl
 ```
 

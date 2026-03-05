@@ -36,7 +36,7 @@ node-image-gcp assets are published under tag `node-image-gcp-vX.Y.Z` and includ
 
 ```bash
 TAG=2.1.10
-scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
+scripts-release/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
 The verifier resolves `node-image-gcp-v${TAG}` automatically when needed.
@@ -56,7 +56,7 @@ Avoid mutable deployment references.
 
 For image build and publishing details, see:
 
-- [packer/gcp/merod/README.md](../../../packer/gcp/merod/README.md)
+- [node-image-gcp/README.md](../../../node-image-gcp/README.md)
 
 ---
 

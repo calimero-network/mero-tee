@@ -7,13 +7,13 @@ on:
     paths:
       - Cargo.toml
       - Cargo.lock
-      - "crates/mero-kms-phala/**"
+      - "src/**"
       - ".github/workflows/ci-kms-phala.yaml"
   pull_request:
     paths:
       - Cargo.toml
       - Cargo.lock
-      - "crates/mero-kms-phala/**"
+      - "src/**"
       - ".github/workflows/ci-kms-phala.yaml"
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy -p mero-kms-phala --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test -p mero-kms-phala
+        run: cargo test

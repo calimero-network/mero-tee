@@ -7,8 +7,10 @@
 /.github/workflows/kms-phala-staging-probe.yaml @chefsale
 /.github/workflows/kms-phala-policy-promotion-pr.yaml @chefsale
 
-# KMS crate
-/crates/mero-kms-phala/ @chefsale
+# KMS package
+/ @chefsale
 
 # Attestation/release scripts
-/scripts/ @chefsale
+/scripts-release/ @chefsale
+/scripts-policy/ @chefsale
+/scripts-attestation/ @chefsale

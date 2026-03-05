@@ -1,6 +1,6 @@
 # Workflow Setup
 
-The GCP locked image build workflow requires GitHub repo configuration. **No secrets or credentials should be committed to the repo.**
+The GCP node-image build workflow requires GitHub repo configuration. **No secrets or credentials should be committed to the repo.**
 
 ## Required GitHub Repo Variables
 
@@ -36,7 +36,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 ## Trigger
 
-The workflow runs on push to `master` when `packer/gcp/merod/versions.json` changes.
+The workflow runs on push to `master` when `node-image-gcp/versions.json` changes.
 
 ## PR documentation guard
 
@@ -44,8 +44,10 @@ Pull requests that modify any of the following paths must also include a
 documentation update in `docs/**` or `README.md`:
 
 - `.github/workflows/**`
-- `scripts/**`
-- `packer/**`
+- `scripts-release/**`
+- `scripts-policy/**`
+- `scripts-attestation/**`
+- `node-image-gcp/**`
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
 
@@ -56,14 +58,14 @@ are bumped together.
 
 It validates the following are synchronized for the active release version:
 
-- `crates/mero-kms-phala/Cargo.toml` package version
+- `Cargo.toml` package version
 - `Cargo.lock` `mero-kms-phala` package version
-- `packer/gcp/merod/versions.json` `imageVersion`
+- `node-image-gcp/versions.json` `imageVersion`
 - `policies/index.json` release entry for that version
 - `policies/kms-phala/<version>.json`
 - `policies/node-image-gcp/<version>.json`
 
-For `policies/index.json`, `merod_release_tag` must be:
+For `policies/index.json`, `node_image_tag` must be:
 
 - `node-image-gcp-v<version>`
 

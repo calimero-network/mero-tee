@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       kms_image:
-        description: "Optional explicit pinned image override (for example ghcr.io/calimero-network/mero-kms-phala:pr-1). If empty, workflow derives image from kms_release_tag."
+        description: "Optional explicit pinned image override (for example ghcr.io/calimero-network/mero-kms-phala:pr-1). If empty, workflow derives image from kms_tag."
         required: false
         default: ""
-      kms_release_tag:
+      kms_tag:
         description: "Release tag to deploy when kms_image is empty. Use 'latest' to auto-pick the latest GitHub release tag."
         required: true
         default: "latest"
@@ -89,7 +89,7 @@ jobs:
       - name: Install probe dependencies
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/verify_tdx_quote_ita.py scripts/extract_tdx_policy_candidates.py
+          python3 -m py_compile scripts-attestation/verify_tdx_quote_ita.py scripts-attestation/extract_tdx_policy_candidates.py
           npm install -g phala@latest
           phala --version
           jq --version
@@ -105,7 +105,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           KMS_IMAGE_INPUT: ${{ inputs.kms_image }}
-          KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_release_tag }}
+          KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_tag }}
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
           set -euo pipefail
@@ -120,7 +120,7 @@ jobs:
               resolved_release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
               if [[ -z "${resolved_release_tag}" ]]; then
                 echo "::error::Could not resolve latest release tag for ${GITHUB_REPOSITORY}."
-                echo "::error::Provide kms_image override or explicit kms_release_tag."
+                echo "::error::Provide kms_image override or explicit kms_tag."
                 exit 1
               fi
             else
@@ -196,7 +196,7 @@ jobs:
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
           echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
-          echo "kms_release_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "kms_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Deploy ephemeral CVM
         id: deploy
@@ -475,7 +475,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts/verify_tdx_quote_ita.py \
+          python3 scripts-attestation/verify_tdx_quote_ita.py \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --output-dir "${ARTIFACTS_DIR}" \
             --ita-url "${ITA_APPRAISAL_URL}" \
@@ -489,7 +489,7 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
-          python3 scripts/extract_tdx_policy_candidates.py \
+          python3 scripts-attestation/extract_tdx_policy_candidates.py \
             --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
             --output-json "${ARTIFACTS_DIR}/kms-policy-candidates.json" \
             --output-env "${ARTIFACTS_DIR}/kms-policy-candidates.env"
@@ -516,7 +516,7 @@ jobs:
           VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
           APP_ID: ${{ steps.deploy.outputs.app_id }}
           RESOLVED_KMS_IMAGE: ${{ steps.prepare.outputs.kms_image }}
-          RESOLVED_KMS_RELEASE_TAG: ${{ steps.prepare.outputs.kms_release_tag }}
+          RESOLVED_KMS_RELEASE_TAG: ${{ steps.prepare.outputs.kms_tag }}
         run: |
           set -euo pipefail
           {

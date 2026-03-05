@@ -20,7 +20,7 @@ The key design rule is to separate:
 
 Implementation references:
 
-- `mero-tee`: `crates/mero-kms-phala/src/handlers.rs`
+- `mero-tee`: `src/handlers.rs`
 - `core`: `crates/merod/src/kms.rs`
 
 ---
@@ -65,7 +65,7 @@ Source: `core/crates/merod/src/kms.rs` (`verify_kms_attestation`, `fetch_from_ph
 4. Enforces measurement policy allowlists
 5. Derives/releases key
 
-Source: `crates/mero-kms-phala/src/handlers.rs` (`get_key_handler`, policy enforcement)
+Source: `src/handlers.rs` (`get_key_handler`, policy enforcement)
 
 ---
 
@@ -81,9 +81,9 @@ runtime safety by themselves.
 
 Use:
 
-- `scripts/verify-kms-phala-release-assets.sh`
-- `scripts/verify-node-image-gcp-release-assets.sh`
-- `scripts/verify-release-assets.sh`
+- `scripts-release/verify-kms-phala-release-assets.sh`
+- `scripts-release/verify-node-image-gcp-release-assets.sh`
+- `scripts-release/verify-release-assets.sh`
 
 Then enforce runtime attestation in deployed services.
 

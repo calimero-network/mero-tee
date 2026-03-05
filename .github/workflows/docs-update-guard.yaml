@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/**"
-      - "scripts/**"
-      - "packer/**"
+      - "scripts-release/**"
+      - "scripts-policy/**"
+      - "scripts-attestation/**"
+      - "node-image-gcp/**"
       - "docs/**"
       - "README.md"
 
@@ -41,7 +43,7 @@ jobs:
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/* || "${file}" == packer/* ]]; then
+            if [[ "${file}" == .github/workflows/* || "${file}" == scripts-release/* || "${file}" == scripts-policy/* || "${file}" == scripts-attestation/* || "${file}" == node-image-gcp/* ]]; then
               requires_docs_update="true"
             fi
 
@@ -51,7 +53,7 @@ jobs:
           done
 
           if [[ "${requires_docs_update}" == "true" && "${has_docs_update}" != "true" ]]; then
-            echo "This PR changes workflows/scripts/packer but does not update docs."
+            echo "This PR changes workflows/scripts/node-image-gcp but does not update docs."
             echo "Please update at least one of: docs/** or README.md."
             exit 1
           fi

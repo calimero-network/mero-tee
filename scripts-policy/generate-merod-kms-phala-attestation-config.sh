@@ -4,11 +4,11 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/generate-merod-kms-phala-attestation-config.sh <release-tag> <kms-url> [output-file]
+  scripts-policy/generate-merod-kms-phala-attestation-config.sh <release-tag> <kms-url> [output-file]
 
 Examples:
-  scripts/generate-merod-kms-phala-attestation-config.sh 1.2.3 http://kms.internal:8080/
-  scripts/generate-merod-kms-phala-attestation-config.sh 1.2.3 https://kms.example.com/ ./tee-kms.toml
+  scripts-policy/generate-merod-kms-phala-attestation-config.sh 1.2.3 http://kms.internal:8080/
+  scripts-policy/generate-merod-kms-phala-attestation-config.sh 1.2.3 https://kms.example.com/ ./tee-kms.toml
 EOF
 }
 
@@ -30,7 +30,7 @@ for cmd in "${required_commands[@]}"; do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"${script_dir}/verify-kms-phala-release-assets.sh" "${tag}" >/dev/null
+"${script_dir}/../scripts-release/verify-kms-phala-release-assets.sh" "${tag}" >/dev/null
 
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }

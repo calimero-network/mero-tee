@@ -212,13 +212,13 @@ jobs:
           policy_sha256="$(sha256sum "${policy_file}" | awk '{print $1}')"
 
           tmp_index="$(mktemp)"
-          merod_release_tag="node-image-gcp-v${RELEASE_TAG}"
+          node_image_tag="node-image-gcp-v${RELEASE_TAG}"
 
           jq \
             --arg version "${RELEASE_TAG}" \
-            --arg merod_release_tag "${merod_release_tag}" \
-            --arg merod_policy_path "${policy_file}" \
-            --arg merod_policy_sha256 "${policy_sha256}" \
+            --arg node_image_tag "${node_image_tag}" \
+            --arg node_image_policy_file "${policy_file}" \
+            --arg node_image_policy_sha256 "${policy_sha256}" \
             '
             .schema_version = 1 |
             .releases = (.releases // []) |
@@ -227,9 +227,9 @@ jobs:
                 (
                   ([ .releases[] | select(.version == $version) ] | first // {}) |
                   .version = $version |
-                  .merod_release_tag = $merod_release_tag |
-                  .merod_policy_path = $merod_policy_path |
-                  .merod_policy_sha256 = $merod_policy_sha256 |
+                  .node_image_tag = $node_image_tag |
+                  .node_image_policy_file = $node_image_policy_file |
+                  .node_image_policy_sha256 = $node_image_policy_sha256 |
                   .updated_at = (now | todate)
                 )
               ] | sort_by(.version)
