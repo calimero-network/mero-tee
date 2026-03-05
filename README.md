@@ -86,6 +86,8 @@ Verify all available release trust assets for a tag (KMS and/or locked-image):
 scripts/verify_all_release_assets.sh X.Y.Z
 ```
 
+Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/MINIMAL_DOWNLOAD_SETS.md) for quick-verify vs full-audit bundles.
+
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
