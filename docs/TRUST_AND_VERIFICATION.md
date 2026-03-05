@@ -7,7 +7,7 @@ This page is the single entry point for how trust is established for released ar
 This repository publishes two trust-asset families per release tag:
 
 1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
-2. **Locked-image assets** on tag `locked-image-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
+2. **node-image-gcp assets** on tag `node-image-gcp-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
 
 These map to two deployment lanes with different responsibilities:
 
@@ -21,7 +21,7 @@ These map to two deployment lanes with different responsibilities:
 
 Use signatures together with:
 
-- policy review (`merod-locked-image-policy.json`, `mero-kms-phala-attestation-policy.json`)
+- policy review (`node-image-gcp-policy.json`, `kms-phala-attestation-policy.json`)
 - compatibility checks (`policies/index.json` + compatibility map artifacts)
 - runtime quote verification for deployed nodes
 

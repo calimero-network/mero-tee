@@ -15,8 +15,8 @@ The key design rule is to separate:
 
 | Repository | Owns | Does not own |
 |---|---|---|
-| `calimero-network/mero-tee` | KMS implementation (`mero-kms-phala`), GCP locked-image build/release assets, policy registry + release verification scripts | `merod` runtime logic |
-| `calimero-network/core` | `merod` runtime behavior, KMS client flow, node-side attestation configuration handling | KMS release packaging and locked-image release assets from `mero-tee` |
+| `calimero-network/mero-tee` | KMS implementation (`mero-kms-phala`), GCP node-image-gcp build/release assets, policy registry + release verification scripts | `merod` runtime logic |
+| `calimero-network/core` | `merod` runtime behavior, KMS client flow, node-side attestation configuration handling | KMS release packaging and node-image-gcp release assets from `mero-tee` |
 
 Implementation references:
 
@@ -37,7 +37,7 @@ The repo contains two lanes that are related but different:
 Runbooks:
 
 - [Phala KMS lane](platforms/phala-kms.md)
-- [GCP locked-image lane](platforms/gcp-merod.md)
+- [GCP node-image-gcp lane](platforms/gcp-merod.md)
 
 ---
 
@@ -74,7 +74,7 @@ Source: `crates/mero-kms-phala/src/handlers.rs` (`get_key_handler`, policy enfor
 `mero-tee` publishes two release asset families:
 
 1. KMS assets on `X.Y.Z`
-2. Locked-image assets on `locked-image-vX.Y.Z`
+2. node-image-gcp assets on `node-image-gcp-vX.Y.Z`
 
 For each family, signatures prove workflow identity/integrity, but not complete
 runtime safety by themselves.

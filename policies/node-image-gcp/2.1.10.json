@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_id": "merod-locked-image/2.1.10",
+  "policy_id": "node-image-gcp/2.1.10",
   "release_tag": "2.1.10",
   "status": "released",
   "generated_at": "2026-03-05T16:07:04Z",

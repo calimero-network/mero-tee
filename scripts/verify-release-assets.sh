@@ -79,22 +79,22 @@ if [[ -z "${assets_json}" || "${assets_json}" == "null" ]]; then
   exit 1
 fi
 
-has_kms_assets="$(jq -r 'any(.[]; . == "mero-kms-phala-checksums.txt")' <<< "${assets_json}")"
-has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${assets_json}")"
-locked_release_tag="${tag}"
-if [[ "${has_locked_assets}" != "true" && "${tag}" != locked-image-v* ]]; then
-  prefixed_tag="locked-image-v${tag}"
+has_kms_assets="$(jq -r 'any(.[]; . == "kms-phala-checksums.txt")' <<< "${assets_json}")"
+has_node_image_assets="$(jq -r 'any(.[]; . == "node-image-gcp-checksums.txt")' <<< "${assets_json}")"
+node_image_release_tag="${tag}"
+if [[ "${has_node_image_assets}" != "true" && "${tag}" != node-image-gcp-v* ]]; then
+  prefixed_tag="node-image-gcp-v${tag}"
   prefixed_assets_json="$(fetch_release_assets "${prefixed_tag}")"
   if [[ -n "${prefixed_assets_json}" && "${prefixed_assets_json}" != "null" ]]; then
-    prefixed_has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${prefixed_assets_json}")"
-    if [[ "${prefixed_has_locked_assets}" == "true" ]]; then
-      has_locked_assets="true"
-      locked_release_tag="${prefixed_tag}"
+    prefixed_has_node_image_assets="$(jq -r 'any(.[]; . == "node-image-gcp-checksums.txt")' <<< "${prefixed_assets_json}")"
+    if [[ "${prefixed_has_node_image_assets}" == "true" ]]; then
+      has_node_image_assets="true"
+      node_image_release_tag="${prefixed_tag}"
     fi
   fi
 fi
 
-if [[ "${has_kms_assets}" != "true" && "${has_locked_assets}" != "true" ]]; then
+if [[ "${has_kms_assets}" != "true" && "${has_node_image_assets}" != "true" ]]; then
   echo "No known trust asset sets found for release '${tag}' in ${repo}"
   exit 1
 fi
@@ -108,15 +108,15 @@ else
   echo "-> KMS asset set not present; skipping"
 fi
 
-if [[ "${has_locked_assets}" == "true" ]]; then
-  if [[ "${locked_release_tag}" == "${tag}" ]]; then
-    echo "-> Verifying locked-image release asset set"
+if [[ "${has_node_image_assets}" == "true" ]]; then
+  if [[ "${node_image_release_tag}" == "${tag}" ]]; then
+    echo "-> Verifying node-image-gcp release asset set"
   else
-    echo "-> Verifying locked-image release asset set from ${locked_release_tag}"
+    echo "-> Verifying node-image-gcp release asset set from ${node_image_release_tag}"
   fi
-  scripts/verify-node-image-gcp-release-assets.sh "${locked_release_tag}"
+  scripts/verify-node-image-gcp-release-assets.sh "${node_image_release_tag}"
 else
-  echo "-> Locked-image asset set not present; skipping"
+  echo "-> Node-image-gcp asset set not present; skipping"
 fi
 
 echo "Release ${tag} verification completed."

@@ -39,7 +39,7 @@ Legend:
 ## Phase 2: signed policy/governance artifacts
 
 - [x] Publish trusted KMS measurements (MRTD, optional RTMR0..3) as release artifacts.
-  - `release-kms-phala.yaml` publishes `mero-kms-phala-attestation-policy.json`.
+  - `release-kms-phala.yaml` publishes `kms-phala-attestation-policy.json`.
 - [x] Ship artifacts per pinned release tag (never `latest`).
   - Release assets are tag-based and verifier scripts require explicit tag input.
 - [x] Sign artifacts (`.sig`/`.pem`) and provide verification flow.
@@ -51,7 +51,7 @@ Legend:
   - Implemented in verification scripts and release workflow sanity checks.
   - Follow-up: add an explicit dedicated section in docs for these identity constraints.
 - [x] Provide machine-readable policy format for downstream ingestion by core.
-  - `mero-kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
+  - `kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
 - [x] Automate staging measurement collection for policy candidates.
   - `kms-phala-staging-probe.yaml` + `scripts/extract_tdx_policy_candidates.py`.
 - [x] Gate policy promotion through reviewed PR updates.

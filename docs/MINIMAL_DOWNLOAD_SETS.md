@@ -13,29 +13,29 @@ Use these sets when you cannot (or do not want to) download all release assets.
 
 ### Quick verify (operator)
 
-- `mero-kms-phala-checksums.txt` + `.sig` + `.pem`
-- `mero-kms-phala-release-manifest.json` + `.sig` + `.pem`
-- `mero-kms-phala-attestation-policy.json` + `.sig` + `.pem`
-- Binary archive(s) for your platform from `mero-kms-phala-checksums.txt` + matching `.sig` + `.pem`
+- `kms-phala-checksums.txt` + `.sig` + `.pem`
+- `kms-phala-release-manifest.json` + `.sig` + `.pem`
+- `kms-phala-attestation-policy.json` + `.sig` + `.pem`
+- Binary archive(s) for your platform from `kms-phala-checksums.txt` + matching `.sig` + `.pem`
 
 ### Full audit (auditor)
 
 Everything in quick verify, plus:
 
-- `mero-kms-phala-rekor-index.json` + `.sig` + `.pem` + `.bundle.json`
-- `mero-kms-phala-container-sbom.spdx.json` + `.sig` + `.pem`
-- `mero-kms-phala-binaries-sbom.spdx.json` + `.sig` + `.pem`
-- `mero-kms-phala-trust-bundle.tar.gz` (+ signature sidecars)
-- `mero-tee-compatibility-map.json` + `.sig` + `.pem`
+- `kms-phala-rekor-index.json` + `.sig` + `.pem` + `.bundle.json`
+- `kms-phala-container-sbom.spdx.json` + `.sig` + `.pem`
+- `kms-phala-binaries-sbom.spdx.json` + `.sig` + `.pem`
+- `kms-phala-trust-bundle.tar.gz` (+ signature sidecars)
+- `kms-phala-compatibility-map.json` + `.sig` + `.pem`
 
-## locked-image release assets
+## node-image-gcp release assets
 
 ### Quick verify (operator)
 
 - `published-mrtds.json` + `.sig` + `.pem`
-- `merod-locked-image-policy.json` + `.sig` + `.pem`
+- `node-image-gcp-policy.json` + `.sig` + `.pem`
 - `release-provenance.json` + `.sig` + `.pem`
-- `locked-image-checksums.txt` + `.sig` + `.pem`
+- `node-image-gcp-checksums.txt` + `.sig` + `.pem`
 
 ### Full audit (auditor)
 
@@ -44,9 +44,9 @@ Everything in quick verify, plus:
 - `mrtd-debug.json` + `.sig` + `.pem`
 - `mrtd-debug-read-only.json` + `.sig` + `.pem`
 - `mrtd-locked-read-only.json` + `.sig` + `.pem`
-- `attestation-artifacts.tar.gz` (+ signature sidecars)
-- `locked-image-release-sbom.spdx.json` + `.sig` + `.pem`
-- `mero-tee-compatibility-map.json` + `.sig` + `.pem`
+- `node-image-gcp-attestation-bundle.tar.gz` (+ signature sidecars)
+- `node-image-gcp-release-sbom.spdx.json` + `.sig` + `.pem`
+- `node-image-gcp-compatibility-map.json` + `.sig` + `.pem`
 
 ## Script shortcuts
 

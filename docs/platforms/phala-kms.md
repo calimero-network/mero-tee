@@ -2,7 +2,7 @@
 
 This runbook is for operating the **KMS plane** on Phala CVMs.
 
-It is **not** the GCP locked-image node deployment path.  
+It is **not** the GCP node-image-gcp node deployment path.  
 For GCP node-plane deployment, use [gcp-merod.md](gcp-merod.md).
 
 ---
@@ -50,7 +50,7 @@ container metadata consistency.
 
 ## 4) Deploy digest-pinned KMS image
 
-Use digest pinning from `mero-kms-phala-release-manifest.json`:
+Use digest pinning from `kms-phala-release-manifest.json`:
 
 ```bash
 # Example only; fetch value from verified release manifest.

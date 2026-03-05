@@ -64,9 +64,9 @@ cleanup() { rm -rf "${tmp_dir}"; }
 trap cleanup EXIT
 
 for pattern in \
-  "mero-kms-phala-attestation-policy.json" \
-  "mero-kms-phala-attestation-policy.json.sig" \
-  "mero-kms-phala-attestation-policy.json.pem"; do
+  "kms-phala-attestation-policy.json" \
+  "kms-phala-attestation-policy.json.sig" \
+  "kms-phala-attestation-policy.json.pem"; do
   if ! download_asset "${release_tag}" "${pattern}" "${tmp_dir}"; then
     echo "Failed to download required asset ${pattern}"
     exit 1
@@ -81,7 +81,7 @@ fi
 cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-kms-phala.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
-policy_file="${tmp_dir}/mero-kms-phala-attestation-policy.json"
+policy_file="${tmp_dir}/kms-phala-attestation-policy.json"
 cosign verify-blob \
   --certificate "${policy_file}.pem" \
   --signature "${policy_file}.sig" \

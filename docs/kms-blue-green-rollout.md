@@ -18,9 +18,9 @@ Avoid cross-version coupling and circular trust dependencies during upgrades:
 
 For a target `mero-tee` tag `X.Y.Z`:
 
-1. `mero-kms-phala-checksums.txt`
-2. `mero-kms-phala-release-manifest.json`
-3. `mero-kms-phala-attestation-policy.json`
+1. `kms-phala-checksums.txt`
+2. `kms-phala-release-manifest.json`
+3. `kms-phala-attestation-policy.json`
 4. Sigstore sidecars for each file (`.sig`, `.pem`)
 5. Binary archives and their sidecars
 

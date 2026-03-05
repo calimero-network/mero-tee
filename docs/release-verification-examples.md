@@ -13,10 +13,10 @@ scripts/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 The KMS release workflow also publishes a signed convenience archive:
-`mero-kms-phala-trust-bundle.tar.gz` (+ `.sig` / `.pem`), which packages
+`kms-phala-trust-bundle.tar.gz` (+ `.sig` / `.pem`), which packages
 checksums, release manifest, and attestation policy.
 
-It also publishes `mero-kms-phala-rekor-index.json`, which records Rekor
+It also publishes `kms-phala-rekor-index.json`, which records Rekor
 metadata for each signed asset (`log_index`, `integrated_time`, `log_id`).
 `log_id` is read from Sigstore bundle JSON at
 `.verificationMaterial.tlogEntries[0].logId.keyId` (protobuf JSON camelCase).
@@ -24,13 +24,13 @@ Each index entry also includes `hash` and `sigstore_search_url`, so operators
 can directly open public transparency search pages such as
 `https://search.sigstore.dev/?hash=sha256:<artifact-hash>`.
 
-Additionally, `mero-kms-phala-container-metadata.json` is published and signed
+Additionally, `kms-phala-container-metadata.json` is published and signed
 as a standalone container metadata artifact and cross-checked by the verifier.
 
 ### Expected success output
 
 ```text
-Inspecting mero-kms-phala release X.Y.Z...
+Inspecting kms-phala release X.Y.Z...
 Release X.Y.Z checksums, manifest, attestation policy, container metadata, archive hashes, and Sigstore signatures verified.
 ```
 
@@ -39,7 +39,7 @@ Release X.Y.Z checksums, manifest, attestation policy, container metadata, archi
 - Missing release asset:
 
 ```text
-Failed to download required asset mero-kms-phala-release-manifest.json
+Failed to download required asset kms-phala-release-manifest.json
 ```
 
 - Hash mismatch:
@@ -54,7 +54,7 @@ Checksum mismatch between manifest and checksums for mero-kms-phala_x86_64-unkno
 Error: no matching signatures:
 ```
 
-## Locked-image release asset verification
+## node-image-gcp release asset verification
 
 Script:
 

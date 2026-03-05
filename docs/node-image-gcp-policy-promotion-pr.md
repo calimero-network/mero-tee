@@ -1,4 +1,4 @@
-# Locked-image policy promotion workflow (PR)
+# node-image-gcp policy promotion workflow (PR)
 
 Workflow file:
 
@@ -6,7 +6,7 @@ Workflow file:
 
 ## Purpose
 
-Promote versioned locked-image measurement policy records into this repository so
+Promote versioned node-image-gcp measurement policy records into this repository so
 image trust policy history is reviewed and auditable in git.
 
 This workflow is auto-dispatched by `release-node-image-gcp.yaml` after release
@@ -21,7 +21,7 @@ asset publication, and can also be run manually for backfills.
 ## What it does
 
 1. Downloads release assets for the provided tag.
-2. Prefers `merod-locked-image-policy.json` when available.
+2. Prefers `node-image-gcp-policy.json` when available.
 3. Falls back to synthesizing policy from `published-mrtds.json` (RTMR arrays
    empty) for older releases.
 4. Updates:

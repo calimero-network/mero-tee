@@ -44,7 +44,7 @@ sequenceDiagram
   GitHubActions->>Sigstore: keyless sign all release assets
   GitHubActions->>GitHubActions: Verify signatures
   GitHubActions->>GitHubRelease: Upload release assets + notes
-  GitHubActions->>GitHubActions: Smoke-test with locked-image verifier
+  GitHubActions->>GitHubActions: Smoke-test with node-image-gcp verifier
 ```
 
 ## 3) Scheduled release audit (`release-auditor.yaml`)
@@ -64,7 +64,7 @@ sequenceDiagram
     alt KMS assets present
       AuditorWorkflow->>VerifierScripts: verify-kms-phala-release-assets.sh
     end
-    alt Locked-image assets present
+    alt node-image-gcp assets present
       AuditorWorkflow->>VerifierScripts: verify-node-image-gcp-release-assets.sh
     end
   end

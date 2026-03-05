@@ -62,7 +62,7 @@ release_entry_json="$(
 )"
 
 if [[ -z "${release_entry_json}" ]]; then
-  echo "No merod locked-image policy mapping found for release tag ${release_tag} in ${index_file}"
+  echo "No node-image-gcp policy mapping found for release tag ${release_tag} in ${index_file}"
   exit 1
 fi
 

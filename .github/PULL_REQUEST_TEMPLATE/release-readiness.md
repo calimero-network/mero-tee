@@ -10,7 +10,7 @@ assignees: ""
 
 - Release family:
   - [ ] `mero-kms-phala`
-  - [ ] locked-image (`gcp_locked_image_build`)
+  - [ ] node-image-gcp (`release-node-image-gcp`)
   - [ ] both
 - Target version/tag: `<X.Y.Z>`
 - Related policy entry:
@@ -30,10 +30,10 @@ assignees: ""
 ## Verification plan
 
 - [ ] `scripts/verify-kms-phala-release-assets.sh <X.Y.Z>` succeeds (if KMS assets are expected).
-- [ ] `scripts/verify-node-image-gcp-release-assets.sh <X.Y.Z>` succeeds (if locked-image assets are expected).
+- [ ] `scripts/verify-node-image-gcp-release-assets.sh <X.Y.Z>` succeeds (if node-image-gcp assets are expected).
 - [ ] Sigstore identity expectations were checked against workflow identity:
   - [ ] KMS workflow identity regex
-  - [ ] locked-image workflow identity regex
+  - [ ] node-image-gcp workflow identity regex
 
 ## Risk and rollback
 

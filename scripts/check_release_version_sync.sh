@@ -89,10 +89,10 @@ if entry.get("kms_release_tag") != kms_version:
         f"{entry.get('kms_release_tag')} != {kms_version}"
     )
 
-expected_merod_tags = {kms_version, f"locked-image-v{kms_version}"}
-if entry.get("merod_release_tag") not in expected_merod_tags:
+expected_merod_tag = f"node-image-gcp-v{kms_version}"
+if entry.get("merod_release_tag") != expected_merod_tag:
     fail(
-        "merod_release_tag must be either version or locked-image-v<version>: "
+        "merod_release_tag must be node-image-gcp-v<version>: "
         f"{entry.get('merod_release_tag')}"
     )
 

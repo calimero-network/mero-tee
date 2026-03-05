@@ -1,4 +1,4 @@
-name: Release mero-kms-phala
+name: Release kms-phala
 
 on:
   push:
@@ -136,7 +136,7 @@ jobs:
       image_digest: ${{ steps.build_and_push.outputs.digest }}
       image_tags: ${{ steps.metadata.outputs.tags }}
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-mero-kms-phala-${{ needs.prepare.outputs.version }}
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-kms-phala-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
     permissions:
       attestations: write
@@ -266,7 +266,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
 
-          sha256sum artifacts/*.tar.gz | sort | sed 's#  artifacts/#  #' > release-assets/mero-kms-phala-checksums.txt
+          sha256sum artifacts/*.tar.gz | sort | sed 's#  artifacts/#  #' > release-assets/kms-phala-checksums.txt
 
           image_name="ghcr.io/${{ github.repository_owner }}/mero-kms-phala"
           image_digest="${{ needs.release-container.outputs.image_digest }}"
@@ -276,8 +276,8 @@ jobs:
           fi
           image_ref="${image_name}@${image_digest}"
 
-          syft "${image_ref}" -o "spdx-json=release-assets/mero-kms-phala-container-sbom.spdx.json"
-          syft dir:artifacts -o "spdx-json=release-assets/mero-kms-phala-binaries-sbom.spdx.json"
+          syft "${image_ref}" -o "spdx-json=release-assets/kms-phala-container-sbom.spdx.json"
+          syft dir:artifacts -o "spdx-json=release-assets/kms-phala-binaries-sbom.spdx.json"
 
           cat > /tmp/mero-kms-tags.txt <<'EOF'
           ${{ needs.release-container.outputs.image_tags }}
@@ -288,7 +288,7 @@ jobs:
             while read -r checksum filepath; do
               file="${filepath#artifacts/}"
               jq -nc --arg file "$file" --arg checksum "$checksum" '{file: $file, sha256: $checksum}'
-            done < release-assets/mero-kms-phala-checksums.txt | jq -s '.'
+            done < release-assets/kms-phala-checksums.txt | jq -s '.'
           )"
 
           policy_registry_json="$(
@@ -322,7 +322,7 @@ jobs:
                 kms_policy_path: $entry.kms_policy_path,
                 merod_policy_path: $entry.merod_policy_path
               }
-            }' > release-assets/mero-kms-phala-compatibility-map.json
+            }' > release-assets/kms-phala-compatibility-map.json
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
@@ -332,7 +332,7 @@ jobs:
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
             --argjson tags "${tags_json}" \
-            --arg compat_asset "mero-tee-compatibility-map.json" \
+            --arg compat_asset "kms-phala-compatibility-map.json" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -346,7 +346,7 @@ jobs:
                 tags: $tags
               },
               compatibility_map_asset: $compat_asset
-            }' > release-assets/mero-kms-phala-container-metadata.json
+            }' > release-assets/kms-phala-container-metadata.json
 
           policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
           allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
@@ -408,24 +408,24 @@ jobs:
                   bytes_32_63: "binding_or_default_domain_separator"
                 },
                 policy_registry_entry_path: $policy_registry_source_path,
-                attestation_policy_asset: "mero-kms-phala-attestation-policy.json",
-                container_metadata_asset: "mero-kms-phala-container-metadata.json",
+                attestation_policy_asset: "kms-phala-attestation-policy.json",
+                container_metadata_asset: "kms-phala-container-metadata.json",
                 rekor: {
-                  index_asset: "mero-kms-phala-rekor-index.json"
+                  index_asset: "kms-phala-rekor-index.json"
                 }
               },
               asset_purposes: {
-                "mero-kms-phala-checksums.txt": ["operator-required", "auditor-required"],
-                "mero-kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
-                "mero-kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
-                "mero-kms-phala-container-metadata.json": ["operator-required", "auditor-required"],
-                "mero-kms-phala-rekor-index.json": ["auditor-required"],
-                "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
-                "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
-                "mero-kms-phala-binaries-sbom.spdx.json": ["auditor-required"],
-                "mero-kms-phala-compatibility-map.json": ["operator-required", "auditor-required"]
+                "kms-phala-checksums.txt": ["operator-required", "auditor-required"],
+                "kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
+                "kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
+                "kms-phala-container-metadata.json": ["operator-required", "auditor-required"],
+                "kms-phala-rekor-index.json": ["auditor-required"],
+                "kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
+                "kms-phala-container-sbom.spdx.json": ["auditor-required"],
+                "kms-phala-binaries-sbom.spdx.json": ["auditor-required"],
+                "kms-phala-compatibility-map.json": ["operator-required", "auditor-required"]
               }
-            }' > release-assets/mero-kms-phala-release-manifest.json
+            }' > release-assets/kms-phala-release-manifest.json
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
@@ -476,30 +476,30 @@ jobs:
                 allowed_rtmr3: $allowed_rtmr3
               },
               merod_config_path: "tee.kms.phala.attestation"
-            }' > release-assets/mero-kms-phala-attestation-policy.json
+            }' > release-assets/kms-phala-attestation-policy.json
 
           sha256sum \
-            release-assets/mero-kms-phala-checksums.txt \
-            release-assets/mero-kms-phala-release-manifest.json \
-            release-assets/mero-kms-phala-attestation-policy.json \
+            release-assets/kms-phala-checksums.txt \
+            release-assets/kms-phala-release-manifest.json \
+            release-assets/kms-phala-attestation-policy.json \
             | sed 's#  release-assets/#  #' \
             > release-assets/MANIFEST.txt
 
-          tar -czf release-assets/mero-kms-phala-trust-bundle.tar.gz \
+          tar -czf release-assets/kms-phala-trust-bundle.tar.gz \
             -C release-assets \
             MANIFEST.txt \
-            mero-kms-phala-checksums.txt \
-            mero-kms-phala-release-manifest.json \
-            mero-kms-phala-attestation-policy.json
+            kms-phala-checksums.txt \
+            kms-phala-release-manifest.json \
+            kms-phala-attestation-policy.json
 
-          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
-          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
-          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
-          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
-            echo "## mero-kms-phala release ${{ needs.prepare.outputs.version }}"
+            echo "## kms-phala release ${{ needs.prepare.outputs.version }}"
             echo ""
             echo "### Release metadata"
             echo ""
@@ -526,7 +526,7 @@ jobs:
             echo "|---|---|"
             while read -r checksum archive; do
               echo "| \`${archive}\` | \`${checksum}\` |"
-            done < release-assets/mero-kms-phala-checksums.txt
+            done < release-assets/kms-phala-checksums.txt
             echo ""
             echo "### Verification commands"
             echo ""
@@ -542,12 +542,12 @@ jobs:
             echo ""
             echo "### Trust assets"
             echo ""
-            echo "- \`mero-kms-phala-trust-bundle.tar.gz\` (\`MANIFEST.txt\`, checksums, manifest, policy)"
-            echo "- \`mero-kms-phala-release-manifest.json\` and \`.sig/.pem/.bundle.json\`"
-            echo "- Container metadata asset: \`mero-kms-phala-container-metadata.json\`"
-            echo "- \`mero-kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
-            echo "- \`mero-kms-phala-container-sbom.spdx.json\` and \`mero-kms-phala-binaries-sbom.spdx.json\`"
-            echo "- \`mero-kms-phala-compatibility-map.json\`"
+            echo "- \`kms-phala-trust-bundle.tar.gz\` (\`MANIFEST.txt\`, checksums, manifest, policy)"
+            echo "- \`kms-phala-release-manifest.json\` and \`.sig/.pem/.bundle.json\`"
+            echo "- Container metadata asset: \`kms-phala-container-metadata.json\`"
+            echo "- \`kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
+            echo "- \`kms-phala-container-sbom.spdx.json\` and \`kms-phala-binaries-sbom.spdx.json\`"
+            echo "- \`kms-phala-compatibility-map.json\`"
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
@@ -567,13 +567,13 @@ jobs:
 
           assets_for_rekor=(
             artifacts/*.tar.gz
-            release-assets/mero-kms-phala-checksums.txt
-            release-assets/mero-kms-phala-attestation-policy.json
-            release-assets/mero-kms-phala-container-metadata.json
-            release-assets/mero-kms-phala-container-sbom.spdx.json
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json
-            release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-kms-phala-compatibility-map.json
+            release-assets/kms-phala-checksums.txt
+            release-assets/kms-phala-attestation-policy.json
+            release-assets/kms-phala-container-metadata.json
+            release-assets/kms-phala-container-sbom.spdx.json
+            release-assets/kms-phala-binaries-sbom.spdx.json
+            release-assets/kms-phala-trust-bundle.tar.gz
+            release-assets/kms-phala-compatibility-map.json
           )
 
           for asset in "${assets_for_rekor[@]}"; do
@@ -627,11 +627,11 @@ jobs:
               workflow_run_attempt: $run_attempt,
               generated_at: (now | todate),
               entries: $entries
-            }' > release-assets/mero-kms-phala-rekor-index.json
+            }' > release-assets/kms-phala-rekor-index.json
 
           post_assets=(
-            release-assets/mero-kms-phala-rekor-index.json
-            release-assets/mero-kms-phala-release-manifest.json
+            release-assets/kms-phala-rekor-index.json
+            release-assets/kms-phala-release-manifest.json
           )
           for asset in "${post_assets[@]}"; do
             base_name="$(basename "${asset}")"
@@ -652,15 +652,15 @@ jobs:
           cert_identity_regex="^https://github.com/${{ github.repository }}/.github/workflows/release-kms-phala.yaml@refs/heads/master$"
           signed_assets=(
             artifacts/*.tar.gz
-            release-assets/mero-kms-phala-checksums.txt
-            release-assets/mero-kms-phala-release-manifest.json
-            release-assets/mero-kms-phala-attestation-policy.json
-            release-assets/mero-kms-phala-container-metadata.json
-            release-assets/mero-kms-phala-container-sbom.spdx.json
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json
-            release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-kms-phala-compatibility-map.json
-            release-assets/mero-kms-phala-rekor-index.json
+            release-assets/kms-phala-checksums.txt
+            release-assets/kms-phala-release-manifest.json
+            release-assets/kms-phala-attestation-policy.json
+            release-assets/kms-phala-container-metadata.json
+            release-assets/kms-phala-container-sbom.spdx.json
+            release-assets/kms-phala-binaries-sbom.spdx.json
+            release-assets/kms-phala-trust-bundle.tar.gz
+            release-assets/kms-phala-compatibility-map.json
+            release-assets/kms-phala-rekor-index.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -685,39 +685,39 @@ jobs:
             artifacts/*.tar.gz
             release-assets/*.tar.gz.sig
             release-assets/*.tar.gz.pem
-            release-assets/mero-kms-phala-checksums.txt
-            release-assets/mero-kms-phala-checksums.txt.sig
-            release-assets/mero-kms-phala-checksums.txt.pem
-            release-assets/mero-kms-phala-release-manifest.json
-            release-assets/mero-kms-phala-release-manifest.json.sig
-            release-assets/mero-kms-phala-release-manifest.json.pem
-            release-assets/mero-kms-phala-release-manifest.json.bundle.json
-            release-assets/mero-kms-phala-attestation-policy.json
-            release-assets/mero-kms-phala-attestation-policy.json.sig
-            release-assets/mero-kms-phala-attestation-policy.json.pem
-            release-assets/mero-kms-phala-container-metadata.json
-            release-assets/mero-kms-phala-container-metadata.json.sig
-            release-assets/mero-kms-phala-container-metadata.json.pem
-            release-assets/mero-kms-phala-container-metadata.json.bundle.json
-            release-assets/mero-kms-phala-container-sbom.spdx.json
-            release-assets/mero-kms-phala-container-sbom.spdx.json.sig
-            release-assets/mero-kms-phala-container-sbom.spdx.json.pem
-            release-assets/mero-kms-phala-container-sbom.spdx.json.bundle.json
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json.sig
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
-            release-assets/mero-kms-phala-binaries-sbom.spdx.json.bundle.json
-            release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-kms-phala-compatibility-map.json
-            release-assets/mero-kms-phala-compatibility-map.json.sig
-            release-assets/mero-kms-phala-compatibility-map.json.pem
-            release-assets/mero-kms-phala-compatibility-map.json.bundle.json
-            release-assets/mero-kms-phala-attestation-policy.json.bundle.json
-            release-assets/mero-kms-phala-rekor-index.json
-            release-assets/mero-kms-phala-rekor-index.json.sig
-            release-assets/mero-kms-phala-rekor-index.json.pem
-            release-assets/mero-kms-phala-rekor-index.json.bundle.json
-            release-assets/mero-kms-phala-checksums.txt.bundle.json
+            release-assets/kms-phala-checksums.txt
+            release-assets/kms-phala-checksums.txt.sig
+            release-assets/kms-phala-checksums.txt.pem
+            release-assets/kms-phala-release-manifest.json
+            release-assets/kms-phala-release-manifest.json.sig
+            release-assets/kms-phala-release-manifest.json.pem
+            release-assets/kms-phala-release-manifest.json.bundle.json
+            release-assets/kms-phala-attestation-policy.json
+            release-assets/kms-phala-attestation-policy.json.sig
+            release-assets/kms-phala-attestation-policy.json.pem
+            release-assets/kms-phala-container-metadata.json
+            release-assets/kms-phala-container-metadata.json.sig
+            release-assets/kms-phala-container-metadata.json.pem
+            release-assets/kms-phala-container-metadata.json.bundle.json
+            release-assets/kms-phala-container-sbom.spdx.json
+            release-assets/kms-phala-container-sbom.spdx.json.sig
+            release-assets/kms-phala-container-sbom.spdx.json.pem
+            release-assets/kms-phala-container-sbom.spdx.json.bundle.json
+            release-assets/kms-phala-binaries-sbom.spdx.json
+            release-assets/kms-phala-binaries-sbom.spdx.json.sig
+            release-assets/kms-phala-binaries-sbom.spdx.json.pem
+            release-assets/kms-phala-binaries-sbom.spdx.json.bundle.json
+            release-assets/kms-phala-trust-bundle.tar.gz
+            release-assets/kms-phala-compatibility-map.json
+            release-assets/kms-phala-compatibility-map.json.sig
+            release-assets/kms-phala-compatibility-map.json.pem
+            release-assets/kms-phala-compatibility-map.json.bundle.json
+            release-assets/kms-phala-attestation-policy.json.bundle.json
+            release-assets/kms-phala-rekor-index.json
+            release-assets/kms-phala-rekor-index.json.sig
+            release-assets/kms-phala-rekor-index.json.pem
+            release-assets/kms-phala-rekor-index.json.bundle.json
+            release-assets/kms-phala-checksums.txt.bundle.json
             release-assets/*.tar.gz.bundle.json
 
       - name: Smoke test published mero-kms release assets

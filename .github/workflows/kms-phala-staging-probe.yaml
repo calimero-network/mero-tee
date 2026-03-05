@@ -152,15 +152,15 @@ jobs:
 
             if ! gh release download "${resolved_release_tag}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --pattern "mero-kms-phala-release-manifest.json" \
+              --pattern "kms-phala-release-manifest.json" \
               --dir "${manifest_tmp_dir}" >/dev/null 2>&1; then
-              echo "::error::Could not download mero-kms-phala-release-manifest.json from release ${resolved_release_tag}."
+              echo "::error::Could not download kms-phala-release-manifest.json from release ${resolved_release_tag}."
               echo "::error::Cannot confirm /attest support for resolved image."
               exit 1
             fi
 
             if ! jq -e '.verification.kms_attest_endpoint == "/attest"' \
-              "${manifest_tmp_dir}/mero-kms-phala-release-manifest.json" >/dev/null 2>&1; then
+              "${manifest_tmp_dir}/kms-phala-release-manifest.json" >/dev/null 2>&1; then
               echo "::error::Release ${resolved_release_tag} manifest does not declare /attest support."
               echo "::error::Use a newer release tag or explicit kms_image override that includes /attest."
               exit 1

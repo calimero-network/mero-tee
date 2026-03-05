@@ -17,7 +17,7 @@ When you download software from GitHub releases, you need to answer:
 In `mero-tee`, verification is split into two release families:
 
 - **KMS release** on tag `X.Y.Z` (example: `2.1.10`)
-- **Locked-image release** on tag `locked-image-vX.Y.Z` (example: `locked-image-v2.1.10`)
+- **node-image-gcp release** on tag `node-image-gcp-vX.Y.Z` (example: `node-image-gcp-v2.1.10`)
 
 The scripts in this repo automate those checks.
 
@@ -37,7 +37,7 @@ These map to two operational lanes:
 - **Sigstore/Cosign**: keyless signing/verification system used for release assets.
 - **Rekor**: transparency log for signatures.
 - **SBOM**: software bill of materials.
-- **Compatibility map**: which KMS release and locked-image policy belong together.
+- **Compatibility map**: which KMS release and node-image-gcp policy belong together.
 
 ---
 
@@ -82,7 +82,7 @@ Why it matters:
 
 ---
 
-## Step B — Verify locked-image release assets
+## Step B — Verify node-image-gcp release assets
 
 ```bash
 scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
@@ -90,14 +90,14 @@ scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
 
 What this checks:
 
-- finds locked-image assets (supports `locked-image-v${TAG}` layout)
+- finds node-image-gcp assets (supports `node-image-gcp-v${TAG}` layout)
 - validates required measurement/provenance assets and checksums
 - verifies policy/provenance JSON structure and tag consistency
-- verifies Sigstore signatures for locked-image assets
+- verifies Sigstore signatures for node-image-gcp assets
 
 Why it matters:
 
-- proves locked-image measurement assets and provenance are authentic and not tampered with.
+- proves node-image-gcp measurement assets and provenance are authentic and not tampered with.
 
 ---
 
@@ -109,8 +109,8 @@ scripts/verify-release-assets.sh "${TAG}"
 
 What this checks:
 
-- runs KMS verification and locked-image verification together
-- handles the split-tag layout (`TAG` + `locked-image-vTAG`) automatically
+- runs KMS verification and node-image-gcp verification together
+- handles the split-tag layout (`TAG` + `node-image-gcp-vTAG`) automatically
 
 Why it matters:
 
@@ -156,15 +156,15 @@ You should still do:
 - `no matching signatures` / identity mismatch  
   Signature cannot be validated against expected workflow identity.
 
-- locked-image verifier can’t find assets on `TAG`  
-  Check `locked-image-vTAG` release (the script now tries this automatically).
+- node-image-gcp verifier can’t find assets on `TAG`  
+  Check `node-image-gcp-vTAG` release (the script now tries this automatically).
 
 ---
 
 ## 7) Optional deep checks
 
 - Inspect Rekor index and Sigstore search links:
-  - `mero-kms-phala-rekor-index.json`
+  - `kms-phala-rekor-index.json`
   - each entry includes `hash` and `sigstore_search_url`
 - Compare compatibility map values against `policies/index.json`.
 - Generate release-pinned merod attestation config:

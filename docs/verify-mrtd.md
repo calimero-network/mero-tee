@@ -4,7 +4,7 @@ This guide explains how end users and operators verify that a GCP TDX merod node
 
 ## Verify signed release assets first (Sigstore keyless)
 
-Before trusting `published-mrtds.json` or `merod-locked-image-policy.json`,
+Before trusting `published-mrtds.json` or `node-image-gcp-policy.json`,
 verify the release assets were signed by this repository's release workflow identity.
 
 ```bash
@@ -16,9 +16,9 @@ BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 curl -sSLO "${BASE_URL}/published-mrtds.json"
 curl -sSLO "${BASE_URL}/published-mrtds.json.sig"
 curl -sSLO "${BASE_URL}/published-mrtds.json.pem"
-curl -sSLO "${BASE_URL}/merod-locked-image-policy.json"
-curl -sSLO "${BASE_URL}/merod-locked-image-policy.json.sig"
-curl -sSLO "${BASE_URL}/merod-locked-image-policy.json.pem"
+curl -sSLO "${BASE_URL}/node-image-gcp-policy.json"
+curl -sSLO "${BASE_URL}/node-image-gcp-policy.json.sig"
+curl -sSLO "${BASE_URL}/node-image-gcp-policy.json.pem"
 
 cosign verify-blob \
   --certificate published-mrtds.json.pem \
@@ -28,14 +28,14 @@ cosign verify-blob \
   published-mrtds.json
 
 cosign verify-blob \
-  --certificate merod-locked-image-policy.json.pem \
-  --signature merod-locked-image-policy.json.sig \
+  --certificate node-image-gcp-policy.json.pem \
+  --signature node-image-gcp-policy.json.sig \
   --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  merod-locked-image-policy.json
+  node-image-gcp-policy.json
 ```
 
-For full provenance validation, verify `release-provenance.json` and `merod-locked-image-attestation-bundle.tar.gz` the same way using their matching `.sig` and `.pem` files.
+For full provenance validation, verify `release-provenance.json` and `node-image-gcp-attestation-bundle.tar.gz` the same way using their matching `.sig` and `.pem` files.
 
 ### What signatures prove (and do not prove)
 
@@ -85,7 +85,7 @@ curl -sL https://github.com/calimero-network/mero-tee/releases/download/2.1.1/pu
 
 If the node's MRTD **matches** the expected MRTD for that profile, the node is running the attested locked image.
 
-Optional hardening: compare RTMRs using `merod-locked-image-policy.json` when
+Optional hardening: compare RTMRs using `node-image-gcp-policy.json` when
 your attestation verifier exposes RTMR0..3 from a verified quote.
 
 **Example script:**

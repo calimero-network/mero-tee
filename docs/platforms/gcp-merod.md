@@ -1,4 +1,4 @@
-# GCP platform: deploy `merod` locked images (node plane)
+# GCP platform: deploy `merod` node-image-gcp images (node plane)
 
 This runbook is for operating the **GCP node image plane**.
 
@@ -11,7 +11,7 @@ For KMS on Phala, use [phala-kms.md](phala-kms.md).
 
 In the GCP lane:
 
-- `mero-tee` builds and signs locked `merod` image artifacts and publishes MRTD policy data.
+- `mero-tee` builds and signs `node-image-gcp` artifacts and publishes MRTD policy data.
 - Operators deploy those images on GCP TDX-capable instances.
 - Operators verify deployed measurements against signed release assets.
 
@@ -21,29 +21,29 @@ This lane focuses on **node image trust and measurement verification**.
 
 ## 2) What is released for this lane
 
-Locked-image assets are published under tag `locked-image-vX.Y.Z` and include:
+node-image-gcp assets are published under tag `node-image-gcp-vX.Y.Z` and include:
 
 - `published-mrtds.json`
-- `merod-locked-image-policy.json`
+- `node-image-gcp-policy.json`
 - `mrtd-*.json` profiles
-- `merod-locked-image-checksums.txt`
-- `merod-locked-image-attestation-bundle.tar.gz`
+- `node-image-gcp-checksums.txt`
+- `node-image-gcp-attestation-bundle.tar.gz`
 - signed sidecars (`.sig`, `.pem`) and provenance/SBOM assets
 
 ---
 
-## 3) Verify locked-image release assets first
+## 3) Verify node-image-gcp release assets first
 
 ```bash
 TAG=2.1.10
 scripts/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
-The verifier resolves `locked-image-v${TAG}` automatically when needed.
+The verifier resolves `node-image-gcp-v${TAG}` automatically when needed.
 
 ---
 
-## 4) Deploy a pinned locked image on GCP
+## 4) Deploy a pinned node-image-gcp image on GCP
 
 Choose the profile that matches your risk/operability requirements:
 
@@ -74,7 +74,7 @@ selected release/profile.
 ## 6) Interaction with `core` attestation paths
 
 `core` contains generic attestation tooling and TEE-mode configuration docs, but
-this GCP lane in `mero-tee` is specifically about signed locked-image artifacts
+this GCP lane in `mero-tee` is specifically about signed node-image-gcp artifacts
 and operator-side measurement validation.
 
 Reference:

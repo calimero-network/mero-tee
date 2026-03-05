@@ -1,7 +1,7 @@
-# merod locked-image policy records
+# node-image-gcp policy records
 
 This directory stores versioned, reviewable measurement policy records for
-GCP locked merod images.
+GCP node-image-gcp releases.
 
 - `<tag>.json` files (for example `2.1.4.json`) contain profile-specific
   measurement allowlists used for attestation verification:
@@ -13,5 +13,5 @@ GCP locked merod images.
 
 These files provide the governance layer between:
 
-1. **GCP locked image build + attestation evidence** (`release-node-image-gcp.yaml`), and
-2. **release trust artifacts** (`published-mrtds.json`, `merod-locked-image-policy.json`).
+1. **GCP node-image-gcp build + attestation evidence** (`release-node-image-gcp.yaml`), and
+2. **release trust artifacts** (`published-mrtds.json`, `node-image-gcp-policy.json`).

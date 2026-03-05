@@ -1,10 +1,10 @@
-name: Promote locked-image policy (PR)
+name: Promote node-image-gcp policy (PR)
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Target locked-image policy tag (for example 2.1.4)"
+        description: "Target node-image-gcp policy version (for example 2.1.4)"
         required: true
       base_branch:
         description: "Base branch for the PR"
@@ -22,10 +22,10 @@ permissions:
 
 jobs:
   promote:
-    name: Promote locked-image policy into PR
+    name: Promote node-image-gcp policy into PR
     runs-on: ubuntu-latest
     env:
-      PROMOTION_BRANCH: automation/locked-image-policy-${{ inputs.release_tag }}
+      PROMOTION_BRANCH: automation/node-image-gcp-policy-${{ inputs.release_tag }}
     steps:
       - name: Checkout base branch
         uses: actions/checkout@v6
@@ -45,7 +45,7 @@ jobs:
             exit 1
           fi
 
-          tmp_dir="${RUNNER_TEMP}/locked-image-policy-${RELEASE_TAG}"
+          tmp_dir="${RUNNER_TEMP}/node-image-gcp-policy-${RELEASE_TAG}"
           mkdir -p "${tmp_dir}"
 
           download_asset() {
@@ -69,7 +69,7 @@ jobs:
           download_asset "release-provenance.json" || true
 
           has_direct_policy="false"
-          if download_asset "merod-locked-image-policy.json"; then
+          if download_asset "node-image-gcp-policy.json"; then
             has_direct_policy="true"
           fi
 
@@ -94,7 +94,7 @@ jobs:
             echo '{"schema_version":1,"releases":[]}' > "${index_file}"
           fi
 
-          direct_policy_file="${TMP_DIR}/merod-locked-image-policy.json"
+          direct_policy_file="${TMP_DIR}/node-image-gcp-policy.json"
           published_mrtds_file="${TMP_DIR}/published-mrtds.json"
           provenance_file="${TMP_DIR}/release-provenance.json"
 
@@ -118,7 +118,7 @@ jobs:
               (.profiles["locked-read-only"].allowed_rtmr2 | type == "array") and
               (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
             ' "${direct_policy_file}" >/dev/null; then
-              echo "::error::merod-locked-image-policy.json failed schema validation"
+              echo "::error::node-image-gcp-policy.json failed schema validation"
               exit 1
             fi
 
@@ -130,7 +130,7 @@ jobs:
               --slurpfile policy "${direct_policy_file}" \
               '{
                 schema_version: 1,
-                policy_id: ("merod-locked-image/" + $tag),
+                policy_id: ("node-image-gcp/" + $tag),
                 release_tag: $tag,
                 status: "released",
                 generated_at: (now | todate),
@@ -169,7 +169,7 @@ jobs:
               --slurpfile mrtds "${published_mrtds_file}" \
               '{
                 schema_version: 1,
-                policy_id: ("merod-locked-image/" + $tag),
+                policy_id: ("node-image-gcp/" + $tag),
                 release_tag: $tag,
                 status: "released",
                 generated_at: (now | todate),
@@ -212,9 +212,11 @@ jobs:
           policy_sha256="$(sha256sum "${policy_file}" | awk '{print $1}')"
 
           tmp_index="$(mktemp)"
+          merod_release_tag="node-image-gcp-v${RELEASE_TAG}"
+
           jq \
             --arg version "${RELEASE_TAG}" \
-            --arg merod_release_tag "${RELEASE_TAG}" \
+            --arg merod_release_tag "${merod_release_tag}" \
             --arg merod_policy_path "${policy_file}" \
             --arg merod_policy_sha256 "${policy_sha256}" \
             '
@@ -235,9 +237,9 @@ jobs:
             ' "${index_file}" > "${tmp_index}"
           mv "${tmp_index}" "${index_file}"
 
-          pr_body="${RUNNER_TEMP}/locked-image-policy-promotion-pr-body.md"
+          pr_body="${RUNNER_TEMP}/node-image-gcp-policy-promotion-pr-body.md"
           {
-            echo "## Promote locked-image policy"
+            echo "## Promote node-image-gcp policy"
             echo
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Source: release assets"
@@ -265,8 +267,8 @@ jobs:
           branch: ${{ env.PROMOTION_BRANCH }}
           delete-branch: true
           draft: ${{ inputs.draft_pr }}
-          title: "chore(policy): promote locked-image policy for ${{ inputs.release_tag }}"
-          commit-message: "chore(policy): promote locked-image policy for ${{ inputs.release_tag }}"
+          title: "chore(policy): promote node-image-gcp policy for ${{ inputs.release_tag }}"
+          commit-message: "chore(policy): promote node-image-gcp policy for ${{ inputs.release_tag }}"
           body-path: ${{ steps.policy.outputs.pr_body }}
           add-paths: |
             ${{ steps.policy.outputs.policy_file }}
@@ -314,7 +316,7 @@ jobs:
           MANUAL_COMPARE_URL: ${{ steps.pr_result.outputs.manual_compare_url }}
         run: |
           {
-            echo "## Locked-image policy promotion"
+            echo "## Node-image-gcp policy promotion"
             echo
             if [[ -n "${PR_NUMBER}" ]]; then
               echo "- PR #${PR_NUMBER}: ${PR_URL}"

@@ -1,6 +1,6 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP locked image build** (Packer-based merod node images with TDX attestation).
+TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP node-image build** (Packer-based merod node images with TDX attestation).
 
 ## Contents
 
@@ -22,7 +22,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [KMS staging probe workflow (Phala)](docs/kms-staging-probe-phala.md)
 - [KMS policy promotion workflow (PR)](docs/kms-policy-promotion-pr.md)
 - [KMS policy auto pipeline](docs/kms-policy-auto-pipeline.md)
-- [Locked-image policy promotion workflow (PR)](docs/locked-image-policy-promotion-pr.md)
+- [node-image-gcp policy promotion workflow (PR)](docs/node-image-gcp-policy-promotion-pr.md)
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Release verification output examples](docs/release-verification-examples.md)
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
@@ -56,17 +56,17 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 - **mero-kms-phala**: Binaries published per platform
 - **mero-kms-phala release trust bundle**:
   - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
-  - `mero-kms-phala-checksums.txt` (SHA-256 for binary archives),
-  - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path, and per-asset purpose labels such as operator-required/auditor-required),
-  - `mero-kms-phala-container-metadata.json` (standalone signed container image metadata for auditors/operators),
-  - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
+  - `kms-phala-checksums.txt` (SHA-256 for binary archives),
+  - `kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path, and per-asset purpose labels such as operator-required/auditor-required),
+  - `kms-phala-container-metadata.json` (standalone signed container image metadata for auditors/operators),
+  - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **Compatibility map artifact**:
-  - `mero-kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
-  - Sigstore keyless signature/certificate sidecars (`mero-kms-phala-compatibility-map.json.sig`, `mero-kms-phala-compatibility-map.json.pem`)
-- **locked-image-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `merod-locked-image-checksums.txt`
-  - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
-  - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
+  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
+  - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
+- **node-image-gcp-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `node-image-gcp-checksums.txt`
+  - `node-image-gcp-policy.json` (profile-specific allowed MRTD/RTMR policy)
+  - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
 
 ### What signatures prove (and do not prove)
 
@@ -85,7 +85,7 @@ Verify KMS release assets:
 scripts/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
-Verify all available release trust assets for a tag (KMS and/or locked-image):
+Verify all available release trust assets for a tag (KMS and/or node-image-gcp):
 
 ```bash
 scripts/verify-release-assets.sh X.Y.Z
@@ -125,7 +125,7 @@ Promote staged candidates into a reviewable, versioned policy PR:
 Release automation reads the policy registry directly (`policies/kms-phala`)
 for the target crate version, so version bump + promoted policy stay aligned.
 
-Locked-image policy history is tracked under `policies/node-image-gcp` and
+node-image-gcp policy history is tracked under `policies/node-image-gcp` and
 can be promoted from release assets using
 `.github/workflows/node-image-gcp-policy-promotion-pr.yaml` (auto-dispatched by
 `release-node-image-gcp.yaml` after release publish, with manual fallback).

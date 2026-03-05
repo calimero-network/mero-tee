@@ -63,13 +63,11 @@ It validates the following are synchronized for the active release version:
 - `policies/kms-phala/<version>.json`
 - `policies/node-image-gcp/<version>.json`
 
-For `policies/index.json`, `merod_release_tag` may be either:
+For `policies/index.json`, `merod_release_tag` must be:
 
-- `<version>` or
-- `locked-image-v<version>`
+- `node-image-gcp-v<version>`
 
-This keeps release metadata internally consistent while supporting prefixed
-locked-image release tags.
+This keeps release metadata aligned with node-image release tags.
 
 ## KMS policy automation
 
@@ -79,7 +77,7 @@ same secrets as `kms-phala-staging-probe.yaml`:
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`
 
-Locked-image policy promotion (`node-image-gcp-policy-promotion-pr.yaml`) reads
+node-image-gcp policy promotion (`node-image-gcp-policy-promotion-pr.yaml`) reads
 release assets and opens a policy PR. For repositories where `github.token`
 cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
 
@@ -92,11 +90,11 @@ Release workflows now install Syft and publish signed SPDX SBOM assets together
 with the existing release checksums/manifest artifacts.
 
 - `release-node-image-gcp.yaml` publishes
-  `merod-locked-image-release-sbom.spdx.json` (plus matching `.sig` and `.pem`
-  assets) and includes it in `merod-locked-image-checksums.txt`.
+  `node-image-gcp-release-sbom.spdx.json` (plus matching `.sig` and `.pem`
+  assets) and includes it in `node-image-gcp-checksums.txt`.
 - `release-kms-phala.yaml` publishes:
-  - `mero-kms-phala-container-sbom.spdx.json`
-  - `mero-kms-phala-binaries-sbom.spdx.json`
+  - `kms-phala-container-sbom.spdx.json`
+  - `kms-phala-binaries-sbom.spdx.json`
   - matching `.sig` and `.pem` files for each SBOM
 
 ## Auto-generated release notes metadata

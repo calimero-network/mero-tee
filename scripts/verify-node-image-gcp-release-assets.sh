@@ -8,8 +8,8 @@ if [[ -z "${tag}" ]]; then
 fi
 
 logical_tag="${tag}"
-if [[ "${logical_tag}" == locked-image-v* ]]; then
-  logical_tag="${logical_tag#locked-image-v}"
+if [[ "${logical_tag}" == node-image-gcp-v* ]]; then
+  logical_tag="${logical_tag#node-image-gcp-v}"
 fi
 
 required_commands=(jq cosign curl git awk)
@@ -71,7 +71,7 @@ base_signed_assets=(
   "mrtd-debug-read-only.json"
   "mrtd-locked-read-only.json"
   "published-mrtds.json"
-  "merod-locked-image-policy.json"
+  "node-image-gcp-policy.json"
   "release-provenance.json"
 )
 
@@ -144,8 +144,8 @@ echo "Inspecting release ${tag}..."
 echo "Repository: ${repo} (download mode: $([[ "${has_gh}" == "true" ]] && echo "gh" || echo "curl"))"
 release_tag="${tag}"
 release_tag_candidates=("${tag}")
-if [[ "${tag}" != locked-image-v* ]]; then
-  release_tag_candidates+=("locked-image-v${tag}")
+if [[ "${tag}" != node-image-gcp-v* ]]; then
+  release_tag_candidates+=("node-image-gcp-v${tag}")
 fi
 release_json=""
 for attempt in $(seq 1 10); do
@@ -157,9 +157,9 @@ for attempt in $(seq 1 10); do
       continue
     fi
 
-    candidate_bundle_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-attestation-bundle.tar.gz" "attestation-artifacts.tar.gz" || true)"
-    candidate_sbom_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-release-sbom.spdx.json" "locked-image-release-sbom.spdx.json" || true)"
-    candidate_checksums_asset="$(select_release_asset "${candidate_json}" "merod-locked-image-checksums.txt" "locked-image-checksums.txt" || true)"
+    candidate_bundle_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-attestation-bundle.tar.gz" || true)"
+    candidate_sbom_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-release-sbom.spdx.json" || true)"
+    candidate_checksums_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-checksums.txt" || true)"
 
     if [[ -z "${candidate_bundle_asset}" || -z "${candidate_sbom_asset}" || -z "${candidate_checksums_asset}" ]]; then
       continue
@@ -205,10 +205,10 @@ for attempt in $(seq 1 10); do
   sleep 6
 done
 
-echo "Resolved release tag for locked-image assets: ${release_tag}"
-echo "Locked-image checksums asset: ${checksums_asset}"
-echo "Locked-image SBOM asset: ${sbom_asset}"
-echo "Locked-image attestation bundle asset: ${bundle_asset}"
+echo "Resolved release tag for node-image-gcp assets: ${release_tag}"
+echo "Node-image-gcp checksums asset: ${checksums_asset}"
+echo "Node-image-gcp SBOM asset: ${sbom_asset}"
+echo "Node-image-gcp attestation bundle asset: ${bundle_asset}"
 
 for pattern in "${required_assets[@]}"; do
   if ! download_asset "${release_tag}" "${pattern}" "${tmp_dir}"; then
@@ -222,7 +222,7 @@ for required in \
   "mrtd-debug-read-only.json" \
   "mrtd-locked-read-only.json" \
   "published-mrtds.json" \
-  "merod-locked-image-policy.json" \
+  "node-image-gcp-policy.json" \
   "release-provenance.json" \
   "${bundle_asset}" \
   "${sbom_asset}"; do
@@ -266,7 +266,7 @@ jq -e --arg tag "${logical_tag}" '
   (.profiles["locked-read-only"].allowed_rtmr1 | type == "array") and
   (.profiles["locked-read-only"].allowed_rtmr2 | type == "array") and
   (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
-' "${tmp_dir}/merod-locked-image-policy.json" >/dev/null
+' "${tmp_dir}/node-image-gcp-policy.json" >/dev/null
 
 jq -e --arg tag "${logical_tag}" '
   .tag == $tag and
