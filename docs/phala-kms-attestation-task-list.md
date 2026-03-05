@@ -58,8 +58,8 @@ Legend:
   - `kms_policy_promotion_pr.yaml` writes `policies/mero-kms-phala/<tag>.json`
     and opens a pull request for approval before release publication.
 - [x] Use versioned policy registry as release input source of truth.
-  - `release-mero-kms-phala.yaml` reads `policies/mero-kms-phala/index.json`
-    and the per-tag policy file instead of repository variable overrides.
+  - `release-mero-kms-phala.yaml` reads `policies/index.json` and the mapped
+    per-tag policy file instead of repository variable overrides.
 
 ## Phase 3: rollout and operational hardening
 
