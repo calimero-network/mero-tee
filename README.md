@@ -25,9 +25,11 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
 - [Architecture & Verification](docs/ARCHITECTURE.md)
+- [Release taxonomy](docs/RELEASE_TAXONOMY.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
 - [mero-kms-phala README](crates/mero-kms-phala/README.md)
 
 ## Building mero-kms-phala
