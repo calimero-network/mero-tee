@@ -38,6 +38,17 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 The workflow runs on push to `master` when `packer/gcp/merod/versions.json` changes.
 
+## PR documentation guard
+
+Pull requests that modify any of the following paths must also include a
+documentation update in `docs/**` or `README.md`:
+
+- `.github/workflows/**`
+- `scripts/**`
+- `packer/**`
+
+This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
+
 ## KMS policy automation
 
 Policy probe/promotion automation (`kms_policy_auto_pipeline.yaml`) reuses the
@@ -52,3 +63,16 @@ cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
 
 `gcp_locked_image_build.yaml` auto-dispatches this promotion workflow after
 publishing release assets.
+
+## Release SBOM assets
+
+Release workflows now install Syft and publish signed SPDX SBOM assets together
+with the existing release checksums/manifest artifacts.
+
+- `gcp_locked_image_build.yaml` publishes
+  `locked-image-release-sbom.spdx.json` (plus matching `.sig` and `.pem`
+  assets) and includes it in `locked-image-checksums.txt`.
+- `release-mero-kms-phala.yaml` publishes:
+  - `mero-kms-phala-container-sbom.spdx.json`
+  - `mero-kms-phala-binaries-sbom.spdx.json`
+  - matching `.sig` and `.pem` files for each SBOM

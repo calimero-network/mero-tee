@@ -69,6 +69,7 @@ signed_assets=(
   "merod-locked-image-policy.json"
   "release-provenance.json"
   "attestation-artifacts.tar.gz"
+  "locked-image-release-sbom.spdx.json"
   "locked-image-checksums.txt"
 )
 
@@ -162,7 +163,8 @@ for required in \
   "published-mrtds.json" \
   "merod-locked-image-policy.json" \
   "release-provenance.json" \
-  "attestation-artifacts.tar.gz"; do
+  "attestation-artifacts.tar.gz" \
+  "locked-image-release-sbom.spdx.json"; do
   if ! awk -v req="${required}" '
     {
       # Handle optional CRLF artifacts safely when reading from downloaded assets.

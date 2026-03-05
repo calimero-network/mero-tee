@@ -36,10 +36,11 @@ mero-tee provides:
 
 ## Verification
 
-### What Signing Proves
+### What signatures prove (and do not prove)
 
-- **GPG/Sigstore**: File came from mero-tee maintainers; not tampered in transit
-- **Does NOT prove**: Content is honest; build matches source
+- **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
+- **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
+- **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
 ### What Reproducible Build Proves
 
