@@ -1369,6 +1369,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: ${{ needs.preflight.outputs.image_version }}
+          target_commitish: ${{ github.sha }}
           body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
           files: |
