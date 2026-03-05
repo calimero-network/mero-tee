@@ -50,6 +50,7 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
 
 - **mero-kms-phala**: Binaries published per platform
 - **mero-kms-phala release trust bundle**:
+  - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
   - `mero-kms-phala-checksums.txt` (SHA-256 for binary archives),
   - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path),
   - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
