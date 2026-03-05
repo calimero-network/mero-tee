@@ -418,6 +418,7 @@ jobs:
                 "mero-kms-phala-checksums.txt": ["operator-required", "auditor-required"],
                 "mero-kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
                 "mero-kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
+                "mero-kms-phala-container-metadata.json": ["operator-required", "auditor-required"],
                 "mero-kms-phala-rekor-index.json": ["auditor-required"],
                 "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
                 "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
