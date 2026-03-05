@@ -296,6 +296,7 @@ jobs:
             echo "::error::Container image digest is empty"
             exit 1
           fi
+          image_ref="${image_name}@${image_digest}"
 
           cat > /tmp/mero-kms-tags.txt <<'EOF'
           ${{ needs.release-container.outputs.image_tags }}
@@ -427,6 +428,34 @@ jobs:
               merod_config_path: "tee.kms.phala.attestation"
             }' > release-assets/mero-kms-phala-attestation-policy.json
 
+          {
+            echo "## mero-kms-phala release ${{ needs.prepare.outputs.version }}"
+            echo ""
+            echo "- Commit: \`${{ needs.prepare.outputs.target_commit }}\`"
+            echo "- Container image (digest-pinned): \`${image_ref}\`"
+            echo "- Policy registry source: \`${policy_registry_source_path}\`"
+            echo ""
+            echo "### Binary archives (SHA-256)"
+            echo ""
+            echo "| Archive | SHA-256 |"
+            echo "|---|---|"
+            while read -r checksum archive; do
+              echo "| \`${archive}\` | \`${checksum}\` |"
+            done < release-assets/mero-kms-phala-checksums.txt
+            echo ""
+            echo "### Verify release assets"
+            echo ""
+            echo "\`\`\`bash"
+            echo "scripts/verify_mero_kms_release_assets.sh ${{ needs.prepare.outputs.version }}"
+            echo "\`\`\`"
+            echo ""
+            echo "### Generate merod attestation config (release-pinned)"
+            echo ""
+            echo "\`\`\`bash"
+            echo "scripts/generate_merod_kms_attestation_config.sh ${{ needs.prepare.outputs.version }} https://<kms-url>/"
+            echo "\`\`\`"
+          } > release-assets/release-notes.md
+
       - name: Install cosign for keyless signing
         uses: sigstore/cosign-installer@v3
 
@@ -482,6 +511,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: ${{ needs.prepare.outputs.version }}
+          body_path: release-assets/release-notes.md
           fail_on_unmatched_files: true
           files: |
             release-assets/*.tar.gz.sig
