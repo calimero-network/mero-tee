@@ -201,7 +201,7 @@ jobs:
 
       - name: Setup gcloud
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
 
       - name: Validate GCP compute access
         id: gcp_access
@@ -829,7 +829,7 @@ jobs:
           export_environment_variables: true
 
       - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
 
       - name: Sweep current-run and stale CI attestation resources
         run: |
