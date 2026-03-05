@@ -17,11 +17,14 @@ When changing release automation, policy workflows, or verification scripts:
 
 | Document | Primary source | Related workflows/scripts | Audience |
 |---|---|---|---|
-| `docs/ARCHITECTURE.md` | System trust model and component boundaries | `release-mero-kms-phala.yaml`, `gcp_locked_image_build.yaml` | Operators, auditors |
+| `docs/ARCHITECTURE.md` | Trust boundaries, enforcement points, and `core` vs `mero-tee` responsibilities | `crates/mero-kms-phala/src/handlers.rs`, `core/crates/merod/src/kms.rs`, release workflows | Operators, auditors |
 | `docs/TRUST_AND_VERIFICATION.md` | Consolidated trust guarantees and verification entry point | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
 | `docs/TEE_VERIFICATION_FOR_BEGINNERS.md` | Step-by-step verification guide for readers new to TEE and attestation | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
-| `docs/deploy-phala.md` | Phala deployment runbook | `scripts/apply_merod_kms_attestation_config.sh` | Operators |
-| `docs/deploy-gcp.md` | GCP locked-image deployment runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml` | Operators |
+| `docs/platforms/README.md` | Platform lane navigation (`Phala KMS` vs `GCP node image`) | `docs/platforms/phala-kms.md`, `docs/platforms/gcp-merod.md` | Operators |
+| `docs/platforms/phala-kms.md` | Phala KMS-plane deployment/operations runbook | `crates/mero-kms-phala/src/handlers.rs`, `scripts/apply_merod_kms_attestation_config.sh` | Operators |
+| `docs/platforms/gcp-merod.md` | GCP locked-image node-plane deployment/verification runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml`, `scripts/verify_locked_image_release_assets.sh` | Operators |
+| `docs/deploy-phala.md` | Compatibility pointer to Phala platform runbook | `docs/platforms/phala-kms.md` | Operators |
+| `docs/deploy-gcp.md` | Compatibility pointer to GCP platform runbook | `docs/platforms/gcp-merod.md` | Operators |
 | `docs/verify-mrtd.md` | End-user/operator verification flow | `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_tdx_quote_ita.py` | Operators, auditors |
 | `docs/MINIMAL_DOWNLOAD_SETS.md` | Minimal asset sets for quick verify vs full audit | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
 | `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |

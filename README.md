@@ -12,8 +12,9 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 ## Quick Links
 
-- [Deploy on GCP](docs/deploy-gcp.md) – GCP TDX locked images
-- [Deploy on Phala](docs/deploy-phala.md) – Phala Cloud CVM
+- [Platform runbooks](docs/platforms/README.md) – deployment lanes by responsibility
+- [Phala KMS lane](docs/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` (KMS plane)
+- [GCP node lane](docs/platforms/gcp-merod.md) – deploy locked `merod` images (node plane)
 - [Phala KMS hardening proposal](docs/phala-kms-key-protection-proposal.md)
 - [Direct Phala KMS design](docs/phala-direct-kms-design.md)
 - [Phala KMS attestation task list (mero-tee)](docs/phala-kms-attestation-task-list.md)
@@ -25,7 +26,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Verify MRTD](docs/verify-mrtd.md) – Verify nodes run the attested image
 - [Release verification output examples](docs/release-verification-examples.md)
 - [Migration & Implementation Plan](docs/MIGRATION_PLAN.md)
-- [Architecture & Verification](docs/ARCHITECTURE.md)
+- [Architecture & verification boundaries](docs/ARCHITECTURE.md)
 - [TEE verification for beginners](docs/TEE_VERIFICATION_FOR_BEGINNERS.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)

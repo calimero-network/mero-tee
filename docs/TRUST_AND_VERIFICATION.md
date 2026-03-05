@@ -9,6 +9,11 @@ This repository publishes two trust-asset families per release tag:
 1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
 2. **Locked-image assets** on tag `locked-image-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
 
+These map to two deployment lanes with different responsibilities:
+
+- **Phala KMS lane** (operate `mero-kms-phala`): [platforms/phala-kms.md](platforms/phala-kms.md)
+- **GCP node lane** (deploy locked `merod` image): [platforms/gcp-merod.md](platforms/gcp-merod.md)
+
 ## What signatures prove (and do not prove)
 
 - **Proves**: an artifact was produced by the expected GitHub Actions workflow identity and was not modified after signing.
@@ -50,6 +55,7 @@ OIDC issuer is expected to be:
 ## Related docs
 
 - [TEE verification for beginners](TEE_VERIFICATION_FOR_BEGINNERS.md)
+- [Platform runbooks](platforms/README.md)
 - [Verify MRTD](verify-mrtd.md)
 - [Release verification examples](release-verification-examples.md)
 - [Architecture](ARCHITECTURE.md)

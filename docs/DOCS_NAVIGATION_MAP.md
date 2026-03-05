@@ -10,7 +10,8 @@ Use these links in PR descriptions, release notes, and issue comments to avoid a
 |---|---|---|
 | [README.md](../README.md) | Operator-facing repository entry point | [`#quick-links`](../README.md#quick-links), [`#releases`](../README.md#releases), [`#what-signatures-prove-and-do-not-prove`](../README.md#what-signatures-prove-and-do-not-prove) |
 | [docs/DOCS_INDEX.md](DOCS_INDEX.md) | Source-of-truth mapping between docs and automation | [`#source-mapping`](DOCS_INDEX.md#source-mapping), [`#release-trust-artifact-references`](DOCS_INDEX.md#release-trust-artifact-references) |
-| [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Trust model and verification concepts | [`#trust-model`](ARCHITECTURE.md#trust-model), [`#verification`](ARCHITECTURE.md#verification) |
+| [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Trust boundaries and attestation enforcement points | [`#repository-boundaries`](ARCHITECTURE.md#repository-boundaries), [`#platform-lanes-not-symmetric-deployments`](ARCHITECTURE.md#platform-lanes-not-symmetric-deployments), [`#attestation-enforcement-points`](ARCHITECTURE.md#attestation-enforcement-points) |
+| [docs/platforms/README.md](platforms/README.md) | Platform-specific navigation entrypoint | [`#runbooks`](platforms/README.md#runbooks) |
 
 ## Verification and release docs
 
@@ -27,8 +28,8 @@ Use these links in PR descriptions, release notes, and issue comments to avoid a
 | Page | Operational phase | Key anchors |
 |---|---|---|
 | [docs/kms-blue-green-rollout.md](kms-blue-green-rollout.md) | KMS rollout and rollback operations | [`#bluegreen-deployment-steps`](kms-blue-green-rollout.md#bluegreen-deployment-steps), [`#rollback`](kms-blue-green-rollout.md#rollback), [`#guardrails`](kms-blue-green-rollout.md#guardrails) |
-| [docs/deploy-phala.md](deploy-phala.md) | Deploying merod with KMS attestation on Phala | [`#setting-up-merod-for-tee`](deploy-phala.md#setting-up-merod-for-tee), [`#production-pinning-mrtdrtmr`](deploy-phala.md#production-pinning-mrtdrtmr) |
-| [docs/deploy-gcp.md](deploy-gcp.md) | Deploying locked-image flow on GCP | [`#deployment-options`](deploy-gcp.md#deployment-options), [`#verification`](deploy-gcp.md#verification) |
+| [docs/platforms/phala-kms.md](platforms/phala-kms.md) | Phala KMS-plane deployment and operations | [`#1-scope-and-responsibility`](platforms/phala-kms.md#1-scope-and-responsibility), [`#5-configure-merod-with-release-pinned-attestation-policy`](platforms/phala-kms.md#5-configure-merod-with-release-pinned-attestation-policy), [`#7-common-mistakes-to-avoid`](platforms/phala-kms.md#7-common-mistakes-to-avoid) |
+| [docs/platforms/gcp-merod.md](platforms/gcp-merod.md) | GCP node-plane locked-image deployment and verification | [`#3-verify-locked-image-release-assets-first`](platforms/gcp-merod.md#3-verify-locked-image-release-assets-first), [`#5-verify-runtime-measurements-after-boot`](platforms/gcp-merod.md#5-verify-runtime-measurements-after-boot), [`#7-common-mistakes-to-avoid`](platforms/gcp-merod.md#7-common-mistakes-to-avoid) |
 
 ## Maintainer update checklist
 

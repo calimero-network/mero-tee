@@ -162,5 +162,5 @@ Do not use mock attestation in production.
 
 For deployment guides, see:
 
-- [Deploy on Phala](https://github.com/calimero-network/mero-tee/blob/master/docs/deploy-phala.md) – Phala Cloud CVM with Docker Compose
-- [Deploy on GCP](https://github.com/calimero-network/mero-tee/blob/master/docs/deploy-gcp.md) – GCP TDX locked images
+- [Phala KMS lane](https://github.com/calimero-network/mero-tee/blob/master/docs/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` on Phala
+- [GCP node lane](https://github.com/calimero-network/mero-tee/blob/master/docs/platforms/gcp-merod.md) – deploy locked `merod` images on GCP

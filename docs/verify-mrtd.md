@@ -152,6 +152,6 @@ A matching MRTD proves the node booted from the locked image. The merod binary i
 
 ## See Also
 
-- [deploy-gcp.md](deploy-gcp.md) – Deployment overview
-- [ARCHITECTURE.md](ARCHITECTURE.md) – Trust model and verification flow
+- [platforms/gcp-merod.md](platforms/gcp-merod.md) – GCP node-plane deployment overview
+- [ARCHITECTURE.md](ARCHITECTURE.md) – Trust boundaries and enforcement points
 - [core tee-mode](https://github.com/calimero-network/core/blob/master/docs/tee-mode.md) – merod TEE configuration

@@ -21,6 +21,11 @@ In `mero-tee`, verification is split into two release families:
 
 The scripts in this repo automate those checks.
 
+These map to two operational lanes:
+
+- **Phala KMS lane**: deploy/operate `mero-kms-phala`
+- **GCP node lane**: deploy locked `merod` images and verify node measurements
+
 ---
 
 ## 2) Quick glossary (plain language)
