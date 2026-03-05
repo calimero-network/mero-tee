@@ -76,3 +76,20 @@ with the existing release checksums/manifest artifacts.
   - `mero-kms-phala-container-sbom.spdx.json`
   - `mero-kms-phala-binaries-sbom.spdx.json`
   - matching `.sig` and `.pem` files for each SBOM
+
+## Auto-generated release notes metadata
+
+Release workflows generate release notes from workflow metadata and publish them
+as the GitHub Release body (`body_path`).
+
+- `release-mero-kms-phala.yaml` includes:
+  - tag and commit SHA
+  - workflow run reference
+  - container digest reference
+  - compatibility/policy source pointers
+  - verification command snippets
+- `gcp_locked_image_build.yaml` includes:
+  - tag and commit SHA
+  - workflow run reference
+  - profile MRTD summary
+  - verification command snippets
