@@ -417,7 +417,10 @@ jobs:
                   bytes_32_63: "binding_or_default_domain_separator"
                 },
                 policy_registry_entry_path: $policy_registry_source_path,
-                attestation_policy_asset: "mero-kms-phala-attestation-policy.json"
+                attestation_policy_asset: "mero-kms-phala-attestation-policy.json",
+                rekor: {
+                  index_asset: "mero-kms-phala-rekor-index.json"
+                }
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
 
@@ -576,11 +579,6 @@ jobs:
               generated_at: (now | todate),
               entries: $entries
             }' > release-assets/mero-kms-phala-rekor-index.json
-
-          jq --arg index_asset "mero-kms-phala-rekor-index.json" \
-            '.verification.rekor = {index_asset: $index_asset}' \
-            release-assets/mero-kms-phala-release-manifest.json > /tmp/manifest-with-rekor.json
-          mv /tmp/manifest-with-rekor.json release-assets/mero-kms-phala-release-manifest.json
 
           post_assets=(
             release-assets/mero-kms-phala-rekor-index.json
