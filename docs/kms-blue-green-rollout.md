@@ -49,7 +49,7 @@ scripts/verify_mero_kms_release_assets.sh X.Y.Z
   automatically after version bump merge.
 - Fallback: run `kms_staging_probe_phala.yaml` and then `kms_policy_promotion_pr.yaml` manually.
 - Merge the policy PR so `policies/mero-kms-phala/<X.Y.Z>.json` is present.
-- Keep `policies/mero-kms-phala/index.json` updated as the historical registry.
+- Keep `policies/index.json` updated as the historical registry.
 - Release automation reads this registry entry for policy values.
 
 ### 3. Generate pinned merod TEE config
