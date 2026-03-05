@@ -15,8 +15,7 @@ use calimero_tee_attestation::{
 };
 use dstack_sdk::dstack_client::DstackClient;
 use libp2p_identity::PublicKey;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::random;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
@@ -302,8 +301,7 @@ async fn challenge_handler(
     State(state): State<AppState>,
     Json(request): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServiceError> {
-    let mut nonce = [0u8; 32];
-    OsRng.fill_bytes(&mut nonce);
+    let nonce: [u8; 32] = random();
 
     let challenge_id = create_challenge_id();
     let now = unix_now_secs()?;
@@ -473,8 +471,7 @@ fn unix_now_secs() -> Result<u64, ServiceError> {
 }
 
 fn create_challenge_id() -> String {
-    let mut raw = [0u8; 16];
-    OsRng.fill_bytes(&mut raw);
+    let raw: [u8; 16] = random();
     hex::encode(raw)
 }
 
