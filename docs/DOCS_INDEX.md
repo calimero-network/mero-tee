@@ -22,6 +22,7 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/deploy-phala.md` | Phala deployment runbook | `scripts/apply_merod_kms_attestation_config.sh` | Operators |
 | `docs/deploy-gcp.md` | GCP locked-image deployment runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml` | Operators |
 | `docs/verify-mrtd.md` | End-user/operator verification flow | `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_tdx_quote_ita.py` | Operators, auditors |
+| `docs/MINIMAL_DOWNLOAD_SETS.md` | Minimal asset sets for quick verify vs full audit | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
 | `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |
 | `docs/kms-blue-green-rollout.md` | Decision-tree rollout and rollback procedure | `scripts/verify_mero_kms_release_assets.sh`, `scripts/generate_merod_kms_attestation_config.sh` | Operators |
 | `docs/kms-staging-probe-phala.md` | Staging probe process for KMS policy candidates | `kms_staging_probe_phala.yaml`, `scripts/extract_tdx_policy_candidates.py` | Release engineers |
