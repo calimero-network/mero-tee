@@ -322,7 +322,7 @@ jobs:
                 kms_policy_path: $entry.kms_policy_path,
                 merod_policy_path: $entry.merod_policy_path
               }
-            }' > release-assets/mero-tee-compatibility-map.json
+            }' > release-assets/mero-kms-phala-compatibility-map.json
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
@@ -423,7 +423,7 @@ jobs:
                 "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
                 "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
                 "mero-kms-phala-binaries-sbom.spdx.json": ["auditor-required"],
-                "mero-tee-compatibility-map.json": ["operator-required", "auditor-required"]
+                "mero-kms-phala-compatibility-map.json": ["operator-required", "auditor-required"]
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
 
@@ -492,10 +492,10 @@ jobs:
             mero-kms-phala-release-manifest.json \
             mero-kms-phala-attestation-policy.json
 
-          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/mero-tee-compatibility-map.json)"
-          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/mero-tee-compatibility-map.json)"
+          compatibility_kms_tag="$(jq -r '.compatibility.kms_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_merod_tag="$(jq -r '.compatibility.merod_release_tag' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_path="$(jq -r '.compatibility.kms_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
+          compatibility_merod_policy_path="$(jq -r '.compatibility.merod_policy_path' release-assets/mero-kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
@@ -547,7 +547,7 @@ jobs:
             echo "- Container metadata asset: \`mero-kms-phala-container-metadata.json\`"
             echo "- \`mero-kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
             echo "- \`mero-kms-phala-container-sbom.spdx.json\` and \`mero-kms-phala-binaries-sbom.spdx.json\`"
-            echo "- \`mero-tee-compatibility-map.json\`"
+            echo "- \`mero-kms-phala-compatibility-map.json\`"
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
@@ -573,7 +573,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json
           )
 
           for asset in "${assets_for_rekor[@]}"; do
@@ -653,7 +653,7 @@ jobs:
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json
             release-assets/mero-kms-phala-rekor-index.json
           )
 
@@ -702,10 +702,10 @@ jobs:
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.pem
             release-assets/mero-kms-phala-binaries-sbom.spdx.json.bundle.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
-            release-assets/mero-tee-compatibility-map.json
-            release-assets/mero-tee-compatibility-map.json.sig
-            release-assets/mero-tee-compatibility-map.json.pem
-            release-assets/mero-tee-compatibility-map.json.bundle.json
+            release-assets/mero-kms-phala-compatibility-map.json
+            release-assets/mero-kms-phala-compatibility-map.json.sig
+            release-assets/mero-kms-phala-compatibility-map.json.pem
+            release-assets/mero-kms-phala-compatibility-map.json.bundle.json
             release-assets/mero-kms-phala-attestation-policy.json.bundle.json
             release-assets/mero-kms-phala-rekor-index.json
             release-assets/mero-kms-phala-rekor-index.json.sig

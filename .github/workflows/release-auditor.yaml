@@ -55,7 +55,7 @@ jobs:
             assets_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name]')"
 
             has_kms_assets="$(jq -r 'any(.[]; . == "mero-kms-phala-checksums.txt")' <<< "${assets_json}")"
-            has_locked_assets="$(jq -r 'any(.[]; . == "locked-image-checksums.txt")' <<< "${assets_json}")"
+            has_locked_assets="$(jq -r 'any(.[]; . == "merod-locked-image-checksums.txt" or . == "locked-image-checksums.txt")' <<< "${assets_json}")"
 
             if [[ "${has_kms_assets}" != "true" && "${has_locked_assets}" != "true" ]]; then
               echo "Skipping ${tag}: no known trust-asset set found."
