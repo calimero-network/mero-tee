@@ -9,7 +9,7 @@
       "merod_release_tag": "2.1.6",
       "merod_policy_path": "policies/merod-locked-image/2.1.6.json",
       "merod_policy_sha256": "a5e0278b4487a9a8a35dcdeb86d9ca10dac4af264879c95419bf1549228126ff",
-      "updated_at": "2026-03-05T14:32:47Z"
+      "updated_at": "2026-03-05T14:37:19Z"
     },
     {
       "version": "2.1.6",
