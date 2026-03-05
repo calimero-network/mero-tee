@@ -38,6 +38,17 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 The workflow runs on push to `master` when `packer/gcp/merod/versions.json` changes.
 
+## PR documentation guard
+
+Pull requests that modify any of the following paths must also include a
+documentation update in `docs/**` or `README.md`:
+
+- `.github/workflows/**`
+- `scripts/**`
+- `packer/**`
+
+This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
+
 ## KMS policy automation
 
 Policy probe/promotion automation (`kms_policy_auto_pipeline.yaml`) reuses the
