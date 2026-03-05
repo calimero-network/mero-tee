@@ -1,0 +1,6 @@
+[advisories]
+ignore = [
+  # Transitive through calimero-tee-attestation/dcap stack.
+  # No patched rsa release is available yet.
+  "RUSTSEC-2023-0071",
+]
