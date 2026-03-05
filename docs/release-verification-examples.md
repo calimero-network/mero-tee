@@ -16,6 +16,11 @@ The KMS release workflow also publishes a signed convenience archive:
 `mero-kms-phala-trust-bundle.tar.gz` (+ `.sig` / `.pem`), which packages
 checksums, release manifest, and attestation policy.
 
+It also publishes `mero-kms-phala-rekor-index.json`, which records Rekor
+metadata for each signed asset (`log_index`, `integrated_time`, `log_id`).
+`log_id` is read from Sigstore bundle JSON at
+`.verificationMaterial.tlogEntries[0].logId.keyId` (protobuf JSON camelCase).
+
 ### Expected success output
 
 ```text
