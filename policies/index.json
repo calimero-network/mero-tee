@@ -5,7 +5,7 @@
       "version": "2.1.7",
       "kms_release_tag": "2.1.7",
       "kms_policy_path": "policies/mero-kms-phala/2.1.7.json",
-      "kms_policy_sha256": "808c63550bd5e9084d36c9d239d02f18bd5e5e02267d9aecaf20f6865dface8e",
+      "kms_policy_sha256": "5fc303bd9142a5fc41e7725685e9dc5af1279f81973d034d7155cf09b87ef04b",
       "merod_release_tag": "2.1.6",
       "merod_policy_path": "policies/merod-locked-image/2.1.6.json",
       "merod_policy_sha256": "a5e0278b4487a9a8a35dcdeb86d9ca10dac4af264879c95419bf1549228126ff",
