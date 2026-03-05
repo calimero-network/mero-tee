@@ -239,7 +239,7 @@ jobs:
 
       - name: Build and push image
         id: build_and_push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: .github/workflows/deps/prebuilt.mero-kms-phala.Dockerfile
