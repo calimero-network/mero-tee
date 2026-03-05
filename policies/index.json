@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "2.1.4",
+      "kms_release_tag": "2.1.4",
+      "kms_policy_path": "policies/mero-kms-phala/2.1.4.json",
+      "kms_policy_sha256": "4a79868b9fa0fe46ba1b80ad56259bffc8fac58fb5cdbadda1924c9db6b9cf2a",
+      "merod_release_tag": "2.1.4",
+      "merod_policy_path": "policies/merod-locked-image/2.1.4.json",
+      "merod_policy_sha256": "3a58d314e59b618d3c72a1cbe30e1ac04706ad8eaedc1d49c79a4d78e9be15e5",
+      "updated_at": "2026-03-04T23:01:55Z"
+    }
+  ]
+}

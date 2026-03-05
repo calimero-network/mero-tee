@@ -26,7 +26,7 @@ asset publication, and can also be run manually for backfills.
    empty) for older releases.
 4. Updates:
    - `policies/merod-locked-image/<tag>.json`
-   - `policies/merod-locked-image/index.json`
+   - `policies/index.json`
 5. Opens (or attempts to open) a PR.
 
 If PR creation is blocked for the workflow token, the branch is still pushed and
