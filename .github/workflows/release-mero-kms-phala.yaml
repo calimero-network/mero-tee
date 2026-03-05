@@ -502,6 +502,7 @@ jobs:
             echo "### Trust bundle"
             echo ""
             echo "- \`mero-kms-phala-trust-bundle.tar.gz\` (checksums, manifest, policy)"
+            echo "- Rekor index asset: \`mero-kms-phala-rekor-index.json\`"
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
@@ -519,10 +520,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          signed_assets=(
+          assets_for_rekor=(
             artifacts/*.tar.gz
             release-assets/mero-kms-phala-checksums.txt
-            release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-container-sbom.spdx.json
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
@@ -530,12 +530,69 @@ jobs:
             release-assets/mero-tee-compatibility-map.json
           )
 
-          for asset in "${signed_assets[@]}"; do
+          for asset in "${assets_for_rekor[@]}"; do
             base_name="$(basename "${asset}")"
             cosign sign-blob \
               --yes \
               --output-signature "release-assets/${base_name}.sig" \
               --output-certificate "release-assets/${base_name}.pem" \
+              --bundle "release-assets/${base_name}.bundle.json" \
+              "${asset}"
+          done
+
+          rekor_entries_json="$(
+            for asset in "${assets_for_rekor[@]}"; do
+              base_name="$(basename "${asset}")"
+              bundle_file="release-assets/${base_name}.bundle.json"
+              log_index="$(jq -r '.verificationMaterial.tlogEntries[0].logIndex // .VerificationMaterial.tlogEntries[0].logIndex // .tlogEntries[0].logIndex // empty' "${bundle_file}")"
+              integrated_time="$(jq -r '.verificationMaterial.tlogEntries[0].integratedTime // .VerificationMaterial.tlogEntries[0].integratedTime // .tlogEntries[0].integratedTime // empty' "${bundle_file}")"
+              log_id="$(jq -r '.verificationMaterial.tlogEntries[0].logId.keyId // .VerificationMaterial.tlogEntries[0].logId.keyId // .tlogEntries[0].logId.keyId // empty' "${bundle_file}")"
+              jq -nc \
+                --arg asset "${base_name}" \
+                --arg bundle_asset "${base_name}.bundle.json" \
+                --arg log_index "${log_index}" \
+                --arg integrated_time "${integrated_time}" \
+                --arg log_id "${log_id}" \
+                '{
+                  asset: $asset,
+                  bundle_asset: $bundle_asset,
+                  log_index: $log_index,
+                  integrated_time: $integrated_time,
+                  log_id: $log_id
+                }'
+            done | jq -s '.'
+          )"
+
+          jq -n \
+            --arg tag "${{ needs.prepare.outputs.version }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_attempt "${{ github.run_attempt }}" \
+            --argjson entries "${rekor_entries_json}" \
+            '{
+              schema_version: 1,
+              tag: $tag,
+              workflow_run_id: $run_id,
+              workflow_run_attempt: $run_attempt,
+              generated_at: (now | todate),
+              entries: $entries
+            }' > release-assets/mero-kms-phala-rekor-index.json
+
+          jq --arg index_asset "mero-kms-phala-rekor-index.json" \
+            '.verification.rekor = {index_asset: $index_asset}' \
+            release-assets/mero-kms-phala-release-manifest.json > /tmp/manifest-with-rekor.json
+          mv /tmp/manifest-with-rekor.json release-assets/mero-kms-phala-release-manifest.json
+
+          post_assets=(
+            release-assets/mero-kms-phala-rekor-index.json
+            release-assets/mero-kms-phala-release-manifest.json
+          )
+          for asset in "${post_assets[@]}"; do
+            base_name="$(basename "${asset}")"
+            cosign sign-blob \
+              --yes \
+              --output-signature "release-assets/${base_name}.sig" \
+              --output-certificate "release-assets/${base_name}.pem" \
+              --bundle "release-assets/${base_name}.bundle.json" \
               "${asset}"
           done
 
@@ -555,6 +612,7 @@ jobs:
             release-assets/mero-kms-phala-binaries-sbom.spdx.json
             release-assets/mero-kms-phala-trust-bundle.tar.gz
             release-assets/mero-tee-compatibility-map.json
+            release-assets/mero-kms-phala-rekor-index.json
           )
 
           for asset in "${signed_assets[@]}"; do
@@ -584,6 +642,7 @@ jobs:
             release-assets/mero-kms-phala-release-manifest.json
             release-assets/mero-kms-phala-release-manifest.json.sig
             release-assets/mero-kms-phala-release-manifest.json.pem
+            release-assets/mero-kms-phala-release-manifest.json.bundle.json
             release-assets/mero-kms-phala-attestation-policy.json
             release-assets/mero-kms-phala-attestation-policy.json.sig
             release-assets/mero-kms-phala-attestation-policy.json.pem
@@ -599,6 +658,13 @@ jobs:
             release-assets/mero-tee-compatibility-map.json
             release-assets/mero-tee-compatibility-map.json.sig
             release-assets/mero-tee-compatibility-map.json.pem
+            release-assets/mero-kms-phala-attestation-policy.json.bundle.json
+            release-assets/mero-kms-phala-rekor-index.json
+            release-assets/mero-kms-phala-rekor-index.json.sig
+            release-assets/mero-kms-phala-rekor-index.json.pem
+            release-assets/mero-kms-phala-rekor-index.json.bundle.json
+            release-assets/mero-kms-phala-checksums.txt.bundle.json
+            release-assets/*.tar.gz.bundle.json
 
       - name: Smoke test published mero-kms release assets
         env:
