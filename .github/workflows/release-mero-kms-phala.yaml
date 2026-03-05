@@ -131,7 +131,7 @@ jobs:
 
   release-binaries:
     name: Release Binaries
-    if: needs.prepare.outputs.binary_release == 'true'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     needs: [prepare, build-binaries]
     concurrency:
@@ -264,7 +264,7 @@ jobs:
     name: Release Metadata
     if: needs.prepare.outputs.binary_release == 'true'
     runs-on: ubuntu-latest
-    needs: [prepare, build-binaries, release-binaries, release-container]
+    needs: [prepare, build-binaries, release-container]
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
@@ -632,6 +632,7 @@ jobs:
           body_path: release-assets/release-notes.md
           fail_on_unmatched_files: true
           files: |
+            artifacts/*.tar.gz
             release-assets/*.tar.gz.sig
             release-assets/*.tar.gz.pem
             release-assets/mero-kms-phala-checksums.txt
