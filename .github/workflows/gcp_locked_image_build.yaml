@@ -749,7 +749,7 @@ jobs:
 
       - name: Upload attestation artifacts
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && always() && steps.params.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.params.outputs.artifacts_dir }}
