@@ -388,6 +388,16 @@ jobs:
                 rekor: {
                   index_asset: "mero-kms-phala-rekor-index.json"
                 }
+              },
+              asset_purposes: {
+                "mero-kms-phala-checksums.txt": ["operator-required", "auditor-required"],
+                "mero-kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
+                "mero-kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
+                "mero-kms-phala-rekor-index.json": ["auditor-required"],
+                "mero-kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
+                "mero-kms-phala-container-sbom.spdx.json": ["auditor-required"],
+                "mero-kms-phala-binaries-sbom.spdx.json": ["auditor-required"],
+                "mero-tee-compatibility-map.json": ["operator-required", "auditor-required"]
               }
             }' > release-assets/mero-kms-phala-release-manifest.json
 
