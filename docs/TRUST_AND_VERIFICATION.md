@@ -6,8 +6,8 @@ This page is the single entry point for how trust is established for released ar
 
 This repository publishes two trust-asset families per release tag:
 
-1. **KMS release assets** (`mero-kms-phala` binaries + policy/manifest/signatures)
-2. **Locked-image assets** (MRTDs, policy, release provenance, signatures)
+1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
+2. **Locked-image assets** on tag `locked-image-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
 
 ## What signatures prove (and do not prove)
 
@@ -49,6 +49,7 @@ OIDC issuer is expected to be:
 
 ## Related docs
 
+- [TEE verification for beginners](TEE_VERIFICATION_FOR_BEGINNERS.md)
 - [Verify MRTD](verify-mrtd.md)
 - [Release verification examples](release-verification-examples.md)
 - [Architecture](ARCHITECTURE.md)

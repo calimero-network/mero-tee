@@ -19,6 +19,7 @@ When changing release automation, policy workflows, or verification scripts:
 |---|---|---|---|
 | `docs/ARCHITECTURE.md` | System trust model and component boundaries | `release-mero-kms-phala.yaml`, `gcp_locked_image_build.yaml` | Operators, auditors |
 | `docs/TRUST_AND_VERIFICATION.md` | Consolidated trust guarantees and verification entry point | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
+| `docs/TEE_VERIFICATION_FOR_BEGINNERS.md` | Step-by-step verification guide for readers new to TEE and attestation | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh` | Operators, auditors |
 | `docs/deploy-phala.md` | Phala deployment runbook | `scripts/apply_merod_kms_attestation_config.sh` | Operators |
 | `docs/deploy-gcp.md` | GCP locked-image deployment runbook | `packer/gcp/merod/*`, `gcp_locked_image_build.yaml` | Operators |
 | `docs/verify-mrtd.md` | End-user/operator verification flow | `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_tdx_quote_ita.py` | Operators, auditors |
@@ -30,7 +31,6 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/kms-policy-auto-pipeline.md` | Automatic KMS policy pipeline behavior | `kms_policy_auto_pipeline.yaml` | Release engineers |
 | `docs/locked-image-policy-promotion-pr.md` | Locked-image policy promotion flow | `locked_image_policy_promotion_pr.yaml` | Release engineers |
 | `docs/RELEASE_PIPELINE_SEQUENCE_DIAGRAMS.md` | Visual sequence diagrams for release workflows and auditing | `release-mero-kms-phala.yaml`, `gcp_locked_image_build.yaml`, `release-auditor.yaml` | Maintainers, release engineers |
-| `site/index.html` | Interactive click-through release verification frontend | `scripts/verify_mero_kms_release_assets.sh`, `scripts/verify_locked_image_release_assets.sh`, `scripts/verify_all_release_assets.sh`, `.github/workflows/github-pages.yaml` | Operators, auditors |
 | `docs/WORKFLOW_SETUP.md` | Required GitHub variables/secrets | All release/policy workflows | Maintainers |
 | `docs/phala-kms-attestation-task-list.md` | KMS attestation implementation checklist | `crates/mero-kms-phala/*`, release scripts | Maintainers |
 | `docs/phala-kms-key-protection-proposal.md` | Key protection direction/proposal | N/A (design doc) | Maintainers |
