@@ -54,6 +54,12 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
   - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
 
+### What signatures prove (and do not prove)
+
+- **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
+- **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
+- **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
+
 Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/verify-mrtd.md) for step-by-step instructions.
 
 Verify KMS release assets:
