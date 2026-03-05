@@ -12,6 +12,7 @@ Use these links in PR descriptions, release notes, and issue comments to avoid a
 | [docs/DOCS_INDEX.md](DOCS_INDEX.md) | Source-of-truth mapping between docs and automation | [`#source-mapping`](DOCS_INDEX.md#source-mapping), [`#release-trust-artifact-references`](DOCS_INDEX.md#release-trust-artifact-references) |
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Trust boundaries and attestation enforcement points | [`#repository-boundaries`](ARCHITECTURE.md#repository-boundaries), [`#platform-lanes-not-symmetric-deployments`](ARCHITECTURE.md#platform-lanes-not-symmetric-deployments), [`#attestation-enforcement-points`](ARCHITECTURE.md#attestation-enforcement-points) |
 | [docs/platforms/README.md](platforms/README.md) | Platform-specific navigation entrypoint | [`#runbooks`](platforms/README.md#runbooks) |
+| [docs/REPO_RESTRUCTURE_PROPOSAL.md](REPO_RESTRUCTURE_PROPOSAL.md) | Naming and structure cleanup proposal | [`#3-proposed-rename-map-servicesassetsworkflowsscripts`](REPO_RESTRUCTURE_PROPOSAL.md#3-proposed-rename-map-servicesassetsworkflowsscripts), [`#4-proposed-repository-structure`](REPO_RESTRUCTURE_PROPOSAL.md#4-proposed-repository-structure), [`#5-execution-plan-breaking-changes-allowed`](REPO_RESTRUCTURE_PROPOSAL.md#5-execution-plan-breaking-changes-allowed) |
 
 ## Verification and release docs
 

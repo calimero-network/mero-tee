@@ -32,6 +32,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
 - [Release pipeline sequence diagrams](docs/RELEASE_PIPELINE_SEQUENCE_DIAGRAMS.md)
 - [Release taxonomy](docs/RELEASE_TAXONOMY.md)
+- [Repo restructure proposal](docs/REPO_RESTRUCTURE_PROPOSAL.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
