@@ -1,0 +1,51 @@
+name: CI workflow and shell lint
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+      - "packer/**"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+      - "packer/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-workflow-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: actionlint + shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:latest
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t shell_files < <(rg --files -g '*.sh' scripts packer .github/workflows/deps || true)
+          if [[ "${#shell_files[@]}" -eq 0 ]]; then
+            echo "No shell files matched lint paths."
+            exit 0
+          fi
+
+          shellcheck "${shell_files[@]}"
