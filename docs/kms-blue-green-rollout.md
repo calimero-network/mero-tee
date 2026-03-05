@@ -30,37 +30,62 @@ All assets must be verified with:
 scripts/verify_mero_kms_release_assets.sh X.Y.Z
 ```
 
-## Blue/Green Deployment Steps
+## Decision tree
 
-### 1. Keep old cohort pinned
+```mermaid
+flowchart TD
+  A[Start rollout for tag X.Y.Z] --> B{Release assets verified?}
+  B -- No --> B1[Stop rollout and fix release inputs]
+  B -- Yes --> C{Policy entry promoted in policies/index.json?}
+  C -- No --> C1[Run auto pipeline or manual probe+promotion]
+  C1 --> C
+  C -- Yes --> D[Deploy green KMS endpoint]
+  D --> E{Green KMS health + attest endpoint OK?}
+  E -- No --> E1[Rollback/repair green KMS]
+  E -- Yes --> F[Generate/apply pinned merod TEE config]
+  F --> G[Deploy green TEE canary cohort]
+  G --> H{Attest preflight + key flow pass?}
+  H -- No --> H1[Rollback canary to blue]
+  H -- Yes --> I{Operational SLOs pass during soak window?}
+  I -- No --> I1[Rollback traffic to blue]
+  I -- Yes --> J[Cut over traffic to green]
+  J --> K{Rollback window expired?}
+  K -- No --> J
+  K -- Yes --> L[Decommission blue cohort]
+```
 
-- Keep old TEE nodes on old merod release and old KMS endpoint.
-- Do not change old cohort KMS URL or attestation policy during new rollout.
+## Decision-node runbook
 
-### 2. Deploy new KMS (green)
+### D1. Release assets verified?
 
-- Deploy new `mero-kms-phala` release in a **separate** environment.
-- Use a new service endpoint (DNS/URL) and independent rollout controls.
-- Publish verified release assets for this tag.
+Required gate:
 
-### 2.5 Promote policy entry for this release tag
+```bash
+scripts/verify_mero_kms_release_assets.sh X.Y.Z
+```
 
-- Recommended: let `kms_policy_auto_pipeline.yaml` dispatch probe + promotion
-  automatically after version bump merge.
-- Fallback: run `kms_staging_probe_phala.yaml` and then `kms_policy_promotion_pr.yaml` manually.
-- Merge the policy PR so `policies/mero-kms-phala/<X.Y.Z>.json` is present.
-- Keep `policies/index.json` updated as the historical registry.
-- Release automation reads this registry entry for policy values.
+- **No**: stop. Do not deploy.
+- **Yes**: continue.
 
-### 3. Generate pinned merod TEE config
+### D2. Policy entry promoted?
 
-Generate config from signed policy artifact:
+- Recommended: `kms_policy_auto_pipeline.yaml` handles probe + promotion after version bump merge.
+- Manual fallback: run `kms_staging_probe_phala.yaml`, then `kms_policy_promotion_pr.yaml`.
+- Gate condition: `policies/mero-kms-phala/<X.Y.Z>.json` exists and `policies/index.json` references it.
+
+### D3. Green KMS healthy?
+
+- Deploy new `mero-kms-phala` to an isolated green environment.
+- Use a separate endpoint (for example, `https://kms-green.example.com`).
+- Validate health and `/attest` behavior before any TEE node cutover.
+
+### D4. Green TEE config generated and applied?
+
+Generate pinned config from signed release policy:
 
 ```bash
 scripts/generate_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example.com/ ./tee-kms.toml
 ```
-
-This generates `[tee.kms.phala.attestation]` with release-pinned allowlists.
 
 Or apply directly to an existing node config:
 
@@ -68,29 +93,28 @@ Or apply directly to an existing node config:
 scripts/apply_merod_kms_attestation_config.sh X.Y.Z https://kms-green.example.com/ /data default
 ```
 
-### 4. Deploy new TEE nodes (green)
+### D5. Canary validation pass?
 
-- Deploy new TEE nodes using new merod release + generated TEE KMS config.
-- Verify startup passes KMS `/attest` preflight before `/challenge` + `/get-key`.
+Deploy a small green TEE cohort first, then verify:
 
-### 5. Validate and cut over
+- `/attest` preflight succeeds.
+- `/challenge` and `/get-key` flow succeeds.
+- Cluster health and key-access SLOs remain within bounds.
 
-- Validate cluster health, key access, and expected attestation behavior.
-- Shift workload/traffic to new cohort according to your operational policy.
+### D6. Cutover and retirement
 
-### 6. Decommission old cohort
+- Shift traffic/workload from blue to green only after D5 is stable.
+- Keep blue unchanged during rollback window.
+- Decommission blue only after stability and rollback windows are complete.
 
-- After stability window and rollback window expire, decommission old KMS and old TEE nodes.
-- Revoke old allowlists/policies where applicable.
+## Rollback branches
 
-## Rollback
+Rollback immediately if any gate fails:
 
-If green rollout fails:
-
-- keep old cohort unchanged,
-- route traffic back to old cohort,
-- investigate and fix green KMS/TEE release out-of-band,
-- redeploy green with a new pinned release tag.
+- keep blue cohort unchanged,
+- route traffic back to blue cohort,
+- investigate green release issues out-of-band,
+- redeploy green with a newly verified pinned release tag.
 
 ## Guardrails
 
