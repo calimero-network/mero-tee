@@ -54,6 +54,9 @@ See [packer/gcp/merod/README.md](packer/gcp/merod/README.md). Requires Packer, A
   - `mero-kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path),
   - `mero-kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
+- **Compatibility map artifact**:
+  - `mero-tee-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
+  - Sigstore keyless signature/certificate sidecars (`mero-tee-compatibility-map.json.sig`, `mero-tee-compatibility-map.json.pem`)
 - **X.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `locked-image-checksums.txt` (same tag as mero-kms-phala)
   - `merod-locked-image-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for locked-image trust artifacts (`*.sig`, `*.pem`)
