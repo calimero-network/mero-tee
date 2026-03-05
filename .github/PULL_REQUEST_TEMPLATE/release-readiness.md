@@ -22,15 +22,15 @@ assignees: ""
 - [ ] Version bump and policy mapping are aligned for this release tag.
 - [ ] Workflow changes (if any) were reviewed by code owners.
 - [ ] Release helper scripts still pass shell syntax checks:
-  - [ ] `scripts-release/verify-kms-phala-release-assets.sh`
-  - [ ] `scripts-release/verify-node-image-gcp-release-assets.sh`
+  - [ ] `scripts/release/verify-kms-phala-release-assets.sh`
+  - [ ] `scripts/release/verify-node-image-gcp-release-assets.sh`
 - [ ] Operator-facing docs were updated for behavior changes.
 - [ ] Deployment snippets use pinned tag/digest references (no mutable `:latest`).
 
 ## Verification plan
 
-- [ ] `scripts-release/verify-kms-phala-release-assets.sh <X.Y.Z>` succeeds (if KMS assets are expected).
-- [ ] `scripts-release/verify-node-image-gcp-release-assets.sh <X.Y.Z>` succeeds (if node-image-gcp assets are expected).
+- [ ] `scripts/release/verify-kms-phala-release-assets.sh <X.Y.Z>` succeeds (if KMS assets are expected).
+- [ ] `scripts/release/verify-node-image-gcp-release-assets.sh <X.Y.Z>` succeeds (if node-image-gcp assets are expected).
 - [ ] Sigstore identity expectations were checked against workflow identity:
   - [ ] KMS workflow identity regex
   - [ ] node-image-gcp workflow identity regex

@@ -82,13 +82,13 @@ For a consolidated trust model and verification entry point, see [Trust & Verifi
 Verify KMS release assets:
 
 ```bash
-scripts-release/verify-kms-phala-release-assets.sh X.Y.Z
+scripts/release/verify-kms-phala-release-assets.sh X.Y.Z
 ```
 
 Verify all available release trust assets for a tag (KMS and/or node-image-gcp):
 
 ```bash
-scripts-release/verify-release-assets.sh X.Y.Z
+scripts/release/verify-release-assets.sh X.Y.Z
 ```
 
 Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/release/minimal-download-sets.md) for quick-verify vs full-audit bundles.
@@ -96,13 +96,13 @@ Need an explicit artifact list for air-gapped or bandwidth-limited environments?
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
-scripts-policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
+scripts/policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
 ```
 
 Apply signed policy directly to an existing `merod` node config:
 
 ```bash
-scripts-policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+scripts/policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
 Collect candidate KMS allowlists automatically from a staged Phala deployment:

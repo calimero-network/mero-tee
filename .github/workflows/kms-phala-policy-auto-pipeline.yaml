@@ -46,7 +46,7 @@ jobs:
             release_exists="true"
           fi
 
-          if scripts-policy/read-kms-phala-policy-registry.sh "${version}" >/dev/null 2>&1; then
+          if scripts/policy/read-kms-phala-policy-registry.sh "${version}" >/dev/null 2>&1; then
             echo "should_run=false" >> "${GITHUB_OUTPUT}"
             echo "reason=policy_entry_exists" >> "${GITHUB_OUTPUT}"
             exit 0

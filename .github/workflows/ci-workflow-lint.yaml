@@ -4,18 +4,18 @@ on:
   pull_request:
     paths:
       - ".github/workflows/**"
-      - "scripts-release/**"
-      - "scripts-policy/**"
-      - "scripts-attestation/**"
+      - "scripts/release/**"
+      - "scripts/policy/**"
+      - "scripts/attestation/**"
       - "node-image-gcp/**"
   push:
     branches:
       - master
     paths:
       - ".github/workflows/**"
-      - "scripts-release/**"
-      - "scripts-policy/**"
-      - "scripts-attestation/**"
+      - "scripts/release/**"
+      - "scripts/policy/**"
+      - "scripts/attestation/**"
       - "node-image-gcp/**"
   workflow_dispatch:
 
@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts-release/**/*.sh scripts-policy/**/*.sh node-image-gcp/**/*.sh .github/workflows/deps/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh node-image-gcp/**/*.sh .github/workflows/deps/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0

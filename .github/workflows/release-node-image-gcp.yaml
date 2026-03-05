@@ -49,13 +49,13 @@ jobs:
         run: |
           bash -n node-image-gcp/init.sh
           bash -n node-image-gcp/build-and-release.sh
-          bash -n scripts-release/verify-node-image-gcp-release-assets.sh
-          bash -n scripts-release/verify-kms-phala-release-assets.sh
-          bash -n scripts-policy/read-node-image-gcp-policy-registry.sh
-          bash -n scripts-policy/generate-merod-kms-phala-attestation-config.sh
-          bash -n scripts-policy/apply-merod-kms-phala-attestation-config.sh
-          python3 -m py_compile scripts-attestation/verify_tdx_quote_ita.py
-          python3 -m py_compile scripts-attestation/extract_tdx_policy_candidates.py
+          bash -n scripts/release/verify-node-image-gcp-release-assets.sh
+          bash -n scripts/release/verify-kms-phala-release-assets.sh
+          bash -n scripts/policy/read-node-image-gcp-policy-registry.sh
+          bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
+          bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
+          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py
+          python3 -m py_compile scripts/attestation/extract_tdx_policy_candidates.py
 
       - name: Validate version manifest shape
         id: version_manifest
@@ -649,7 +649,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts-attestation/verify_tdx_quote_ita.py \
+          python3 scripts/attestation/verify_tdx_quote_ita.py \
             --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --tee-info "${artifacts_dir}/tee-info.json" \
             --output-dir "${artifacts_dir}" \
@@ -662,7 +662,7 @@ jobs:
             echo "::error::Missing external attestation claims file: ${claims_file}"
             exit 1
           fi
-          python3 scripts-attestation/extract_tdx_policy_candidates.py \
+          python3 scripts/attestation/extract_tdx_policy_candidates.py \
             --claims "${claims_file}" \
             --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
             --allow-missing-tcb
@@ -1286,12 +1286,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts-release/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/release/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts-release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
           } > artifacts/release-notes.md
 
@@ -1410,7 +1410,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts-release/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
+          scripts/release/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
 
       - name: Trigger node-image-gcp policy promotion workflow
         env:

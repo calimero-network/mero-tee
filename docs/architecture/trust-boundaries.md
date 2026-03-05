@@ -81,9 +81,9 @@ runtime safety by themselves.
 
 Use:
 
-- `scripts-release/verify-kms-phala-release-assets.sh`
-- `scripts-release/verify-node-image-gcp-release-assets.sh`
-- `scripts-release/verify-release-assets.sh`
+- `scripts/release/verify-kms-phala-release-assets.sh`
+- `scripts/release/verify-node-image-gcp-release-assets.sh`
+- `scripts/release/verify-release-assets.sh`
 
 Then enforce runtime attestation in deployed services.
 

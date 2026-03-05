@@ -36,7 +36,7 @@ node-image-gcp assets are published under tag `node-image-gcp-vX.Y.Z` and includ
 
 ```bash
 TAG=2.1.10
-scripts-release/verify-node-image-gcp-release-assets.sh "${TAG}"
+scripts/release/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
 The verifier resolves `node-image-gcp-v${TAG}` automatically when needed.

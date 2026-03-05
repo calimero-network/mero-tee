@@ -13,7 +13,7 @@ body:
     id: component
     attributes:
       label: Component
-      description: Which area is affected? (for example `mero-kms-phala`, `release-node-image-gcp`, `scripts-policy`)
+      description: Which area is affected? (for example `mero-kms-phala`, `release-node-image-gcp`, `scripts/policy`)
       placeholder: mero-kms-phala
     validations:
       required: true

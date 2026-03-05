@@ -9,7 +9,7 @@ on:
       - "policies/index.json"
       - "policies/kms-phala/**"
       - "policies/node-image-gcp/**"
-      - "scripts-policy/check_release_version_sync.sh"
+      - "scripts/policy/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   push:
     branches:
@@ -21,7 +21,7 @@ on:
       - "policies/index.json"
       - "policies/kms-phala/**"
       - "policies/node-image-gcp/**"
-      - "scripts-policy/check_release_version_sync.sh"
+      - "scripts/policy/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   workflow_dispatch:
 
@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate sync script syntax
-        run: bash -n scripts-policy/check_release_version_sync.sh
+        run: bash -n scripts/policy/check_release_version_sync.sh
 
       - name: Run release version sync guard
-        run: scripts-policy/check_release_version_sync.sh
+        run: scripts/policy/check_release_version_sync.sh

@@ -11,6 +11,6 @@
 / @chefsale
 
 # Attestation/release scripts
-/scripts-release/ @chefsale
-/scripts-policy/ @chefsale
-/scripts-attestation/ @chefsale
+/scripts/release/ @chefsale
+/scripts/policy/ @chefsale
+/scripts/attestation/ @chefsale

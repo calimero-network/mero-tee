@@ -89,7 +89,7 @@ jobs:
       - name: Install probe dependencies
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts-attestation/verify_tdx_quote_ita.py scripts-attestation/extract_tdx_policy_candidates.py
+          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py
           npm install -g phala@latest
           phala --version
           jq --version
@@ -475,7 +475,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts-attestation/verify_tdx_quote_ita.py \
+          python3 scripts/attestation/verify_tdx_quote_ita.py \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --output-dir "${ARTIFACTS_DIR}" \
             --ita-url "${ITA_APPRAISAL_URL}" \
@@ -489,7 +489,7 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
-          python3 scripts-attestation/extract_tdx_policy_candidates.py \
+          python3 scripts/attestation/extract_tdx_policy_candidates.py \
             --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
             --output-json "${ARTIFACTS_DIR}/kms-policy-candidates.json" \
             --output-env "${ARTIFACTS_DIR}/kms-policy-candidates.env"

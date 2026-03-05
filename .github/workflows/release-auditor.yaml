@@ -63,13 +63,13 @@ jobs:
             fi
 
             if [[ "${has_kms_assets}" == "true" ]]; then
-              if ! scripts-release/verify-kms-phala-release-assets.sh "${tag}"; then
+              if ! scripts/release/verify-kms-phala-release-assets.sh "${tag}"; then
                 failures+=("${tag}:kms")
               fi
             fi
 
             if [[ "${has_node_image_assets}" == "true" ]]; then
-              if ! scripts-release/verify-node-image-gcp-release-assets.sh "${tag}"; then
+              if ! scripts/release/verify-node-image-gcp-release-assets.sh "${tag}"; then
                 failures+=("${tag}:node-image-gcp")
               fi
             fi

@@ -44,16 +44,16 @@ Legend:
   - Release assets are tag-based and verifier scripts require explicit tag input.
 - [x] Sign artifacts (`.sig`/`.pem`) and provide verification flow.
   - Sigstore keyless signing in release workflow.
-  - Verification scripts: `scripts-release/verify-kms-phala-release-assets.sh`,
-    `scripts-policy/generate-merod-kms-phala-attestation-config.sh`,
-    `scripts-policy/apply-merod-kms-phala-attestation-config.sh`.
+  - Verification scripts: `scripts/release/verify-kms-phala-release-assets.sh`,
+    `scripts/policy/generate-merod-kms-phala-attestation-config.sh`,
+    `scripts/policy/apply-merod-kms-phala-attestation-config.sh`.
 - [~] Document signature identity constraints (OIDC issuer + workflow identity).
   - Implemented in verification scripts and release workflow sanity checks.
   - Follow-up: add an explicit dedicated section in docs for these identity constraints.
 - [x] Provide machine-readable policy format for downstream ingestion by core.
   - `kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
 - [x] Automate staging measurement collection for policy candidates.
-  - `kms-phala-staging-probe.yaml` + `scripts-attestation/extract_tdx_policy_candidates.py`.
+  - `kms-phala-staging-probe.yaml` + `scripts/attestation/extract_tdx_policy_candidates.py`.
 - [x] Gate policy promotion through reviewed PR updates.
   - `kms-phala-policy-promotion-pr.yaml` writes `policies/kms-phala/<tag>.json`
     and opens a pull request for approval before release publication.

@@ -87,9 +87,9 @@ Avoid mixing lane names inside one artifact family.
 Cargo.toml
 src/
 node-image-gcp/
-scripts-release/
-scripts-policy/
-scripts-attestation/
+scripts/release/
+scripts/policy/
+scripts/attestation/
 policies/
 docs/
 ```

@@ -44,9 +44,9 @@ Pull requests that modify any of the following paths must also include a
 documentation update in `docs/**` or `README.md`:
 
 - `.github/workflows/**`
-- `scripts-release/**`
-- `scripts-policy/**`
-- `scripts-attestation/**`
+- `scripts/release/**`
+- `scripts/policy/**`
+- `scripts/attestation/**`
 - `node-image-gcp/**`
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.

@@ -7,7 +7,7 @@ labels: bug
 
 ## Component
 
-<!-- e.g. mero-kms-phala, scripts-policy, workflow name -->
+<!-- e.g. mero-kms-phala, scripts/policy, workflow name -->
 
 ## Environment
 
