@@ -42,7 +42,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t shell_files < <(rg --files -g '*.sh' scripts packer .github/workflows/deps || true)
+          shopt -s globstar nullglob
+          shell_files=(scripts/**/*.sh packer/**/*.sh .github/workflows/deps/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0
