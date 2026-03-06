@@ -1372,6 +1372,7 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: mero-tee-v${{ needs.preflight.outputs.image_version }}
+          make_latest: false
           body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
           files: |
@@ -1431,9 +1432,9 @@ jobs:
           } > "${notes_file}"
 
           if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}"
+            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}" --latest
           else
-            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${GITHUB_SHA}"
+            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${GITHUB_SHA}" --latest
           fi
 
       - name: Trigger node-image-gcp policy promotion workflow
