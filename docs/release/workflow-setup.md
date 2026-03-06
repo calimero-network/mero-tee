@@ -67,7 +67,11 @@ It validates the following are synchronized for the active release version:
 
 For `policies/index.json`, `node_image_tag` must be:
 
-- `node-image-gcp-v<version>`
+- `mero-tee-v<version>`
+
+And `kms_tag` must be:
+
+- `mero-kms-v<version>`
 
 This keeps release metadata aligned with node-image release tags.
 

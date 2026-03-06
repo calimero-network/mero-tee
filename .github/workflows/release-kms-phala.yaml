@@ -1,4 +1,4 @@
-name: Release kms-phala
+name: Release mero-kms
 
 on:
   push:
@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version_info.outputs.version }}
+      kms_release_tag: ${{ steps.version_info.outputs.kms_release_tag }}
       binary_release: ${{ steps.version_info.outputs.binary_release }}
       docker_release: ${{ steps.version_info.outputs.docker_release }}
       docker_push: ${{ github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork) }}
@@ -69,6 +70,7 @@ jobs:
           if [[ -z "$version" || "$version" == "null" ]]; then
             version="0.1.0"
           fi
+          kms_release_tag="mero-kms-v${version}"
 
           prerelease=false
           binary_release=false
@@ -78,7 +80,7 @@ jobs:
             if [[ "$version" =~ -[a-z]+(\.[0-9]+)?$ ]]; then
               prerelease=true
             fi
-            if ! gh release view "$version" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            if ! gh release view "$kms_release_tag" --repo ${{ github.repository }} >/dev/null 2>&1; then
               if scripts/policy/read-kms-phala-policy-registry.sh "$version" >/dev/null 2>&1; then
                 binary_release=true
                 docker_release=true
@@ -91,6 +93,7 @@ jobs:
           fi
 
           echo "version=$version" >> $GITHUB_OUTPUT
+          echo "kms_release_tag=$kms_release_tag" >> $GITHUB_OUTPUT
           echo "prerelease=$prerelease" >> $GITHUB_OUTPUT
           echo "binary_release=$binary_release" >> $GITHUB_OUTPUT
           echo "docker_release=$docker_release" >> $GITHUB_OUTPUT
@@ -501,13 +504,13 @@ jobs:
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
-            echo "## kms-phala release ${{ needs.prepare.outputs.version }}"
+            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
             echo ""
             echo "### Release metadata"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`${{ needs.prepare.outputs.version }}\` |"
+            echo "| Tag | \`${{ needs.prepare.outputs.kms_release_tag }}\` |"
             echo "| Commit | \`${{ needs.prepare.outputs.target_commit }}\` |"
             echo "| Workflow run | [${{ github.run_id }}](${run_url}) |"
             echo "| Container image | \`${image_ref}\` |"
@@ -534,7 +537,7 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-kms-phala-release-assets.sh ${{ needs.prepare.outputs.version }}"
+            echo "scripts/release/verify-kms-phala-release-assets.sh ${{ needs.prepare.outputs.kms_release_tag }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
@@ -680,7 +683,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          tag_name: ${{ needs.prepare.outputs.version }}
+          tag_name: ${{ needs.prepare.outputs.kms_release_tag }}
           body_path: release-assets/release-notes.md
           fail_on_unmatched_files: true
           files: |
@@ -726,4 +729,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/release/verify-kms-phala-release-assets.sh "${{ needs.prepare.outputs.version }}"
+          scripts/release/verify-kms-phala-release-assets.sh "${{ needs.prepare.outputs.kms_release_tag }}"
+
+      - name: Upsert umbrella version release links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          kms_tag="${{ needs.prepare.outputs.kms_release_tag }}"
+          tee_tag="mero-tee-v${version}"
+          notes_file="$(mktemp)"
+          {
+            echo "## Consolidated release ${version}"
+            echo
+            echo "This is an index release that links to component releases:"
+            echo
+            echo "- mero-kms: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${kms_tag}"
+            echo "- mero-tee: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tee_tag}"
+          } > "${notes_file}"
+
+          if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}"
+          else
+            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${{ needs.prepare.outputs.target_commit }}"
+          fi

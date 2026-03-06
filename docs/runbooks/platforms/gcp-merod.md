@@ -21,7 +21,7 @@ This lane focuses on **node image trust and measurement verification**.
 
 ## 2) What is released for this lane
 
-node-image-gcp assets are published under tag `node-image-gcp-vX.Y.Z` and include:
+node-image-gcp assets are published under tag `mero-tee-vX.Y.Z` and include:
 
 - `published-mrtds.json`
 - `node-image-gcp-policy.json`
@@ -39,7 +39,7 @@ TAG=2.1.10
 scripts/release/verify-node-image-gcp-release-assets.sh "${TAG}"
 ```
 
-The verifier resolves `node-image-gcp-v${TAG}` automatically when needed.
+The verifier resolves `mero-tee-v${TAG}` automatically when needed.
 
 ---
 

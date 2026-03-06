@@ -8,7 +8,9 @@ if [[ -z "${tag}" ]]; then
 fi
 
 logical_tag="${tag}"
-if [[ "${logical_tag}" == node-image-gcp-v* ]]; then
+if [[ "${logical_tag}" == mero-tee-v* ]]; then
+  logical_tag="${logical_tag#mero-tee-v}"
+elif [[ "${logical_tag}" == node-image-gcp-v* ]]; then
   logical_tag="${logical_tag#node-image-gcp-v}"
 fi
 
@@ -144,8 +146,12 @@ echo "Inspecting release ${tag}..."
 echo "Repository: ${repo} (download mode: $([[ "${has_gh}" == "true" ]] && echo "gh" || echo "curl"))"
 release_tag="${tag}"
 release_tag_candidates=("${tag}")
-if [[ "${tag}" != node-image-gcp-v* ]]; then
-  release_tag_candidates+=("node-image-gcp-v${tag}")
+if [[ "${tag}" == mero-tee-v* ]]; then
+  release_tag_candidates=("${tag}")
+elif [[ "${tag}" == node-image-gcp-v* ]]; then
+  release_tag_candidates=("mero-tee-v${logical_tag}" "${tag}")
+else
+  release_tag_candidates=("mero-tee-v${tag}" "${tag}")
 fi
 release_json=""
 for attempt in $(seq 1 10); do
@@ -205,7 +211,7 @@ for attempt in $(seq 1 10); do
   sleep 6
 done
 
-echo "Resolved release tag for node-image-gcp assets: ${release_tag}"
+echo "Resolved release tag for mero-tee assets: ${release_tag}"
 echo "Node-image-gcp checksums asset: ${checksums_asset}"
 echo "Node-image-gcp SBOM asset: ${sbom_asset}"
 echo "Node-image-gcp attestation bundle asset: ${bundle_asset}"

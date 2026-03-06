@@ -7,6 +7,11 @@ if [[ -z "${tag}" ]]; then
   exit 1
 fi
 
+logical_tag="${tag}"
+if [[ "${logical_tag}" == mero-kms-v* ]]; then
+  logical_tag="${logical_tag#mero-kms-v}"
+fi
+
 required_commands=(jq cosign sha256sum awk basename curl git)
 for cmd in "${required_commands[@]}"; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -105,7 +110,7 @@ download_asset() {
   done
 }
 
-echo "Inspecting kms-phala release ${tag}..."
+echo "Inspecting mero-kms release ${tag}..."
 echo "Repository: ${repo} (download mode: $([[ "${has_gh}" == "true" ]] && echo "gh" || echo "curl"))"
 base_signed_assets=(
   "kms-phala-checksums.txt"
@@ -116,40 +121,60 @@ base_signed_assets=(
   "kms-phala-binaries-sbom.spdx.json"
 )
 
+release_tag="${tag}"
+release_tag_candidates=("${tag}")
+if [[ "${tag}" != mero-kms-v* ]]; then
+  release_tag_candidates=("mero-kms-v${tag}" "${tag}")
+fi
+
 release_json=""
 for attempt in $(seq 1 10); do
-  release_json="$(fetch_release_json "${tag}")"
-  if [[ -n "${release_json}" ]]; then
-    missing_asset=""
+  release_json=""
+  missing_asset=""
+  for candidate_tag in "${release_tag_candidates[@]}"; do
+    candidate_json="$(fetch_release_json "${candidate_tag}")"
+    if [[ -z "${candidate_json}" ]]; then
+      continue
+    fi
+
+    candidate_missing_asset=""
     for asset in "${base_signed_assets[@]}"; do
       for suffix in "" ".sig" ".pem"; do
         signed_asset="${asset}${suffix}"
-        if ! jq -e --arg asset "${signed_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
-          missing_asset="${signed_asset}"
+        if ! jq -e --arg asset "${signed_asset}" '.assets | any(.name == $asset)' <<< "${candidate_json}" >/dev/null; then
+          candidate_missing_asset="${signed_asset}"
           break 2
         fi
       done
     done
-    if [[ -z "${missing_asset}" ]]; then
-      break
+
+    if [[ -n "${candidate_missing_asset}" ]]; then
+      missing_asset="${candidate_missing_asset}"
+      continue
     fi
+
+    release_tag="${candidate_tag}"
+    release_json="${candidate_json}"
+    break
+  done
+
+  if [[ -n "${release_json}" ]]; then
+    break
   fi
 
   if [[ "${attempt}" -eq 10 ]]; then
-    if [[ -z "${release_json}" ]]; then
-      echo "Release '${tag}' not found"
-    else
-      echo "Release asset set did not stabilize in time. Last missing asset: ${missing_asset:-unknown}"
-    fi
+    echo "Release asset set did not stabilize in time. Last missing asset: ${missing_asset:-unknown}"
     exit 1
   fi
   sleep 6
 done
 
+echo "Resolved release tag for mero-kms assets: ${release_tag}"
+
 for asset in "${base_signed_assets[@]}"; do
   for suffix in "" ".sig" ".pem"; do
     signed_asset="${asset}${suffix}"
-    if ! download_asset "${tag}" "${signed_asset}" "${tmp_dir}"; then
+    if ! download_asset "${release_tag}" "${signed_asset}" "${tmp_dir}"; then
       echo "Failed to download required asset ${signed_asset}"
       exit 1
     fi
@@ -185,7 +210,7 @@ for archive in "${archives[@]}"; do
       echo "Release is missing required archive asset: ${archive_asset}"
       exit 1
     fi
-    if ! download_asset "${tag}" "${archive_asset}" "${tmp_dir}"; then
+    if ! download_asset "${release_tag}" "${archive_asset}" "${tmp_dir}"; then
       echo "Failed to download required archive asset ${archive_asset}"
       exit 1
     fi
@@ -197,7 +222,7 @@ done
   sha256sum -c "${normalized_checksums}"
 )
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
   (.binaries | type == "array" and length > 0) and
@@ -208,7 +233,7 @@ jq -e --arg tag "${tag}" '
   (.verification.container_metadata_asset == "kms-phala-container-metadata.json")
 ' "${tmp_dir}/kms-phala-release-manifest.json" >/dev/null
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
@@ -217,7 +242,7 @@ jq -e --arg tag "${tag}" '
   (.container.tags | type == "array")
 ' "${tmp_dir}/kms-phala-container-metadata.json" >/dev/null
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
@@ -302,4 +327,4 @@ for asset in "${signed_assets[@]}"; do
     "${tmp_dir}/${asset}" >/dev/null
 done
 
-echo "Release ${tag} checksums, manifest, attestation policy, container metadata, archive hashes, and Sigstore signatures verified."
+echo "Release ${logical_tag} checksums, manifest, attestation policy, container metadata, archive hashes, and Sigstore signatures verified."

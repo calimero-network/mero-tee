@@ -16,8 +16,8 @@ When you download software from GitHub releases, you need to answer:
 
 In `mero-tee`, verification is split into two release families:
 
-- **KMS release** on tag `X.Y.Z` (example: `2.1.10`)
-- **node-image-gcp release** on tag `node-image-gcp-vX.Y.Z` (example: `node-image-gcp-v2.1.10`)
+- **KMS release** on tag `mero-kms-vX.Y.Z` (example: `mero-kms-v2.1.10`)
+- **node-image-gcp release** on tag `mero-tee-vX.Y.Z` (example: `mero-tee-v2.1.10`)
 
 The scripts in this repo automate those checks.
 
@@ -70,7 +70,7 @@ scripts/release/verify-kms-phala-release-assets.sh "${TAG}"
 
 What this checks:
 
-- required KMS assets exist on release `TAG`
+- required KMS assets exist on release `mero-kms-vTAG`
 - checksums match binary archives
 - release manifest and attestation policy are structurally valid
 - container metadata matches manifest (digest/commit consistency)
@@ -90,7 +90,7 @@ scripts/release/verify-node-image-gcp-release-assets.sh "${TAG}"
 
 What this checks:
 
-- finds node-image-gcp assets (supports `node-image-gcp-v${TAG}` layout)
+- finds node-image-gcp assets (supports `mero-tee-v${TAG}` layout)
 - validates required measurement/provenance assets and checksums
 - verifies policy/provenance JSON structure and tag consistency
 - verifies Sigstore signatures for node-image-gcp assets
@@ -110,7 +110,7 @@ scripts/release/verify-release-assets.sh "${TAG}"
 What this checks:
 
 - runs KMS verification and node-image-gcp verification together
-- handles the split-tag layout (`TAG` + `node-image-gcp-vTAG`) automatically
+- handles the split-tag layout (`mero-kms-vTAG` + `mero-tee-vTAG`) automatically
 
 Why it matters:
 
@@ -157,7 +157,7 @@ You should still do:
   Signature cannot be validated against expected workflow identity.
 
 - node-image-gcp verifier can’t find assets on `TAG`  
-  Check `node-image-gcp-vTAG` release (the script now tries this automatically).
+  Check `mero-tee-vTAG` release (the script now tries this automatically).
 
 ---
 

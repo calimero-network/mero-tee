@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "policy_id": "node-image-gcp/2.1.4",
+  "policy_id": "mero-tee/2.1.4",
   "release_tag": "2.1.4",
   "status": "released",
   "generated_at": "2026-03-04T18:46:48Z",

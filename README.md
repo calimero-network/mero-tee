@@ -53,7 +53,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 
 ## Releases
 
-- **mero-kms-phala**: Binaries published per platform
+- **mero-kms-vX.Y.Z**: KMS binaries and trust assets
 - **mero-kms-phala release trust bundle**:
   - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
   - `kms-phala-checksums.txt` (SHA-256 for binary archives),
@@ -64,7 +64,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 - **Compatibility map artifact**:
   - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
-- **node-image-gcp-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `node-image-gcp-checksums.txt`
+- **mero-tee-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `node-image-gcp-checksums.txt`
   - `node-image-gcp-policy.json` (profile-specific allowed MRTD/RTMR policy)
   - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
 

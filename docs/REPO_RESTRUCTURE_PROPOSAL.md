@@ -57,7 +57,7 @@ Avoid mixing lane names inside one artifact family.
 |---|---|
 | `mero-kms-phala-*` | `kms-phala-*` |
 | `merod-locked-image-*` | `node-image-gcp-*` |
-| `locked-image-vX.Y.Z` tag | `node-image-gcp-vX.Y.Z` tag |
+| `locked-image-vX.Y.Z` tag | `mero-tee-vX.Y.Z` tag |
 
 ## Workflow filenames
 
@@ -108,7 +108,7 @@ docs/
 ### Phase B: release surface normalization (medium-high risk)
 
 - Rename release asset prefixes to `kms-phala-*` and `node-image-gcp-*`.
-- Switch node-image tag format to `node-image-gcp-vX.Y.Z`.
+- Switch node-image tag format to `mero-tee-vX.Y.Z`.
 - Update all verifiers and release workflows together.
 
 ### Phase C: docs tree split by intent (medium risk)

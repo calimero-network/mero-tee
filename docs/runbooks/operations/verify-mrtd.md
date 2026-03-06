@@ -9,7 +9,7 @@ verify the release assets were signed by this repository's release workflow iden
 
 ```bash
 VERSION="2.1.1"
-NODE_IMAGE_TAG="node-image-gcp-v${VERSION}"
+NODE_IMAGE_TAG="mero-tee-v${VERSION}"
 REPO="calimero-network/mero-tee"
 BASE_URL="https://github.com/${REPO}/releases/download/${NODE_IMAGE_TAG}"
 
@@ -66,20 +66,20 @@ The response also includes `cloudProvider`, `osImage`, and `profile`. Note the `
 
 ```bash
 # Replace X.Y.Z with the release version (e.g. 2.1.1)
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-vX.Y.Z/published-mrtds.json | jq
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/mero-tee-vX.Y.Z/published-mrtds.json | jq
 ```
 
 Extract the expected MRTD for your profile:
 
 ```bash
 # For locked-read-only (production)
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles["locked-read-only"].mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.1.1/published-mrtds.json | jq -r '.profiles["locked-read-only"].mrtd'
 
 # For debug
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles.debug.mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.1.1/published-mrtds.json | jq -r '.profiles.debug.mrtd'
 
 # For debug-read-only
-curl -sL https://github.com/calimero-network/mero-tee/releases/download/node-image-gcp-v2.1.1/published-mrtds.json | jq -r '.profiles["debug-read-only"].mrtd'
+curl -sL https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.1.1/published-mrtds.json | jq -r '.profiles["debug-read-only"].mrtd'
 ```
 
 ### 3. Compare
@@ -96,7 +96,7 @@ your attestation verifier exposes RTMR0..3 from a verified quote.
 NODE_URL="${1:-http://localhost/admin-api}"
 VERSION="${2:-2.1.1}"
 PROFILE="${3:-locked-read-only}"
-NODE_IMAGE_TAG="node-image-gcp-v${VERSION}"
+NODE_IMAGE_TAG="mero-tee-v${VERSION}"
 
 OBSERVED=$(curl -s "${NODE_URL}/tee/info" | jq -r '.mrtd')
 EXPECTED=$(curl -sL "https://github.com/calimero-network/mero-tee/releases/download/${NODE_IMAGE_TAG}/published-mrtds.json" | jq -r --arg p "$PROFILE" '.profiles[$p].mrtd')

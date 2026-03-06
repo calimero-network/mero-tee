@@ -67,7 +67,7 @@ if [[ -z "${release_entry_json}" ]]; then
 fi
 
 policy_rel_path="$(jq -r '.node_image_policy_file // empty' <<< "${release_entry_json}")"
-expected_policy_tag="$(jq -r '.node_image_tag // .version // empty' <<< "${release_entry_json}")"
+expected_node_release_tag="$(jq -r '.node_image_tag // .version // empty' <<< "${release_entry_json}")"
 mapped_version="$(jq -r '.version // empty' <<< "${release_entry_json}")"
 
 if [[ -z "${policy_rel_path}" ]]; then
@@ -75,7 +75,7 @@ if [[ -z "${policy_rel_path}" ]]; then
   exit 1
 fi
 
-if [[ -z "${expected_policy_tag}" ]]; then
+if [[ -z "${expected_node_release_tag}" ]]; then
   echo "Merod release tag mapping is missing for release tag ${release_tag} in ${index_file}"
   exit 1
 fi
@@ -91,8 +91,8 @@ if [[ ! -f "${policy_rel_path}" ]]; then
 fi
 
 declared_tag="$(jq -r '.release_tag // .tag // empty' "${policy_rel_path}")"
-if [[ -n "${declared_tag}" && "${declared_tag}" != "${expected_policy_tag}" ]]; then
-  echo "Policy file tag mismatch for ${policy_rel_path}: expected ${expected_policy_tag}, found ${declared_tag}"
+if [[ -n "${declared_tag}" && "${declared_tag}" != "${mapped_version}" ]]; then
+  echo "Policy file tag mismatch for ${policy_rel_path}: expected ${mapped_version}, found ${declared_tag}"
   exit 1
 fi
 
@@ -138,7 +138,7 @@ fi
 jq -n \
   --arg release_tag "${release_tag}" \
   --arg mapped_version "${mapped_version}" \
-  --arg node_image_tag "${expected_policy_tag}" \
+  --arg node_image_tag "${expected_node_release_tag}" \
   --arg source_policy_path "${policy_rel_path}" \
   --argjson profiles "${profiles_json}" \
   '{

@@ -83,16 +83,17 @@ entry = next((item for item in releases if item.get("version") == kms_version), 
 if entry is None:
     fail(f"policies/index.json missing releases entry for version {kms_version}")
 
-if entry.get("kms_tag") != kms_version:
+expected_kms_tag = f"mero-kms-v{kms_version}"
+if entry.get("kms_tag") != expected_kms_tag:
     fail(
-        "kms_tag must match version exactly: "
-        f"{entry.get('kms_tag')} != {kms_version}"
+        "kms_tag must be mero-kms-v<version>: "
+        f"{entry.get('kms_tag')}"
     )
 
-expected_merod_tag = f"node-image-gcp-v{kms_version}"
+expected_merod_tag = f"mero-tee-v{kms_version}"
 if entry.get("node_image_tag") != expected_merod_tag:
     fail(
-        "node_image_tag must be node-image-gcp-v<version>: "
+        "node_image_tag must be mero-tee-v<version>: "
         f"{entry.get('node_image_tag')}"
     )
 

@@ -41,9 +41,10 @@ jobs:
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          kms_release_tag="mero-kms-v${version}"
 
           release_exists="false"
-          if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          if gh release view "${kms_release_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             release_exists="true"
           fi
 

@@ -45,13 +45,14 @@ jobs:
             exit 1
           fi
 
+          source_release_tag="mero-tee-v${RELEASE_TAG}"
           tmp_dir="${RUNNER_TEMP}/node-image-gcp-policy-${RELEASE_TAG}"
           mkdir -p "${tmp_dir}"
 
           download_asset() {
             local pattern="$1"
             for attempt in $(seq 1 5); do
-              if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --pattern "${pattern}" --dir "${tmp_dir}" >/dev/null 2>&1; then
+              if gh release download "${source_release_tag}" --repo "${GITHUB_REPOSITORY}" --pattern "${pattern}" --dir "${tmp_dir}" >/dev/null 2>&1; then
                 return 0
               fi
               if [[ "${attempt}" -eq 5 ]]; then
@@ -63,7 +64,7 @@ jobs:
 
           # Always required for fallback synthesis and provenance.
           if ! download_asset "published-mrtds.json"; then
-            echo "::error::Missing published-mrtds.json in release ${RELEASE_TAG}"
+            echo "::error::Missing published-mrtds.json in release ${source_release_tag}"
             exit 1
           fi
           download_asset "release-provenance.json" || true
@@ -130,7 +131,7 @@ jobs:
               --slurpfile policy "${direct_policy_file}" \
               '{
                 schema_version: 1,
-                policy_id: ("node-image-gcp/" + $tag),
+                policy_id: ("mero-tee/" + $tag),
                 release_tag: $tag,
                 status: "released",
                 generated_at: (now | todate),
@@ -169,7 +170,7 @@ jobs:
               --slurpfile mrtds "${published_mrtds_file}" \
               '{
                 schema_version: 1,
-                policy_id: ("node-image-gcp/" + $tag),
+                policy_id: ("mero-tee/" + $tag),
                 release_tag: $tag,
                 status: "released",
                 generated_at: (now | todate),
@@ -212,7 +213,7 @@ jobs:
           policy_sha256="$(sha256sum "${policy_file}" | awk '{print $1}')"
 
           tmp_index="$(mktemp)"
-          node_image_tag="node-image-gcp-v${RELEASE_TAG}"
+          node_image_tag="mero-tee-v${RELEASE_TAG}"
 
           jq \
             --arg version "${RELEASE_TAG}" \

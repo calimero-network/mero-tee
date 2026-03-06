@@ -1,4 +1,4 @@
-name: Release node-image-gcp
+name: Release mero-tee
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: node-image-gcp-release-${{ github.ref }}
+  group: mero-tee-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -1252,13 +1252,13 @@ jobs:
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           {
-            echo "## Node-image-gcp release ${{ needs.preflight.outputs.image_version }}"
+            echo "## mero-tee release ${{ needs.preflight.outputs.image_version }}"
             echo ""
             echo "### Release metadata"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`${{ needs.preflight.outputs.image_version }}\` |"
+            echo "| Tag | \`mero-tee-v${{ needs.preflight.outputs.image_version }}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Workflow run | [${GITHUB_RUN_ID}](${run_url}) |"
             echo "| Checksums | \`node-image-gcp-checksums.txt\` |"
@@ -1286,7 +1286,7 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-node-image-gcp-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
@@ -1371,7 +1371,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          tag_name: node-image-gcp-v${{ needs.preflight.outputs.image_version }}
+          tag_name: mero-tee-v${{ needs.preflight.outputs.image_version }}
           body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
           files: |
@@ -1410,7 +1410,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          scripts/release/verify-node-image-gcp-release-assets.sh "${{ needs.preflight.outputs.image_version }}"
+          scripts/release/verify-node-image-gcp-release-assets.sh "mero-tee-v${{ needs.preflight.outputs.image_version }}"
+
+      - name: Upsert umbrella version release links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.preflight.outputs.image_version }}"
+          kms_tag="mero-kms-v${version}"
+          tee_tag="mero-tee-v${version}"
+          notes_file="$(mktemp)"
+          {
+            echo "## Consolidated release ${version}"
+            echo
+            echo "This is an index release that links to component releases:"
+            echo
+            echo "- mero-kms: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${kms_tag}"
+            echo "- mero-tee: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tee_tag}"
+          } > "${notes_file}"
+
+          if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}"
+          else
+            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${GITHUB_SHA}"
+          fi
 
       - name: Trigger node-image-gcp policy promotion workflow
         env:

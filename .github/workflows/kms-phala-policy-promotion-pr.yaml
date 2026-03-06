@@ -169,7 +169,7 @@ jobs:
           tmp_index="$(mktemp)"
           jq \
             --arg version "${RELEASE_TAG}" \
-            --arg kms_tag "${RELEASE_TAG}" \
+            --arg kms_tag "mero-kms-v${RELEASE_TAG}" \
             --arg kms_policy_file "${policy_file}" \
             --arg run_id "${PROBE_RUN_ID}" \
             --arg run_url "${probe_run_url}" \

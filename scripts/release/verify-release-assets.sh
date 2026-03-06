@@ -7,7 +7,16 @@ if [[ -z "${tag}" ]]; then
   exit 1
 fi
 
-required_commands=(jq curl git)
+logical_tag="${tag}"
+if [[ "${logical_tag}" == mero-kms-v* ]]; then
+  logical_tag="${logical_tag#mero-kms-v}"
+elif [[ "${logical_tag}" == mero-tee-v* ]]; then
+  logical_tag="${logical_tag#mero-tee-v}"
+elif [[ "${logical_tag}" == node-image-gcp-v* ]]; then
+  logical_tag="${logical_tag#node-image-gcp-v}"
+fi
+
+required_commands=(git)
 for cmd in "${required_commands[@]}"; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "${cmd} is required"
@@ -55,68 +64,20 @@ resolve_repo() {
 }
 
 repo="$(resolve_repo)"
-api_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-api_headers=(-H "Accept: application/vnd.github+json")
-if [[ -n "${api_token}" ]]; then
-  api_headers+=(-H "Authorization: Bearer ${api_token}")
+kms_release_tag="${tag}"
+node_release_tag="${tag}"
+if [[ "${tag}" != mero-kms-v* ]]; then
+  kms_release_tag="mero-kms-v${logical_tag}"
+fi
+if [[ "${tag}" != mero-tee-v* ]]; then
+  node_release_tag="mero-tee-v${logical_tag}"
 fi
 
-fetch_release_assets() {
-  local release_tag="$1"
-  if [[ "${has_gh}" == "true" ]]; then
-    gh release view "${release_tag}" --repo "${repo}" --json assets --jq '[.assets[].name]' 2>/dev/null || true
-    return
-  fi
+echo "Verifying release ${logical_tag} in ${repo}..."
+echo "-> Verifying mero-kms release asset set from ${kms_release_tag}"
+scripts/release/verify-kms-phala-release-assets.sh "${kms_release_tag}"
 
-  curl -fsSL "${api_headers[@]}" \
-    "https://api.github.com/repos/${repo}/releases/tags/${release_tag}" \
-    | jq -c '[.assets[]?.name]' 2>/dev/null || true
-}
+echo "-> Verifying mero-tee release asset set from ${node_release_tag}"
+scripts/release/verify-node-image-gcp-release-assets.sh "${node_release_tag}"
 
-assets_json="$(fetch_release_assets "${tag}")"
-if [[ -z "${assets_json}" || "${assets_json}" == "null" ]]; then
-  echo "Release '${tag}' not found in ${repo}"
-  exit 1
-fi
-
-has_kms_assets="$(jq -r 'any(.[]; . == "kms-phala-checksums.txt")' <<< "${assets_json}")"
-has_node_image_assets="$(jq -r 'any(.[]; . == "node-image-gcp-checksums.txt")' <<< "${assets_json}")"
-node_image_release_tag="${tag}"
-if [[ "${has_node_image_assets}" != "true" && "${tag}" != node-image-gcp-v* ]]; then
-  prefixed_tag="node-image-gcp-v${tag}"
-  prefixed_assets_json="$(fetch_release_assets "${prefixed_tag}")"
-  if [[ -n "${prefixed_assets_json}" && "${prefixed_assets_json}" != "null" ]]; then
-    prefixed_has_node_image_assets="$(jq -r 'any(.[]; . == "node-image-gcp-checksums.txt")' <<< "${prefixed_assets_json}")"
-    if [[ "${prefixed_has_node_image_assets}" == "true" ]]; then
-      has_node_image_assets="true"
-      node_image_release_tag="${prefixed_tag}"
-    fi
-  fi
-fi
-
-if [[ "${has_kms_assets}" != "true" && "${has_node_image_assets}" != "true" ]]; then
-  echo "No known trust asset sets found for release '${tag}' in ${repo}"
-  exit 1
-fi
-
-echo "Verifying release ${tag} in ${repo}..."
-
-if [[ "${has_kms_assets}" == "true" ]]; then
-  echo "-> Verifying KMS release asset set"
-  scripts/release/verify-kms-phala-release-assets.sh "${tag}"
-else
-  echo "-> KMS asset set not present; skipping"
-fi
-
-if [[ "${has_node_image_assets}" == "true" ]]; then
-  if [[ "${node_image_release_tag}" == "${tag}" ]]; then
-    echo "-> Verifying node-image-gcp release asset set"
-  else
-    echo "-> Verifying node-image-gcp release asset set from ${node_image_release_tag}"
-  fi
-  scripts/release/verify-node-image-gcp-release-assets.sh "${node_image_release_tag}"
-else
-  echo "-> Node-image-gcp asset set not present; skipping"
-fi
-
-echo "Release ${tag} verification completed."
+echo "Release ${logical_tag} verification completed."

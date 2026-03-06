@@ -73,8 +73,8 @@ Source: `mero-kms/src/handlers.rs` (`get_key_handler`, policy enforcement)
 
 `mero-tee` publishes two release asset families:
 
-1. KMS assets on `X.Y.Z`
-2. node-image-gcp assets on `node-image-gcp-vX.Y.Z`
+1. mero-kms assets on `mero-kms-vX.Y.Z`
+2. mero-tee assets on `mero-tee-vX.Y.Z`
 
 For each family, signatures prove workflow identity/integrity, but not complete
 runtime safety by themselves.

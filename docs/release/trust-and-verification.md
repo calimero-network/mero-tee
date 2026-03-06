@@ -7,7 +7,7 @@ This page is the single entry point for how trust is established for released ar
 This repository publishes two trust-asset families per release tag:
 
 1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
-2. **node-image-gcp assets** on tag `node-image-gcp-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
+2. **node-image-gcp assets** on tag `mero-tee-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
 
 These map to two deployment lanes with different responsibilities:
 
