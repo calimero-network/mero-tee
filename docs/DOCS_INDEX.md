@@ -27,6 +27,7 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/runbooks/operations/verify-mrtd.md` | End-user/operator verification flow | `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/attestation/verify_tdx_quote_ita.py` | Operators, auditors |
 | `docs/release/minimal-download-sets.md` | Minimal asset sets for quick verify vs full audit | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh` | Operators, auditors |
 | `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |
+| `docs/DOCS_GRAPH.md` | Visual Mermaid graph of doc structure and relationships | `README.md`, `docs/DOCS_INDEX.md` | All |
 | `docs/runbooks/operations/kms-blue-green-rollout.md` | Decision-tree rollout and rollback procedure | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/policy/generate-merod-kms-phala-attestation-config.sh` | Operators |
 | `docs/policies/kms-phala-staging-probe.md` | Staging probe process for KMS policy candidates | `kms-phala-staging-probe.yaml`, `scripts/attestation/extract_tdx_policy_candidates.py` | Release engineers |
 | `docs/policies/kms-phala-policy-promotion.md` | Manual PR promotion of KMS policy candidates | `kms-phala-policy-promotion-pr.yaml` | Release engineers |
