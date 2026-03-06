@@ -2,34 +2,14 @@
   "schema_version": 1,
   "releases": [
     {
-      "version": "2.1.14",
-      "kms_tag": "mero-kms-v2.1.14",
-      "kms_policy_file": "policies/kms-phala/2.1.14.json",
-      "kms_policy_sha256": "82651de9a12888a0298e9ba628cb627f2f009eee0aadefd3135362e1c142b7df",
-      "node_image_tag": "mero-tee-v2.1.14",
-      "node_image_policy_file": "policies/mero-tee/2.1.14.json",
-      "node_image_policy_sha256": "06a132749189eeebbe38193f768d2e9afbfaea80f8b492341dbd28d1d6cb5b9f",
-      "updated_at": "2026-03-06T15:00:00Z"
-    },
-    {
-      "version": "2.1.13",
-      "kms_tag": "mero-kms-v2.1.13",
-      "kms_policy_file": "policies/kms-phala/2.1.13.json",
-      "kms_policy_sha256": "10c1ffebab620ba15b80f9635bdefa33dedfccab72f1d1e9485c9069dc910c6b",
-      "node_image_tag": "mero-tee-v2.1.13",
-      "node_image_policy_file": "policies/mero-tee/2.1.13.json",
-      "node_image_policy_sha256": "49d4146e052cb2a7e0144c2e9c3022de7c07ed474e0ffcc4f47beb244de51b05",
-      "updated_at": "2026-03-06T11:12:50Z"
-    },
-    {
-      "version": "2.1.12",
-      "kms_tag": "mero-kms-v2.1.12",
-      "kms_policy_file": "policies/kms-phala/2.1.12.json",
-      "kms_policy_sha256": "57f27c348823092580f06cd1b4d56da71f1af00cc090299ae3e7430f0c2f9459",
-      "node_image_tag": "mero-tee-v2.1.12",
-      "node_image_policy_file": "policies/mero-tee/2.1.12.json",
-      "node_image_policy_sha256": "3b3ed12111a29848ea1de3be8abfd264aa37b89c6c1b69586a535f2ce67b410e",
-      "updated_at": "2026-03-06T08:06:37Z"
+      "version": "2.1.10",
+      "kms_tag": "mero-kms-v2.1.10",
+      "kms_policy_file": "policies/kms-phala/2.1.10.json",
+      "kms_policy_sha256": "94ca9dcd022cfa1a1b5003cb75b3e0ad94c30d677e254830ac88384a1f79eed2",
+      "node_image_tag": "mero-tee-v2.1.10",
+      "node_image_policy_file": "policies/mero-tee/2.1.10.json",
+      "node_image_policy_sha256": "2ff36bb06f97a57bbee2d344aba3659133090b9bf098a13b4f6be6c81741a621",
+      "updated_at": "2026-03-05T16:07:19Z"
     },
     {
       "version": "2.1.11",
@@ -42,54 +22,44 @@
       "updated_at": "2026-03-05T21:24:34Z"
     },
     {
-      "version": "2.1.10",
-      "kms_tag": "mero-kms-v2.1.10",
-      "kms_policy_file": "policies/kms-phala/2.1.10.json",
-      "kms_policy_sha256": "94ca9dcd022cfa1a1b5003cb75b3e0ad94c30d677e254830ac88384a1f79eed2",
-      "node_image_tag": "mero-tee-v2.1.10",
-      "node_image_policy_file": "policies/mero-tee/2.1.10.json",
-      "node_image_policy_sha256": "2ff36bb06f97a57bbee2d344aba3659133090b9bf098a13b4f6be6c81741a621",
-      "updated_at": "2026-03-05T16:07:19Z"
+      "version": "2.1.12",
+      "kms_tag": "mero-kms-v2.1.12",
+      "kms_policy_file": "policies/kms-phala/2.1.12.json",
+      "kms_policy_sha256": "57f27c348823092580f06cd1b4d56da71f1af00cc090299ae3e7430f0c2f9459",
+      "node_image_tag": "mero-tee-v2.1.12",
+      "node_image_policy_file": "policies/mero-tee/2.1.12.json",
+      "node_image_policy_sha256": "3b3ed12111a29848ea1de3be8abfd264aa37b89c6c1b69586a535f2ce67b410e",
+      "updated_at": "2026-03-06T08:06:37Z"
     },
     {
-      "version": "2.1.9",
-      "kms_tag": "mero-kms-v2.1.9",
-      "kms_policy_file": "policies/kms-phala/2.1.9.json",
-      "kms_policy_sha256": "460a68d67e86794ccf952656fd479986dc06c21b93f9b60608701f49fb2c93dd",
-      "node_image_tag": "mero-tee-v2.1.9",
-      "node_image_policy_file": "policies/mero-tee/2.1.9.json",
-      "node_image_policy_sha256": "bcd683fc1f8cdda747d0b2234d5b356bc43043dcd4dc6d43a64de3822aea64cd",
-      "updated_at": "2026-03-05T15:49:42Z"
+      "version": "2.1.13",
+      "kms_tag": "mero-kms-v2.1.13",
+      "kms_policy_file": "policies/kms-phala/2.1.13.json",
+      "kms_policy_sha256": "10c1ffebab620ba15b80f9635bdefa33dedfccab72f1d1e9485c9069dc910c6b",
+      "node_image_tag": "mero-tee-v2.1.13",
+      "node_image_policy_file": "policies/mero-tee/2.1.13.json",
+      "node_image_policy_sha256": "49d4146e052cb2a7e0144c2e9c3022de7c07ed474e0ffcc4f47beb244de51b05",
+      "updated_at": "2026-03-06T11:12:50Z"
     },
     {
-      "version": "2.1.8",
-      "kms_tag": "mero-kms-v2.1.8",
-      "kms_policy_file": "policies/kms-phala/2.1.8.json",
-      "kms_policy_sha256": "d47bf839090e6f4a7b0c3b5099d7ab122ec8f597230bed642e7988461e904162",
-      "node_image_tag": "mero-tee-v2.1.8",
-      "node_image_policy_file": "policies/mero-tee/2.1.8.json",
-      "node_image_policy_sha256": "fd24984a06bd86e4686975ec88d985410c6b650b994ab300d844adf23c636547",
-      "updated_at": "2026-03-05T15:21:42Z"
+      "version": "2.1.14",
+      "kms_tag": "mero-kms-v2.1.14",
+      "kms_policy_file": "policies/kms-phala/2.1.14.json",
+      "kms_policy_sha256": "82651de9a12888a0298e9ba628cb627f2f009eee0aadefd3135362e1c142b7df",
+      "node_image_tag": "mero-tee-v2.1.14",
+      "node_image_policy_file": "policies/mero-tee/2.1.14.json",
+      "node_image_policy_sha256": "44f107ceffde6a13865465e5c9ab1af2f521745c19bfbb0c66dbb87b4e890a7f",
+      "updated_at": "2026-03-06T15:30:05Z"
     },
     {
-      "version": "2.1.7",
-      "kms_tag": "mero-kms-v2.1.7",
-      "kms_policy_file": "policies/kms-phala/2.1.7.json",
-      "kms_policy_sha256": "9295a9457ba2951e60c063c0d4276eb6fc4dbdade221112daf2250d7cbad85a3",
-      "node_image_tag": "mero-tee-v2.1.7",
-      "node_image_policy_file": "policies/mero-tee/2.1.7.json",
-      "node_image_policy_sha256": "1549d19f4d0f38acd4f5a50e4e6c9fe67cfc74731009a6f164574fc7dbe7a092",
-      "updated_at": "2026-03-05T15:04:37Z"
-    },
-    {
-      "version": "2.1.6",
-      "kms_tag": "mero-kms-v2.1.6",
-      "kms_policy_file": "policies/kms-phala/2.1.6.json",
-      "kms_policy_sha256": "de293d4854211c3ce44419d1a3857ab47c4fab138f6e56e2cac37b7012369be4",
-      "node_image_tag": "mero-tee-v2.1.6",
-      "node_image_policy_file": "policies/mero-tee/2.1.6.json",
-      "node_image_policy_sha256": "68e5339db45b9158ce3b92fac10c0fdfe1190d2592ca50b905d20b59210cc482",
-      "updated_at": "2026-03-05T12:04:25Z"
+      "version": "2.1.4",
+      "kms_tag": "mero-kms-v2.1.4",
+      "kms_policy_file": "policies/kms-phala/2.1.4.json",
+      "kms_policy_sha256": "7435b2ee3f0ab91f2f1e2ff5be9f8021d8a67019e262ef227dd18d4f5f87d33a",
+      "node_image_tag": "mero-tee-v2.1.4",
+      "node_image_policy_file": "policies/mero-tee/2.1.4.json",
+      "node_image_policy_sha256": "f0443ddf7c4a5736a61774726baff8a49a0cd5e12bcda1944231f9390700924e",
+      "updated_at": "2026-03-04T23:01:55Z"
     },
     {
       "version": "2.1.5",
@@ -102,14 +72,44 @@
       "updated_at": "2026-03-05T11:51:14Z"
     },
     {
-      "version": "2.1.4",
-      "kms_tag": "mero-kms-v2.1.4",
-      "kms_policy_file": "policies/kms-phala/2.1.4.json",
-      "kms_policy_sha256": "7435b2ee3f0ab91f2f1e2ff5be9f8021d8a67019e262ef227dd18d4f5f87d33a",
-      "node_image_tag": "mero-tee-v2.1.4",
-      "node_image_policy_file": "policies/mero-tee/2.1.4.json",
-      "node_image_policy_sha256": "f0443ddf7c4a5736a61774726baff8a49a0cd5e12bcda1944231f9390700924e",
-      "updated_at": "2026-03-04T23:01:55Z"
+      "version": "2.1.6",
+      "kms_tag": "mero-kms-v2.1.6",
+      "kms_policy_file": "policies/kms-phala/2.1.6.json",
+      "kms_policy_sha256": "de293d4854211c3ce44419d1a3857ab47c4fab138f6e56e2cac37b7012369be4",
+      "node_image_tag": "mero-tee-v2.1.6",
+      "node_image_policy_file": "policies/mero-tee/2.1.6.json",
+      "node_image_policy_sha256": "68e5339db45b9158ce3b92fac10c0fdfe1190d2592ca50b905d20b59210cc482",
+      "updated_at": "2026-03-05T12:04:25Z"
+    },
+    {
+      "version": "2.1.7",
+      "kms_tag": "mero-kms-v2.1.7",
+      "kms_policy_file": "policies/kms-phala/2.1.7.json",
+      "kms_policy_sha256": "9295a9457ba2951e60c063c0d4276eb6fc4dbdade221112daf2250d7cbad85a3",
+      "node_image_tag": "mero-tee-v2.1.7",
+      "node_image_policy_file": "policies/mero-tee/2.1.7.json",
+      "node_image_policy_sha256": "1549d19f4d0f38acd4f5a50e4e6c9fe67cfc74731009a6f164574fc7dbe7a092",
+      "updated_at": "2026-03-05T15:04:37Z"
+    },
+    {
+      "version": "2.1.8",
+      "kms_tag": "mero-kms-v2.1.8",
+      "kms_policy_file": "policies/kms-phala/2.1.8.json",
+      "kms_policy_sha256": "d47bf839090e6f4a7b0c3b5099d7ab122ec8f597230bed642e7988461e904162",
+      "node_image_tag": "mero-tee-v2.1.8",
+      "node_image_policy_file": "policies/mero-tee/2.1.8.json",
+      "node_image_policy_sha256": "fd24984a06bd86e4686975ec88d985410c6b650b994ab300d844adf23c636547",
+      "updated_at": "2026-03-05T15:21:42Z"
+    },
+    {
+      "version": "2.1.9",
+      "kms_tag": "mero-kms-v2.1.9",
+      "kms_policy_file": "policies/kms-phala/2.1.9.json",
+      "kms_policy_sha256": "460a68d67e86794ccf952656fd479986dc06c21b93f9b60608701f49fb2c93dd",
+      "node_image_tag": "mero-tee-v2.1.9",
+      "node_image_policy_file": "policies/mero-tee/2.1.9.json",
+      "node_image_policy_sha256": "bcd683fc1f8cdda747d0b2234d5b356bc43043dcd4dc6d43a64de3822aea64cd",
+      "updated_at": "2026-03-05T15:49:42Z"
     }
   ]
 }
