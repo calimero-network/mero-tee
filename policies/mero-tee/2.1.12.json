@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "policy_id": "mero-tee/2.1.12",
+  "release_tag": "2.1.12",
+  "status": "released",
+  "generated_at": "2026-03-05T16:07:04Z",
+  "source": {
+    "repository": "calimero-network/mero-tee",
+    "workflow": "GCP Locked Image Build",
+    "run_id": "22683605343",
+    "run_attempt": "1",
+    "commit_sha": "5aeb388430ae168683d1b39a9243765540a8542b"
+  },
+  "profiles": {
+    "debug": {
+      "allowed_mrtd": [
+        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+      ],
+      "allowed_rtmr0": [],
+      "allowed_rtmr1": [],
+      "allowed_rtmr2": [],
+      "allowed_rtmr3": [],
+      "allowed_tcb_statuses": []
+    },
+    "debug-read-only": {
+      "allowed_mrtd": [
+        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+      ],
+      "allowed_rtmr0": [],
+      "allowed_rtmr1": [],
+      "allowed_rtmr2": [],
+      "allowed_rtmr3": [],
+      "allowed_tcb_statuses": []
+    },
+    "locked-read-only": {
+      "allowed_mrtd": [
+        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+      ],
+      "allowed_rtmr0": [],
+      "allowed_rtmr1": [],
+      "allowed_rtmr2": [],
+      "allowed_rtmr3": [],
+      "allowed_tcb_statuses": []
+    }
+  }
+}
