@@ -1,116 +1,85 @@
-# Documentation Graph
+# Architecture Graph
 
-Visual map of mero-tee documentation structure and relationships. Use this to navigate the docs and understand how topics connect.
+Visual map of KMS, mero-tee, regular nodes, and how they interact.
 
-## Graph
+## System overview
 
 ```mermaid
 flowchart TB
-    subgraph entry["Entry points"]
-        README[README.md]
-        DOCS_INDEX[DOCS_INDEX.md]
-        DOCS_NAV[DOCS_NAVIGATION_MAP.md]
+    subgraph regular["Regular nodes (no TEE)"]
+        MEROD_REG[merod]
     end
 
-    subgraph architecture["Architecture"]
-        TB[trust-boundaries.md]
-        KMS_PROP[phala-kms-key-protection-proposal.md]
-        DIRECT_KMS[phala-direct-kms-design.md]
-        MIGRATION[migration-plan.md]
+    subgraph phala["Phala lane (KMS plane)"]
+        subgraph cvm["Phala CVM"]
+            MEROD_PHALA[merod]
+            KMS[mero-kms-phala]
+            DSTACK[(dstack socket)]
+        end
     end
 
-    subgraph release["Release & verification"]
-        TRUST[trust-and-verification.md]
-        BEGINNER[verification-beginner.md]
-        EXAMPLES[verification-examples.md]
-        PIPELINE[pipeline-sequence-diagrams.md]
-        WORKFLOW[workflow-setup.md]
-        TAXONOMY[taxonomy.md]
-        MINIMAL[minimal-download-sets.md]
+    subgraph gcp["GCP lane (node image plane)"]
+        PACKER[Packer build]
+        NODE_IMG[node-image-gcp]
+        MEROD_GCP[merod on TDX instance]
     end
 
-    subgraph runbooks_platforms["Platform runbooks"]
-        PLAT_README[platforms/README.md]
-        PHALA[phala-kms.md]
-        GCP[gcp-merod.md]
+    subgraph core["calimero-network/core"]
+        MEROD_RUNTIME[merod runtime]
     end
 
-    subgraph runbooks_ops["Operations runbooks"]
-        VERIFY_MRTD[verify-mrtd.md]
-        BLUE_GREEN[kms-blue-green-rollout.md]
-    end
+    %% Regular nodes: no KMS
+    MEROD_REG -->|"no key fetch"| MEROD_RUNTIME
 
-    subgraph policies["Policy workflows"]
-        STAGING[kms-phala-staging-probe.md]
-        PROMO[kms-phala-policy-promotion.md]
-        AUTO[kms-phala-policy-auto-pipeline.md]
-        NODE_PROMO[node-image-gcp-policy-promotion.md]
-        ATTEST_TASK[kms-phala-attestation-task-list.md]
-    end
+    %% Phala flow: merod -> KMS -> dstack
+    MEROD_PHALA -->|"1. POST /attest"| KMS
+    MEROD_PHALA -->|"2. POST /challenge"| KMS
+    MEROD_PHALA -->|"3. POST /get-key"| KMS
+    KMS -->|"GetKey(path)"| DSTACK
+    DSTACK -->|"key bytes"| KMS
+    KMS -->|"storage key"| MEROD_PHALA
 
-    subgraph meta["Meta / proposals"]
-        RESTRUCTURE[REPO_RESTRUCTURE_PROPOSAL.md]
-    end
-
-    %% Entry point links
-    README --> PLAT_README
-    README --> TB
-    README --> DOCS_INDEX
-    DOCS_INDEX --> DOCS_NAV
-
-    %% Architecture is central
-    TB --> PLAT_README
-    TB --> PHALA
-    TB --> GCP
-    TB --> TRUST
-
-    %% Release trust flow
-    TRUST --> BEGINNER
-    TRUST --> PLAT_README
-    TRUST --> VERIFY_MRTD
-    TRUST --> EXAMPLES
-    TRUST --> TB
-    BEGINNER --> VERIFY_MRTD
-
-    %% Platform runbooks
-    PLAT_README --> PHALA
-    PLAT_README --> GCP
-    PHALA --> TB
-    PHALA --> BLUE_GREEN
-    GCP --> TB
-    GCP --> VERIFY_MRTD
-
-    %% Operations
-    BLUE_GREEN --> STAGING
-    VERIFY_MRTD --> TB
-
-    %% Policy chain
-    STAGING --> PROMO
-    PROMO --> AUTO
-    ATTEST_TASK --> PHALA
-
-    %% Release automation
-    PIPELINE --> WORKFLOW
-    WORKFLOW --> TRUST
+    %% GCP flow: build -> deploy -> verify
+    PACKER -->|"locked image"| NODE_IMG
+    NODE_IMG -->|"deploy"| MEROD_GCP
+    MEROD_GCP -.->|"verify MRTD"| NODE_IMG
 ```
 
-## Legend
+## Attestation flow (Phala KMS lane)
 
-| Category | Purpose |
-|----------|---------|
-| **Entry points** | Repository root and maintainer indexes |
-| **Architecture** | Trust boundaries, design proposals, migration plans |
-| **Release & verification** | Trust model, verification flows, release taxonomy |
-| **Platform runbooks** | Phala KMS vs GCP node-image deployment lanes |
-| **Operations runbooks** | MRTD verification, KMS blue/green rollout |
-| **Policy workflows** | KMS policy staging, promotion, attestation tasks |
-| **Meta** | Repo structure proposals |
+```mermaid
+sequenceDiagram
+    participant M as merod (in CVM)
+    participant K as mero-kms-phala
+    participant D as dstack
 
-## Quick reference by role
+    M->>K: POST /attest (nonce)
+    K->>M: quoteB64
+    Note over M: Verify KMS quote + policy
+    M->>K: POST /challenge (peerId)
+    K->>M: challengeId, nonce
+    M->>K: POST /get-key (quote, signature)
+    Note over K: Verify node quote + policy
+    K->>D: GetKey(path)
+    D->>K: key bytes
+    K->>M: storage key
+```
 
-| Role | Start here |
-|------|------------|
-| **Operator** | [trust-and-verification.md](release/trust-and-verification.md) → [platforms/README.md](runbooks/platforms/README.md) |
-| **First-time verifier** | [verification-beginner.md](release/verification-beginner.md) |
-| **Release engineer** | [pipeline-sequence-diagrams.md](release/pipeline-sequence-diagrams.md) → [workflow-setup.md](release/workflow-setup.md) |
-| **Maintainer** | [DOCS_INDEX.md](DOCS_INDEX.md) → [trust-boundaries.md](architecture/trust-boundaries.md) |
+## Component roles
+
+| Component | Role |
+|-----------|------|
+| **merod (regular)** | Node runtime; no TEE, no storage key fetch from KMS |
+| **merod (Phala CVM)** | Node in TEE; fetches storage keys from KMS after mutual attestation |
+| **mero-kms-phala** | Validates merod attestation, enforces policy, releases keys from dstack |
+| **dstack** | Phala key system; deterministic key derivation by path |
+| **node-image-gcp** | Locked merod images (Packer) for GCP TDX instances; MRTD/measurement verification |
+
+## Platform lanes
+
+| Lane | Responsibility |
+|------|----------------|
+| **Phala (KMS plane)** | Deploy mero-kms-phala; merod talks to KMS for key release |
+| **GCP (node plane)** | Build/verify/deploy locked merod images; validate measurements |
+
+See [trust-boundaries.md](architecture/trust-boundaries.md) for enforcement points and repository boundaries.
