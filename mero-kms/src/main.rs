@@ -75,8 +75,7 @@ impl Default for Config {
     }
 }
 
-const POLICY_RELEASE_BASE: &str =
-    "https://github.com/calimero-network/mero-tee/releases/download";
+const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
 
 impl Config {
     /// Load configuration from environment variables.
@@ -113,13 +112,17 @@ impl Config {
         } else if let Some(version) = Self::release_version_from_env() {
             match Self::fetch_policy_from_release_async(&version).await {
                 Ok(policy) => {
-                    tracing::info!("Loaded attestation policy from release mero-kms-v{}", version);
+                    tracing::info!(
+                        "Loaded attestation policy from release mero-kms-v{}",
+                        version
+                    );
                     policy
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to fetch policy from release ({}): {}. Falling back to env vars.",
-                        version, e
+                        version,
+                        e
                     );
                     Self::load_policy_from_env()?
                 }
@@ -128,7 +131,9 @@ impl Config {
             Self::load_policy_from_env()?
         };
 
-        if enforce_measurement_policy && !accept_mock_attestation && attestation_policy.allowed_tcb_statuses.is_empty()
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_tcb_statuses.is_empty()
         {
             bail!(
                 "Measurement policy is enforced, but ALLOWED_TCB_STATUSES is empty. \
@@ -136,7 +141,10 @@ impl Config {
             );
         }
 
-        if enforce_measurement_policy && !accept_mock_attestation && attestation_policy.allowed_mrtd.is_empty() {
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_mrtd.is_empty()
+        {
             bail!(
                 "Measurement policy is enforced, but ALLOWED_MRTD is empty. \
                  Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped."
@@ -182,11 +190,7 @@ impl Config {
             .await
             .map_err(|e| eyre::eyre!("Policy fetch failed: {}", e))?;
         if !resp.status().is_success() {
-            bail!(
-                "Policy fetch failed: {} {}",
-                resp.status(),
-                url
-            );
+            bail!("Policy fetch failed: {} {}", resp.status(), url);
         }
         let body = resp
             .text()
@@ -196,8 +200,8 @@ impl Config {
     }
 
     fn parse_policy_json(json_str: &str) -> EyreResult<AttestationPolicy> {
-        let root: serde_json::Value =
-            serde_json::from_str(json_str).map_err(|e| eyre::eyre!("Invalid policy JSON: {}", e))?;
+        let root: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| eyre::eyre!("Invalid policy JSON: {}", e))?;
         let policy = root
             .get("policy")
             .and_then(|v| v.as_object())
@@ -250,7 +254,10 @@ fn parse_bool_flag(value: &str) -> bool {
     )
 }
 
-fn parse_json_string_array(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<Vec<String>> {
+fn parse_json_string_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<Vec<String>> {
     let arr = obj.get(key)?.as_array()?;
     let out: Vec<String> = arr
         .iter()
@@ -275,13 +282,12 @@ fn parse_json_hex_array(
     };
     let mut parsed = Vec::with_capacity(arr.len());
     for (i, v) in arr.iter().enumerate() {
-        let s = v.as_str().ok_or_else(|| {
-            eyre::eyre!("Policy {}[{}] must be a string", key, i)
-        })?;
+        let s = v
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Policy {}[{}] must be a string", key, i))?;
         let normalized = normalize_hex(s);
-        let bytes = hex::decode(&normalized).map_err(|e| {
-            eyre::eyre!("Policy {}[{}] invalid hex: {}", key, i, e)
-        })?;
+        let bytes = hex::decode(&normalized)
+            .map_err(|e| eyre::eyre!("Policy {}[{}] invalid hex: {}", key, i, e))?;
         if bytes.len() != expected_bytes {
             bail!(
                 "Policy {}[{}] invalid length: expected {} bytes, got {}",
