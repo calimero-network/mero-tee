@@ -2,6 +2,16 @@
   "schema_version": 1,
   "releases": [
     {
+      "version": "2.1.14",
+      "kms_tag": "mero-kms-v2.1.14",
+      "kms_policy_file": "policies/kms-phala/2.1.14.json",
+      "kms_policy_sha256": "82651de9a12888a0298e9ba628cb627f2f009eee0aadefd3135362e1c142b7df",
+      "node_image_tag": "mero-tee-v2.1.14",
+      "node_image_policy_file": "policies/mero-tee/2.1.14.json",
+      "node_image_policy_sha256": "06a132749189eeebbe38193f768d2e9afbfaea80f8b492341dbd28d1d6cb5b9f",
+      "updated_at": "2026-03-06T15:00:00Z"
+    },
+    {
       "version": "2.1.13",
       "kms_tag": "mero-kms-v2.1.13",
       "kms_policy_file": "policies/kms-phala/2.1.13.json",

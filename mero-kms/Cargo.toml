@@ -1,6 +1,6 @@
 [package]
 name = "mero-kms-phala"
-version = "2.1.13"
+version = "2.1.14"
 authors = ["Calimero Limited <info@calimero.network>"]
 edition = "2021"
 repository = "https://github.com/calimero-network/mero-tee"
@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.22"
 dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "14b850d9da172cc6cf943365bc37771c550c881f" }
 eyre = "0.6"

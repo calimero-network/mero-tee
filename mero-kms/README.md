@@ -99,6 +99,27 @@ Recommended caller verification:
 
 ## Configuration
 
+### Policy source: release fetch (recommended)
+
+When `MERO_KMS_VERSION` (or `MERO_KMS_RELEASE_TAG`) is set, the KMS fetches the
+attestation policy from the official release at boot:
+
+```
+https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSION}/kms-phala-attestation-policy.json
+```
+
+This ensures the policy cannot be tweaked via env vars; it comes from the
+canonical source. If the fetch fails, the KMS falls back to env vars (if set).
+
+```bash
+export MERO_KMS_VERSION=2.1.14
+```
+
+### Policy source: env vars (air-gapped / legacy)
+
+For air-gapped deployments or when the release is unreachable, set
+`USE_ENV_POLICY=true` and provide policy via env vars.
+
 Environment variables:
 
 - `LISTEN_ADDR` (default: `0.0.0.0:8080`)
@@ -106,6 +127,9 @@ Environment variables:
 - `CHALLENGE_TTL_SECS` (default: `60`)
 - `ACCEPT_MOCK_ATTESTATION` (default: `false`)
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
+- `MERO_KMS_VERSION` – fetch policy from release (e.g. `2.1.14`); recommended
+- `MERO_KMS_RELEASE_TAG` – alternative (e.g. `mero-kms-v2.1.14`)
+- `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
 - `ALLOWED_TCB_STATUSES` (CSV, default: `UpToDate`)
 - `ALLOWED_MRTD` (CSV of hex measurements)
 - `ALLOWED_RTMR0` (CSV of hex measurements)
@@ -119,7 +143,7 @@ Measurement values must be hex-encoded 48-byte values (96 hex chars, optional
 When strict policy is enabled (`ENFORCE_MEASUREMENT_POLICY=true`) and mock
 attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 
-- `ALLOWED_MRTD` must contain at least one trusted value.
+- `ALLOWED_MRTD` must contain at least one trusted value (or use `MERO_KMS_VERSION`).
 - `ALLOWED_TCB_STATUSES` must not be empty.
 
 ## Production guidance

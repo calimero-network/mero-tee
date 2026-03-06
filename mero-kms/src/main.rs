@@ -75,9 +75,14 @@ impl Default for Config {
     }
 }
 
+const POLICY_RELEASE_BASE: &str =
+    "https://github.com/calimero-network/mero-tee/releases/download";
+
 impl Config {
     /// Load configuration from environment variables.
-    pub fn from_env() -> EyreResult<Self> {
+    /// When MERO_KMS_VERSION is set, fetches attestation policy from the official release
+    /// instead of trusting env vars. Use USE_ENV_POLICY=true for air-gapped deployments.
+    pub async fn from_env() -> EyreResult<Self> {
         let listen_addr = std::env::var("LISTEN_ADDR")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -99,16 +104,31 @@ impl Config {
             .map(|v| parse_bool_flag(&v))
             .unwrap_or(true);
 
-        let allowed_tcb_statuses =
-            parse_csv_env("ALLOWED_TCB_STATUSES").unwrap_or_else(|| vec!["uptodate".to_owned()]);
+        let use_env_policy = std::env::var("USE_ENV_POLICY")
+            .map(|v| parse_bool_flag(&v))
+            .unwrap_or(false);
 
-        let allowed_mrtd = parse_measurement_list_env("ALLOWED_MRTD", "MRTD", 48)?;
-        let allowed_rtmr0 = parse_measurement_list_env("ALLOWED_RTMR0", "RTMR0", 48)?;
-        let allowed_rtmr1 = parse_measurement_list_env("ALLOWED_RTMR1", "RTMR1", 48)?;
-        let allowed_rtmr2 = parse_measurement_list_env("ALLOWED_RTMR2", "RTMR2", 48)?;
-        let allowed_rtmr3 = parse_measurement_list_env("ALLOWED_RTMR3", "RTMR3", 48)?;
+        let attestation_policy = if use_env_policy {
+            Self::load_policy_from_env()?
+        } else if let Some(version) = Self::release_version_from_env() {
+            match Self::fetch_policy_from_release_async(&version).await {
+                Ok(policy) => {
+                    tracing::info!("Loaded attestation policy from release mero-kms-v{}", version);
+                    policy
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to fetch policy from release ({}): {}. Falling back to env vars.",
+                        version, e
+                    );
+                    Self::load_policy_from_env()?
+                }
+            }
+        } else {
+            Self::load_policy_from_env()?
+        };
 
-        if enforce_measurement_policy && !accept_mock_attestation && allowed_tcb_statuses.is_empty()
+        if enforce_measurement_policy && !accept_mock_attestation && attestation_policy.allowed_tcb_statuses.is_empty()
         {
             bail!(
                 "Measurement policy is enforced, but ALLOWED_TCB_STATUSES is empty. \
@@ -116,10 +136,10 @@ impl Config {
             );
         }
 
-        if enforce_measurement_policy && !accept_mock_attestation && allowed_mrtd.is_empty() {
+        if enforce_measurement_policy && !accept_mock_attestation && attestation_policy.allowed_mrtd.is_empty() {
             bail!(
                 "Measurement policy is enforced, but ALLOWED_MRTD is empty. \
-                 Configure at least one trusted MRTD to prevent releasing keys to arbitrary TEEs."
+                 Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped."
             );
         }
 
@@ -128,15 +148,97 @@ impl Config {
             dstack_socket_path,
             challenge_ttl_secs,
             accept_mock_attestation,
-            attestation_policy: AttestationPolicy {
-                enforce_measurement_policy,
-                allowed_tcb_statuses,
-                allowed_mrtd,
-                allowed_rtmr0,
-                allowed_rtmr1,
-                allowed_rtmr2,
-                allowed_rtmr3,
-            },
+            attestation_policy,
+        })
+    }
+
+    fn release_version_from_env() -> Option<String> {
+        let tag = std::env::var("MERO_KMS_RELEASE_TAG").ok();
+        let version = std::env::var("MERO_KMS_VERSION").ok();
+        tag.or(version).map(|s| {
+            let s = s.trim();
+            if s.starts_with("mero-kms-v") {
+                s.strip_prefix("mero-kms-v").unwrap_or(s).to_string()
+            } else {
+                s.to_string()
+            }
+        })
+    }
+
+    async fn fetch_policy_from_release_async(version: &str) -> EyreResult<AttestationPolicy> {
+        let tag = format!("mero-kms-v{}", version.trim());
+        let url = format!(
+            "{}/{}/kms-phala-attestation-policy.json",
+            POLICY_RELEASE_BASE, tag
+        );
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("mero-kms-phala/1.0")
+            .build()
+            .map_err(|e| eyre::eyre!("Failed to create HTTP client: {}", e))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| eyre::eyre!("Policy fetch failed: {}", e))?;
+        if !resp.status().is_success() {
+            bail!(
+                "Policy fetch failed: {} {}",
+                resp.status(),
+                url
+            );
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| eyre::eyre!("Failed to read policy response: {}", e))?;
+        Self::parse_policy_json(&body)
+    }
+
+    fn parse_policy_json(json_str: &str) -> EyreResult<AttestationPolicy> {
+        let root: serde_json::Value =
+            serde_json::from_str(json_str).map_err(|e| eyre::eyre!("Invalid policy JSON: {}", e))?;
+        let policy = root
+            .get("policy")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| eyre::eyre!("Policy JSON missing 'policy' object"))?;
+
+        let allowed_tcb_statuses = parse_json_string_array(policy, "allowed_tcb_statuses")
+            .unwrap_or_else(|| vec!["uptodate".to_owned()]);
+        let allowed_mrtd = parse_json_hex_array(policy, "allowed_mrtd", 48)?;
+        let allowed_rtmr0 = parse_json_hex_array(policy, "allowed_rtmr0", 48)?;
+        let allowed_rtmr1 = parse_json_hex_array(policy, "allowed_rtmr1", 48)?;
+        let allowed_rtmr2 = parse_json_hex_array(policy, "allowed_rtmr2", 48)?;
+        let allowed_rtmr3 = parse_json_hex_array(policy, "allowed_rtmr3", 48)?;
+
+        Ok(AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses,
+            allowed_mrtd,
+            allowed_rtmr0,
+            allowed_rtmr1,
+            allowed_rtmr2,
+            allowed_rtmr3,
+        })
+    }
+
+    fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
+        let allowed_tcb_statuses =
+            parse_csv_env("ALLOWED_TCB_STATUSES").unwrap_or_else(|| vec!["uptodate".to_owned()]);
+        let allowed_mrtd = parse_measurement_list_env("ALLOWED_MRTD", "MRTD", 48)?;
+        let allowed_rtmr0 = parse_measurement_list_env("ALLOWED_RTMR0", "RTMR0", 48)?;
+        let allowed_rtmr1 = parse_measurement_list_env("ALLOWED_RTMR1", "RTMR1", 48)?;
+        let allowed_rtmr2 = parse_measurement_list_env("ALLOWED_RTMR2", "RTMR2", 48)?;
+        let allowed_rtmr3 = parse_measurement_list_env("ALLOWED_RTMR3", "RTMR3", 48)?;
+
+        Ok(AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses,
+            allowed_mrtd,
+            allowed_rtmr0,
+            allowed_rtmr1,
+            allowed_rtmr2,
+            allowed_rtmr3,
         })
     }
 }
@@ -146,6 +248,52 @@ fn parse_bool_flag(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes"
     )
+}
+
+fn parse_json_string_array(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<Vec<String>> {
+    let arr = obj.get(key)?.as_array()?;
+    let out: Vec<String> = arr
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.trim().to_ascii_lowercase()))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn parse_json_hex_array(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    expected_bytes: usize,
+) -> EyreResult<Vec<String>> {
+    let arr = match obj.get(key).and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Ok(Vec::new()),
+    };
+    let mut parsed = Vec::with_capacity(arr.len());
+    for (i, v) in arr.iter().enumerate() {
+        let s = v.as_str().ok_or_else(|| {
+            eyre::eyre!("Policy {}[{}] must be a string", key, i)
+        })?;
+        let normalized = normalize_hex(s);
+        let bytes = hex::decode(&normalized).map_err(|e| {
+            eyre::eyre!("Policy {}[{}] invalid hex: {}", key, i, e)
+        })?;
+        if bytes.len() != expected_bytes {
+            bail!(
+                "Policy {}[{}] invalid length: expected {} bytes, got {}",
+                key,
+                i,
+                expected_bytes,
+                bytes.len()
+            );
+        }
+        parsed.push(normalized);
+    }
+    Ok(parsed)
 }
 
 fn parse_csv_env(name: &str) -> Option<Vec<String>> {
@@ -212,7 +360,7 @@ async fn main() -> eyre::Result<()> {
         .init();
 
     // Load configuration
-    let config = Config::from_env()?;
+    let config = Config::from_env().await?;
 
     info!("Starting mero-kms-phala");
     info!("Listen address: {}", config.listen_addr);

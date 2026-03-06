@@ -6,6 +6,18 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.14] - 2026-03-06
+
+### Added
+
+- KMS fetches attestation policy from official release at boot when `MERO_KMS_VERSION` is set, instead of trusting env vars. Use `USE_ENV_POLICY=true` for air-gapped deployments.
+
+### Changed
+
+- MDMA passes `MERO_KMS_VERSION` when creating KMS deployments so the KMS fetches policy from `https://github.com/calimero-network/mero-tee/releases`.
+
+## [2.1.13] - 2026-03-06
+
 ### Added
 
 - Formal release taxonomy and operator-facing documentation index.
