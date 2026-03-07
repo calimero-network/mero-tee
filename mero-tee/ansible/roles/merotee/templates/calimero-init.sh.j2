@@ -38,6 +38,7 @@ SERVER_PORT=$(get_meta "server-port")
 SERVER_PORT=${SERVER_PORT:-2428}
 SWARM_PORT=$(get_meta "swarm-port")
 SWARM_PORT=${SWARM_PORT:-2528}
+TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
 METRICS_SECRET=$(get_meta "metrics-secret-name")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
@@ -48,6 +49,12 @@ CPU_PLATFORM=$(uname -m)
 BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VERSION}"
 
 log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
+
+if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
+  printf 'MERO_TEE_VERSION=%s\n' "$TEE_RELEASE_VERSION" > /etc/calimero/merod.env
+  chmod 0644 /etc/calimero/merod.env
+  log "Configured MERO_TEE_VERSION from tee-release-version metadata"
+fi
 
 # Download only from trusted GitHub releases
 download() {
