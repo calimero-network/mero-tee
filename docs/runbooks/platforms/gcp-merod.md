@@ -58,6 +58,16 @@ For image build and publishing details, see:
 
 - [mero-tee/README.md](../../../mero-tee/README.md)
 
+### Optional runtime metadata for `MERO_TEE_VERSION`
+
+When creating instances, you can pass metadata key `tee-release-version`.
+During boot, the init service maps it to `MERO_TEE_VERSION` for `merod` via
+`/etc/calimero/merod.env`.
+
+- If `tee-release-version` is set, `MERO_TEE_VERSION` is written and loaded.
+- If `tee-release-version` is removed, `/etc/calimero/merod.env` is removed on
+  next boot to avoid stale values.
+
 ---
 
 ## 5) Verify runtime measurements after boot

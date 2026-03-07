@@ -6,6 +6,16 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.15] - 2026-03-07
+
+### Added
+
+- `mero-tee` init now reads `tee-release-version` metadata and writes `/etc/calimero/merod.env` with `MERO_TEE_VERSION=<value>` when set.
+
+### Changed
+
+- `merod.service` now loads optional runtime overrides via `EnvironmentFile=-/etc/calimero/merod.env`.
+
 ## [2.1.14] - 2026-03-06
 
 ### Added

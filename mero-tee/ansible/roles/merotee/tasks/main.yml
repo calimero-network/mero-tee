@@ -119,6 +119,7 @@
         After=calimero-init.service
 
         [Service]
+        EnvironmentFile=-/etc/calimero/merod.env
         ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
         Restart=always
 
