@@ -51,9 +51,16 @@ BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VER
 log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
 
 if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
-  printf 'MERO_TEE_VERSION=%s\n' "$TEE_RELEASE_VERSION" > /etc/calimero/merod.env
+  # Prevent EnvironmentFile injection: strip line breaks and quote/escape value.
+  SANITIZED_TEE_RELEASE_VERSION=${TEE_RELEASE_VERSION//$'\n'/}
+  SANITIZED_TEE_RELEASE_VERSION=${SANITIZED_TEE_RELEASE_VERSION//$'\r'/}
+  ESCAPED_TEE_RELEASE_VERSION=${SANITIZED_TEE_RELEASE_VERSION//\\/\\\\}
+  ESCAPED_TEE_RELEASE_VERSION=${ESCAPED_TEE_RELEASE_VERSION//\"/\\\"}
+  printf 'MERO_TEE_VERSION="%s"\n' "$ESCAPED_TEE_RELEASE_VERSION" > /etc/calimero/merod.env
   chmod 0644 /etc/calimero/merod.env
   log "Configured MERO_TEE_VERSION from tee-release-version metadata"
+else
+  rm -f /etc/calimero/merod.env
 fi
 
 # Download only from trusted GitHub releases
