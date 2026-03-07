@@ -58,8 +58,8 @@
       "kms_policy_sha256": "2119fa82c13ca58faf27a6360d37a1ce3a0d288edab5d5dcbefc55767c3e7084",
       "node_image_tag": "mero-tee-v2.1.15",
       "node_image_policy_file": "policies/mero-tee/2.1.15.json",
-      "node_image_policy_sha256": "5d345397ca0dbbf03e9ee249b4d4bf0dc53cf6bb063c612f81a968981a936b85",
-      "updated_at": "2026-03-07T09:16:16Z"
+      "node_image_policy_sha256": "f6744c2b869c374cdc7b638fac82cded7d64d3611aa688ae5d4656a71a1dd1e6",
+      "updated_at": "2026-03-07T14:49:01Z"
     },
     {
       "version": "2.1.4",
