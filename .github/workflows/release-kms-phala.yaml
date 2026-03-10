@@ -225,7 +225,7 @@ jobs:
 
       - name: Attest container image build provenance
         if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_and_push.outputs.digest != '' }}
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
           subject-digest: ${{ steps.build_and_push.outputs.digest }}
