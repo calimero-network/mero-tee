@@ -186,7 +186,7 @@ jobs:
         uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # GITHUB_TOKEN often lacks packages write in orgs. Add GHCR_PUSH_TOKEN (PAT with write:packages) if push fails.
       - name: Log in to GitHub Container Registry
