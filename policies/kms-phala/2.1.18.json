@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "policy_id": "mero-kms-phala/2.1.18",
+  "release_tag": "2.1.18",
+  "status": "approved",
+  "generated_at": "2026-03-07T09:16:16Z",
+  "source": {
+    "repository": "calimero-network/mero-tee",
+    "workflow": "kms-phala-staging-probe.yaml",
+    "run_id": "22693432387",
+    "run_url": "https://github.com/calimero-network/mero-tee/actions/runs/22693432387",
+    "artifact_name": "kms-staging-probe-22693432387-1",
+    "attestation_context": {
+      "base_url": "https://dc526011fa0552d8ea85a77db9682479dd1e0f54-8080.dstack-pha-prod5.phala.network",
+      "nonce_b64": "IgBxzzRoL54r8cGC78S7VCzbUEFVfQ2FuPSftzFyHoM=",
+      "vm_uuid": "f1e27c6e-ddd4-496a-b534-834121842a10",
+      "app_id": "dc526011fa0552d8ea85a77db9682479dd1e0f54"
+    }
+  },
+  "policy": {
+    "allowed_mrtd": [
+      "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077"
+    ],
+    "allowed_rtmr0": [
+      "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96"
+    ],
+    "allowed_rtmr1": [
+      "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
+    ],
+    "allowed_rtmr2": [
+      "5c993ed29378b41d94a402055aee9294c5de3b6daa07542cbc734e3a4789eef5a7cd35590bac7804dcf2bcc90b77482b"
+    ],
+    "allowed_rtmr3": [
+      "e19e2e0192850a5dfe035e0169aa70ca4d1b8dd476badf8db562914433f5f0f96cf0f6314d39f25fd8debfb4347155f6"
+    ],
+    "allowed_tcb_statuses": [
+      "outofdate"
+    ]
+  },
+  "candidate_policy": {
+    "allowed_mrtd": [
+      "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077"
+    ],
+    "allowed_rtmr0": [
+      "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96"
+    ],
+    "allowed_rtmr1": [
+      "c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc"
+    ],
+    "allowed_rtmr2": [
+      "5c993ed29378b41d94a402055aee9294c5de3b6daa07542cbc734e3a4789eef5a7cd35590bac7804dcf2bcc90b77482b"
+    ],
+    "allowed_rtmr3": [
+      "e19e2e0192850a5dfe035e0169aa70ca4d1b8dd476badf8db562914433f5f0f96cf0f6314d39f25fd8debfb4347155f6"
+    ],
+    "allowed_tcb_statuses": [
+      "outofdate"
+    ]
+  },
+  "github_repository_variables": {
+    "MERO_KMS_ALLOWED_MRTD_JSON": "[\"f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077\"]",
+    "MERO_KMS_ALLOWED_RTMR0_JSON": "[\"68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96\"]",
+    "MERO_KMS_ALLOWED_RTMR1_JSON": "[\"c0445b704e4c48139496ae337423ddb1dcee3a673fd5fb60a53d562f127d235f11de471a7b4ee12c9027c829786757dc\"]",
+    "MERO_KMS_ALLOWED_RTMR2_JSON": "[\"5c993ed29378b41d94a402055aee9294c5de3b6daa07542cbc734e3a4789eef5a7cd35590bac7804dcf2bcc90b77482b\"]",
+    "MERO_KMS_ALLOWED_RTMR3_JSON": "[\"e19e2e0192850a5dfe035e0169aa70ca4d1b8dd476badf8db562914433f5f0f96cf0f6314d39f25fd8debfb4347155f6\"]",
+    "MERO_KMS_ALLOWED_TCB_STATUSES_JSON": "[\"outofdate\"]"
+  }
+}
