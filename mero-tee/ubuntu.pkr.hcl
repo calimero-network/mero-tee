@@ -1,12 +1,13 @@
 packer {
   required_plugins {
+    # Pin to versions with GitHub release assets (HashiCorp moved newer releases to releases.hashicorp.com)
     googlecompute = {
       source  = "github.com/hashicorp/googlecompute"
-      version = "~> 1"
+      version = "= 1.2.1"
     }
     ansible = {
       source  = "github.com/hashicorp/ansible"
-      version = "~> 1"
+      version = "= 1.1.3"
     }
   }
 }
