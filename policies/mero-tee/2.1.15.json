@@ -3,7 +3,7 @@
   "policy_id": "mero-tee/2.1.15",
   "release_tag": "2.1.15",
   "status": "released",
-  "generated_at": "2026-03-07T09:16:16Z",
+  "generated_at": "2026-03-07T14:49:01Z",
   "source": {
     "repository": "calimero-network/mero-tee",
     "workflow": "release-node-image-gcp.yaml",
