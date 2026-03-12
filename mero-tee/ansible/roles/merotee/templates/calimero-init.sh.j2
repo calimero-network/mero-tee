@@ -1,6 +1,6 @@
 #!/bin/bash
-# Calimero locked-down image init (R6). Reads only whitelisted GCP instance
-# metadata keys; downloads merod/meroctl/mero-auth from GitHub only.
+# Calimero locked-down image init (R6). Uses baked merod/meroctl/mero-auth if present;
+# otherwise downloads from GitHub (legacy, requires merod-version metadata).
 set -euo pipefail
 
 LOG="/var/log/calimero-init.log"
@@ -26,13 +26,6 @@ log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 systemctl stop vmagent vector 2>/dev/null || true
 systemctl disable vmagent vector 2>/dev/null || true
 
-# Required
-MEROD_VERSION=$(get_meta "merod-version")
-if [[ -z "${MEROD_VERSION:-}" ]]; then
-  log "ERROR: merod-version metadata is required"
-  exit 1
-fi
-
 # Optional with defaults
 SERVER_PORT=$(get_meta "server-port")
 SERVER_PORT=${SERVER_PORT:-2428}
@@ -44,11 +37,33 @@ METRICS_SECRET=$(get_meta "metrics-secret-name")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
 LOGS_SECRET=$(get_meta "logs-secret-name")
 
-# CPU platform for GitHub release tarballs (e.g. x86_64)
-CPU_PLATFORM=$(uname -m)
-BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VERSION}"
+# Use baked binaries if present (image built with calimero-core); else download at runtime
+if [[ -x "${BIN_DIR}/merod" ]] && [[ -x "${BIN_DIR}/meroctl" ]] && [[ -x "${BIN_DIR}/mero-auth" ]]; then
+  log "Using baked merod/meroctl/mero-auth from image"
+else
+  MEROD_VERSION=$(get_meta "merod-version")
+  if [[ -z "${MEROD_VERSION:-}" ]]; then
+    log "ERROR: merod-version metadata required (binaries not baked in image)"
+    exit 1
+  fi
+  CPU_PLATFORM=$(uname -m)
+  BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VERSION}"
+  log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
+  download() {
+    local name="$1"
+    local tar="${name}_${CPU_PLATFORM}-unknown-linux-gnu.tar.gz"
+    log "Downloading $name from $BASE_URL ..."
+    wget -q -O "/tmp/${name}.tar.gz" "${BASE_URL}/${tar}"
+    tar -xzf "/tmp/${name}.tar.gz" -C "$BIN_DIR"
+    chmod 0755 "$BIN_DIR/$name"
+    rm -f "/tmp/${name}.tar.gz"
+  }
+  download merod
+  download meroctl
+  download mero-auth
+fi
 
-log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
+log "server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
 
 if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
   # Prevent EnvironmentFile injection: strip line breaks and quote/escape value.
@@ -62,17 +77,6 @@ if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
 else
   rm -f /etc/calimero/merod.env
 fi
-
-# Download only from trusted GitHub releases
-download() {
-  local name="$1"
-  local tar="${name}_${CPU_PLATFORM}-unknown-linux-gnu.tar.gz"
-  log "Downloading $name from $BASE_URL ..."
-  wget -q -O "/tmp/${name}.tar.gz" "${BASE_URL}/${tar}"
-  tar -xzf "/tmp/${name}.tar.gz" -C "$BIN_DIR"
-  chmod 0755 "$BIN_DIR/$name"
-  rm -f "/tmp/${name}.tar.gz"
-}
 
 init_node() {
   if [[ "$MEROD_MODE" == "read-only" ]]; then
@@ -88,10 +92,6 @@ init_node() {
       --swarm-port "$SWARM_PORT"
   fi
 }
-
-download merod
-download meroctl
-download mero-auth
 
 mkdir -p "$CALIMERO_HOME"
 if [[ ! -d "$CALIMERO_HOME/$CALIMERO_NODE" ]]; then

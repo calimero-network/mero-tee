@@ -63,6 +63,7 @@ jobs:
           image_version="$(jq -er '.imageVersion' mero-tee/versions.json)"
           jq -e '
             has("imageVersion")
+            and has("merodVersion")
             and has("traefikVersion")
             and has("nodeExporterVersion")
             and has("vmagentVersion")

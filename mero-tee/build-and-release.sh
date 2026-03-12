@@ -16,6 +16,11 @@ case "${1:-intel}" in
 esac
 versions="$(<versions.json)"
 image_version="$(echo "$versions" | jq -r '.imageVersion')"
+merod_version="${GATED_MEROD_VERSION:-$(echo "$versions" | jq -r '.merodVersion // empty')}"
+if [[ -z "${merod_version}" ]]; then
+  echo "::error::merodVersion required: set GATED_MEROD_VERSION or merodVersion in versions.json (core tag, e.g. 0.10.0)"
+  exit 1
+fi
 traefik_version="$(echo "$versions" | jq -r '.traefikVersion')"
 node_exporter_version="$(echo "$versions" | jq -r '.nodeExporterVersion')"
 vmagent_version="$(echo "$versions" | jq -r '.vmagentVersion')"
@@ -23,6 +28,7 @@ vector_version="$(echo "$versions" | jq -r '.vectorVersion')"
 
 packer_args=(
   -var "version=${image_version}"
+  -var "merod_version=${merod_version}"
   -var "traefik_version=${traefik_version}"
   -var "node_exporter_version=${node_exporter_version}"
   -var "vmagent_version=${vmagent_version}"

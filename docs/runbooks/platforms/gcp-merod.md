@@ -58,6 +58,14 @@ For image build and publishing details, see:
 
 - [mero-tee/README.md](../../../mero-tee/README.md)
 
+### Baked merod (v2.1.16+)
+
+From v2.1.16 onward, `merod`, `meroctl`, and `mero-auth` are **baked into the image** at build time via the `calimero-core` role. The init service uses these binaries if present and does not download them at runtime.
+
+- **No `merod-version` metadata required** for baked images.
+- Legacy images (pre-2.1.16) still download merod at runtime and require `merod-version` metadata (core tag, e.g. `0.10.0`).
+- The build uses `merodVersion` from `versions.json` (or `GATED_MEROD_VERSION` in CI) to fetch binaries from `calimero-network/core` during image build.
+
 ### Optional runtime metadata for `MERO_TEE_VERSION`
 
 When creating instances, you can pass metadata key `tee-release-version`.

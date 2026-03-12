@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.16] - 2026-03-12
+
+### Added
+
+- **Baked merod**: `merod`, `meroctl`, and `mero-auth` are now baked into the image at build time via the `calimero-core` role. No runtime download or `merod-version` metadata required for new images.
+- `merodVersion` in `versions.json` (core tag, e.g. `0.10.0`). CI uses `GATED_MEROD_VERSION` when set.
+
+### Changed
+
+- `calimero-init` uses baked binaries if present; falls back to runtime download (requires `merod-version` metadata) for legacy images.
+
 ## [2.1.15] - 2026-03-07
 
 ### Added

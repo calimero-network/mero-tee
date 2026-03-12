@@ -14,7 +14,7 @@
   until: merod_download is succeeded
 - name: Download meroctl binary from GitHub releases
   unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ meroctl_version }}/meroctl_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
+    src: https://github.com/calimero-network/core/releases/download/{{ meroctl_version | default(merod_version) }}/meroctl_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
     dest: /usr/local/bin
     mode: "0755"
     remote_src: yes
@@ -22,3 +22,14 @@
   retries: 5
   delay: 10
   until: meroctl_download is succeeded
+
+- name: Download mero-auth binary from GitHub releases
+  unarchive:
+    src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/mero-auth_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+  register: mero_auth_download
+  retries: 5
+  delay: 10
+  until: mero_auth_download is succeeded

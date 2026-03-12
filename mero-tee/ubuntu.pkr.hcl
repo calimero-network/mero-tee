@@ -46,6 +46,11 @@ variable "cpu_architecture" {
   default = ""
 }
 
+variable "merod_version" {
+  type    = string
+  default = ""
+}
+
 variable "lockdown_profile" {
   type    = string
   default = "locked-read-only"
@@ -112,6 +117,7 @@ build {
       "--scp-extra-args", "'-O'",
       "-e", "cpu_architecture=${var.cpu_architecture}",
       "-e", "lockdown_profile=${var.lockdown_profile}",
+      "-e", "merod_version=${var.merod_version}",
       "-e", "traefik_version=${var.traefik_version}",
       "-e", "node_exporter_version=${var.node_exporter_version}",
       "-e", "vmagent_version=${var.vmagent_version}",
