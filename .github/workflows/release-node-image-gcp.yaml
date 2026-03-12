@@ -138,6 +138,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     strategy:
       fail-fast: true
+      max-parallel: 1
       matrix:
         profile: [debug, debug-read-only, locked-read-only]
     permissions:
@@ -290,6 +291,11 @@ jobs:
         run: |
           echo "::error::Packer build failed. Last 150 lines of output:"
           tail -150 /tmp/packer-build.log 2>/dev/null || echo "(no log captured)"
+          echo ""
+          echo "## Packer build failure (profile: ${{ matrix.profile }})" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
+          tail -80 /tmp/packer-build.log 2>/dev/null >> "${GITHUB_STEP_SUMMARY}" || echo "(no log)" >> "${GITHUB_STEP_SUMMARY}"
+          echo '```' >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload packer build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
