@@ -102,6 +102,16 @@
       "updated_at": "2026-03-12T00:00:00Z"
     },
     {
+      "version": "2.1.21",
+      "kms_tag": "mero-kms-v2.1.21",
+      "kms_policy_file": "policies/kms-phala/2.1.21.json",
+      "kms_policy_sha256": "14c1c5067d328b8a542d31ddd8a6bf943e36186a1078b0d05cf7fc8f969f228b",
+      "node_image_tag": "mero-tee-v2.1.21",
+      "node_image_policy_file": "policies/mero-tee/2.1.21.json",
+      "node_image_policy_sha256": "60eaba3b1d74a62708738105bbbe7123fd12375bece16b5e4b8b0b43d5ca68b3",
+      "updated_at": "2026-03-12T00:00:00Z"
+    },
+    {
       "version": "2.1.4",
       "kms_tag": "mero-kms-v2.1.4",
       "kms_policy_file": "policies/kms-phala/2.1.4.json",
