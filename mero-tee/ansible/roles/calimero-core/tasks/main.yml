@@ -14,7 +14,7 @@
   until: merod_download is succeeded
 - name: Download meroctl binary from GitHub releases
   unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ meroctl_version | default(merod_version) }}/meroctl_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
+    src: https://github.com/calimero-network/core/releases/download/{{ meroctl_version | default(merod_version, true) }}/meroctl_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
     dest: /usr/local/bin
     mode: "0755"
     remote_src: yes

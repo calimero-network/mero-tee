@@ -138,7 +138,6 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     strategy:
       fail-fast: true
-      max-parallel: 1
       matrix:
         profile: [debug, debug-read-only, locked-read-only]
     permissions:
