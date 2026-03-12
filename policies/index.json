@@ -106,6 +106,7 @@
       "kms_tag": "mero-kms-v2.1.21",
       "kms_policy_file": "policies/kms-phala/2.1.21.json",
       "kms_policy_sha256": "14c1c5067d328b8a542d31ddd8a6bf943e36186a1078b0d05cf7fc8f969f228b",
+      "merod_release_tag": "0.10.0",
       "node_image_tag": "mero-tee-v2.1.21",
       "node_image_policy_file": "policies/mero-tee/2.1.21.json",
       "node_image_policy_sha256": "60eaba3b1d74a62708738105bbbe7123fd12375bece16b5e4b8b0b43d5ca68b3",
@@ -116,9 +117,21 @@
       "kms_tag": "mero-kms-v2.1.22",
       "kms_policy_file": "policies/kms-phala/2.1.22.json",
       "kms_policy_sha256": "d37135e8871460cd262d495af0f99994ede4b504db656c9cddf13445b8463c2e",
+      "merod_release_tag": "0.10.0",
       "node_image_tag": "mero-tee-v2.1.22",
       "node_image_policy_file": "policies/mero-tee/2.1.22.json",
       "node_image_policy_sha256": "7d36d7306e486ad6199a9d55168514be536e2193bf32fb5eb90723e3278f1e8c",
+      "updated_at": "2026-03-12T00:00:00Z"
+    },
+    {
+      "version": "2.1.23",
+      "kms_tag": "mero-kms-v2.1.23",
+      "kms_policy_file": "policies/kms-phala/2.1.23.json",
+      "kms_policy_sha256": "d5b6670ded0ad8500698e046f2836612b81d1228a7973c21967388488c382b88",
+      "merod_release_tag": "0.10.0",
+      "node_image_tag": "mero-tee-v2.1.23",
+      "node_image_policy_file": "policies/mero-tee/2.1.23.json",
+      "node_image_policy_sha256": "69a980596ce7515999575222e8894e606a6e81f7a232a8a8238185ecb76f61bf",
       "updated_at": "2026-03-12T00:00:00Z"
     },
     {

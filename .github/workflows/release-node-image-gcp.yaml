@@ -597,6 +597,9 @@ jobs:
                 --port "${serial_port}" \
                 > "${artifacts_dir}/serial-port-${serial_port}.log" || true
             done
+            echo ""
+            echo "=== Last 150 lines of serial-port-1 (most recent boot output) ==="
+            tail -150 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
             exit 1
           fi
 
