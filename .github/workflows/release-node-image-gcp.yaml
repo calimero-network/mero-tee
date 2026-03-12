@@ -136,7 +136,7 @@ jobs:
     env:
       GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         profile: [debug, debug-read-only, locked-read-only]
     permissions:
@@ -275,11 +275,30 @@ jobs:
         id: build_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         working-directory: mero-tee
+        env:
+          PACKER_LOG: 1
         run: |
+          set -euo pipefail
           export PACKER_FORCE_BUILD=true
+          echo "Running init.sh..."
           ./init.sh
-          ./build-and-release.sh "${{ matrix.profile }}"
+          echo "Running build-and-release.sh for profile=${{ matrix.profile }}..."
+          ./build-and-release.sh "${{ matrix.profile }}" 2>&1 | tee /tmp/packer-build.log
           echo "Packer build completed successfully."
+
+      - name: Show build log on failure
+        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+        run: |
+          echo "::error::Packer build failed. Last 150 lines of output:"
+          tail -150 /tmp/packer-build.log 2>/dev/null || echo "(no log captured)"
+
+      - name: Upload packer build log on failure
+        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: packer-build-log-${{ matrix.profile }}-${{ github.run_id }}
+          path: /tmp/packer-build.log
+          if-no-files-found: ignore
 
       - name: Resolve image and VM parameters
         id: params
