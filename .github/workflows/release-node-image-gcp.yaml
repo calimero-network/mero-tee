@@ -88,17 +88,35 @@ jobs:
             exit 0
           fi
 
-          release_json="$(curl -fsSL \
-            --retry 5 \
-            --retry-delay 2 \
-            --retry-all-errors \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/calimero-network/core/releases/latest")"
-          latest_merod_version="$(jq -r '.tag_name // empty' <<< "${release_json}")"
-          if [[ -z "${latest_merod_version}" ]]; then
-            echo "Unable to resolve latest calimero-network/core release tag."
-            exit 1
+          # Prefer merodVersion from versions.json (supports RC/pre-releases; releases/latest excludes them)
+          pinned_version="$(jq -r '.merodVersion // empty' mero-tee/versions.json)"
+          if [[ -n "${pinned_version}" ]]; then
+            echo "Using merodVersion from versions.json: ${pinned_version}"
+            release_json="$(curl -fsSL \
+              --retry 5 \
+              --retry-delay 2 \
+              --retry-all-errors \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/calimero-network/core/releases/tags/${pinned_version}")"
+            if ! jq -e '.tag_name' <<< "${release_json}" >/dev/null 2>&1; then
+              echo "::error::Core release '${pinned_version}' not found. Check that the tag exists (including RC/pre-releases)."
+              exit 1
+            fi
+            latest_merod_version="${pinned_version}"
+          else
+            release_json="$(curl -fsSL \
+              --retry 5 \
+              --retry-delay 2 \
+              --retry-all-errors \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/calimero-network/core/releases/latest")"
+            latest_merod_version="$(jq -r '.tag_name // empty' <<< "${release_json}")"
+            if [[ -z "${latest_merod_version}" ]]; then
+              echo "Unable to resolve latest calimero-network/core release tag."
+              exit 1
+            fi
           fi
 
           for required_asset in \
@@ -106,7 +124,7 @@ jobs:
             "meroctl_x86_64-unknown-linux-gnu.tar.gz" \
             "mero-auth_x86_64-unknown-linux-gnu.tar.gz"; do
               if ! jq -e --arg asset "${required_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
-                echo "::error::Latest core release '${latest_merod_version}' missing required asset: ${required_asset}"
+                echo "::error::Core release '${latest_merod_version}' missing required asset: ${required_asset}"
                 exit 1
               fi
           done
@@ -402,23 +420,33 @@ jobs:
 
           merod_version="${GCP_ATTESTATION_MEROD_VERSION:-${GATED_MEROD_VERSION:-}}"
           if [[ -z "${merod_version}" ]]; then
-            echo "GCP_ATTESTATION_MEROD_VERSION not set; resolving latest calimero-network/core release tag..."
-            release_json="$(curl -fsSL \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              "https://api.github.com/repos/calimero-network/core/releases/latest" 2>/dev/null || true)"
+            # Prefer merodVersion from versions.json (supports RC/pre-releases)
+            pinned_version="$(jq -r '.merodVersion // empty' versions.json 2>/dev/null || true)"
+            if [[ -n "${pinned_version}" ]]; then
+              echo "Resolving merod from versions.json: ${pinned_version}"
+              release_json="$(curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/calimero-network/core/releases/tags/${pinned_version}" 2>/dev/null || true)"
+            fi
+            if [[ -z "${pinned_version}" || ! "$(jq -r '.tag_name // empty' <<< "${release_json}" 2>/dev/null)" ]]; then
+              echo "Resolving latest calimero-network/core release tag..."
+              release_json="$(curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/calimero-network/core/releases/latest" 2>/dev/null || true)"
+            fi
             merod_version="$(jq -r '.tag_name // empty' <<< "${release_json}" 2>/dev/null || true)"
             if [[ -z "${merod_version}" ]]; then
-              echo "Could not resolve latest core release from API; using image_version as fallback: ${image_version}"
+              echo "Could not resolve core release from API; using image_version as fallback: ${image_version}"
               merod_version="${image_version}"
             else
-              # Validate required linux artifacts are present for init downloads.
               for required_asset in \
                 "merod_x86_64-unknown-linux-gnu.tar.gz" \
                 "meroctl_x86_64-unknown-linux-gnu.tar.gz" \
                 "mero-auth_x86_64-unknown-linux-gnu.tar.gz"; do
                 if ! jq -e --arg asset "${required_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null 2>&1; then
-                  echo "::error::Latest core release '${merod_version}' missing required asset: ${required_asset}"
+                  echo "::error::Core release '${merod_version}' missing required asset: ${required_asset}"
                   exit 1
                 fi
               done
@@ -598,7 +626,13 @@ jobs:
                 > "${artifacts_dir}/serial-port-${serial_port}.log" || true
             done
             echo ""
-            echo "=== Last 150 lines of serial-port-1 (most recent boot output) ==="
+            echo "=== First 200 lines of serial-port-1 (boot + calimero-init) ==="
+            head -200 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
+            echo ""
+            echo "=== Lines matching calimero-init|merod|ERROR|failed|WARN from serial-port-1 ==="
+            grep -E -i "calimero-init|merod|ERROR|failed|WARN" "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
+            echo ""
+            echo "=== Last 150 lines of serial-port-1 (most recent) ==="
             tail -150 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
             exit 1
           fi
