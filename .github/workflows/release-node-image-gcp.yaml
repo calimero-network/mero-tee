@@ -173,15 +173,18 @@ jobs:
           echo "  - GCP_SERVICE_ACCOUNT_KEY"
           exit 1
 
-      - name: Require pinned base source image
+      - name: Set pinned base source image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
         run: |
           if [[ -z "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
-            echo "::warning::PACKER_GCP_SOURCE_IMAGE is unset; using Packer default source image (less reproducible). Set the repo variable for reproducible builds."
+            echo "::warning::PACKER_GCP_SOURCE_IMAGE is unset; using pinned default. Set the repo variable to override."
+            echo "PACKER_GCP_SOURCE_IMAGE=ubuntu-2404-noble-amd64-v20260225" >> "${GITHUB_ENV}"
           fi
 
       - name: Setup packer
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
         uses: hashicorp/setup-packer@v3.1.0
         with:
           version: v1.11.2
