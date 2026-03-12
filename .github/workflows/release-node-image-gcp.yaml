@@ -561,6 +561,7 @@ jobs:
           echo "base_url=http://${nat_ip}:${{ steps.params.outputs.admin_api_port }}" >> "${GITHUB_OUTPUT}"
 
       - name: Collect TEE info and quote artifacts
+        id: collect_tee
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
@@ -573,20 +574,21 @@ jobs:
             > "${artifacts_dir}/instance.json"
 
           ready="false"
-          for attempt in $(seq 1 60); do
+          max_attempts=90
+          for attempt in $(seq 1 ${max_attempts}); do
             http_code="$(curl -sS --max-time 5 -o "${artifacts_dir}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
             if [[ "${http_code}" == "200" ]]; then
               ready="true"
-              echo "Health endpoint ready (HTTP 200) at attempt ${attempt}/60"
+              echo "Health endpoint ready (HTTP 200) at attempt ${attempt}/${max_attempts}"
               break
             fi
 
-            echo "Health endpoint not ready (HTTP ${http_code:-error}) at attempt ${attempt}/60"
+            echo "Health endpoint not ready (HTTP ${http_code:-error}) at attempt ${attempt}/${max_attempts}"
             sleep 5
           done
 
           if [[ "${ready}" != "true" ]]; then
-            echo "Timed out waiting for ${base_url}/admin-api/health"
+            echo "Timed out waiting for ${base_url}/admin-api/health after ${max_attempts} attempts (~$((max_attempts * 5 / 60)) min)"
             echo "Capturing serial console logs for diagnostics..."
             for serial_port in 1 2 3 4; do
               gcloud compute instances get-serial-port-output "${{ steps.params.outputs.instance_name }}" \
