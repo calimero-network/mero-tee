@@ -135,6 +135,7 @@ jobs:
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' }}
     env:
       GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     strategy:
       fail-fast: true
       matrix:
@@ -183,8 +184,6 @@ jobs:
 
       - name: Setup packer
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
         uses: hashicorp/setup-packer@v3.1.0
         with:
           version: v1.11.2
