@@ -3,7 +3,7 @@
   "policy_id": "mero-tee/2.1.25",
   "release_tag": "2.1.25",
   "status": "released",
-  "generated_at": "2026-03-12T00:00:00Z",
+  "generated_at": "2026-03-12T14:40:32Z",
   "source": {
     "repository": "calimero-network/mero-tee",
     "workflow": "release-node-image-gcp.yaml",
@@ -12,10 +12,10 @@
   "profiles": {
     "debug": {
       "allowed_mrtd": [
-        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+        "8370d8f6d02f2d13e211e91c93fde923049522b241425a29a7bf0071ef49b250af4ef49d852fa3e10065d1b51dfce8fb"
       ],
       "allowed_rtmr0": [
-        "6bdc1993185c90b973181010cf709108df4f9af712196733d5554946f6cc7972f28c664fa09fcef5b2b340fa19b346cf"
+        "b872df4c973f0fabb87c0823af0ce40eb5c1b03ff842f1edfef62f62511f84a19587e0a16c553fc1ed35b2845104d886"
       ],
       "allowed_rtmr1": [
         "bca47f7e2109249055dc2f818f66db957eff7c4665ce310825b319c5d75987df7b3225c2b1153226e90fe80c713ebf70"
@@ -32,10 +32,10 @@
     },
     "debug-read-only": {
       "allowed_mrtd": [
-        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+        "8370d8f6d02f2d13e211e91c93fde923049522b241425a29a7bf0071ef49b250af4ef49d852fa3e10065d1b51dfce8fb"
       ],
       "allowed_rtmr0": [
-        "6bdc1993185c90b973181010cf709108df4f9af712196733d5554946f6cc7972f28c664fa09fcef5b2b340fa19b346cf"
+        "b872df4c973f0fabb87c0823af0ce40eb5c1b03ff842f1edfef62f62511f84a19587e0a16c553fc1ed35b2845104d886"
       ],
       "allowed_rtmr1": [
         "bca47f7e2109249055dc2f818f66db957eff7c4665ce310825b319c5d75987df7b3225c2b1153226e90fe80c713ebf70"
@@ -52,10 +52,10 @@
     },
     "locked-read-only": {
       "allowed_mrtd": [
-        "a5844e88897b70c318bef929ef4dfd6c7304c52c4bc9c3f39132f0fdccecf3eb5bab70110ee42a12509a31c037288694"
+        "8370d8f6d02f2d13e211e91c93fde923049522b241425a29a7bf0071ef49b250af4ef49d852fa3e10065d1b51dfce8fb"
       ],
       "allowed_rtmr0": [
-        "6bdc1993185c90b973181010cf709108df4f9af712196733d5554946f6cc7972f28c664fa09fcef5b2b340fa19b346cf"
+        "b872df4c973f0fabb87c0823af0ce40eb5c1b03ff842f1edfef62f62511f84a19587e0a16c553fc1ed35b2845104d886"
       ],
       "allowed_rtmr1": [
         "bca47f7e2109249055dc2f818f66db957eff7c4665ce310825b319c5d75987df7b3225c2b1153226e90fe80c713ebf70"

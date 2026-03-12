@@ -153,8 +153,8 @@
       "merod_release_tag": "0.10.1-rc.4",
       "node_image_tag": "mero-tee-v2.1.25",
       "node_image_policy_file": "policies/mero-tee/2.1.25.json",
-      "node_image_policy_sha256": "eeeacef00c1d826b596c87ec1ad3f44e774add1472045f39336b4b91e8976436",
-      "updated_at": "2026-03-12T00:00:00Z"
+      "node_image_policy_sha256": "33a795c229466962147faa40ed249e42f15a313b4da1126fd68321305725270b",
+      "updated_at": "2026-03-12T14:40:32Z"
     },
     {
       "version": "2.1.4",
