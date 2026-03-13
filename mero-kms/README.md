@@ -102,11 +102,14 @@ Recommended caller verification:
 ### Policy source: release fetch (recommended)
 
 When `MERO_KMS_VERSION` (or `MERO_KMS_RELEASE_TAG`) is set, the KMS fetches the
-attestation policy from the official release at boot:
+attestation policy from the official release at boot (profile-aware):
 
 ```
-https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSION}/kms-phala-attestation-policy.json
+https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSION}/kms-phala-attestation-policy.{PROFILE}.json
 ```
+
+`PROFILE` is selected by `KMS_POLICY_PROFILE` (`debug`, `debug-read-only`, `locked-read-only`).
+For backward compatibility, `locked-read-only` can fall back to `kms-phala-attestation-policy.json`.
 
 This ensures the policy cannot be tweaked via env vars; it comes from the
 canonical source. If the fetch fails, the KMS falls back to env vars.
@@ -114,6 +117,7 @@ canonical source. If the fetch fails, the KMS falls back to env vars.
 Production recommendation:
 
 - keep release policy as primary source (`MERO_KMS_VERSION` or `MERO_KMS_RELEASE_TAG`);
+- pin `MERO_KMS_POLICY_SHA256` from reviewed release metadata when possible;
 - avoid broad fallback env allowlists;
 - treat startup failures on missing/invalid policy as fail-closed signals, not something to bypass.
 
@@ -135,7 +139,12 @@ Environment variables:
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
 - `MERO_KMS_VERSION` – fetch policy from release (e.g. `2.1.14`); recommended
 - `MERO_KMS_RELEASE_TAG` – alternative (e.g. `mero-kms-v2.1.14`)
+- `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (default)
+- `MERO_KMS_POLICY_SHA256` – optional policy hash pin for release-fetched policy
 - `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
+- `KEY_NAMESPACE_PREFIX` – key namespace prefix (default: `merod/storage`)
+- `REDIS_URL` – optional Redis connection URL for shared challenge state
+- `CORS_ALLOWED_ORIGINS` – comma-separated browser origin allowlist (CORS disabled if empty)
 - `ALLOWED_TCB_STATUSES` (CSV, default: `UpToDate`)
 - `ALLOWED_MRTD` (CSV of hex measurements)
 - `ALLOWED_RTMR0` (CSV of hex measurements)
@@ -156,6 +165,7 @@ attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Keep `ENFORCE_MEASUREMENT_POLICY=true`.
+- Keep `KMS_POLICY_PROFILE=locked-read-only` for production.
 - Require both quote verification and measurement verification for key release.
 - Pin trusted values from your built/deployed image:
   - MRTD (required),
@@ -164,7 +174,8 @@ attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 - Start with `ALLOWED_TCB_STATUSES=UpToDate`.
 - Use a short challenge TTL (for example, `30-120` seconds).
 - Keep `/challenge`, `/get-key`, and `/attest` on private trusted networks (TLS/mTLS recommended across hosts).
-- In HA/load-balanced setups, ensure session affinity between `/challenge` and `/get-key` for a caller (challenge state is currently in-memory per instance).
+- Prefer `REDIS_URL` for HA deployments so challenge state is shared across KMS replicas.
+- Keep cohort-specific key namespaces isolated (`KEY_NAMESPACE_PREFIX` + profile) so debug/pre-prod cannot collide with production keys.
 
 Example:
 

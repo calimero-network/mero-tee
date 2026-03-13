@@ -51,7 +51,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 
 ## Releases
 
-- **mero-kms-vX.Y.Z**: KMS binaries and trust assets
+- **mero-kms-vX.Y.Z**: KMS binaries and trust assets (including profile policies for `debug`, `debug-read-only`, `locked-read-only`)
 - **mero-kms-phala release trust bundle**:
   - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
   - `kms-phala-checksums.txt` (SHA-256 for binary archives),
@@ -60,7 +60,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
   - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **Compatibility map artifact**:
-  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus policy URLs),
+  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus profile-specific policy URLs/hashes),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
 - **mero-tee-vX.Y.Z**: `published-mrtds.json` (MRTDs + measurement policy), `release-provenance.json`, SBOM, and `node-image-gcp-checksums.txt`
   - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
@@ -93,13 +93,13 @@ Need an explicit artifact list for air-gapped or bandwidth-limited environments?
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
-scripts/policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
+scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/
 ```
 
 Apply signed policy directly to an existing `merod` node config:
 
 ```bash
-scripts/policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
 KMS release flow (draft release + human approval):

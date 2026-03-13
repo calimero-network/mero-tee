@@ -59,6 +59,7 @@ Recommended profile-to-KMS trust mapping:
 | `locked-read-only` | production | production KMS policy |
 
 Do not point debug profiles at production KMS key-release policy.
+Use matching KMS profile policy/image cohorts (`*-debug`, `*-debug-read-only`, `*-locked-read-only`).
 
 Provision TDX-capable instances and pin to the exact image/version you verified.
 Avoid mutable deployment references.

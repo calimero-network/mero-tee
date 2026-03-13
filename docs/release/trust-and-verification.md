@@ -49,7 +49,7 @@ OIDC issuer is expected to be:
 1. Pick the release tag you plan to deploy.
 2. Run `scripts/release/verify-release-assets.sh <tag>`.
 3. Generate release-pinned config snippets for `merod` using:
-   - `scripts/policy/generate-merod-kms-phala-attestation-config.sh`
+   - `scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile <debug|debug-read-only|locked-read-only>`
 4. Roll out with digest-pinned images and release-pinned policy/config.
 
 ## Verification direction matrix (who proves what to whom)
@@ -93,6 +93,7 @@ Confirm:
 - `kms_tag` is `mero-kms-v${TAG}`
 - `node_image_tag` points to the intended `mero-tee-v...` release
 - `kms_policy_url` and `node_policy_url` resolve to the reviewed signed assets
+- profile entries exist under `.compatibility.profiles` with matching policy URLs/hashes for `debug`, `debug-read-only`, and `locked-read-only`
 
 ## Related docs
 

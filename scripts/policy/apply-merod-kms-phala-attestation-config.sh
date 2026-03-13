@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/policy/apply-merod-kms-phala-attestation-config.sh [--dry-run] <release-tag> <kms-url> <merod-home> [node-name]
+  scripts/policy/apply-merod-kms-phala-attestation-config.sh [--dry-run] [--profile <debug|debug-read-only|locked-read-only>] <release-tag> <kms-url> <merod-home> [node-name]
 
 Examples:
   scripts/policy/apply-merod-kms-phala-attestation-config.sh 1.2.3 https://kms-green.example.com/ /data default
@@ -13,15 +13,34 @@ EOF
 }
 
 dry_run="false"
-if [[ "${1:-}" == "--dry-run" ]]; then
-  dry_run="true"
-  shift
-fi
+profile="locked-read-only"
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
+    --dry-run)
+      dry_run="true"
+      shift
+      ;;
+    --profile)
+      profile="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+case "${profile}" in
+  debug|debug-read-only|locked-read-only) ;;
+  *)
+    echo "Unsupported --profile '${profile}'. Allowed: debug, debug-read-only, locked-read-only"
+    exit 1
+    ;;
+esac
 
 release_tag="${1:-}"
 kms_url="${2:-}"
@@ -59,15 +78,31 @@ download_asset() {
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "${script_dir}/../release/verify-kms-phala-release-assets.sh" "${release_tag}" >/dev/null
 
+resolved_release_tag="${release_tag}"
+if ! gh release view "${resolved_release_tag}" >/dev/null 2>&1 && [[ "${release_tag}" != mero-kms-v* ]]; then
+  resolved_release_tag="mero-kms-v${release_tag}"
+fi
+logical_tag="${release_tag#mero-kms-v}"
+
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
 trap cleanup EXIT
 
-for pattern in \
-  "kms-phala-attestation-policy.json" \
-  "kms-phala-attestation-policy.json.sig" \
-  "kms-phala-attestation-policy.json.pem"; do
-  if ! download_asset "${release_tag}" "${pattern}" "${tmp_dir}"; then
+policy_asset="kms-phala-attestation-policy.${profile}.json"
+if ! download_asset "${resolved_release_tag}" "${policy_asset}" "${tmp_dir}"; then
+  if [[ "${profile}" == "locked-read-only" ]]; then
+    policy_asset="kms-phala-attestation-policy.json"
+    if ! download_asset "${resolved_release_tag}" "${policy_asset}" "${tmp_dir}"; then
+      echo "Failed to download required asset ${policy_asset}"
+      exit 1
+    fi
+  else
+    echo "Failed to download required asset ${policy_asset}"
+    exit 1
+  fi
+fi
+for pattern in "${policy_asset}.sig" "${policy_asset}.pem"; do
+  if ! download_asset "${resolved_release_tag}" "${pattern}" "${tmp_dir}"; then
     echo "Failed to download required asset ${pattern}"
     exit 1
   fi
@@ -81,7 +116,7 @@ fi
 cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-kms-phala.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
-policy_file="${tmp_dir}/kms-phala-attestation-policy.json"
+policy_file="${tmp_dir}/${policy_asset}"
 cosign verify-blob \
   --certificate "${policy_file}.pem" \
   --signature "${policy_file}.sig" \
@@ -89,7 +124,7 @@ cosign verify-blob \
   --certificate-oidc-issuer "${cert_oidc_issuer}" \
   "${policy_file}" >/dev/null
 
-jq -e --arg tag "${release_tag}" '
+jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
@@ -130,6 +165,7 @@ updates=(
 
 echo "Applying release-pinned KMS attestation config"
 echo "  tag: ${release_tag}"
+echo "  profile: ${profile}"
 echo "  commit: ${commit_sha}"
 echo "  home: ${merod_home}"
 echo "  node: ${node_name}"

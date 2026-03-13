@@ -116,9 +116,15 @@ base_signed_assets=(
   "kms-phala-checksums.txt"
   "kms-phala-release-manifest.json"
   "kms-phala-attestation-policy.json"
+  "kms-phala-compatibility-map.json"
   "kms-phala-container-metadata.json"
   "kms-phala-container-sbom.spdx.json"
   "kms-phala-binaries-sbom.spdx.json"
+)
+profile_policy_assets=(
+  "kms-phala-attestation-policy.debug.json"
+  "kms-phala-attestation-policy.debug-read-only.json"
+  "kms-phala-attestation-policy.locked-read-only.json"
 )
 
 release_tag="${tag}"
@@ -170,6 +176,30 @@ for attempt in $(seq 1 10); do
 done
 
 echo "Resolved release tag for mero-kms assets: ${release_tag}"
+
+has_profile_policy_assets="false"
+for asset in "${profile_policy_assets[@]}"; do
+  if jq -e --arg asset "${asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
+    has_profile_policy_assets="true"
+    break
+  fi
+done
+
+if [[ "${has_profile_policy_assets}" == "true" ]]; then
+  for asset in "${profile_policy_assets[@]}"; do
+    for suffix in "" ".sig" ".pem"; do
+      profile_asset="${asset}${suffix}"
+      if ! jq -e --arg asset "${profile_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
+        echo "Release is missing required profile policy asset: ${profile_asset}"
+        exit 1
+      fi
+      if ! download_asset "${release_tag}" "${profile_asset}" "${tmp_dir}"; then
+        echo "Failed to download required profile policy asset ${profile_asset}"
+        exit 1
+      fi
+    done
+  done
+fi
 
 for asset in "${base_signed_assets[@]}"; do
   for suffix in "" ".sig" ".pem"; do
@@ -230,6 +260,14 @@ jq -e --arg tag "${logical_tag}" '
   (.container.digest | type == "string" and length > 0) and
   (.verification.kms_attest_endpoint == "/attest") and
   (.verification.attestation_policy_asset == "kms-phala-attestation-policy.json") and
+  (
+    (.verification.policy_profile_assets == null) or
+    (
+      .verification.policy_profile_assets.debug == "kms-phala-attestation-policy.debug.json" and
+      .verification.policy_profile_assets["debug-read-only"] == "kms-phala-attestation-policy.debug-read-only.json" and
+      .verification.policy_profile_assets["locked-read-only"] == "kms-phala-attestation-policy.locked-read-only.json"
+    )
+  ) and
   (.verification.container_metadata_asset == "kms-phala-container-metadata.json")
 ' "${tmp_dir}/kms-phala-release-manifest.json" >/dev/null
 
@@ -241,6 +279,23 @@ jq -e --arg tag "${logical_tag}" '
   (.container.digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
   (.container.tags | type == "array")
 ' "${tmp_dir}/kms-phala-container-metadata.json" >/dev/null
+
+jq -e --arg tag "${logical_tag}" '
+  .schema_version == 1 and
+  .tag == $tag and
+  (.compatibility.version == $tag) and
+  (.compatibility.kms_tag == ("mero-kms-v" + $tag)) and
+  (.compatibility.node_image_tag == ("mero-tee-v" + $tag)) and
+  (.compatibility.profiles.debug.kms_policy_asset | type == "string" and length > 0) and
+  (.compatibility.profiles["debug-read-only"].kms_policy_asset | type == "string" and length > 0) and
+  (.compatibility.profiles["locked-read-only"].kms_policy_asset | type == "string" and length > 0) and
+  (.compatibility.profiles.debug.kms_image_tag | type == "string" and length > 0) and
+  (.compatibility.profiles["debug-read-only"].kms_image_tag | type == "string" and length > 0) and
+  (.compatibility.profiles["locked-read-only"].kms_image_tag | type == "string" and length > 0) and
+  (.compatibility.profiles.debug.node_profile == "debug") and
+  (.compatibility.profiles["debug-read-only"].node_profile == "debug-read-only") and
+  (.compatibility.profiles["locked-read-only"].node_profile == "locked-read-only")
+' "${tmp_dir}/kms-phala-compatibility-map.json" >/dev/null
 
 jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
@@ -258,6 +313,33 @@ jq -e --arg tag "${logical_tag}" '
   (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0))
 ' "${tmp_dir}/kms-phala-attestation-policy.json" >/dev/null
 
+if [[ "${has_profile_policy_assets}" == "true" ]]; then
+  for profile in debug debug-read-only locked-read-only; do
+    profile_file="${tmp_dir}/kms-phala-attestation-policy.${profile}.json"
+    jq -e --arg tag "${logical_tag}" --arg profile "${profile}" '
+      .schema_version == 1 and
+      .tag == $tag and
+      (.commit_sha | type == "string" and length > 0) and
+      ((.profile // "locked-read-only") == $profile) and
+      (.kms.provider == "mero-kms-phala") and
+      (.kms.attest_endpoint == "/attest") and
+      (.kms.default_binding_hex | type == "string" and test("^[A-Fa-f0-9]{64}$")) and
+      (.kms.default_binding_b64 | type == "string" and length > 0) and
+      ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
+      (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0)) and
+      (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0)) and
+      (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array" and length > 0)) and
+      (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array" and length > 0)) and
+      (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0)) and
+      (((.policy.node_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0)) and
+      (((.policy.node_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0)) and
+      (((.policy.node_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array" and length > 0)) and
+      (((.policy.node_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array" and length > 0)) and
+      (((.policy.node_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0))
+    ' "${profile_file}" >/dev/null
+  done
+fi
+
 manifest_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-release-manifest.json")"
 policy_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-attestation-policy.json")"
 container_metadata_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-container-metadata.json")"
@@ -266,6 +348,17 @@ if [[ "${manifest_commit}" != "${policy_commit}" ]]; then
   echo "  manifest: ${manifest_commit}"
   echo "  policy:   ${policy_commit}"
   exit 1
+fi
+if [[ "${has_profile_policy_assets}" == "true" ]]; then
+  for profile in debug debug-read-only locked-read-only; do
+    profile_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-attestation-policy.${profile}.json")"
+    if [[ "${manifest_commit}" != "${profile_commit}" ]]; then
+      echo "Manifest and ${profile} policy commit mismatch"
+      echo "  manifest: ${manifest_commit}"
+      echo "  policy:   ${profile_commit}"
+      exit 1
+    fi
+  done
 fi
 if [[ "${manifest_commit}" != "${container_metadata_commit}" ]]; then
   echo "Manifest and container metadata commit mismatch"
@@ -317,6 +410,11 @@ signed_assets=(
 for archive in "${archives[@]}"; do
   signed_assets+=("${archive}")
 done
+if [[ "${has_profile_policy_assets}" == "true" ]]; then
+  for asset in "${profile_policy_assets[@]}"; do
+    signed_assets+=("${asset}")
+  done
+fi
 
 for asset in "${signed_assets[@]}"; do
   cosign verify-blob \

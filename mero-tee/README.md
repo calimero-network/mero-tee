@@ -12,6 +12,7 @@ Security intent:
 
 - `locked-read-only` is the production baseline.
 - `debug` and `debug-read-only` are for non-production cohorts and should use separate non-production KMS policy/key lanes.
+- KMS releases publish profile-specific policy assets so operators can enforce profile-to-profile trust cohorts.
 
 ## Prerequisites
 

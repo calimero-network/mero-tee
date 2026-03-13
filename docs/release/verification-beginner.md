@@ -191,10 +191,11 @@ If either side fails verification, key release must not proceed.
   ```
 
   Ensure `kms_tag`, `node_image_tag`, `kms_policy_url`, and `node_policy_url` match the rollout you approved.
+  Also confirm `.compatibility.profiles` contains the exact profile policy (`debug`, `debug-read-only`, `locked-read-only`) you plan to deploy.
 - Generate release-pinned merod attestation config:
 
 ```bash
-scripts/policy/generate-merod-kms-phala-attestation-config.sh "${TAG}" https://<kms-url>/
+scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only "${TAG}" https://<kms-url>/
 ```
 
 ---

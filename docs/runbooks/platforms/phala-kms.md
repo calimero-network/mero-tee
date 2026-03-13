@@ -71,7 +71,13 @@ services:
       CHALLENGE_TTL_SECS: "60"
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
+      KMS_POLICY_PROFILE: "locked-read-only"
+      KEY_NAMESPACE_PREFIX: "merod/storage"
+      # Optional release policy hash pin
+      # MERO_KMS_POLICY_SHA256: "<sha256 from compatibility map>"
       ALLOWED_TCB_STATUSES: "UpToDate"
+      # Optional HA/shared challenge store
+      # REDIS_URL: "redis://redis:6379/0"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
 ```
@@ -81,6 +87,7 @@ Production guidance:
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Pin MRTD (and preferably RTMR0-3) allowlists.
 - Do not use mutable container tags (`:latest`).
+- Set `KMS_POLICY_PROFILE=locked-read-only` for production cohorts.
 - Keep KMS endpoints private to trusted network paths; do not expose key-release APIs publicly.
 - Use TLS (preferably mTLS) on any non-local network path between `merod` and KMS.
 
@@ -91,7 +98,7 @@ Production guidance:
 Use signed policy from the same reviewed release:
 
 ```bash
-scripts/policy/apply-merod-kms-phala-attestation-config.sh "${TAG}" http://mero-kms:8080/ /data default
+scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read-only "${TAG}" http://mero-kms:8080/ /data default
 ```
 
 This writes `tee.kms.phala.attestation.*` config values so `merod` verifies KMS
@@ -112,6 +119,7 @@ Recommended mapping:
 | `locked-read-only` | production KMS policy | production keys |
 
 Do not mix debug profile measurements into production KMS allowlists.
+For release images, use profile-specific KMS tags (for example `vX.Y.Z-debug`, `vX.Y.Z-debug-read-only`, `vX.Y.Z-locked-read-only`).
 
 ---
 
@@ -130,8 +138,8 @@ The expected runtime sequence is documented in
 
 Operational note for HA/LB deployments:
 
-- `/challenge` state is currently in-memory per KMS instance.
-- Route `/challenge` and the subsequent `/get-key` for the same caller to the same instance (session affinity/stickiness), or use shared challenge state.
+- `/challenge` state is in-memory by default; set `REDIS_URL` for shared challenge state across replicas.
+- Without shared state, route `/challenge` and subsequent `/get-key` for the same caller to the same instance (session affinity/stickiness).
 - If this is misconfigured, expect intermittent `invalid_challenge` failures.
 
 ---

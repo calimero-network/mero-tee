@@ -4,13 +4,41 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/policy/generate-merod-kms-phala-attestation-config.sh <release-tag> <kms-url> [output-file]
+  scripts/policy/generate-merod-kms-phala-attestation-config.sh [--profile <debug|debug-read-only|locked-read-only>] <release-tag> <kms-url> [output-file]
 
 Examples:
   scripts/policy/generate-merod-kms-phala-attestation-config.sh 1.2.3 http://kms.internal:8080/
-  scripts/policy/generate-merod-kms-phala-attestation-config.sh 1.2.3 https://kms.example.com/ ./tee-kms.toml
+  scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile debug 1.2.3 https://kms.example.com/ ./tee-kms.toml
 EOF
 }
+
+profile="locked-read-only"
+positional=()
+while [[ $# -gt 0 ]]; do
+  case "${1}" in
+    --profile)
+      profile="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      positional+=("${1}")
+      shift
+      ;;
+  esac
+done
+set -- "${positional[@]}"
+
+case "${profile}" in
+  debug|debug-read-only|locked-read-only) ;;
+  *)
+    echo "Unsupported --profile '${profile}'. Allowed: debug, debug-read-only, locked-read-only"
+    exit 1
+    ;;
+esac
 
 tag="${1:-}"
 kms_url="${2:-}"
@@ -32,16 +60,41 @@ done
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "${script_dir}/../release/verify-kms-phala-release-assets.sh" "${tag}" >/dev/null
 
+resolved_tag="${tag}"
+if ! gh release view "${resolved_tag}" >/dev/null 2>&1 && [[ "${tag}" != mero-kms-v* ]]; then
+  resolved_tag="mero-kms-v${tag}"
+fi
+logical_tag="${tag#mero-kms-v}"
+
 tmp_dir="$(mktemp -d)"
 cleanup() { rm -rf "${tmp_dir}"; }
 trap cleanup EXIT
 
-for pattern in \
-  "kms-phala-attestation-policy.json" \
-  "kms-phala-attestation-policy.json.sig" \
-  "kms-phala-attestation-policy.json.pem"; do
+policy_asset="kms-phala-attestation-policy.${profile}.json"
+downloaded_profile_asset="false"
+for attempt in $(seq 1 5); do
+  if gh release download "${resolved_tag}" --pattern "${policy_asset}" --dir "${tmp_dir}" >/dev/null 2>&1; then
+    downloaded_profile_asset="true"
+    break
+  fi
+  sleep 2
+done
+if [[ "${downloaded_profile_asset}" != "true" ]]; then
+  if [[ "${profile}" == "locked-read-only" ]]; then
+    policy_asset="kms-phala-attestation-policy.json"
+    if ! gh release download "${resolved_tag}" --pattern "${policy_asset}" --dir "${tmp_dir}" >/dev/null 2>&1; then
+      echo "Failed to download required asset ${policy_asset}"
+      exit 1
+    fi
+  else
+    echo "Failed to download required asset kms-phala-attestation-policy.${profile}.json"
+    exit 1
+  fi
+fi
+
+for pattern in "${policy_asset}.sig" "${policy_asset}.pem"; do
   for attempt in $(seq 1 5); do
-    if gh release download "${tag}" --pattern "${pattern}" --dir "${tmp_dir}" >/dev/null 2>&1; then
+    if gh release download "${resolved_tag}" --pattern "${pattern}" --dir "${tmp_dir}" >/dev/null 2>&1; then
       break
     fi
     if [[ "${attempt}" -eq 5 ]]; then
@@ -60,7 +113,7 @@ fi
 cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-kms-phala.yaml@refs/heads/master$}"
 cert_oidc_issuer="${COSIGN_CERTIFICATE_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 
-policy_file="${tmp_dir}/kms-phala-attestation-policy.json"
+policy_file="${tmp_dir}/${policy_asset}"
 cosign verify-blob \
   --certificate "${policy_file}.pem" \
   --signature "${policy_file}.sig" \
@@ -68,7 +121,7 @@ cosign verify-blob \
   --certificate-oidc-issuer "${cert_oidc_issuer}" \
   "${policy_file}" >/dev/null
 
-jq -e --arg tag "${tag}" '
+jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
@@ -93,7 +146,7 @@ commit_sha="$(jq -r '.commit_sha' "${policy_file}")"
 
 snippet="$(
   cat <<EOF
-# Generated from mero-tee release ${tag} (commit ${commit_sha})
+# Generated from mero-tee release ${tag} (commit ${commit_sha}, profile ${profile})
 # Do not auto-follow latest: pin this to a reviewed release tag.
 
 [tee]
