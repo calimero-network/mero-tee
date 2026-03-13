@@ -1136,15 +1136,45 @@ jobs:
           ensure_policy_matches_mrtd "artifacts/mrtd-debug-read-only.json" "artifacts/measurement-policy-candidates-debug-read-only.json" "debug-read-only"
           ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
 
-          # Profiles must have different MRTDs (different builds). Identical = bug in build or artifact merge.
-          debug_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-debug.json | tr '[:upper:]' '[:lower:]')"
-          debug_ro_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
-          locked_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
-          if [[ "${debug_mrtd}" == "${debug_ro_mrtd}" && "${debug_ro_mrtd}" == "${locked_mrtd}" ]]; then
-            echo "::error::All three profiles have identical MRTD. Debug, debug-read-only, and locked-read-only must produce different builds with different measurements."
-            echo "  debug: ${debug_mrtd}"
-            echo "  debug-read-only: ${debug_ro_mrtd}"
-            echo "  locked-read-only: ${locked_mrtd}"
+          # MRTD is firmware-only (TDVF) per GCP TDX docs; it is identical for all profiles.
+          # Profile differentiation is via RTMR registers (kernel, boot chain). At least one RTMR
+          # must differ across profiles so the KMS can distinguish images and prevent impersonation.
+          debug_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
+          debug_ro_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
+          locked_ro_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
+          debug_rtmr1="$(jq -r '.policy.allowed_rtmr1[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
+          debug_ro_rtmr1="$(jq -r '.policy.allowed_rtmr1[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
+          locked_ro_rtmr1="$(jq -r '.policy.allowed_rtmr1[0] // empty' artifacts/measurement-policy-candidates-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
+          debug_rtmr2="$(jq -r '.policy.allowed_rtmr2[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
+          debug_ro_rtmr2="$(jq -r '.policy.allowed_rtmr2[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
+          locked_ro_rtmr2="$(jq -r '.policy.allowed_rtmr2[0] // empty' artifacts/measurement-policy-candidates-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
+          debug_rtmr3="$(jq -r '.policy.allowed_rtmr3[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
+          debug_ro_rtmr3="$(jq -r '.policy.allowed_rtmr3[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
+          locked_ro_rtmr3="$(jq -r '.policy.allowed_rtmr3[0] // empty' artifacts/measurement-policy-candidates-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
+          profiles_differ=false
+          if [[ -n "${debug_rtmr0}" && -n "${debug_ro_rtmr0}" && -n "${locked_ro_rtmr0}" ]]; then
+            if [[ "${debug_rtmr0}" != "${debug_ro_rtmr0}" || "${debug_ro_rtmr0}" != "${locked_ro_rtmr0}" ]]; then
+              profiles_differ=true
+            fi
+          fi
+          if [[ "${profiles_differ}" != "true" && -n "${debug_rtmr1}" && -n "${debug_ro_rtmr1}" && -n "${locked_ro_rtmr1}" ]]; then
+            if [[ "${debug_rtmr1}" != "${debug_ro_rtmr1}" || "${debug_ro_rtmr1}" != "${locked_ro_rtmr1}" ]]; then
+              profiles_differ=true
+            fi
+          fi
+          if [[ "${profiles_differ}" != "true" && -n "${debug_rtmr2}" && -n "${debug_ro_rtmr2}" && -n "${locked_ro_rtmr2}" ]]; then
+            if [[ "${debug_rtmr2}" != "${debug_ro_rtmr2}" || "${debug_ro_rtmr2}" != "${locked_ro_rtmr2}" ]]; then
+              profiles_differ=true
+            fi
+          fi
+          if [[ "${profiles_differ}" != "true" && -n "${debug_rtmr3}" && -n "${debug_ro_rtmr3}" && -n "${locked_ro_rtmr3}" ]]; then
+            if [[ "${debug_rtmr3}" != "${debug_ro_rtmr3}" || "${debug_ro_rtmr3}" != "${locked_ro_rtmr3}" ]]; then
+              profiles_differ=true
+            fi
+          fi
+          if [[ "${profiles_differ}" != "true" ]]; then
+            echo "::error::All three profiles have identical RTMR0/RTMR1/RTMR2/RTMR3. Profiles must produce different boot-chain measurements so the KMS can distinguish images. Identical measurements would allow any profile to impersonate another."
+            echo "  RTMR0 (first 24 chars): debug=${debug_rtmr0:0:24}... debug-ro=${debug_ro_rtmr0:0:24}... locked-ro=${locked_ro_rtmr0:0:24}..."
             exit 1
           fi
 
