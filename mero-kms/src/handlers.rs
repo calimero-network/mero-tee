@@ -330,9 +330,9 @@ async fn challenge_handler(
         )
         .await
         .map_err(|err| match err {
-            ChallengeStoreError::CapacityExceeded => ServiceError::RateLimited(
-                "Too many pending challenges. Retry shortly.".to_string(),
-            ),
+            ChallengeStoreError::CapacityExceeded => {
+                ServiceError::RateLimited("Too many pending challenges. Retry shortly.".to_string())
+            }
             _ => ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", err)),
         })?;
 

@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,8 +117,8 @@ impl ChallengeStore {
                 .arg(now)
                 .arg(max_pending_challenges as i64)
                 .invoke_async(&mut conn)
-                    .await
-                    .map_err(|e| ChallengeStoreError::RedisOperation(e.to_string()))?;
+                .await
+                .map_err(|e| ChallengeStoreError::RedisOperation(e.to_string()))?;
                 if pending_after_insert < 0 {
                     return Err(ChallengeStoreError::CapacityExceeded);
                 }

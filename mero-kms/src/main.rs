@@ -390,8 +390,7 @@ fn parse_bool_flag(value: &str) -> EyreResult<bool> {
 
 fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     match std::env::var(name) {
-        Ok(value) => parse_bool_flag(&value)
-            .map_err(|e| eyre::eyre!("{} is invalid: {}", name, e)),
+        Ok(value) => parse_bool_flag(&value).map_err(|e| eyre::eyre!("{} is invalid: {}", name, e)),
         Err(std::env::VarError::NotPresent) => Ok(default),
         Err(std::env::VarError::NotUnicode(_)) => {
             bail!("{} must be valid UTF-8", name)
@@ -631,10 +630,7 @@ async fn main() -> eyre::Result<()> {
     info!("Listen address: {}", config.listen_addr);
     info!("Dstack socket: {}", config.dstack_socket_path);
     info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
-    info!(
-        "Max pending challenges: {}",
-        config.max_pending_challenges
-    );
+    info!("Max pending challenges: {}", config.max_pending_challenges);
     info!(
         "Accept mock attestation: {}",
         config.accept_mock_attestation
@@ -809,13 +805,9 @@ mod tests {
                 "node_allowed_rtmr3": ["ee".repeat(48)]
             }
         });
-        let parsed = Config::parse_policy_json(
-            &policy_json.to_string(),
-            "2.1.38",
-            "locked-read-only",
-            true,
-        )
-        .expect("legacy locked-read-only policy should parse");
+        let parsed =
+            Config::parse_policy_json(&policy_json.to_string(), "2.1.38", "locked-read-only", true)
+                .expect("legacy locked-read-only policy should parse");
         assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
     }
 }
