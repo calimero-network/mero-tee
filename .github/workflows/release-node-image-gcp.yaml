@@ -192,12 +192,11 @@ jobs:
           echo "  - GCP_SERVICE_ACCOUNT_KEY"
           exit 1
 
-      - name: Set pinned base source image
+      - name: Resolve base source image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
         run: |
           if [[ -z "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
-            echo "::warning::PACKER_GCP_SOURCE_IMAGE is unset; using pinned default. Set the repo variable to override."
-            echo "PACKER_GCP_SOURCE_IMAGE=ubuntu-2510-amd64-v20260226" >> "${GITHUB_ENV}"
+            echo "::notice::PACKER_GCP_SOURCE_IMAGE unset; Packer will use source_image_family ubuntu-2510-amd64. Set repo variable to pin a specific image."
           fi
 
       - name: Setup packer
