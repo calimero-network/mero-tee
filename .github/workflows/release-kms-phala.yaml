@@ -473,8 +473,8 @@ jobs:
           for json_var in \
             kms_allowed_tcb_json kms_allowed_mrtd_json kms_allowed_rtmr0_json kms_allowed_rtmr1_json kms_allowed_rtmr2_json kms_allowed_rtmr3_json \
             node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json; do
-            if ! jq -e 'type == "array"' <<< "${!json_var}" >/dev/null 2>&1; then
-              echo "::error::${json_var} must be a JSON array. Got: ${!json_var}"
+            if ! jq -e 'type == "array" and length > 0' <<< "${!json_var}" >/dev/null 2>&1; then
+              echo "::error::${json_var} must be a non-empty JSON array. Got: ${!json_var}"
               exit 1
             fi
           done

@@ -15,6 +15,8 @@ In the Phala lane:
 - `merod` (from `calimero-network/core`) proves node identity + attestation to KMS.
 - KMS verifies quote validity, challenge freshness, peer binding, and policy
   allowlists before releasing storage keys.
+- Production policy should require both quote verification and full measurement checks
+  (MRTD + RTMR0..3) for both directions (`merod` verifying KMS and KMS verifying `merod`).
 
 Implementation references:
 

@@ -72,11 +72,11 @@ jq -e --arg tag "${tag}" '
   .schema_version == 1 and
   .tag == $tag and
   ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
-  (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array")) and
-  (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array")) and
-  (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array")) and
-  (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array")) and
-  (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array")) and
+  (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0)) and
+  (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0)) and
+  (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array" and length > 0)) and
+  (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array" and length > 0)) and
+  (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0)) and
   (.kms.attest_endpoint == "/attest") and
   (.kms.default_binding_b64 | type == "string" and length > 0)
 ' "${policy_file}" >/dev/null

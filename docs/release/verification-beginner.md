@@ -154,8 +154,8 @@ You should still do:
 
 Release verification is not enough by itself. Runtime trust is bidirectional:
 
-1. `merod` verifies KMS via `/attest` (quote + nonce/binding + KMS policy).
-2. KMS verifies `merod` via `/challenge` + `/get-key` (peer identity/signature + quote + node policy).
+1. `merod` verifies KMS via `/attest` (quote + nonce/binding + KMS TCB + MRTD + RTMR0..3 policy checks).
+2. KMS verifies `merod` via `/challenge` + `/get-key` (peer identity/signature + quote + node TCB + MRTD + RTMR0..3 policy checks).
 
 If either side fails verification, key release must not proceed.
 

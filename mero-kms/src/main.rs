@@ -151,6 +151,42 @@ impl Config {
                  Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped."
             );
         }
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_rtmr0.is_empty()
+        {
+            bail!(
+                "Measurement policy is enforced, but ALLOWED_RTMR0 is empty. \
+                 Configure at least one trusted RTMR0 value."
+            );
+        }
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_rtmr1.is_empty()
+        {
+            bail!(
+                "Measurement policy is enforced, but ALLOWED_RTMR1 is empty. \
+                 Configure at least one trusted RTMR1 value."
+            );
+        }
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_rtmr2.is_empty()
+        {
+            bail!(
+                "Measurement policy is enforced, but ALLOWED_RTMR2 is empty. \
+                 Configure at least one trusted RTMR2 value."
+            );
+        }
+        if enforce_measurement_policy
+            && !accept_mock_attestation
+            && attestation_policy.allowed_rtmr3.is_empty()
+        {
+            bail!(
+                "Measurement policy is enforced, but ALLOWED_RTMR3 is empty. \
+                 Configure at least one trusted RTMR3 value."
+            );
+        }
 
         Ok(Self {
             listen_addr,

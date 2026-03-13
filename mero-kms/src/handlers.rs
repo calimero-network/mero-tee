@@ -582,6 +582,12 @@ fn enforce_attestation_policy(
         )));
     }
 
+    require_non_empty_allowlist("MRTD", &policy.allowed_mrtd)?;
+    require_non_empty_allowlist("RTMR0", &policy.allowed_rtmr0)?;
+    require_non_empty_allowlist("RTMR1", &policy.allowed_rtmr1)?;
+    require_non_empty_allowlist("RTMR2", &policy.allowed_rtmr2)?;
+    require_non_empty_allowlist("RTMR3", &policy.allowed_rtmr3)?;
+
     let body = &verification_result.quote.body;
     enforce_measurement_allowlist("MRTD", &body.mrtd, &policy.allowed_mrtd)?;
     enforce_measurement_allowlist("RTMR0", &body.rtmr0, &policy.allowed_rtmr0)?;
@@ -589,6 +595,16 @@ fn enforce_attestation_policy(
     enforce_measurement_allowlist("RTMR2", &body.rtmr2, &policy.allowed_rtmr2)?;
     enforce_measurement_allowlist("RTMR3", &body.rtmr3, &policy.allowed_rtmr3)?;
 
+    Ok(())
+}
+
+fn require_non_empty_allowlist(label: &str, allowed_measurements: &[String]) -> Result<(), ServiceError> {
+    if allowed_measurements.is_empty() {
+        return Err(ServiceError::MeasurementPolicyRejected(format!(
+            "{} allowlist is empty",
+            label
+        )));
+    }
     Ok(())
 }
 

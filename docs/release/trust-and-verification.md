@@ -58,8 +58,8 @@ This is the canonical direction of trust checks:
 
 | Verifier | Subject being verified | Evidence/API | Required check before proceeding |
 |---|---|---|---|
-| `merod` (client node) | KMS (`mero-kms-phala`) | `POST /attest` quote + report data | Verify quote cryptographically, verify nonce/binding, verify KMS measurements vs allowed policy |
-| KMS (`mero-kms-phala`) | `merod` (requesting node) | `POST /challenge` + `POST /get-key` quote + peer signature | Verify peer identity/signature/challenge freshness, verify quote cryptographically, enforce node TCB + MRTD/RTMR allowlists |
+| `merod` (client node) | KMS (`mero-kms-phala`) | `POST /attest` quote + report data | Verify quote cryptographically, verify nonce/binding, and enforce KMS TCB + MRTD + RTMR0..3 allowlists |
+| KMS (`mero-kms-phala`) | `merod` (requesting node) | `POST /challenge` + `POST /get-key` quote + peer signature | Verify peer identity/signature/challenge freshness, verify quote cryptographically, and enforce node TCB + MRTD + RTMR0..3 allowlists |
 | Operator CI/acceptance | Release artifacts and policy metadata | Sigstore sidecars + release manifests/checksums | Verify workflow identity, checksums, and compatibility map before rollout |
 
 If any verification step fails, key release or rollout approval must fail closed.

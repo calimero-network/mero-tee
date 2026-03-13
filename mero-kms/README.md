@@ -156,10 +156,11 @@ attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Keep `ENFORCE_MEASUREMENT_POLICY=true`.
+- Require both quote verification and measurement verification for key release.
 - Pin trusted values from your built/deployed image:
   - MRTD (required),
-  - RTMR0/1/2 (boot/runtime chain),
-  - RTMR3 (application/compose/runtime extensions).
+  - RTMR0/1/2 (required boot/runtime chain),
+  - RTMR3 (required application/compose/runtime extensions).
 - Start with `ALLOWED_TCB_STATUSES=UpToDate`.
 - Use a short challenge TTL (for example, `30-120` seconds).
 - Keep `/challenge`, `/get-key`, and `/attest` on private trusted networks (TLS/mTLS recommended across hosts).
