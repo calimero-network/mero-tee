@@ -307,7 +307,7 @@ impl Config {
             );
         }
         match root.get("role").and_then(|value| value.as_str()) {
-            Some(role) if role == "kms" => {}
+            Some("kms") => {}
             Some(role) => {
                 bail!("Policy role mismatch: expected 'kms', got '{}'", role);
             }
