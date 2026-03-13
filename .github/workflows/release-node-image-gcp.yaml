@@ -1270,7 +1270,10 @@ jobs:
               }
             }' > artifacts/release-provenance.json
 
-          syft artifacts/published-mrtds.json artifacts/release-provenance.json -o "spdx-json=artifacts/node-image-gcp-release-sbom.spdx.json"
+          sbom_dir="$(mktemp -d)"
+          cp artifacts/published-mrtds.json artifacts/release-provenance.json "${sbom_dir}/"
+          syft "dir:${sbom_dir}" -o "spdx-json=artifacts/node-image-gcp-release-sbom.spdx.json"
+          rm -rf "${sbom_dir}"
 
           sha256sum \
             artifacts/published-mrtds.json \
