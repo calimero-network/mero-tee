@@ -7,6 +7,17 @@ on:
     paths:
       - "mero-tee/versions.json"
   workflow_dispatch:
+    inputs:
+      force_run_on_non_master:
+        description: "Allow running the full pipeline on non-master refs (for PR pre-merge validation)"
+        required: true
+        type: boolean
+        default: false
+      run_post_release_e2e:
+        description: "Run the KMS↔node profile compatibility e2e matrix"
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
   group: mero-tee-release-${{ github.ref }}
@@ -76,12 +87,17 @@ jobs:
         id: release_gate
         env:
           GH_TOKEN: ${{ github.token }}
+          FORCE_RUN_ON_NON_MASTER: ${{ inputs.force_run_on_non_master || 'false' }}
         run: |
           run_pipeline="false"
           reason=""
           latest_merod_version=""
+          allow_non_master="false"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${FORCE_RUN_ON_NON_MASTER}" == "true" ]]; then
+            allow_non_master="true"
+          fi
 
-          if [[ "${GITHUB_REF}" != "refs/heads/master" ]]; then
+          if [[ "${GITHUB_REF}" != "refs/heads/master" && "${allow_non_master}" != "true" ]]; then
             reason="Workflow is restricted to refs/heads/master; current ref is ${GITHUB_REF}."
             echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
             echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -131,7 +147,11 @@ jobs:
           done
 
           run_pipeline="true"
-          reason="Detected mero-tee/versions.json change on master."
+          if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
+            reason="Detected mero-tee/versions.json change on master."
+          else
+            reason="Manual workflow_dispatch override enabled on non-master ref ${GITHUB_REF}."
+          fi
 
           echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
           echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -997,10 +1017,114 @@ jobs:
               --quiet || true
           done
 
+  e2e_kms_node_compatibility:
+    name: E2E KMS-node compatibility matrix
+    runs-on: ubuntu-latest
+    needs: [preflight, profile_pipeline]
+    if: ${{ needs.preflight.outputs.run_pipeline == 'true' && (github.ref == 'refs/heads/master' || (github.event_name == 'workflow_dispatch' && inputs.run_post_release_e2e == true)) }}
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Download attestation artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gcp-tdx-attestation-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Run post-release e2e attestation compatibility matrix (KMS + node)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.preflight.outputs.image_version }}"
+          kms_tag="mero-kms-v${version}"
+
+          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gh workflow run "kms-phala-staging-probe.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f kms_tag="${kms_tag}"
+
+          probe_run_id=""
+          for attempt in $(seq 1 90); do
+            probe_run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "kms-phala-staging-probe.yaml" \
+              --event workflow_dispatch \
+              --branch master \
+              --limit 8 \
+              --json databaseId,createdAt \
+              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -n "${probe_run_id}" ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ -z "${probe_run_id}" ]]; then
+            echo "::error::Could not resolve kms-phala-staging-probe workflow run ID"
+            exit 1
+          fi
+
+          gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+          probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
+            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+          if [[ -z "${probe_artifact_name}" ]]; then
+            echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
+            exit 1
+          fi
+
+          mkdir -p e2e/kms-probe e2e/kms-release
+          gh run download "${probe_run_id}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${probe_artifact_name}" \
+            --dir e2e/kms-probe
+
+          for asset in \
+            "kms-phala-attestation-policy.debug.json" \
+            "kms-phala-attestation-policy.debug-read-only.json" \
+            "kms-phala-attestation-policy.locked-read-only.json"; do
+            gh release download "${kms_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset}" \
+              --dir e2e/kms-release
+          done
+
+          kms_probe_candidates_file="$(python3 - <<'PY'
+          import pathlib
+          base = pathlib.Path("e2e/kms-probe")
+          matches = sorted(base.rglob("kms-policy-candidates.json"))
+          print(matches[0] if matches else "")
+          PY
+          )"
+          if [[ -z "${kms_probe_candidates_file}" ]]; then
+            echo "::error::Could not locate kms-policy-candidates.json in downloaded probe artifacts"
+            exit 1
+          fi
+
+          bash scripts/release/e2e-verify-kms-node-compatibility.sh \
+            artifacts \
+            e2e/kms-release \
+            "${kms_probe_candidates_file}"
+
+          {
+            echo "### Post-release e2e attestation matrix"
+            echo ""
+            echo "- KMS release tag: ${kms_tag}"
+            echo "- KMS probe run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
+            echo "- Result: strict profile allow/deny matrix verified (debug/debug-read-only/locked-read-only)."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   publish_mrtds:
     name: Publish profile MRTDs
     runs-on: ubuntu-latest
-    needs: [preflight, profile_pipeline, cleanup_attestation_resources]
+    needs: [preflight, profile_pipeline, cleanup_attestation_resources, e2e_kms_node_compatibility]
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' && github.ref == 'refs/heads/master' }}
     permissions:
       actions: write
@@ -1555,91 +1679,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           scripts/release/verify-node-image-gcp-release-assets.sh "mero-tee-v${{ needs.preflight.outputs.image_version }}"
-
-      - name: Post-release e2e attestation compatibility matrix (KMS + node)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version="${{ needs.preflight.outputs.image_version }}"
-          kms_tag="mero-kms-v${version}"
-
-          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          gh workflow run "kms-phala-staging-probe.yaml" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref master \
-            -f kms_tag="${kms_tag}"
-
-          probe_run_id=""
-          for attempt in $(seq 1 90); do
-            probe_run_id="$(gh run list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --workflow "kms-phala-staging-probe.yaml" \
-              --event workflow_dispatch \
-              --branch master \
-              --limit 8 \
-              --json databaseId,createdAt \
-              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
-            if [[ -n "${probe_run_id}" ]]; then
-              break
-            fi
-            sleep 10
-          done
-
-          if [[ -z "${probe_run_id}" ]]; then
-            echo "::error::Could not resolve kms-phala-staging-probe workflow run ID"
-            exit 1
-          fi
-
-          gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
-
-          probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
-            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
-          if [[ -z "${probe_artifact_name}" ]]; then
-            echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
-            exit 1
-          fi
-
-          mkdir -p e2e/kms-probe e2e/kms-release
-          gh run download "${probe_run_id}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --name "${probe_artifact_name}" \
-            --dir e2e/kms-probe
-
-          for asset in \
-            "kms-phala-attestation-policy.debug.json" \
-            "kms-phala-attestation-policy.debug-read-only.json" \
-            "kms-phala-attestation-policy.locked-read-only.json"; do
-            gh release download "${kms_tag}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern "${asset}" \
-              --dir e2e/kms-release
-          done
-
-          kms_probe_candidates_file="$(python3 - <<'PY'
-          import pathlib
-          base = pathlib.Path("e2e/kms-probe")
-          matches = sorted(base.rglob("kms-policy-candidates.json"))
-          print(matches[0] if matches else "")
-          PY
-          )"
-          if [[ -z "${kms_probe_candidates_file}" ]]; then
-            echo "::error::Could not locate kms-policy-candidates.json in downloaded probe artifacts"
-            exit 1
-          fi
-
-          bash scripts/release/e2e-verify-kms-node-compatibility.sh \
-            artifacts \
-            e2e/kms-release \
-            "${kms_probe_candidates_file}"
-
-          {
-            echo "### Post-release e2e attestation matrix"
-            echo ""
-            echo "- KMS release tag: ${kms_tag}"
-            echo "- KMS probe run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
-            echo "- Result: strict profile allow/deny matrix verified (debug/debug-read-only/locked-read-only)."
-          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upsert umbrella version release links
         env:
