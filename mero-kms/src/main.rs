@@ -306,6 +306,16 @@ impl Config {
                 tag
             );
         }
+        match root.get("role").and_then(|value| value.as_str()) {
+            Some(role) if role == "kms" => {}
+            Some(role) => {
+                bail!("Policy role mismatch: expected 'kms', got '{}'", role);
+            }
+            None if allow_legacy_missing_profile && expected_profile == "locked-read-only" => {}
+            None => {
+                bail!("Policy JSON missing 'role' for KMS policy");
+            }
+        }
         match root.get("profile").and_then(|value| value.as_str()) {
             Some(profile) => {
                 let normalized = parse_profile(profile)?;
@@ -772,6 +782,7 @@ mod tests {
         let measurement = "ab".repeat(48);
         let policy_json = serde_json::json!({
             "tag": "2.1.38",
+            "role": "kms",
             "profile": "debug",
             "policy": {
                 "node_allowed_tcb_statuses": ["uptodate"],
@@ -809,5 +820,30 @@ mod tests {
             Config::parse_policy_json(&policy_json.to_string(), "2.1.38", "locked-read-only", true)
                 .expect("legacy locked-read-only policy should parse");
         assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
+    }
+
+    #[test]
+    fn parse_policy_json_rejects_non_kms_role() {
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "role": "node",
+            "profile": "locked-read-only",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": ["aa".repeat(48)],
+                "node_allowed_rtmr0": ["bb".repeat(48)],
+                "node_allowed_rtmr1": ["cc".repeat(48)],
+                "node_allowed_rtmr2": ["dd".repeat(48)],
+                "node_allowed_rtmr3": ["ee".repeat(48)]
+            }
+        });
+        let err = Config::parse_policy_json(
+            &policy_json.to_string(),
+            "2.1.38",
+            "locked-read-only",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Policy role mismatch"));
     }
 }

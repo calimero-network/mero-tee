@@ -8,6 +8,7 @@ BIN_DIR="/usr/local/bin"
 CALIMERO_HOME="/mnt/data/calimero"
 CALIMERO_NODE="default"
 IMAGE_PROFILE="{{ lockdown_profile }}"
+IMAGE_ROLE="node"
 MEROD_MODE="{{ merod_mode }}"
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
@@ -23,16 +24,16 @@ log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
 # --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
-# RTMR3 is empty by default; extending with profile+root_hash makes each image unique.
+# RTMR3 is empty by default; extending with role+profile+root_hash makes each image unique.
 # Requires tdx_guest module + sysfs (kernel 6.16+). Skip gracefully if unavailable.
 RTMR3_SYSFS="/sys/class/misc/tdx_guest/mr/rtmr3:sha384"
 ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
-RTMR3_EXTEND=$(printf 'calimero-rtmr3-v1:%s:%s' "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary 2>/dev/null)
+RTMR3_EXTEND=$(printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary 2>/dev/null)
 if [[ -n "${RTMR3_EXTEND}" ]]; then
   modprobe tdx_guest 2>/dev/null || true
   if [[ -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
     if printf '%s' "${RTMR3_EXTEND}" > "${RTMR3_SYSFS}" 2>/dev/null; then
-      log "Extended RTMR3 for attestation (profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+      log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
     else
       log "WARN: RTMR3 extend write failed"
     fi

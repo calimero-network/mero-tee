@@ -471,6 +471,10 @@ jobs:
               generated_at: (now | todate),
               compatibility: {
                 version: $version,
+                roles: {
+                  kms: "kms",
+                  node: "node"
+                },
                 kms_tag: $kms_tag,
                 node_image_tag: $node_image_tag,
                 kms_policy_url: $kms_policy_url,
@@ -478,22 +482,28 @@ jobs:
                 profiles: {
                   debug: {
                     kms_image_tag: ($version + "-debug"),
+                    kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug.json",
                     kms_policy_url: $kms_policy_debug_url,
+                    node_role: "node",
                     node_profile: "debug",
                     node_policy_url: $node_policy_url
                   },
                   "debug-read-only": {
                     kms_image_tag: ($version + "-debug-read-only"),
+                    kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug-read-only.json",
                     kms_policy_url: $kms_policy_debug_ro_url,
+                    node_role: "node",
                     node_profile: "debug-read-only",
                     node_policy_url: $node_policy_url
                   },
                   "locked-read-only": {
                     kms_image_tag: ($version + "-locked-read-only"),
+                    kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.locked-read-only.json",
                     kms_policy_url: $kms_policy_locked_url,
+                    node_role: "node",
                     node_profile: "locked-read-only",
                     node_policy_url: $node_policy_url
                   }
@@ -560,6 +570,26 @@ jobs:
               exit 1
             fi
           done
+
+          # Role separation guardrail: KMS and node must not share RTMR3 values
+          # within the same profile cohort, otherwise image spoofing boundaries blur.
+          ensure_no_overlap() {
+            local label="$1"
+            local left_json="$2"
+            local right_json="$3"
+            if jq -e --argjson left "${left_json}" --argjson right "${right_json}" '
+              [($left[] | ascii_downcase)] as $l
+              | [($right[] | ascii_downcase)] as $r
+              | any($r[] as $v; ($l | index($v)) != null)
+            ' >/dev/null; then
+              echo "::error::${label} has overlapping allowlist values between KMS and node roles."
+              exit 1
+            fi
+          }
+
+          ensure_no_overlap "debug RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_json}"
+          ensure_no_overlap "debug-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_ro_json}"
+          ensure_no_overlap "locked-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_locked_json}"
 
           read -r default_binding_hex default_binding_b64 < <(
             python3 - <<'PY'
@@ -663,6 +693,7 @@ jobs:
               --argjson node_allowed_rtmr3 "${node_rtmr3}" \
               '{
                 schema_version: 1,
+                role: "kms",
                 profile: $profile,
                 tag: $tag,
                 commit_sha: $commit,
@@ -675,6 +706,12 @@ jobs:
                   ref: $ref
                 },
                 policy_registry_entry_path: $policy_registry_source_path,
+                measurement_markers: {
+                  kms_role: "calimero.role=kms",
+                  node_role: "calimero.role=node",
+                  node_profile_key: "calimero.profile",
+                  node_root_hash_key: "calimero.root_hash"
+                },
                 kms: {
                   provider: "mero-kms-phala",
                   attest_endpoint: "/attest",

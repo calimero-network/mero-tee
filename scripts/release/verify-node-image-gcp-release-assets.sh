@@ -235,6 +235,7 @@ for required in \
 done
 
 jq -e --arg tag "${logical_tag}" '
+  ((.role // "node") == "node") and
   .tag == $tag and
   (.profiles.debug.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["debug-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
@@ -260,6 +261,7 @@ jq -e --arg tag "${logical_tag}" '
 ' "${tmp_dir}/published-mrtds.json" >/dev/null
 
 jq -e --arg tag "${logical_tag}" '
+  ((.role // "node") == "node") and
   .tag == $tag and
   (.commit_sha | type == "string" and length > 0) and
   (.profiles.debug.image.name | type == "string" and length > 0) and

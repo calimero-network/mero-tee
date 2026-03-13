@@ -284,11 +284,19 @@ jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
   (.compatibility.version == $tag) and
+  ((.compatibility.roles.kms // "kms") == "kms") and
+  ((.compatibility.roles.node // "node") == "node") and
   (.compatibility.kms_tag == ("mero-kms-v" + $tag)) and
   (.compatibility.node_image_tag == ("mero-tee-v" + $tag)) and
   (.compatibility.profiles.debug.kms_policy_asset | type == "string" and length > 0) and
   (.compatibility.profiles["debug-read-only"].kms_policy_asset | type == "string" and length > 0) and
   (.compatibility.profiles["locked-read-only"].kms_policy_asset | type == "string" and length > 0) and
+  ((.compatibility.profiles.debug.kms_role // "kms") == "kms") and
+  ((.compatibility.profiles["debug-read-only"].kms_role // "kms") == "kms") and
+  ((.compatibility.profiles["locked-read-only"].kms_role // "kms") == "kms") and
+  ((.compatibility.profiles.debug.node_role // "node") == "node") and
+  ((.compatibility.profiles["debug-read-only"].node_role // "node") == "node") and
+  ((.compatibility.profiles["locked-read-only"].node_role // "node") == "node") and
   (.compatibility.profiles.debug.kms_image_tag | type == "string" and length > 0) and
   (.compatibility.profiles["debug-read-only"].kms_image_tag | type == "string" and length > 0) and
   (.compatibility.profiles["locked-read-only"].kms_image_tag | type == "string" and length > 0) and
@@ -300,6 +308,7 @@ jq -e --arg tag "${logical_tag}" '
 jq -e --arg tag "${logical_tag}" '
   .schema_version == 1 and
   .tag == $tag and
+  ((.role // "kms") == "kms") and
   (.commit_sha | type == "string" and length > 0) and
   (.kms.provider == "mero-kms-phala") and
   (.kms.attest_endpoint == "/attest") and
@@ -313,6 +322,20 @@ jq -e --arg tag "${logical_tag}" '
   (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0))
 ' "${tmp_dir}/kms-phala-attestation-policy.json" >/dev/null
 
+ensure_no_overlap() {
+  local label="$1"
+  local left_json="$2"
+  local right_json="$3"
+  if jq -e --argjson left "${left_json}" --argjson right "${right_json}" '
+    [($left[] | ascii_downcase)] as $l
+    | [($right[] | ascii_downcase)] as $r
+    | any($r[] as $v; ($l | index($v)) != null)
+  ' >/dev/null; then
+    echo "${label} has overlapping measurement values between KMS and node roles"
+    exit 1
+  fi
+}
+
 if [[ "${has_profile_policy_assets}" == "true" ]]; then
   for profile in debug debug-read-only locked-read-only; do
     profile_file="${tmp_dir}/kms-phala-attestation-policy.${profile}.json"
@@ -320,6 +343,7 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
       .schema_version == 1 and
       .tag == $tag and
       (.commit_sha | type == "string" and length > 0) and
+      ((.role // "kms") == "kms") and
       ((.profile // "locked-read-only") == $profile) and
       (.kms.provider == "mero-kms-phala") and
       (.kms.attest_endpoint == "/attest") and
@@ -337,6 +361,10 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
       (((.policy.node_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array" and length > 0)) and
       (((.policy.node_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0))
     ' "${profile_file}" >/dev/null
+
+    kms_rtmr3_json="$(jq -c '.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3' "${profile_file}")"
+    node_rtmr3_json="$(jq -c '.policy.node_allowed_rtmr3 // .policy.allowed_rtmr3' "${profile_file}")"
+    ensure_no_overlap "${profile} RTMR3" "${kms_rtmr3_json}" "${node_rtmr3_json}"
   done
 fi
 

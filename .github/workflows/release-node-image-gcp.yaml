@@ -1056,10 +1056,10 @@ jobs:
             jq -e '
               .schema_version == 1
               and (.policy.allowed_mrtd | type == "array" and length > 0)
-              and (.policy.allowed_rtmr0 | type == "array")
-              and (.policy.allowed_rtmr1 | type == "array")
-              and (.policy.allowed_rtmr2 | type == "array")
-              and (.policy.allowed_rtmr3 | type == "array")
+              and (.policy.allowed_rtmr0 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr1 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr2 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr3 | type == "array" and length > 0)
             ' "${file_path}" >/dev/null || {
               echo "Invalid measurement policy candidate in ${label}"
               exit 1
@@ -1143,7 +1143,7 @@ jobs:
           ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
 
           # MRTD is firmware-only (TDVF) per GCP TDX docs; identical for all profiles.
-          # RTMR[2] includes kernel cmdline; we inject calimero.profile=<profile> so each profile
+          # RTMR[2] includes kernel cmdline; we inject calimero.role=node + calimero.profile=<profile> so each profile
           # produces different RTMRs. At least one RTMR must differ so KMS can distinguish images.
           debug_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
           debug_ro_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
@@ -1171,7 +1171,7 @@ jobs:
             fi
           fi
           if [[ "${profiles_differ}" != "true" ]]; then
-            echo "::error::All three profiles have identical RTMR0/RTMR2/RTMR3. Profiles must produce different measurements (calimero.profile+root_hash in RTMR[2], RTMR3 extend at boot)."
+            echo "::error::All three profiles have identical RTMR0/RTMR2/RTMR3. Profiles must produce different measurements (calimero.role+calimero.profile+root_hash in RTMR[2], RTMR3 extend at boot)."
             echo "  RTMR2: debug=${debug_rtmr2:0:24}... debug-ro=${debug_ro_rtmr2:0:24}... locked-ro=${locked_ro_rtmr2:0:24}..."
             echo "  RTMR3: debug=${debug_rtmr3:0:24}... (empty if kernel <6.16)"
             exit 1
@@ -1186,8 +1186,14 @@ jobs:
             --slurpfile debug_ro_policy artifacts/measurement-policy-candidates-debug-read-only.json \
             --slurpfile locked_ro_policy artifacts/measurement-policy-candidates-locked-read-only.json \
             '{
+              role: "node",
               tag: $tag,
               generated_at: (now | todate),
+              measurement_markers: {
+                role: "calimero.role=node",
+                profile_key: "calimero.profile",
+                root_hash_key: "calimero.root_hash"
+              },
               profiles: {
                 debug: (
                   $debug[0] + {
@@ -1223,6 +1229,7 @@ jobs:
             }' > artifacts/published-mrtds.json
 
           jq -e '
+            .role == "node" and
             (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0) and
             (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
             (.profiles.debug.allowed_rtmr0 | type == "array" and length > 0) and
@@ -1264,6 +1271,7 @@ jobs:
             --slurpfile locked_ro artifacts/profile-provenance-locked-read-only.json \
             --slurpfile mrtds artifacts/published-mrtds.json \
             '{
+              role: "node",
               tag: $tag,
               commit_sha: $commit,
               workflow_run_id: $run_id,

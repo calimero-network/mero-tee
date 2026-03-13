@@ -124,9 +124,11 @@ cosign verify-blob \
   --certificate-oidc-issuer "${cert_oidc_issuer}" \
   "${policy_file}" >/dev/null
 
-jq -e --arg tag "${logical_tag}" '
+jq -e --arg tag "${logical_tag}" --arg profile "${profile}" '
   .schema_version == 1 and
   .tag == $tag and
+  ((.role // "kms") == "kms") and
+  ((.profile // "locked-read-only") == $profile) and
   ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
   ((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0) and
   ((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0) and

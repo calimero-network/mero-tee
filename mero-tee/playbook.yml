@@ -1,7 +1,7 @@
 ---
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
-# Attestation: calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
-# calimero-init extends RTMR[3] with profile+root_hash at boot (kernel 6.16+).
+# Attestation: calimero.role + calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
+# calimero-init extends RTMR[3] with role+profile+root_hash at boot (kernel 6.16+).
 # Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub — cannot be forged.
 - hosts: all
   become: true

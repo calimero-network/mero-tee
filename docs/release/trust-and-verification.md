@@ -115,7 +115,7 @@ This is expected in some cases and does **not** automatically indicate a bug.
 
 - **MRTD** usually changes whenever measured image/rootfs content differs.
 - **RTMR0/RTMR1** can match across profiles if early boot chain and firmware/kernel components are identical.
-- **RTMR2/RTMR3** are more likely to diverge between profiles because cmdline/runtime extensions include profile- and configuration-sensitive material.
+- **RTMR2/RTMR3** are more likely to diverge between profiles because cmdline/runtime extensions include role/profile/root-hash-sensitive material (`calimero.role`, `calimero.profile`, `calimero.root_hash`).
 
 Practical rule:
 - Do not infer compatibility from one field.
