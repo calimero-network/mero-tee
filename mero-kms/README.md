@@ -112,13 +112,13 @@ https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSIO
 For backward compatibility, `locked-read-only` can fall back to `kms-phala-attestation-policy.json`.
 
 This ensures the policy cannot be tweaked via env vars; it comes from the
-canonical source. If the fetch fails, the KMS falls back to env vars.
+canonical source. If the fetch fails, startup fails closed.
 
 Production recommendation:
 
 - keep release policy as primary source (`MERO_KMS_VERSION` or `MERO_KMS_RELEASE_TAG`);
-- pin `MERO_KMS_POLICY_SHA256` from reviewed release metadata when possible;
-- avoid broad fallback env allowlists;
+- require `MERO_KMS_POLICY_SHA256` from reviewed release metadata for release-policy mode;
+- use `USE_ENV_POLICY=true` only for explicit air-gapped env-policy mode;
 - treat startup failures on missing/invalid policy as fail-closed signals, not something to bypass.
 
 ```bash
@@ -135,12 +135,13 @@ Environment variables:
 - `LISTEN_ADDR` (default: `0.0.0.0:8080`)
 - `DSTACK_SOCKET_PATH` (default: `/var/run/dstack.sock`)
 - `CHALLENGE_TTL_SECS` (default: `60`)
+- `MAX_PENDING_CHALLENGES` (default: `10000`) – cap on unconsumed challenges
 - `ACCEPT_MOCK_ATTESTATION` (default: `false`)
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
 - `MERO_KMS_VERSION` – fetch policy from release (e.g. `2.1.14`); recommended
 - `MERO_KMS_RELEASE_TAG` – alternative (e.g. `mero-kms-v2.1.14`)
 - `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (default)
-- `MERO_KMS_POLICY_SHA256` – optional policy hash pin for release-fetched policy
+- `MERO_KMS_POLICY_SHA256` – required when fetching policy from release
 - `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
 - `KEY_NAMESPACE_PREFIX` – key namespace prefix (default: `merod/storage`)
 - `REDIS_URL` – optional Redis connection URL for shared challenge state

@@ -60,6 +60,8 @@ pub struct Config {
     pub dstack_socket_path: String,
     /// Challenge token TTL in seconds.
     pub challenge_ttl_secs: u64,
+    /// Maximum number of unconsumed challenges allowed at once.
+    pub max_pending_challenges: usize,
     /// Whether to accept mock attestations (for development only).
     pub accept_mock_attestation: bool,
     /// Optional Redis URL for shared challenge storage.
@@ -82,6 +84,7 @@ impl Default for Config {
             listen_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             dstack_socket_path: "/var/run/dstack.sock".to_string(),
             challenge_ttl_secs: 60,
+            max_pending_challenges: 10_000,
             accept_mock_attestation: false,
             redis_url: None,
             kms_profile: "locked-read-only".to_string(),
@@ -113,10 +116,15 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(60);
+        let max_pending_challenges = std::env::var("MAX_PENDING_CHALLENGES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10_000);
+        if max_pending_challenges == 0 {
+            bail!("MAX_PENDING_CHALLENGES must be greater than 0");
+        }
 
-        let accept_mock_attestation = std::env::var("ACCEPT_MOCK_ATTESTATION")
-            .map(|v| parse_bool_flag(&v))
-            .unwrap_or(false);
+        let accept_mock_attestation = parse_bool_env("ACCEPT_MOCK_ATTESTATION", false)?;
 
         let redis_url = std::env::var("REDIS_URL")
             .ok()
@@ -143,41 +151,38 @@ impl Config {
 
         let cors_allowed_origins = parse_csv_env_raw("CORS_ALLOWED_ORIGINS").unwrap_or_default();
 
-        let enforce_measurement_policy = std::env::var("ENFORCE_MEASUREMENT_POLICY")
-            .map(|v| parse_bool_flag(&v))
-            .unwrap_or(true);
+        let enforce_measurement_policy = parse_bool_env("ENFORCE_MEASUREMENT_POLICY", true)?;
 
-        let use_env_policy = std::env::var("USE_ENV_POLICY")
-            .map(|v| parse_bool_flag(&v))
-            .unwrap_or(false);
+        let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
+
+        let release_version = if use_env_policy {
+            None
+        } else {
+            Self::release_version_from_env()
+        };
+        if release_version.is_some() && policy_sha256.is_none() {
+            bail!(
+                "MERO_KMS_POLICY_SHA256 is required when loading policy from release. \
+                 Set MERO_KMS_POLICY_SHA256 to the reviewed policy hash, or set USE_ENV_POLICY=true \
+                 for air-gapped env-policy mode."
+            );
+        }
 
         let mut attestation_policy = if use_env_policy {
             Self::load_policy_from_env()?
-        } else if let Some(version) = Self::release_version_from_env() {
-            match Self::fetch_policy_from_release_async(
+        } else if let Some(version) = release_version {
+            let policy = Self::fetch_policy_from_release_async(
                 &version,
                 &kms_profile,
                 policy_sha256.as_deref(),
             )
-            .await
-            {
-                Ok(policy) => {
-                    tracing::info!(
-                        "Loaded attestation policy from release mero-kms-v{} profile {}",
-                        version,
-                        kms_profile
-                    );
-                    policy
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to fetch policy from release ({}): {}. Falling back to env vars.",
-                        version,
-                        e
-                    );
-                    Self::load_policy_from_env()?
-                }
-            }
+            .await?;
+            tracing::info!(
+                "Loaded attestation policy from release mero-kms-v{} profile {}",
+                version,
+                kms_profile
+            );
+            policy
         } else {
             Self::load_policy_from_env()?
         };
@@ -189,6 +194,7 @@ impl Config {
             listen_addr,
             dstack_socket_path,
             challenge_ttl_secs,
+            max_pending_challenges,
             accept_mock_attestation,
             redis_url,
             kms_profile,
@@ -218,23 +224,29 @@ impl Config {
         expected_policy_sha256: Option<&str>,
     ) -> EyreResult<AttestationPolicy> {
         let tag = format!("mero-kms-v{}", version.trim());
-        let urls = [
+        let mut urls = vec![(
             format!(
                 "{}/{}/kms-phala-attestation-policy.{}.json",
                 POLICY_RELEASE_BASE, tag, profile
             ),
-            format!(
-                "{}/{}/kms-phala-attestation-policy.json",
-                POLICY_RELEASE_BASE, tag
-            ),
-        ];
+            false,
+        )];
+        if profile == "locked-read-only" {
+            urls.push((
+                format!(
+                    "{}/{}/kms-phala-attestation-policy.json",
+                    POLICY_RELEASE_BASE, tag
+                ),
+                true,
+            ));
+        }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("mero-kms-phala/1.0")
             .build()
             .map_err(|e| eyre::eyre!("Failed to create HTTP client: {}", e))?;
         let mut last_error: Option<String> = None;
-        for url in urls {
+        for (url, legacy_fallback) in urls {
             let resp = client
                 .get(&url)
                 .send()
@@ -265,7 +277,7 @@ impl Config {
             }
             let body = std::str::from_utf8(&bytes)
                 .map_err(|e| eyre::eyre!("Policy body is not valid UTF-8: {}", e))?;
-            return Self::parse_policy_json(body);
+            return Self::parse_policy_json(body, version.trim(), profile, legacy_fallback);
         }
 
         bail!(
@@ -275,9 +287,44 @@ impl Config {
         );
     }
 
-    fn parse_policy_json(json_str: &str) -> EyreResult<AttestationPolicy> {
+    fn parse_policy_json(
+        json_str: &str,
+        expected_tag: &str,
+        expected_profile: &str,
+        allow_legacy_missing_profile: bool,
+    ) -> EyreResult<AttestationPolicy> {
         let root: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| eyre::eyre!("Invalid policy JSON: {}", e))?;
+        let tag = root
+            .get("tag")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| eyre::eyre!("Policy JSON missing 'tag' string"))?;
+        if tag != expected_tag {
+            bail!(
+                "Policy tag mismatch: expected '{}', got '{}'",
+                expected_tag,
+                tag
+            );
+        }
+        match root.get("profile").and_then(|value| value.as_str()) {
+            Some(profile) => {
+                let normalized = parse_profile(profile)?;
+                if normalized != expected_profile {
+                    bail!(
+                        "Policy profile mismatch: expected '{}', got '{}'",
+                        expected_profile,
+                        normalized
+                    );
+                }
+            }
+            None if allow_legacy_missing_profile && expected_profile == "locked-read-only" => {}
+            None => {
+                bail!(
+                    "Policy JSON missing 'profile' for requested profile '{}'",
+                    expected_profile
+                );
+            }
+        }
         let policy = root
             .get("policy")
             .and_then(|v| v.as_object())
@@ -330,11 +377,26 @@ impl Config {
     }
 }
 
-fn parse_bool_flag(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes"
-    )
+fn parse_bool_flag(value: &str) -> EyreResult<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Ok(true),
+        "0" | "false" | "no" => Ok(false),
+        _ => bail!(
+            "Invalid boolean value '{}'. Allowed: true/false/1/0/yes/no",
+            value
+        ),
+    }
+}
+
+fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
+    match std::env::var(name) {
+        Ok(value) => parse_bool_flag(&value)
+            .map_err(|e| eyre::eyre!("{} is invalid: {}", name, e)),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{} must be valid UTF-8", name)
+        }
+    }
 }
 
 fn parse_profile(value: &str) -> EyreResult<String> {
@@ -570,6 +632,10 @@ async fn main() -> eyre::Result<()> {
     info!("Dstack socket: {}", config.dstack_socket_path);
     info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
     info!(
+        "Max pending challenges: {}",
+        config.max_pending_challenges
+    );
+    info!(
         "Accept mock attestation: {}",
         config.accept_mock_attestation
     );
@@ -690,5 +756,66 @@ mod tests {
         let parsed =
             parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd", 48).unwrap();
         assert_eq!(parsed, vec!["cd".repeat(48)]);
+    }
+
+    #[test]
+    fn parse_bool_flag_accepts_false_values() {
+        assert!(!parse_bool_flag("false").unwrap());
+        assert!(!parse_bool_flag("0").unwrap());
+        assert!(!parse_bool_flag("no").unwrap());
+    }
+
+    #[test]
+    fn parse_bool_flag_rejects_invalid_value() {
+        let err = parse_bool_flag("truthy").unwrap_err();
+        assert!(err.to_string().contains("Invalid boolean value"));
+    }
+
+    #[test]
+    fn parse_policy_json_rejects_mismatched_profile() {
+        let measurement = "ab".repeat(48);
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "profile": "debug",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": [measurement],
+                "node_allowed_rtmr0": ["cd".repeat(48)],
+                "node_allowed_rtmr1": ["ef".repeat(48)],
+                "node_allowed_rtmr2": ["01".repeat(48)],
+                "node_allowed_rtmr3": ["23".repeat(48)]
+            }
+        });
+        let err = Config::parse_policy_json(
+            &policy_json.to_string(),
+            "2.1.38",
+            "locked-read-only",
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Policy profile mismatch"));
+    }
+
+    #[test]
+    fn parse_policy_json_allows_locked_legacy_missing_profile() {
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": ["aa".repeat(48)],
+                "node_allowed_rtmr0": ["bb".repeat(48)],
+                "node_allowed_rtmr1": ["cc".repeat(48)],
+                "node_allowed_rtmr2": ["dd".repeat(48)],
+                "node_allowed_rtmr3": ["ee".repeat(48)]
+            }
+        });
+        let parsed = Config::parse_policy_json(
+            &policy_json.to_string(),
+            "2.1.38",
+            "locked-read-only",
+            true,
+        )
+        .expect("legacy locked-read-only policy should parse");
+        assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
     }
 }

@@ -239,21 +239,24 @@ jq -e --arg tag "${logical_tag}" '
   (.profiles.debug.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["debug-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["locked-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
+  (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0) and
   (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
-  (.profiles.debug.allowed_rtmr0 | type == "array") and
-  (.profiles.debug.allowed_rtmr1 | type == "array") and
-  (.profiles.debug.allowed_rtmr2 | type == "array") and
-  (.profiles.debug.allowed_rtmr3 | type == "array") and
+  (.profiles.debug.allowed_rtmr0 | type == "array" and length > 0) and
+  (.profiles.debug.allowed_rtmr1 | type == "array" and length > 0) and
+  (.profiles.debug.allowed_rtmr2 | type == "array" and length > 0) and
+  (.profiles.debug.allowed_rtmr3 | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
   (.profiles["debug-read-only"].allowed_mrtd | type == "array" and length > 0) and
-  (.profiles["debug-read-only"].allowed_rtmr0 | type == "array") and
-  (.profiles["debug-read-only"].allowed_rtmr1 | type == "array") and
-  (.profiles["debug-read-only"].allowed_rtmr2 | type == "array") and
-  (.profiles["debug-read-only"].allowed_rtmr3 | type == "array") and
+  (.profiles["debug-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_rtmr2 | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_rtmr3 | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
   (.profiles["locked-read-only"].allowed_mrtd | type == "array" and length > 0) and
-  (.profiles["locked-read-only"].allowed_rtmr0 | type == "array") and
-  (.profiles["locked-read-only"].allowed_rtmr1 | type == "array") and
-  (.profiles["locked-read-only"].allowed_rtmr2 | type == "array") and
-  (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
+  (.profiles["locked-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_rtmr2 | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_rtmr3 | type == "array" and length > 0)
 ' "${tmp_dir}/published-mrtds.json" >/dev/null
 
 jq -e --arg tag "${logical_tag}" '

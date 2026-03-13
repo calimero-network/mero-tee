@@ -21,6 +21,7 @@ pub enum ChallengeStoreError {
     Serialize(String),
     RedisConnection(String),
     RedisOperation(String),
+    CapacityExceeded,
     NotFoundOrExpired,
     PeerMismatch,
     Expired,
@@ -35,6 +36,7 @@ impl Display for ChallengeStoreError {
             Self::Serialize(msg) => write!(f, "challenge serialization error: {}", msg),
             Self::RedisConnection(msg) => write!(f, "redis connection failed: {}", msg),
             Self::RedisOperation(msg) => write!(f, "redis operation failed: {}", msg),
+            Self::CapacityExceeded => write!(f, "challenge store capacity exceeded"),
             Self::NotFoundOrExpired => write!(f, "challenge not found or expired"),
             Self::PeerMismatch => write!(f, "challenge peer mismatch"),
             Self::Expired => write!(f, "challenge has expired"),
@@ -66,14 +68,18 @@ impl ChallengeStore {
         challenge_id: String,
         challenge: PendingChallenge,
         ttl_secs: u64,
+        max_pending_challenges: usize,
     ) -> Result<(), ChallengeStoreError> {
+        let now = unix_now_secs()?;
         match self {
             Self::InMemory(store) => {
-                let now = unix_now_secs()?;
                 let mut guard = store
                     .lock()
                     .map_err(|_| ChallengeStoreError::LockPoisoned)?;
                 prune_expired_challenges(&mut guard, now);
+                if guard.len() >= max_pending_challenges {
+                    return Err(ChallengeStoreError::CapacityExceeded);
+                }
                 guard.insert(challenge_id, challenge);
                 Ok(())
             }
@@ -85,9 +91,38 @@ impl ChallengeStore {
                     .get_multiplexed_async_connection()
                     .await
                     .map_err(|e| ChallengeStoreError::RedisConnection(e.to_string()))?;
-                conn.set_ex::<_, _, ()>(key, payload, ttl_secs)
+                let pending_after_insert: i64 = redis::Script::new(
+                    r#"
+                    local challenge_key = KEYS[1]
+                    local index_key = KEYS[2]
+                    local payload = ARGV[1]
+                    local ttl = tonumber(ARGV[2])
+                    local expires_at = tonumber(ARGV[3])
+                    local now = tonumber(ARGV[4])
+                    local max_pending = tonumber(ARGV[5])
+                    redis.call('ZREMRANGEBYSCORE', index_key, '-inf', now)
+                    local pending = redis.call('ZCARD', index_key)
+                    if pending >= max_pending then
+                      return -1
+                    end
+                    redis.call('SET', challenge_key, payload, 'EX', ttl)
+                    redis.call('ZADD', index_key, expires_at, challenge_key)
+                    return pending + 1
+                    "#,
+                )
+                .key(key)
+                .key(redis_challenge_index_key())
+                .arg(payload)
+                .arg(ttl_secs)
+                .arg(challenge.expires_at)
+                .arg(now)
+                .arg(max_pending_challenges as i64)
+                .invoke_async(&mut conn)
                     .await
                     .map_err(|e| ChallengeStoreError::RedisOperation(e.to_string()))?;
+                if pending_after_insert < 0 {
+                    return Err(ChallengeStoreError::CapacityExceeded);
+                }
                 Ok(())
             }
         }
@@ -117,9 +152,22 @@ impl ChallengeStore {
                     .await
                     .map_err(|e| ChallengeStoreError::RedisConnection(e.to_string()))?;
                 let payload: Option<String> = redis::Script::new(
-                    "local v=redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]); end; return v",
+                    r#"
+                    local challenge_key = KEYS[1]
+                    local index_key = KEYS[2]
+                    local now = tonumber(ARGV[1])
+                    redis.call('ZREMRANGEBYSCORE', index_key, '-inf', now)
+                    local v = redis.call('GET', challenge_key)
+                    if v then
+                      redis.call('DEL', challenge_key)
+                      redis.call('ZREM', index_key, challenge_key)
+                    end
+                    return v
+                    "#,
                 )
                 .key(key)
+                .key(redis_challenge_index_key())
+                .arg(now)
                 .invoke_async(&mut conn)
                 .await
                 .map_err(|e| ChallengeStoreError::RedisOperation(e.to_string()))?;
@@ -159,4 +207,34 @@ fn validate_challenge(
 
 fn redis_challenge_key(challenge_id: &str) -> String {
     format!("mero-kms-phala:challenge:{}", challenge_id)
+}
+
+fn redis_challenge_index_key() -> &'static str {
+    "mero-kms-phala:challenge:index"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn in_memory_insert_respects_max_pending_capacity() {
+        let store = ChallengeStore::from_redis_url(None).expect("store should initialize");
+        let now = unix_now_secs().expect("clock should be available");
+        let challenge = PendingChallenge {
+            nonce: [1u8; 32],
+            peer_id: "12D3KooWPeer".to_string(),
+            expires_at: now + 60,
+        };
+
+        store
+            .insert("challenge-1".to_string(), challenge.clone(), 60, 1)
+            .await
+            .expect("first challenge should fit");
+        let err = store
+            .insert("challenge-2".to_string(), challenge, 60, 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ChallengeStoreError::CapacityExceeded));
+    }
 }

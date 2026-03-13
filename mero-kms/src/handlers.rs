@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
-use crate::challenge_store::{ChallengeStore, PendingChallenge};
+use crate::challenge_store::{ChallengeStore, ChallengeStoreError, PendingChallenge};
 use crate::Config;
 
 /// Shared application state.
@@ -109,7 +109,9 @@ pub struct ErrorResponse {
 #[derive(Debug)]
 pub enum ServiceError {
     InvalidBase64(String),
+    InvalidPeerId(String),
     InvalidAttestationRequest(String),
+    RateLimited(String),
     InvalidChallenge(String),
     InvalidPeerPublicKey(String),
     InvalidSignature(String),
@@ -132,10 +134,24 @@ impl IntoResponse for ServiceError {
                     details: Some(msg.clone()),
                 },
             ),
+            ServiceError::InvalidPeerId(msg) => (
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "invalid_peer_id".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
             ServiceError::InvalidAttestationRequest(msg) => (
                 StatusCode::BAD_REQUEST,
                 ErrorResponse {
                     error: "invalid_attestation_request".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
+            ServiceError::RateLimited(msg) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorResponse {
+                    error: "rate_limited".to_string(),
                     details: Some(msg.clone()),
                 },
             ),
@@ -294,6 +310,7 @@ async fn challenge_handler(
     State(state): State<AppState>,
     Json(request): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServiceError> {
+    validate_peer_id_shape(&request.peer_id)?;
     let nonce: [u8; 32] = random();
 
     let challenge_id = create_challenge_id();
@@ -309,10 +326,14 @@ async fn challenge_handler(
                 expires_at,
             },
             state.config.challenge_ttl_secs,
+            state.config.max_pending_challenges,
         )
         .await
-        .map_err(|msg| {
-            ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", msg))
+        .map_err(|err| match err {
+            ChallengeStoreError::CapacityExceeded => ServiceError::RateLimited(
+                "Too many pending challenges. Retry shortly.".to_string(),
+            ),
+            _ => ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", err)),
         })?;
 
     Ok(Json(ChallengeResponse {
@@ -329,6 +350,8 @@ async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
+    validate_peer_id_shape(&request.peer_id)?;
+    validate_challenge_id(&request.challenge_id)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
     // Decode the base64 quote
@@ -469,6 +492,40 @@ fn unix_now_secs() -> Result<u64, ServiceError> {
 fn create_challenge_id() -> String {
     let raw: [u8; 16] = random();
     hex::encode(raw)
+}
+
+fn validate_peer_id_shape(peer_id: &str) -> Result<(), ServiceError> {
+    const MAX_PEER_ID_LENGTH: usize = 128;
+    let trimmed = peer_id.trim();
+    if trimmed.is_empty() {
+        return Err(ServiceError::InvalidPeerId(
+            "peer ID must not be empty".to_string(),
+        ));
+    }
+    if trimmed.len() > MAX_PEER_ID_LENGTH {
+        return Err(ServiceError::InvalidPeerId(format!(
+            "peer ID exceeds max length {}",
+            MAX_PEER_ID_LENGTH
+        )));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| matches!(c, '1'..='9' | 'A'..='H' | 'J'..='N' | 'P'..='Z' | 'a'..='k' | 'm'..='z'))
+    {
+        return Err(ServiceError::InvalidPeerId(
+            "peer ID contains non-base58btc characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceError> {
+    if challenge_id.len() != 32 || !challenge_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ServiceError::InvalidChallenge(
+            "challenge ID must be 32 hex characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
@@ -783,6 +840,18 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_peer_id_shape_rejects_non_base58() {
+        let err = validate_peer_id_shape("not-valid-peer-id-0OIl").unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidPeerId(_)));
+    }
+
+    #[test]
+    fn test_validate_challenge_id_rejects_invalid_shape() {
+        let err = validate_challenge_id("abc").unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidChallenge(_)));
+    }
+
+    #[test]
     fn test_resolve_attestation_binding_defaults_to_domain_separator() {
         let binding = resolve_attestation_binding(None).unwrap();
         assert_eq!(binding.len(), 32);
@@ -913,7 +982,8 @@ mod tests {
     #[tokio::test]
     async fn test_challenge_is_single_use_even_when_signature_fails() {
         let app = create_router(Config::default()).expect("router should build");
-        let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
+        let keypair = Keypair::generate_ed25519();
+        let peer_id = keypair.public().to_peer_id().to_base58();
         let challenge_body = serde_json::json!({
             "peerId": peer_id
         });
