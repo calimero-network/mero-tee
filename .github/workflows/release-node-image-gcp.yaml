@@ -51,7 +51,6 @@ jobs:
           bash -n mero-tee/build-and-release.sh
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/verify-kms-phala-release-assets.sh
-          bash -n scripts/policy/read-node-image-gcp-policy-registry.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
           python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py
