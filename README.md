@@ -20,11 +20,10 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Phala KMS attestation task list (mero-tee)](docs/policies/kms-phala-attestation-task-list.md)
 - [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/policies/kms-phala-staging-probe.md)
-- [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) – Verify nodes run the attested image
+- [Trust, verification, and measurements](docs/release/trust-and-verification.md) – Canonical operator/client guide
 - [Release verification output examples](docs/release/verification-examples.md)
 - [Migration & Implementation Plan](docs/architecture/migration-plan.md)
 - [Architecture & verification boundaries](docs/architecture/trust-boundaries.md)
-- [TEE verification for beginners](docs/release/verification-beginner.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Architecture graph](docs/DOCS_GRAPH.md) – KMS, mero-tee, regular nodes, and attestation flow
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
@@ -72,7 +71,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 - **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy. The build injects `calimero.profile` and `calimero.root_hash` into the kernel cmdline (RTMR[2]). At boot, calimero-init extends RTMR[3] with profile+root_hash (kernel 6.16+). Each image produces unique measurements; cannot be forged without an identical image. Still does not cover every environment/control-plane risk outside the attested boundary.
 - **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) for step-by-step instructions.
+Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Trust, verification, and measurements](docs/release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr) for the concrete workflow.
 
 For a consolidated trust model and verification entry point, see [Trust & Verification](docs/release/trust-and-verification.md).
 

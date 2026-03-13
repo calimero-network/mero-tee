@@ -24,4 +24,3 @@ guides causes confusion.
 
 - [Architecture & verification boundaries](../../architecture/trust-boundaries.md)
 - [Trust & verification entry point](../../release/trust-and-verification.md)
-- [TEE verification for beginners](../../release/verification-beginner.md)

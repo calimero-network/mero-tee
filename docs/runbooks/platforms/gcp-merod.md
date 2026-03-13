@@ -92,7 +92,7 @@ During boot, the init service maps it to `MERO_TEE_VERSION` for `merod` via
 
 Use published measurements to verify running node state:
 
-- [Verify MRTD guide](../operations/verify-mrtd.md)
+- [Trust, verification, and measurements](../../release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr)
 
 This confirms the deployed node measurement matches the signed allowlist for the
 selected release/profile.

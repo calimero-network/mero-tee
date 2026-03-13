@@ -18,13 +18,11 @@ When changing release automation, policy workflows, or verification scripts:
 | Document | Primary source | Related workflows/scripts | Audience |
 |---|---|---|---|
 | `docs/architecture/trust-boundaries.md` | Trust boundaries, enforcement points, and `core` vs `mero-tee` responsibilities | `mero-kms/src/handlers.rs`, `core/crates/merod/src/kms.rs`, release workflows | Operators, auditors |
-| `docs/release/trust-and-verification.md` | Consolidated trust guarantees and verification entry point | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh` | Operators, auditors |
-| `docs/release/verification-beginner.md` | Step-by-step verification guide for readers new to TEE and attestation | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh` | Operators, auditors |
+| `docs/release/trust-and-verification.md` | Canonical trust/verification/measurement guide (operator + client) | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh`, profile policy scripts | Operators, auditors |
 | `docs/runbooks/platforms/README.md` | Platform lane navigation (`Phala KMS` vs `GCP node image`) | `docs/runbooks/platforms/phala-kms.md`, `docs/runbooks/platforms/gcp-merod.md` | Operators |
 | `docs/runbooks/platforms/phala-kms.md` | Phala KMS-plane deployment/operations runbook | `mero-kms/src/handlers.rs`, `scripts/policy/apply-merod-kms-phala-attestation-config.sh` | Operators |
 | `docs/runbooks/platforms/gcp-merod.md` | GCP node-image-gcp deployment/verification runbook | `mero-tee/*`, `release-node-image-gcp.yaml`, `scripts/release/verify-node-image-gcp-release-assets.sh` | Operators |
 | `docs/REPO_RESTRUCTURE_PROPOSAL.md` | Proposed naming and repository-structure cleanup plan | workflows/scripts/policies/docs naming surface | Maintainers |
-| `docs/runbooks/operations/verify-mrtd.md` | End-user/operator verification flow | `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/attestation/verify_tdx_quote_ita.py` | Operators, auditors |
 | `docs/release/minimal-download-sets.md` | Minimal asset sets for quick verify vs full audit | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh` | Operators, auditors |
 | `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |
 | `docs/DOCS_GRAPH.md` | Architecture diagram: KMS, mero-tee, regular nodes, attestation flow | `README.md`, `docs/architecture/trust-boundaries.md` | Operators, maintainers |
