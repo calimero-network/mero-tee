@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  PACKER_GITHUB_API_TOKEN: ${{ github.token }}
   PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
   PACKER_GCP_SOURCE_IMAGE: ${{ vars.PACKER_GCP_SOURCE_IMAGE }}
   PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
