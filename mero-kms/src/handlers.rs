@@ -1,9 +1,5 @@
 //! HTTP request handlers for the key release service.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -16,11 +12,12 @@ use calimero_tee_attestation::{
 use dstack_sdk::dstack_client::DstackClient;
 use libp2p_identity::PublicKey;
 use rand::random;
-use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+use crate::challenge_store::{ChallengeStore, PendingChallenge};
 use crate::Config;
 
 /// Shared application state.
@@ -28,19 +25,6 @@ use crate::Config;
 pub struct AppState {
     pub config: Config,
     pub challenge_store: ChallengeStore,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingChallenge {
-    pub nonce: [u8; 32],
-    pub peer_id: String,
-    pub expires_at: u64,
-}
-
-#[derive(Clone)]
-pub enum ChallengeStore {
-    InMemory(Arc<Mutex<HashMap<String, PendingChallenge>>>),
-    Redis(redis::Client),
 }
 
 /// Request body for the challenge endpoint.
@@ -241,7 +225,8 @@ impl IntoResponse for ServiceError {
 
 /// Create the router with all endpoints.
 pub fn create_router(config: Config) -> eyre::Result<Router> {
-    let challenge_store = build_challenge_store(&config)?;
+    let challenge_store = ChallengeStore::from_redis_url(config.redis_url.as_deref())
+        .map_err(|e| eyre::eyre!("failed to initialize challenge store: {}", e))?;
     let state = AppState {
         config,
         challenge_store,
@@ -253,16 +238,6 @@ pub fn create_router(config: Config) -> eyre::Result<Router> {
         .route("/get-key", post(get_key_handler))
         .route("/attest", post(attest_kms_handler))
         .with_state(state))
-}
-
-fn build_challenge_store(config: &Config) -> eyre::Result<ChallengeStore> {
-    if let Some(redis_url) = config.redis_url.as_deref() {
-        let client = redis::Client::open(redis_url)
-            .map_err(|e| eyre::eyre!("Invalid REDIS_URL '{}': {}", redis_url, e))?;
-        Ok(ChallengeStore::Redis(client))
-    } else {
-        Ok(ChallengeStore::InMemory(Arc::new(Mutex::new(HashMap::new()))))
-    }
 }
 
 /// Health check endpoint.
@@ -334,10 +309,11 @@ async fn challenge_handler(
                 expires_at,
             },
             state.config.challenge_ttl_secs,
-            now,
         )
         .await
-        .map_err(|msg| ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", msg)))?;
+        .map_err(|msg| {
+            ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", msg))
+        })?;
 
     Ok(Json(ChallengeResponse {
         challenge_id,
@@ -495,92 +471,6 @@ fn create_challenge_id() -> String {
     hex::encode(raw)
 }
 
-fn prune_expired_challenges(store: &mut HashMap<String, PendingChallenge>, now: u64) {
-    store.retain(|_, challenge| challenge.expires_at > now);
-}
-
-impl ChallengeStore {
-    async fn insert(
-        &self,
-        challenge_id: String,
-        challenge: PendingChallenge,
-        ttl_secs: u64,
-        now: u64,
-    ) -> Result<(), String> {
-        match self {
-            ChallengeStore::InMemory(store) => {
-                let mut guard = store
-                    .lock()
-                    .map_err(|_| "challenge store lock poisoned".to_owned())?;
-                prune_expired_challenges(&mut guard, now);
-                guard.insert(challenge_id, challenge);
-                Ok(())
-            }
-            ChallengeStore::Redis(client) => {
-                let key = redis_challenge_key(&challenge_id);
-                let payload =
-                    serde_json::to_string(&challenge).map_err(|e| format!("serialize challenge: {}", e))?;
-                let mut conn = client
-                    .get_multiplexed_async_connection()
-                    .await
-                    .map_err(|e| format!("redis connection failed: {}", e))?;
-                conn.set_ex::<_, _, ()>(key, payload, ttl_secs)
-                    .await
-                    .map_err(|e| format!("redis set challenge failed: {}", e))?;
-                Ok(())
-            }
-        }
-    }
-
-    async fn consume(&self, challenge_id: &str, peer_id: &str) -> Result<[u8; 32], String> {
-        let now = unix_now_secs().map_err(|e| format!("{:?}", e))?;
-        match self {
-            ChallengeStore::InMemory(store) => {
-                let mut guard = store
-                    .lock()
-                    .map_err(|_| "challenge store lock poisoned".to_owned())?;
-                prune_expired_challenges(&mut guard, now);
-                let challenge = guard
-                    .remove(challenge_id)
-                    .ok_or_else(|| "challenge not found or expired".to_owned())?;
-                validate_challenge(&challenge, peer_id, now)
-            }
-            ChallengeStore::Redis(client) => {
-                let key = redis_challenge_key(challenge_id);
-                let mut conn = client
-                    .get_multiplexed_async_connection()
-                    .await
-                    .map_err(|e| format!("redis connection failed: {}", e))?;
-                let payload: Option<String> = redis::Script::new(
-                    "local v=redis.call('GET', KEYS[1]); if v then redis.call('DEL', KEYS[1]); end; return v",
-                )
-                .key(key)
-                .invoke_async(&mut conn)
-                .await
-                .map_err(|e| format!("redis get+delete challenge failed: {}", e))?;
-                let payload = payload.ok_or_else(|| "challenge not found or expired".to_owned())?;
-                let challenge: PendingChallenge = serde_json::from_str(&payload)
-                    .map_err(|e| format!("invalid challenge payload: {}", e))?;
-                validate_challenge(&challenge, peer_id, now)
-            }
-        }
-    }
-}
-
-fn validate_challenge(challenge: &PendingChallenge, peer_id: &str, now: u64) -> Result<[u8; 32], String> {
-    if challenge.peer_id != peer_id {
-        return Err("challenge peer mismatch".to_owned());
-    }
-    if challenge.expires_at <= now {
-        return Err("challenge has expired".to_owned());
-    }
-    Ok(challenge.nonce)
-}
-
-fn redis_challenge_key(challenge_id: &str) -> String {
-    format!("mero-kms-phala:challenge:{}", challenge_id)
-}
-
 fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
     format!(
         "{}/{}/{}",
@@ -683,7 +573,10 @@ fn enforce_attestation_policy(
     Ok(())
 }
 
-fn require_non_empty_allowlist(label: &str, allowed_measurements: &[String]) -> Result<(), ServiceError> {
+fn require_non_empty_allowlist(
+    label: &str,
+    allowed_measurements: &[String],
+) -> Result<(), ServiceError> {
     if allowed_measurements.is_empty() {
         return Err(ServiceError::MeasurementPolicyRejected(format!(
             "{} allowlist is empty",
@@ -698,10 +591,6 @@ fn enforce_measurement_allowlist(
     actual_measurement: &str,
     allowed_measurements: &[String],
 ) -> Result<(), ServiceError> {
-    if allowed_measurements.is_empty() {
-        return Ok(());
-    }
-
     let normalized_actual = normalize_measurement(actual_measurement);
     if allowed_measurements
         .iter()

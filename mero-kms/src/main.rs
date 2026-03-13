@@ -3,12 +3,13 @@
 //! This service validates TDX attestations from merod nodes and releases deterministic
 //! storage encryption keys based on peer ID using Phala's dstack key derivation.
 
+mod challenge_store;
 mod handlers;
 
 use std::net::SocketAddr;
 
-use eyre::{bail, Result as EyreResult};
 use axum::http::{HeaderValue, Method};
+use eyre::{bail, Result as EyreResult};
 use sha2::Digest;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -121,10 +122,6 @@ impl Config {
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
-        if let Some(url) = redis_url.as_deref() {
-            redis::Client::open(url)
-                .map_err(|e| eyre::eyre!("Invalid REDIS_URL '{}': {}", url, e))?;
-        }
 
         let kms_profile = parse_profile(
             std::env::var("KMS_POLICY_PROFILE")
@@ -186,61 +183,7 @@ impl Config {
         };
         attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
 
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_tcb_statuses.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_TCB_STATUSES is empty. \
-                 Configure at least one allowed status (recommended: UpToDate)."
-            );
-        }
-
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_mrtd.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_MRTD is empty. \
-                 Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped."
-            );
-        }
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_rtmr0.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_RTMR0 is empty. \
-                 Configure at least one trusted RTMR0 value."
-            );
-        }
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_rtmr1.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_RTMR1 is empty. \
-                 Configure at least one trusted RTMR1 value."
-            );
-        }
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_rtmr2.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_RTMR2 is empty. \
-                 Configure at least one trusted RTMR2 value."
-            );
-        }
-        if enforce_measurement_policy
-            && !accept_mock_attestation
-            && attestation_policy.allowed_rtmr3.is_empty()
-        {
-            bail!(
-                "Measurement policy is enforced, but ALLOWED_RTMR3 is empty. \
-                 Configure at least one trusted RTMR3 value."
-            );
-        }
+        validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
 
         Ok(Self {
             listen_addr,
@@ -280,7 +223,10 @@ impl Config {
                 "{}/{}/kms-phala-attestation-policy.{}.json",
                 POLICY_RELEASE_BASE, tag, profile
             ),
-            format!("{}/{}/kms-phala-attestation-policy.json", POLICY_RELEASE_BASE, tag),
+            format!(
+                "{}/{}/kms-phala-attestation-policy.json",
+                POLICY_RELEASE_BASE, tag
+            ),
         ];
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -341,36 +287,16 @@ impl Config {
         let allowed_tcb_statuses = parse_json_string_array(policy, "node_allowed_tcb_statuses")
             .or_else(|| parse_json_string_array(policy, "allowed_tcb_statuses"))
             .unwrap_or_else(|| vec!["uptodate".to_owned()]);
-        let node_mrtd = parse_json_hex_array(policy, "node_allowed_mrtd", 48)?;
-        let allowed_mrtd = if node_mrtd.is_empty() {
-            parse_json_hex_array(policy, "allowed_mrtd", 48)?
-        } else {
-            node_mrtd
-        };
-        let node_rtmr0 = parse_json_hex_array(policy, "node_allowed_rtmr0", 48)?;
-        let allowed_rtmr0 = if node_rtmr0.is_empty() {
-            parse_json_hex_array(policy, "allowed_rtmr0", 48)?
-        } else {
-            node_rtmr0
-        };
-        let node_rtmr1 = parse_json_hex_array(policy, "node_allowed_rtmr1", 48)?;
-        let allowed_rtmr1 = if node_rtmr1.is_empty() {
-            parse_json_hex_array(policy, "allowed_rtmr1", 48)?
-        } else {
-            node_rtmr1
-        };
-        let node_rtmr2 = parse_json_hex_array(policy, "node_allowed_rtmr2", 48)?;
-        let allowed_rtmr2 = if node_rtmr2.is_empty() {
-            parse_json_hex_array(policy, "allowed_rtmr2", 48)?
-        } else {
-            node_rtmr2
-        };
-        let node_rtmr3 = parse_json_hex_array(policy, "node_allowed_rtmr3", 48)?;
-        let allowed_rtmr3 = if node_rtmr3.is_empty() {
-            parse_json_hex_array(policy, "allowed_rtmr3", 48)?
-        } else {
-            node_rtmr3
-        };
+        let allowed_mrtd =
+            parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd", 48)?;
+        let allowed_rtmr0 =
+            parse_policy_hex_allowlist(policy, "node_allowed_rtmr0", "allowed_rtmr0", 48)?;
+        let allowed_rtmr1 =
+            parse_policy_hex_allowlist(policy, "node_allowed_rtmr1", "allowed_rtmr1", 48)?;
+        let allowed_rtmr2 =
+            parse_policy_hex_allowlist(policy, "node_allowed_rtmr2", "allowed_rtmr2", 48)?;
+        let allowed_rtmr3 =
+            parse_policy_hex_allowlist(policy, "node_allowed_rtmr3", "allowed_rtmr3", 48)?;
 
         Ok(AttestationPolicy {
             enforce_measurement_policy: true,
@@ -495,6 +421,20 @@ fn parse_json_hex_array(
     Ok(parsed)
 }
 
+fn parse_policy_hex_allowlist(
+    policy: &serde_json::Map<String, serde_json::Value>,
+    primary_key: &str,
+    legacy_key: &str,
+    expected_bytes: usize,
+) -> EyreResult<Vec<String>> {
+    let primary = parse_json_hex_array(policy, primary_key, expected_bytes)?;
+    if primary.is_empty() {
+        parse_json_hex_array(policy, legacy_key, expected_bytes)
+    } else {
+        Ok(primary)
+    }
+}
+
 fn parse_csv_env(name: &str) -> Option<Vec<String>> {
     std::env::var(name).ok().map(|value| {
         value
@@ -558,6 +498,59 @@ fn normalize_hex(value: &str) -> String {
     value.trim().trim_start_matches("0x").to_ascii_lowercase()
 }
 
+fn validate_policy_requirements(
+    policy: &AttestationPolicy,
+    accept_mock_attestation: bool,
+) -> EyreResult<()> {
+    if !policy.enforce_measurement_policy || accept_mock_attestation {
+        return Ok(());
+    }
+    if policy.allowed_tcb_statuses.is_empty() {
+        bail!(
+            "Measurement policy is enforced, but ALLOWED_TCB_STATUSES is empty. \
+             Configure at least one allowed status (recommended: UpToDate)."
+        );
+    }
+
+    let checks: [(&str, &[String], &str); 5] = [
+        (
+            "ALLOWED_MRTD",
+            &policy.allowed_mrtd,
+            "Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped.",
+        ),
+        (
+            "ALLOWED_RTMR0",
+            &policy.allowed_rtmr0,
+            "Configure at least one trusted RTMR0 value.",
+        ),
+        (
+            "ALLOWED_RTMR1",
+            &policy.allowed_rtmr1,
+            "Configure at least one trusted RTMR1 value.",
+        ),
+        (
+            "ALLOWED_RTMR2",
+            &policy.allowed_rtmr2,
+            "Configure at least one trusted RTMR2 value.",
+        ),
+        (
+            "ALLOWED_RTMR3",
+            &policy.allowed_rtmr3,
+            "Configure at least one trusted RTMR3 value.",
+        ),
+    ];
+    for (name, values, guidance) in checks {
+        if values.is_empty() {
+            bail!(
+                "Measurement policy is enforced, but {} is empty. {}",
+                name,
+                guidance
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     // Initialize tracing
@@ -595,7 +588,9 @@ async fn main() -> eyre::Result<()> {
         config.attestation_policy.enforce_measurement_policy
     );
     if !config.attestation_policy.enforce_measurement_policy {
-        tracing::warn!("Measurement policy enforcement is disabled; this is not safe for production");
+        tracing::warn!(
+            "Measurement policy enforcement is disabled; this is not safe for production"
+        );
     }
     info!(
         "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
@@ -642,4 +637,58 @@ async fn main() -> eyre::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strict_policy() -> AttestationPolicy {
+        let v = "ab".repeat(48);
+        AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: vec!["uptodate".to_string()],
+            allowed_mrtd: vec![v.clone()],
+            allowed_rtmr0: vec![v.clone()],
+            allowed_rtmr1: vec![v.clone()],
+            allowed_rtmr2: vec![v.clone()],
+            allowed_rtmr3: vec![v],
+        }
+    }
+
+    #[test]
+    fn validate_policy_requirements_rejects_missing_rtmr3() {
+        let mut policy = strict_policy();
+        policy.allowed_rtmr3.clear();
+        let err = validate_policy_requirements(&policy, false).unwrap_err();
+        assert!(err.to_string().contains("ALLOWED_RTMR3"));
+    }
+
+    #[test]
+    fn validate_policy_requirements_allows_when_mock_enabled() {
+        let policy = AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: Vec::new(),
+            allowed_mrtd: Vec::new(),
+            allowed_rtmr0: Vec::new(),
+            allowed_rtmr1: Vec::new(),
+            allowed_rtmr2: Vec::new(),
+            allowed_rtmr3: Vec::new(),
+        };
+        assert!(validate_policy_requirements(&policy, true).is_ok());
+    }
+
+    #[test]
+    fn parse_policy_hex_allowlist_prefers_primary_key() {
+        let primary = "cd".repeat(48);
+        let legacy = "ef".repeat(48);
+        let value = serde_json::json!({
+            "node_allowed_mrtd": [primary],
+            "allowed_mrtd": [legacy],
+        });
+        let policy = value.as_object().expect("policy object");
+        let parsed =
+            parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd", 48).unwrap();
+        assert_eq!(parsed, vec!["cd".repeat(48)]);
+    }
 }
