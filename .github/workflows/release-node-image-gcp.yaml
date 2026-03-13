@@ -1282,21 +1282,50 @@ jobs:
             | sed 's#  artifacts/#  #' \
             > artifacts/node-image-gcp-checksums.txt
 
-          debug_mrtd="$(jq -r '.profiles.debug.mrtd' artifacts/published-mrtds.json)"
-          debug_ro_mrtd="$(jq -r '.profiles["debug-read-only"].mrtd' artifacts/published-mrtds.json)"
-          locked_ro_mrtd="$(jq -r '.profiles["locked-read-only"].mrtd' artifacts/published-mrtds.json)"
-          debug_rtmr0="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr1="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr2="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr3="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr0="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr1="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr2="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr3="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr1="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr2="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr3="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          format_profile_allowlist_md() {
+            local profile="$1"
+            local key="$2"
+            jq -r --arg profile "${profile}" --arg key "${key}" '
+              (.profiles[$profile][$key] // [])
+              | if (type == "array" and length > 0) then
+                  map("`" + tostring + "`") | join("<br>")
+                else
+                  "n/a"
+                end
+            ' artifacts/published-mrtds.json
+          }
+
+          debug_mrtd="$(format_profile_allowlist_md "debug" "allowed_mrtd")"
+          debug_ro_mrtd="$(format_profile_allowlist_md "debug-read-only" "allowed_mrtd")"
+          locked_ro_mrtd="$(format_profile_allowlist_md "locked-read-only" "allowed_mrtd")"
+          debug_rtmr0="$(format_profile_allowlist_md "debug" "allowed_rtmr0")"
+          debug_rtmr1="$(format_profile_allowlist_md "debug" "allowed_rtmr1")"
+          debug_rtmr2="$(format_profile_allowlist_md "debug" "allowed_rtmr2")"
+          debug_rtmr3="$(format_profile_allowlist_md "debug" "allowed_rtmr3")"
+          debug_ro_rtmr0="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr0")"
+          debug_ro_rtmr1="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr1")"
+          debug_ro_rtmr2="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr2")"
+          debug_ro_rtmr3="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr3")"
+          locked_ro_rtmr0="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr0")"
+          locked_ro_rtmr1="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr1")"
+          locked_ro_rtmr2="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr2")"
+          locked_ro_rtmr3="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr3")"
+
+          debug_mrtd_preview="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_mrtd_preview="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_mrtd_preview="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr0_preview="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr1_preview="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr2_preview="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr3_preview="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr0_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr1_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr2_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr3_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr0_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr1_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr2_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr3_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
 
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
@@ -1325,15 +1354,56 @@ jobs:
             echo ""
             echo "| Profile | MRTD |"
             echo "|---|---|"
-            echo "| debug | \`${debug_mrtd}\` |"
-            echo "| debug-read-only | \`${debug_ro_mrtd}\` |"
-            echo "| locked-read-only | \`${locked_ro_mrtd}\` |"
+            echo "| debug | ${debug_mrtd} |"
+            echo "| debug-read-only | ${debug_ro_mrtd} |"
+            echo "| locked-read-only | ${locked_ro_mrtd} |"
             echo ""
             echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
             echo "|---|---|---|---|---|"
-            echo "| debug | \`${debug_rtmr0}\` | \`${debug_rtmr1}\` | \`${debug_rtmr2}\` | \`${debug_rtmr3}\` |"
-            echo "| debug-read-only | \`${debug_ro_rtmr0}\` | \`${debug_ro_rtmr1}\` | \`${debug_ro_rtmr2}\` | \`${debug_ro_rtmr3}\` |"
-            echo "| locked-read-only | \`${locked_ro_rtmr0}\` | \`${locked_ro_rtmr1}\` | \`${locked_ro_rtmr2}\` | \`${locked_ro_rtmr3}\` |"
+            echo "| debug | ${debug_rtmr0} | ${debug_rtmr1} | ${debug_rtmr2} | ${debug_rtmr3} |"
+            echo "| debug-read-only | ${debug_ro_rtmr0} | ${debug_ro_rtmr1} | ${debug_ro_rtmr2} | ${debug_ro_rtmr3} |"
+            echo "| locked-read-only | ${locked_ro_rtmr0} | ${locked_ro_rtmr1} | ${locked_ro_rtmr2} | ${locked_ro_rtmr3} |"
+            echo ""
+            echo "### Full profile allowlists (all MRTD/RTMR arrays)"
+            echo ""
+            echo "#### Profile: debug"
+            echo "\`\`\`json"
+            jq '.profiles.debug | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: debug-read-only"
+            echo "\`\`\`json"
+            jq '.profiles["debug-read-only"] | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: locked-read-only"
+            echo "\`\`\`json"
+            jq '.profiles["locked-read-only"] | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
             echo ""
             echo "### Verification commands"
             echo ""
@@ -1347,29 +1417,35 @@ jobs:
             echo "scripts/release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
             echo "\`\`\`"
             echo ""
-            echo "### Trust assets"
+            echo "### Trust assets (detailed)"
             echo ""
-            echo "- \`published-mrtds.json\` (MRTDs + measurement policy)"
-            echo "- \`release-provenance.json\`"
-            echo "- \`node-image-gcp-release-sbom.spdx.json\`"
-            echo "- \`node-image-gcp-checksums.txt\`"
-            echo "- All assets signed with Sigstore keyless (\`.sig\`, \`.pem\`)"
+            echo "| Asset | What it contains | Why operators need it |"
+            echo "|---|---|---|"
+            echo "| \`published-mrtds.json\` | Profile measurement policy (MRTD/RTMR allowlists) | Runtime quote measurement validation baseline |"
+            echo "| \`release-provenance.json\` | Build/attestation metadata, compatibility references, and profile verification records | Audit and release-governance evidence |"
+            echo "| \`node-image-gcp-release-sbom.spdx.json\` | SBOM for release trust artifacts | Supply-chain and compliance review |"
+            echo "| \`node-image-gcp-checksums.txt\` | SHA-256 for release trust artifacts | Integrity verification before policy usage |"
+            echo "| \`*.sig / *.pem\` | Sigstore keyless signatures/certificates | Verifiable provenance and authenticity checks |"
+            echo ""
+            echo "KMS-side profile policies for the matching release are linked via:"
+            echo "- \`${kms_policy_url}\` (default/locked policy alias)"
+            echo "- Profile-specific URLs in \`kms-phala-compatibility-map.json\` under \`.compatibility.profiles.*.kms_policy_url\`"
           } > artifacts/release-notes.md
 
           {
             echo "## Published MRTDs"
             echo ""
             echo "- Tag: ${{ needs.preflight.outputs.image_version }}"
-            echo "- Debug MRTD: ${debug_mrtd}"
-            echo "- Debug read-only MRTD: ${debug_ro_mrtd}"
-            echo "- Locked read-only MRTD: ${locked_ro_mrtd}"
+            echo "- Debug MRTD: ${debug_mrtd_preview}"
+            echo "- Debug read-only MRTD: ${debug_ro_mrtd_preview}"
+            echo "- Locked read-only MRTD: ${locked_ro_mrtd_preview}"
             echo ""
             echo "### RTMRs"
             echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
             echo "|---|---|---|---|---|"
-            echo "| debug | ${debug_rtmr0} | ${debug_rtmr1} | ${debug_rtmr2} | ${debug_rtmr3} |"
-            echo "| debug-read-only | ${debug_ro_rtmr0} | ${debug_ro_rtmr1} | ${debug_ro_rtmr2} | ${debug_ro_rtmr3} |"
-            echo "| locked-read-only | ${locked_ro_rtmr0} | ${locked_ro_rtmr1} | ${locked_ro_rtmr2} | ${locked_ro_rtmr3} |"
+            echo "| debug | ${debug_rtmr0_preview} | ${debug_rtmr1_preview} | ${debug_rtmr2_preview} | ${debug_rtmr3_preview} |"
+            echo "| debug-read-only | ${debug_ro_rtmr0_preview} | ${debug_ro_rtmr1_preview} | ${debug_ro_rtmr2_preview} | ${debug_ro_rtmr3_preview} |"
+            echo "| locked-read-only | ${locked_ro_rtmr0_preview} | ${locked_ro_rtmr1_preview} | ${locked_ro_rtmr2_preview} | ${locked_ro_rtmr3_preview} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing
