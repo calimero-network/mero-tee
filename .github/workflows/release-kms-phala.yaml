@@ -620,7 +620,8 @@ jobs:
           compatibility_node_policy_url="$(jq -r '.compatibility.node_policy_url' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          # Node profile measurements (from node policy - images this KMS accepts)
+          # Node profile measurements copied from node policy for operator reference.
+          # KMS node allowlists above are currently sourced from locked-read-only.
           debug_mrtd="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
           debug_ro_mrtd="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
           locked_ro_mrtd="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
@@ -659,7 +660,7 @@ jobs:
             echo "| KMS policy URL | \`${compatibility_kms_policy_url}\` |"
             echo "| Node policy URL | \`${compatibility_node_policy_url}\` |"
             echo ""
-            echo "### Node profile measurements (images this KMS accepts)"
+            echo "### Node profile measurements (from node policy reference)"
             echo ""
             echo "| Profile | MRTD |"
             echo "|---|---|"
@@ -715,7 +716,7 @@ jobs:
             echo "- Tag: ${{ needs.prepare.outputs.kms_release_tag }}"
             echo "- Compatible node: ${compatibility_merod_tag}"
             echo ""
-            echo "### Node profile measurements (accepted by this KMS)"
+            echo "### Node profile measurements (node policy reference)"
             echo "| Profile | MRTD | RTMR0 | RTMR2 |"
             echo "|---|---|---|---|"
             echo "| debug | ${debug_mrtd:0:24}... | ${debug_rtmr0:0:24}... | ${debug_rtmr2:0:24}... |"

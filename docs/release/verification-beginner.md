@@ -21,6 +21,11 @@ In `mero-tee`, verification is split into two release families:
 
 The scripts in this repo automate those checks.
 
+Use `TAG=X.Y.Z` as input; scripts resolve split release tags automatically:
+
+- KMS: `mero-kms-v${TAG}`
+- node image: `mero-tee-v${TAG}`
+
 These map to two operational lanes:
 
 - **Phala KMS lane**: deploy/operate `mero-kms-phala`
@@ -145,6 +150,17 @@ You should still do:
 
 ---
 
+## Runtime trust direction (important)
+
+Release verification is not enough by itself. Runtime trust is bidirectional:
+
+1. `merod` verifies KMS via `/attest` (quote + nonce/binding + KMS policy).
+2. KMS verifies `merod` via `/challenge` + `/get-key` (peer identity/signature + quote + node policy).
+
+If either side fails verification, key release must not proceed.
+
+---
+
 ## 6) Common failures and interpretation
 
 - `missing asset ...`  
@@ -166,7 +182,15 @@ You should still do:
 - Inspect Rekor index and Sigstore search links:
   - `kms-phala-rekor-index.json`
   - each entry includes `hash` and `sigstore_search_url`
-- Compare compatibility map values against `policies/index.json`.
+- Inspect the KMS compatibility map and confirm release pairing:
+
+  ```bash
+  curl -fsSL \
+    "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v${TAG}/kms-phala-compatibility-map.json" \
+    | jq '.compatibility'
+  ```
+
+  Ensure `kms_tag`, `node_image_tag`, `kms_policy_url`, and `node_policy_url` match the rollout you approved.
 - Generate release-pinned merod attestation config:
 
 ```bash

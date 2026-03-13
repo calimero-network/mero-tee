@@ -109,7 +109,13 @@ https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSIO
 ```
 
 This ensures the policy cannot be tweaked via env vars; it comes from the
-canonical source. If the fetch fails, the KMS falls back to env vars (if set).
+canonical source. If the fetch fails, the KMS falls back to env vars.
+
+Production recommendation:
+
+- keep release policy as primary source (`MERO_KMS_VERSION` or `MERO_KMS_RELEASE_TAG`);
+- avoid broad fallback env allowlists;
+- treat startup failures on missing/invalid policy as fail-closed signals, not something to bypass.
 
 ```bash
 export MERO_KMS_VERSION=2.1.14
@@ -149,12 +155,15 @@ attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 ## Production guidance
 
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
+- Keep `ENFORCE_MEASUREMENT_POLICY=true`.
 - Pin trusted values from your built/deployed image:
   - MRTD (required),
   - RTMR0/1/2 (boot/runtime chain),
   - RTMR3 (application/compose/runtime extensions).
 - Start with `ALLOWED_TCB_STATUSES=UpToDate`.
 - Use a short challenge TTL (for example, `30-120` seconds).
+- Keep `/challenge`, `/get-key`, and `/attest` on private trusted networks (TLS/mTLS recommended across hosts).
+- In HA/load-balanced setups, ensure session affinity between `/challenge` and `/get-key` for a caller (challenge state is currently in-memory per instance).
 
 Example:
 

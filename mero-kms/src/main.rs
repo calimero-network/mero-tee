@@ -107,7 +107,7 @@ impl Config {
             .map(|v| parse_bool_flag(&v))
             .unwrap_or(false);
 
-        let attestation_policy = if use_env_policy {
+        let mut attestation_policy = if use_env_policy {
             Self::load_policy_from_env()?
         } else if let Some(version) = Self::release_version_from_env() {
             match Self::fetch_policy_from_release_async(&version).await {
@@ -130,6 +130,7 @@ impl Config {
         } else {
             Self::load_policy_from_env()?
         };
+        attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
 
         if enforce_measurement_policy
             && !accept_mock_attestation
@@ -407,6 +408,9 @@ async fn main() -> eyre::Result<()> {
         "Measurement policy enforced: {}",
         config.attestation_policy.enforce_measurement_policy
     );
+    if !config.attestation_policy.enforce_measurement_policy {
+        tracing::warn!("Measurement policy enforcement is disabled; this is not safe for production");
+    }
     info!(
         "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
         config.attestation_policy.allowed_tcb_statuses.len(),

@@ -6,7 +6,7 @@ This page is the single entry point for how trust is established for released ar
 
 This repository publishes two trust-asset families per release tag:
 
-1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
+1. **KMS release assets** on tag `mero-kms-vX.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
 2. **node-image-gcp assets** on tag `mero-tee-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
 
 These map to two deployment lanes with different responsibilities:
@@ -22,7 +22,7 @@ These map to two deployment lanes with different responsibilities:
 Use signatures together with:
 
 - policy review (`published-mrtds.json`, `kms-phala-attestation-policy.json`)
-- compatibility checks (`policies/index.json` + compatibility map artifacts)
+- compatibility checks (`kms-phala-compatibility-map.json` + node/KMS policy assets)
 - runtime quote verification for deployed nodes
 
 ## Canonical verification commands
@@ -51,6 +51,48 @@ OIDC issuer is expected to be:
 3. Generate release-pinned config snippets for `merod` using:
    - `scripts/policy/generate-merod-kms-phala-attestation-config.sh`
 4. Roll out with digest-pinned images and release-pinned policy/config.
+
+## Verification direction matrix (who proves what to whom)
+
+This is the canonical direction of trust checks:
+
+| Verifier | Subject being verified | Evidence/API | Required check before proceeding |
+|---|---|---|---|
+| `merod` (client node) | KMS (`mero-kms-phala`) | `POST /attest` quote + report data | Verify quote cryptographically, verify nonce/binding, verify KMS measurements vs allowed policy |
+| KMS (`mero-kms-phala`) | `merod` (requesting node) | `POST /challenge` + `POST /get-key` quote + peer signature | Verify peer identity/signature/challenge freshness, verify quote cryptographically, enforce node TCB + MRTD/RTMR allowlists |
+| Operator CI/acceptance | Release artifacts and policy metadata | Sigstore sidecars + release manifests/checksums | Verify workflow identity, checksums, and compatibility map before rollout |
+
+If any verification step fails, key release or rollout approval must fail closed.
+
+## Profile/KMS compatibility assumptions
+
+`node-image-gcp` currently has three profiles: `debug`, `debug-read-only`, `locked-read-only`.
+
+Recommended trust posture:
+
+| Node profile | Typical use | KMS policy expectation |
+|---|---|---|
+| `debug` | local/dev investigations only | separate non-production KMS policy/lane; never shared with production keys |
+| `debug-read-only` | pre-production hardening/tests | separate non-production KMS policy/lane; never shared with production keys |
+| `locked-read-only` | production baseline | production KMS policy allowlist should be pinned to this profile's measurements |
+
+Practical rule for operators: **debug images should only talk to debug/non-production KMS policy cohorts**.
+
+## Check release-level KMS↔node mapping
+
+Before rollout, verify compatibility artifacts for the same release version:
+
+```bash
+TAG=2.1.10
+BASE="https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v${TAG}"
+curl -fsSL "${BASE}/kms-phala-compatibility-map.json" | jq '.compatibility'
+```
+
+Confirm:
+
+- `kms_tag` is `mero-kms-v${TAG}`
+- `node_image_tag` points to the intended `mero-tee-v...` release
+- `kms_policy_url` and `node_policy_url` resolve to the reviewed signed assets
 
 ## Related docs
 

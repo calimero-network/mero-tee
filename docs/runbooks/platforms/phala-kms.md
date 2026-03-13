@@ -79,6 +79,8 @@ Production guidance:
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Pin MRTD (and preferably RTMR0-3) allowlists.
 - Do not use mutable container tags (`:latest`).
+- Keep KMS endpoints private to trusted network paths; do not expose key-release APIs publicly.
+- Use TLS (preferably mTLS) on any non-local network path between `merod` and KMS.
 
 ---
 
@@ -95,7 +97,23 @@ self-attestation (`/attest`) and enforces policy before key fetch.
 
 ---
 
-## 6) Runtime checks
+## 6) Profile compatibility and trust cohorts
+
+`node-image-gcp` publishes three profiles (`debug`, `debug-read-only`, `locked-read-only`), but production key-release policy should be treated as a separate trust cohort from debug/testing cohorts.
+
+Recommended mapping:
+
+| Node profile | KMS policy cohort | Keys |
+|---|---|---|
+| `debug` | dedicated debug/non-production KMS policy | non-production only |
+| `debug-read-only` | dedicated pre-production KMS policy | non-production only |
+| `locked-read-only` | production KMS policy | production keys |
+
+Do not mix debug profile measurements into production KMS allowlists.
+
+---
+
+## 7) Runtime checks
 
 - KMS health:
   - `GET /health`
@@ -108,14 +126,21 @@ self-attestation (`/attest`) and enforces policy before key fetch.
 The expected runtime sequence is documented in
 [Architecture](../../architecture/trust-boundaries.md#attestation-enforcement-points).
 
+Operational note for HA/LB deployments:
+
+- `/challenge` state is currently in-memory per KMS instance.
+- Route `/challenge` and the subsequent `/get-key` for the same caller to the same instance (session affinity/stickiness), or use shared challenge state.
+- If this is misconfigured, expect intermittent `invalid_challenge` failures.
+
 ---
 
-## 7) Common mistakes to avoid
+## 8) Common mistakes to avoid
 
 - Treating this as a generic "Phala deployment" guide.
 - Reusing unpinned or unsigned policy inputs.
 - Enabling mock attestation in production.
 - Sharing one KMS across unrelated release cohorts without explicit policy governance.
+- Mixing debug profile nodes with production key-release policy.
 
 ---
 

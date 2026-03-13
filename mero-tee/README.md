@@ -8,6 +8,11 @@ Builds locked merod node images for GCP TDX Confidential VMs.
 - **debug-read-only** – Read-only merod, no lockdown
 - **locked-read-only** – Read-only merod with lockdown (no SSH, no getty, etc.)
 
+Security intent:
+
+- `locked-read-only` is the production baseline.
+- `debug` and `debug-read-only` are for non-production cohorts and should use separate non-production KMS policy/key lanes.
+
 ## Prerequisites
 
 - Packer

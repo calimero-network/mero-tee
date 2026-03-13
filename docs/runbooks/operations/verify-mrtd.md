@@ -38,13 +38,13 @@ For full provenance validation, verify `release-provenance.json` the same way us
 
 ### 1. Get the node's MRTD
 
-Query the node's admin API (replace `<node-ip>` with the node's IP or hostname, and ensure port 80 or your admin port is reachable):
+Query the node's admin API (replace `<node-ip>` with the node's IP or hostname). Keep this endpoint private to trusted operator networks.
 
 ```bash
 curl -s https://<node-ip>/admin-api/tee/info | jq -r '.mrtd'
 ```
 
-Or over HTTP if not using TLS:
+Or over HTTP only for local/lab environments where transport security is handled out-of-band:
 
 ```bash
 curl -s http://<node-ip>/admin-api/tee/info | jq -r '.mrtd'
@@ -135,12 +135,16 @@ See [core tee-attestation](https://github.com/calimero-network/core/tree/master/
 
 | Verified by MRTD | Not in MRTD |
 |------------------|-------------|
-| OS (kernel, rootfs) | merod binary (downloaded at runtime from GitHub) |
-| Lockdown (no SSH, no console) | Observability endpoints (from metadata) |
+| OS (kernel, rootfs) | External control-plane/network risks |
+| Lockdown (no SSH, no console) | Secrets handling outside attested boundary |
 | Init service behavior | |
-| Baked binaries (traefik, vmagent, vector) | |
+| Baked binaries in the image (including `merod` on v2.1.16+) | |
+| Baked observability binaries (traefik, vmagent, vector) | |
 
-A matching MRTD proves the node booted from the node-image-gcp image. The merod binary is downloaded at runtime from [calimero-network/core](https://github.com/calimero-network/core) releases and is trusted separately.
+A matching MRTD proves the node booted from the node-image-gcp image:
+
+- **v2.1.16+ images:** `merod` is baked into the image, so MRTD covers the shipped `merod` binary.
+- **Legacy images (pre-v2.1.16):** `merod` is downloaded at runtime from [calimero-network/core](https://github.com/calimero-network/core) releases and is trusted separately.
 
 ## See Also
 
