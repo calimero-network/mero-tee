@@ -50,6 +50,7 @@ jobs:
       contents: read
     outputs:
       run_pipeline: ${{ steps.release_gate.outputs.run_pipeline }}
+      run_post_release_e2e: ${{ steps.release_gate.outputs.run_post_release_e2e }}
       latest_merod_version: ${{ steps.release_gate.outputs.latest_merod_version }}
       image_version: ${{ steps.version_manifest.outputs.image_version }}
       gate_reason: ${{ steps.release_gate.outputs.reason }}
@@ -87,19 +88,22 @@ jobs:
         id: release_gate
         env:
           GH_TOKEN: ${{ github.token }}
-          FORCE_RUN_ON_NON_MASTER: ${{ inputs.force_run_on_non_master || 'false' }}
         run: |
           run_pipeline="false"
+          run_post_release_e2e="false"
           reason=""
           latest_merod_version=""
           allow_non_master="false"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${FORCE_RUN_ON_NON_MASTER}" == "true" ]]; then
+          force_run_on_non_master="$(jq -r '.inputs.force_run_on_non_master // "false"' "${GITHUB_EVENT_PATH}" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+          requested_post_release_e2e="$(jq -r '.inputs.run_post_release_e2e // "true"' "${GITHUB_EVENT_PATH}" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${force_run_on_non_master}" == "true" ]]; then
             allow_non_master="true"
           fi
 
           if [[ "${GITHUB_REF}" != "refs/heads/master" && "${allow_non_master}" != "true" ]]; then
             reason="Workflow is restricted to refs/heads/master; current ref is ${GITHUB_REF}."
             echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
+            echo "run_post_release_e2e=${run_post_release_e2e}" >> "${GITHUB_OUTPUT}"
             echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
             echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
             exit 0
@@ -149,11 +153,16 @@ jobs:
           run_pipeline="true"
           if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
             reason="Detected mero-tee/versions.json change on master."
+            run_post_release_e2e="true"
           else
             reason="Manual workflow_dispatch override enabled on non-master ref ${GITHUB_REF}."
+            if [[ "${requested_post_release_e2e}" == "true" ]]; then
+              run_post_release_e2e="true"
+            fi
           fi
 
           echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
+          echo "run_post_release_e2e=${run_post_release_e2e}" >> "${GITHUB_OUTPUT}"
           echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
           echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
 
@@ -164,6 +173,7 @@ jobs:
             echo ""
             echo "- Latest merod release: ${{ steps.release_gate.outputs.latest_merod_version }}"
             echo "- Run pipeline: ${{ steps.release_gate.outputs.run_pipeline }}"
+            echo "- Run post-release e2e: ${{ steps.release_gate.outputs.run_post_release_e2e }}"
             echo "- Reason: ${{ steps.release_gate.outputs.reason }}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -1021,7 +1031,7 @@ jobs:
     name: E2E KMS-node compatibility matrix
     runs-on: ubuntu-latest
     needs: [preflight, profile_pipeline]
-    if: ${{ needs.preflight.outputs.run_pipeline == 'true' && (github.ref == 'refs/heads/master' || (github.event_name == 'workflow_dispatch' && inputs.run_post_release_e2e == true)) }}
+    if: ${{ needs.preflight.outputs.run_pipeline == 'true' && needs.preflight.outputs.run_post_release_e2e == 'true' }}
     permissions:
       actions: write
       contents: read
