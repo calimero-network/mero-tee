@@ -69,15 +69,10 @@ if [[ -n "${api_token}" ]]; then
 fi
 
 base_signed_assets=(
-  "mrtd-debug.json"
-  "mrtd-debug-read-only.json"
-  "mrtd-locked-read-only.json"
   "published-mrtds.json"
-  "node-image-gcp-policy.json"
   "release-provenance.json"
 )
 
-bundle_asset=""
 sbom_asset=""
 checksums_asset=""
 signed_assets=()
@@ -163,15 +158,14 @@ for attempt in $(seq 1 10); do
       continue
     fi
 
-    candidate_bundle_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-attestation-bundle.tar.gz" || true)"
     candidate_sbom_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-release-sbom.spdx.json" || true)"
     candidate_checksums_asset="$(select_release_asset "${candidate_json}" "node-image-gcp-checksums.txt" || true)"
 
-    if [[ -z "${candidate_bundle_asset}" || -z "${candidate_sbom_asset}" || -z "${candidate_checksums_asset}" ]]; then
+    if [[ -z "${candidate_sbom_asset}" || -z "${candidate_checksums_asset}" ]]; then
       continue
     fi
 
-    candidate_signed_assets=("${base_signed_assets[@]}" "${candidate_bundle_asset}" "${candidate_sbom_asset}" "${candidate_checksums_asset}")
+    candidate_signed_assets=("${base_signed_assets[@]}" "${candidate_sbom_asset}" "${candidate_checksums_asset}")
     candidate_required_assets=("${candidate_signed_assets[@]}")
     for asset in "${candidate_signed_assets[@]}"; do
       candidate_required_assets+=("${asset}.sig")
@@ -192,7 +186,6 @@ for attempt in $(seq 1 10); do
 
     release_tag="${candidate_tag}"
     release_json="${candidate_json}"
-    bundle_asset="${candidate_bundle_asset}"
     sbom_asset="${candidate_sbom_asset}"
     checksums_asset="${candidate_checksums_asset}"
     signed_assets=("${candidate_signed_assets[@]}")
@@ -214,7 +207,6 @@ done
 echo "Resolved release tag for mero-tee assets: ${release_tag}"
 echo "Node-image-gcp checksums asset: ${checksums_asset}"
 echo "Node-image-gcp SBOM asset: ${sbom_asset}"
-echo "Node-image-gcp attestation bundle asset: ${bundle_asset}"
 
 for pattern in "${required_assets[@]}"; do
   if ! download_asset "${release_tag}" "${pattern}" "${tmp_dir}"; then
@@ -224,13 +216,8 @@ for pattern in "${required_assets[@]}"; do
 done
 
 for required in \
-  "mrtd-debug.json" \
-  "mrtd-debug-read-only.json" \
-  "mrtd-locked-read-only.json" \
   "published-mrtds.json" \
-  "node-image-gcp-policy.json" \
   "release-provenance.json" \
-  "${bundle_asset}" \
   "${sbom_asset}"; do
   if ! awk -v req="${required}" '
     {
@@ -251,12 +238,7 @@ jq -e --arg tag "${logical_tag}" '
   .tag == $tag and
   (.profiles.debug.mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles["debug-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
-  (.profiles["locked-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$"))
-' "${tmp_dir}/published-mrtds.json" >/dev/null
-
-jq -e --arg tag "${logical_tag}" '
-  .schema_version == 1 and
-  .tag == $tag and
+  (.profiles["locked-read-only"].mrtd | type == "string" and test("^[A-Fa-f0-9]{96}$")) and
   (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
   (.profiles.debug.allowed_rtmr0 | type == "array") and
   (.profiles.debug.allowed_rtmr1 | type == "array") and
@@ -272,7 +254,7 @@ jq -e --arg tag "${logical_tag}" '
   (.profiles["locked-read-only"].allowed_rtmr1 | type == "array") and
   (.profiles["locked-read-only"].allowed_rtmr2 | type == "array") and
   (.profiles["locked-read-only"].allowed_rtmr3 | type == "array")
-' "${tmp_dir}/node-image-gcp-policy.json" >/dev/null
+' "${tmp_dir}/published-mrtds.json" >/dev/null
 
 jq -e --arg tag "${logical_tag}" '
   .tag == $tag and

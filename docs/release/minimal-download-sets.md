@@ -32,8 +32,7 @@ Everything in quick verify, plus:
 
 ### Quick verify (operator)
 
-- `published-mrtds.json` + `.sig` + `.pem`
-- `node-image-gcp-policy.json` + `.sig` + `.pem`
+- `published-mrtds.json` + `.sig` + `.pem` (MRTDs + measurement policy)
 - `release-provenance.json` + `.sig` + `.pem`
 - `node-image-gcp-checksums.txt` + `.sig` + `.pem`
 
@@ -41,12 +40,7 @@ Everything in quick verify, plus:
 
 Everything in quick verify, plus:
 
-- `mrtd-debug.json` + `.sig` + `.pem`
-- `mrtd-debug-read-only.json` + `.sig` + `.pem`
-- `mrtd-locked-read-only.json` + `.sig` + `.pem`
-- `node-image-gcp-attestation-bundle.tar.gz` (+ signature sidecars)
 - `node-image-gcp-release-sbom.spdx.json` + `.sig` + `.pem`
-- `node-image-gcp-compatibility-map.json` + `.sig` + `.pem`
 
 ## Script shortcuts
 

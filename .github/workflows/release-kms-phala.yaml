@@ -335,13 +335,13 @@ jobs:
           for attempt in $(seq 1 60); do
             if gh release view "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
               if gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-                --pattern "node-image-gcp-policy.json" --dir node-policy 2>/dev/null; then
+                --pattern "published-mrtds.json" --dir node-policy 2>/dev/null; then
                 echo "Fetched node policy from ${NODE_TAG}"
                 break
               fi
             fi
             if [[ "${attempt}" -eq 60 ]]; then
-              echo "::error::Timed out waiting for node release ${NODE_TAG} with node-image-gcp-policy.json"
+              echo "::error::Timed out waiting for node release ${NODE_TAG} with published-mrtds.json"
               exit 1
             fi
             echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
@@ -392,10 +392,10 @@ jobs:
           kms_tag="mero-kms-v${version}"
           node_image_tag="mero-tee-v${version}"
           kms_policy_url="https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
-          node_policy_url="https://github.com/${{ github.repository }}/releases/download/${node_image_tag}/node-image-gcp-policy.json"
+          node_policy_url="https://github.com/${{ github.repository }}/releases/download/${node_image_tag}/published-mrtds.json"
 
           candidates_file="probe-artifacts/kms-policy-candidates.json"
-          node_policy_file="node-policy/node-image-gcp-policy.json"
+          node_policy_file="node-policy/published-mrtds.json"
           if [[ ! -f "${candidates_file}" ]]; then
             echo "::error::Probe candidates not found at ${candidates_file}"
             exit 1
@@ -620,10 +620,25 @@ jobs:
           compatibility_node_policy_url="$(jq -r '.compatibility.node_policy_url' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+          # Node profile measurements (from node policy - images this KMS accepts)
+          debug_mrtd="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_mrtd="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_mrtd="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr0="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr1="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr2="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr3="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr0="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr1="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr2="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr3="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr1="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr2="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr3="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
+
           {
-            echo "## mero-kms release ${{ needs.prepare.outputs.version }} (draft)"
-            echo ""
-            echo "**This is a draft release.** Review the attestation policy and publish when ready."
+            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
             echo ""
             echo "### Release metadata"
             echo ""
@@ -643,6 +658,20 @@ jobs:
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
             echo "| KMS policy URL | \`${compatibility_kms_policy_url}\` |"
             echo "| Node policy URL | \`${compatibility_node_policy_url}\` |"
+            echo ""
+            echo "### Node profile measurements (images this KMS accepts)"
+            echo ""
+            echo "| Profile | MRTD |"
+            echo "|---|---|"
+            echo "| debug | \`${debug_mrtd}\` |"
+            echo "| debug-read-only | \`${debug_ro_mrtd}\` |"
+            echo "| locked-read-only | \`${locked_ro_mrtd}\` |"
+            echo ""
+            echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
+            echo "|---|---|---|---|---|"
+            echo "| debug | \`${debug_rtmr0}\` | \`${debug_rtmr1}\` | \`${debug_rtmr2}\` | \`${debug_rtmr3}\` |"
+            echo "| debug-read-only | \`${debug_ro_rtmr0}\` | \`${debug_ro_rtmr1}\` | \`${debug_ro_rtmr2}\` | \`${debug_ro_rtmr3}\` |"
+            echo "| locked-read-only | \`${locked_ro_rtmr0}\` | \`${locked_ro_rtmr1}\` | \`${locked_ro_rtmr2}\` | \`${locked_ro_rtmr3}\` |"
             echo ""
             echo "### Binary archives (SHA-256)"
             echo ""
@@ -679,6 +708,20 @@ jobs:
             echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.kms_release_tag }} https://<kms-url>/"
             echo "\`\`\`"
           } > release-assets/release-notes.md
+
+          {
+            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
+            echo ""
+            echo "- Tag: ${{ needs.prepare.outputs.kms_release_tag }}"
+            echo "- Compatible node: ${compatibility_merod_tag}"
+            echo ""
+            echo "### Node profile measurements (accepted by this KMS)"
+            echo "| Profile | MRTD | RTMR0 | RTMR2 |"
+            echo "|---|---|---|---|"
+            echo "| debug | ${debug_mrtd:0:24}... | ${debug_rtmr0:0:24}... | ${debug_rtmr2:0:24}... |"
+            echo "| debug-read-only | ${debug_ro_mrtd:0:24}... | ${debug_ro_rtmr0:0:24}... | ${debug_ro_rtmr2:0:24}... |"
+            echo "| locked-read-only | ${locked_ro_mrtd:0:24}... | ${locked_ro_rtmr0:0:24}... | ${locked_ro_rtmr2:0:24}... |"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing
         uses: sigstore/cosign-installer@v3
@@ -797,14 +840,14 @@ jobs:
               "${asset}" >/dev/null
           done
 
-      - name: Upload release metadata assets (draft)
+      - name: Upload release metadata assets
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: ${{ needs.prepare.outputs.kms_release_tag }}
           make_latest: false
-          draft: true
+          draft: false
           body_path: release-assets/release-notes.md
           fail_on_unmatched_files: true
           files: |
@@ -871,7 +914,7 @@ jobs:
           } > "${notes_file}"
 
           if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}" --latest
+            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}" --draft
           else
-            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${{ needs.prepare.outputs.target_commit }}" --latest
+            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${{ needs.prepare.outputs.target_commit }}" --draft
           fi

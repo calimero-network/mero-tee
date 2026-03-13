@@ -19,7 +19,7 @@
 
 ## Verification
 
-- `published-mrtds.json`, `release-provenance.json`, and `node-image-gcp-attestation-bundle.tar.gz` are shipped with Sigstore signatures (`.sig`) and certificates (`.pem`).
+- `published-mrtds.json` and `release-provenance.json` are shipped with Sigstore signatures (`.sig`) and certificates (`.pem`).
 - Users verify MRTDs before trusting deployed nodes.
 - See [docs/architecture/trust-boundaries.md](docs/architecture/trust-boundaries.md) for the trust model.
 

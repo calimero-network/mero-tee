@@ -25,6 +25,12 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 | `ITA_POLICY_IDS` | Policy IDs for attestation |
 | `ITA_POLICY_MUST_MATCH` | Whether policy must match |
 
+## Base image notes
+
+Current builds use Ubuntu 25.10 (Questing Quokka) for kernel 6.17+ (RTMR3 sysfs support). When unset, `PACKER_GCP_SOURCE_IMAGE` causes Packer to use the `ubuntu-2510-amd64` image family.
+
+**Ubuntu 26.04 LTS availability**: Based on discussions in the Ubuntu community, Ubuntu 26.04 LTS is expected to be part of the official Ubuntu repositories by March 2026, with components like authd maintained by Canonical for this release. When available, consider migrating to `ubuntu-2604-lts-amd64` for longer support.
+
 ## Required GitHub Secrets
 
 | Secret | Description |
@@ -82,13 +88,6 @@ same secrets as `kms-phala-staging-probe.yaml`:
 
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`
-
-node-image-gcp policy promotion (`node-image-gcp-policy-promotion-pr.yaml`) reads
-release assets and opens a policy PR. For repositories where `github.token`
-cannot open PRs, ensure `GHCR_PUSH_TOKEN` is configured.
-
-`release-node-image-gcp.yaml` auto-dispatches this promotion workflow after
-publishing release assets.
 
 ## Release SBOM assets
 

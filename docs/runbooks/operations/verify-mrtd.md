@@ -4,7 +4,7 @@ This guide explains how end users and operators verify that a GCP TDX merod node
 
 ## Verify signed release assets first (Sigstore keyless)
 
-Before trusting `published-mrtds.json` or `node-image-gcp-policy.json`,
+Before trusting `published-mrtds.json`,
 verify the release assets were signed by this repository's release workflow identity.
 
 ```bash
@@ -17,9 +17,6 @@ BASE_URL="https://github.com/${REPO}/releases/download/${NODE_IMAGE_TAG}"
 curl -sSLO "${BASE_URL}/published-mrtds.json"
 curl -sSLO "${BASE_URL}/published-mrtds.json.sig"
 curl -sSLO "${BASE_URL}/published-mrtds.json.pem"
-curl -sSLO "${BASE_URL}/node-image-gcp-policy.json"
-curl -sSLO "${BASE_URL}/node-image-gcp-policy.json.sig"
-curl -sSLO "${BASE_URL}/node-image-gcp-policy.json.pem"
 
 cosign verify-blob \
   --certificate published-mrtds.json.pem \
@@ -27,16 +24,9 @@ cosign verify-blob \
   --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   published-mrtds.json
-
-cosign verify-blob \
-  --certificate node-image-gcp-policy.json.pem \
-  --signature node-image-gcp-policy.json.sig \
-  --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  node-image-gcp-policy.json
 ```
 
-For full provenance validation, verify `release-provenance.json` and `node-image-gcp-attestation-bundle.tar.gz` the same way using their matching `.sig` and `.pem` files.
+For full provenance validation, verify `release-provenance.json` the same way using its matching `.sig` and `.pem` files.
 
 ### What signatures prove (and do not prove)
 
@@ -86,7 +76,7 @@ curl -sL https://github.com/calimero-network/mero-tee/releases/download/mero-tee
 
 If the node's MRTD **matches** the expected MRTD for that profile, the node is running the attested node-image-gcp image.
 
-Optional hardening: compare RTMRs using `node-image-gcp-policy.json` when
+Optional hardening: compare RTMRs using `published-mrtds.json` (`.profiles.<profile>.allowed_rtmr0` etc.) when
 your attestation verifier exposes RTMR0..3 from a verified quote.
 
 **Example script:**

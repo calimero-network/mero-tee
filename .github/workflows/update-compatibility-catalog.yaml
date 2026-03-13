@@ -31,7 +31,7 @@ jobs:
             kms_tag="mero-kms-v${v}"
             node_tag="mero-tee-v${v}"
             kms_url="https://github.com/${repo}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
-            node_url="https://github.com/${repo}/releases/download/${node_tag}/node-image-gcp-policy.json"
+            node_url="https://github.com/${repo}/releases/download/${node_tag}/published-mrtds.json"
             entry="$(jq -n \
               --arg v "${v}" \
               --arg kt "${kms_tag}" \

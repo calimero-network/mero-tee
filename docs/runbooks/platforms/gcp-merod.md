@@ -23,11 +23,10 @@ This lane focuses on **node image trust and measurement verification**.
 
 node-image-gcp assets are published under tag `mero-tee-vX.Y.Z` and include:
 
-- `published-mrtds.json`
-- `node-image-gcp-policy.json`
-- `mrtd-*.json` profiles
+- `published-mrtds.json` (MRTDs + measurement policy)
+- `release-provenance.json`
+- `node-image-gcp-release-sbom.spdx.json`
 - `node-image-gcp-checksums.txt`
-- `node-image-gcp-attestation-bundle.tar.gz`
 - signed sidecars (`.sig`, `.pem`) and provenance/SBOM assets
 
 ---

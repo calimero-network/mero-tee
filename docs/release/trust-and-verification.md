@@ -21,7 +21,7 @@ These map to two deployment lanes with different responsibilities:
 
 Use signatures together with:
 
-- policy review (`node-image-gcp-policy.json`, `kms-phala-attestation-policy.json`)
+- policy review (`published-mrtds.json`, `kms-phala-attestation-policy.json`)
 - compatibility checks (`policies/index.json` + compatibility map artifacts)
 - runtime quote verification for deployed nodes
 

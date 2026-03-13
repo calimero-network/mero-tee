@@ -62,8 +62,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 - **Compatibility map artifact**:
   - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus policy URLs),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
-- **mero-tee-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `node-image-gcp-checksums.txt`
-  - `node-image-gcp-policy.json` (profile-specific allowed MRTD/RTMR policy)
+- **mero-tee-vX.Y.Z**: `published-mrtds.json` (MRTDs + measurement policy), `release-provenance.json`, SBOM, and `node-image-gcp-checksums.txt`
   - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
 
 ### What signatures prove (and do not prove)
@@ -111,7 +110,7 @@ KMS release flow (draft release + human approval):
 
 Node release flow:
 
-- On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy (`node-image-gcp-policy.json`) is included in the release.
+- On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
 - KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
 
 Recommended release order:
