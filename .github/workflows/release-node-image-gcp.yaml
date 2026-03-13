@@ -1155,7 +1155,11 @@ jobs:
         uses: anchore/sbom-action/download-syft@v0
 
       - name: Assemble published MRTD payload
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.image_version }}
         run: |
+          release_version="${RELEASE_VERSION}"
+
           validate_mrtd_file() {
             local file_path="$1"
             local label="$2"
@@ -1313,7 +1317,7 @@ jobs:
           fi
 
           jq -n \
-            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${release_version}" \
             --slurpfile debug artifacts/mrtd-debug.json \
             --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
             --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
@@ -1385,14 +1389,14 @@ jobs:
             (.profiles["locked-read-only"].allowed_rtmr3 | type == "array" and length > 0)
           ' artifacts/published-mrtds.json >/dev/null
 
-          version="${{ needs.preflight.outputs.image_version }}"
+          version="${release_version}"
           kms_tag="mero-kms-v${version}"
           node_image_tag="mero-tee-v${version}"
           kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
           node_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
           jq -n \
-            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${release_version}" \
             --arg commit "${GITHUB_SHA}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -1494,13 +1498,13 @@ jobs:
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           {
-            echo "## mero-tee release ${{ needs.preflight.outputs.image_version }}"
+            echo "## mero-tee release ${release_version}"
             echo ""
             echo "### Release metadata"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`mero-tee-v${{ needs.preflight.outputs.image_version }}\` |"
+            echo "| Tag | \`mero-tee-v${release_version}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Workflow run | [${GITHUB_RUN_ID}](${run_url}) |"
             echo "| Checksums | \`node-image-gcp-checksums.txt\` |"
@@ -1573,12 +1577,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${release_version}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
+            echo "scripts/release/verify-release-assets.sh ${release_version}"
             echo "\`\`\`"
             echo ""
             echo "### Trust assets (detailed)"
@@ -1599,7 +1603,7 @@ jobs:
           {
             echo "## Published MRTDs"
             echo ""
-            echo "- Tag: ${{ needs.preflight.outputs.image_version }}"
+            echo "- Tag: ${release_version}"
             echo "- Debug MRTD: ${debug_mrtd_preview}"
             echo "- Debug read-only MRTD: ${debug_ro_mrtd_preview}"
             echo "- Locked read-only MRTD: ${locked_ro_mrtd_preview}"
