@@ -7,7 +7,6 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - <<'PY'
-import hashlib
 import json
 import pathlib
 import sys
@@ -24,7 +23,6 @@ root = pathlib.Path(".")
 cargo_toml_path = root / "mero-kms/Cargo.toml"
 cargo_lock_path = root / "Cargo.lock"
 versions_json_path = root / "mero-tee/versions.json"
-policy_index_path = root / "policies/index.json"
 
 try:
     cargo_toml = tomllib.loads(cargo_toml_path.read_text())
@@ -70,79 +68,8 @@ if lock_versions[0] != kms_version:
         f"{lock_versions[0]} != {kms_version}"
     )
 
-try:
-    policy_index = json.loads(policy_index_path.read_text())
-except Exception as exc:
-    fail(f"Could not parse {policy_index_path}: {exc}")
-
-releases = policy_index.get("releases")
-if not isinstance(releases, list):
-    fail("policies/index.json must contain a releases array")
-
-entry = next((item for item in releases if item.get("version") == kms_version), None)
-if entry is None:
-    fail(f"policies/index.json missing releases entry for version {kms_version}")
-
-expected_kms_tag = f"mero-kms-v{kms_version}"
-if entry.get("kms_tag") != expected_kms_tag:
-    fail(
-        "kms_tag must be mero-kms-v<version>: "
-        f"{entry.get('kms_tag')}"
-    )
-
-expected_merod_tag = f"mero-tee-v{kms_version}"
-if entry.get("node_image_tag") != expected_merod_tag:
-    fail(
-        "node_image_tag must be mero-tee-v<version>: "
-        f"{entry.get('node_image_tag')}"
-    )
-
-expected_kms_policy_file = f"policies/kms-phala/{kms_version}.json"
-expected_node_image_policy_file = f"policies/mero-tee/{kms_version}.json"
-
-if entry.get("kms_policy_file") != expected_kms_policy_file:
-    fail(
-        f"kms_policy_file must be {expected_kms_policy_file}, got {entry.get('kms_policy_file')}"
-    )
-if entry.get("node_image_policy_file") != expected_node_image_policy_file:
-    fail(
-        f"node_image_policy_file must be {expected_node_image_policy_file}, got {entry.get('node_image_policy_file')}"
-    )
-
-kms_policy_file = root / expected_kms_policy_file
-node_image_policy_file = root / expected_node_image_policy_file
-if not kms_policy_file.exists():
-    fail(f"Missing KMS policy file: {kms_policy_file}")
-if not node_image_policy_file.exists():
-    fail(f"Missing merod policy file: {node_image_policy_file}")
-
-
-def sha256_hex(path: pathlib.Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-kms_sha = sha256_hex(kms_policy_file)
-merod_sha = sha256_hex(node_image_policy_file)
-
-if entry.get("kms_policy_sha256") != kms_sha:
-    fail("kms_policy_sha256 does not match file contents")
-if entry.get("node_image_policy_sha256") != merod_sha:
-    fail("node_image_policy_sha256 does not match file contents")
-
-try:
-    kms_policy = json.loads(kms_policy_file.read_text())
-    merod_policy = json.loads(node_image_policy_file.read_text())
-except Exception as exc:
-    fail(f"Failed to parse policy files as JSON: {exc}")
-
-if kms_policy.get("release_tag") != kms_version:
-    fail("KMS policy release_tag does not match version")
-if merod_policy.get("release_tag") != kms_version:
-    fail("merod policy release_tag does not match version")
-
 print(
     "[release-version-sync] OK: "
-    f"kms={kms_version}, merod={image_version}, "
-    f"index.node_image_tag={entry.get('node_image_tag')}"
+    f"kms={kms_version}, merod={image_version}"
 )
 PY

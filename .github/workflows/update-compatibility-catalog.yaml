@@ -1,0 +1,63 @@
+name: Update compatibility catalog
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch releases and build catalog
+        id: catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          releases_json="$(gh api "repos/${repo}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"
+          versions="$(echo "${releases_json}" | grep -E '^"mero-kms-v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/"mero-kms-v//;s/"$//' | sort -V -u)"
+          catalog="[]"
+          for v in ${versions}; do
+            kms_tag="mero-kms-v${v}"
+            node_tag="mero-tee-v${v}"
+            kms_url="https://github.com/${repo}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+            node_url="https://github.com/${repo}/releases/download/${node_tag}/node-image-gcp-policy.json"
+            entry="$(jq -n \
+              --arg v "${v}" \
+              --arg kt "${kms_tag}" \
+              --arg nt "${node_tag}" \
+              --arg ku "${kms_url}" \
+              --arg nu "${node_url}" \
+              '{version: $v, kms_tag: $kt, node_image_tag: $nt, kms_policy_url: $ku, node_policy_url: $nu}')"
+            catalog="$(echo "${catalog}" | jq --argjson e "${entry}" '. + [$e]')"
+          done
+          echo "${catalog}" | jq '{schema_version: 1, releases: .}' > compatibility-catalog.json
+          echo "catalog_count=$(echo "${catalog}" | jq 'length')" >> "${GITHUB_OUTPUT}"
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet compatibility-catalog.json 2>/dev/null; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add compatibility-catalog.json
+          git commit -m "chore: update compatibility catalog (${{ steps.catalog.outputs.catalog_count }} releases)"
+          git push

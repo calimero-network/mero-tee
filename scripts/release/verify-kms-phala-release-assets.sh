@@ -250,12 +250,12 @@ jq -e --arg tag "${logical_tag}" '
   (.kms.attest_endpoint == "/attest") and
   (.kms.default_binding_hex | type == "string" and test("^[A-Fa-f0-9]{64}$")) and
   (.kms.default_binding_b64 | type == "string" and length > 0) and
-  (.policy.allowed_tcb_statuses | type == "array" and length > 0) and
-  (.policy.allowed_mrtd | type == "array") and
-  (.policy.allowed_rtmr0 | type == "array") and
-  (.policy.allowed_rtmr1 | type == "array") and
-  (.policy.allowed_rtmr2 | type == "array") and
-  (.policy.allowed_rtmr3 | type == "array")
+  ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
+  (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array")) and
+  (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array")) and
+  (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array")) and
+  (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array")) and
+  (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array"))
 ' "${tmp_dir}/kms-phala-attestation-policy.json" >/dev/null
 
 manifest_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-release-manifest.json")"

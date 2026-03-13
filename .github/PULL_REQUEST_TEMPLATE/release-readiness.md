@@ -13,13 +13,10 @@ assignees: ""
   - [ ] node-image-gcp (`release-node-image-gcp`)
   - [ ] both
 - Target version/tag: `<X.Y.Z>`
-- Related policy entry:
-  - [ ] `policies/index.json` includes target mapping
-  - [ ] mapped policy file exists and is reviewed
 
 ## Pre-merge checklist
 
-- [ ] Version bump and policy mapping are aligned for this release tag.
+- [ ] Version bump (Cargo.toml and versions.json) are aligned for this release tag.
 - [ ] Workflow changes (if any) were reviewed by code owners.
 - [ ] Release helper scripts still pass shell syntax checks:
   - [ ] `scripts/release/verify-kms-phala-release-assets.sh`
@@ -44,5 +41,5 @@ assignees: ""
 ## Post-release follow-up
 
 - [ ] Release notes include verification command snippets.
-- [ ] Any required policy-promotion workflow has been dispatched/verified.
+- [ ] KMS draft release reviewed and published by human.
 - [ ] Links to published release assets are recorded in PR comments.

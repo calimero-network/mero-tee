@@ -207,13 +207,40 @@ impl Config {
             .and_then(|v| v.as_object())
             .ok_or_else(|| eyre::eyre!("Policy JSON missing 'policy' object"))?;
 
-        let allowed_tcb_statuses = parse_json_string_array(policy, "allowed_tcb_statuses")
+        // KMS verifies nodes; use node_allowed_* (fallback to allowed_* for legacy)
+        let allowed_tcb_statuses = parse_json_string_array(policy, "node_allowed_tcb_statuses")
+            .or_else(|| parse_json_string_array(policy, "allowed_tcb_statuses"))
             .unwrap_or_else(|| vec!["uptodate".to_owned()]);
-        let allowed_mrtd = parse_json_hex_array(policy, "allowed_mrtd", 48)?;
-        let allowed_rtmr0 = parse_json_hex_array(policy, "allowed_rtmr0", 48)?;
-        let allowed_rtmr1 = parse_json_hex_array(policy, "allowed_rtmr1", 48)?;
-        let allowed_rtmr2 = parse_json_hex_array(policy, "allowed_rtmr2", 48)?;
-        let allowed_rtmr3 = parse_json_hex_array(policy, "allowed_rtmr3", 48)?;
+        let node_mrtd = parse_json_hex_array(policy, "node_allowed_mrtd", 48)?;
+        let allowed_mrtd = if node_mrtd.is_empty() {
+            parse_json_hex_array(policy, "allowed_mrtd", 48)?
+        } else {
+            node_mrtd
+        };
+        let node_rtmr0 = parse_json_hex_array(policy, "node_allowed_rtmr0", 48)?;
+        let allowed_rtmr0 = if node_rtmr0.is_empty() {
+            parse_json_hex_array(policy, "allowed_rtmr0", 48)?
+        } else {
+            node_rtmr0
+        };
+        let node_rtmr1 = parse_json_hex_array(policy, "node_allowed_rtmr1", 48)?;
+        let allowed_rtmr1 = if node_rtmr1.is_empty() {
+            parse_json_hex_array(policy, "allowed_rtmr1", 48)?
+        } else {
+            node_rtmr1
+        };
+        let node_rtmr2 = parse_json_hex_array(policy, "node_allowed_rtmr2", 48)?;
+        let allowed_rtmr2 = if node_rtmr2.is_empty() {
+            parse_json_hex_array(policy, "allowed_rtmr2", 48)?
+        } else {
+            node_rtmr2
+        };
+        let node_rtmr3 = parse_json_hex_array(policy, "node_allowed_rtmr3", 48)?;
+        let allowed_rtmr3 = if node_rtmr3.is_empty() {
+            parse_json_hex_array(policy, "allowed_rtmr3", 48)?
+        } else {
+            node_rtmr3
+        };
 
         Ok(AttestationPolicy {
             enforce_measurement_policy: true,

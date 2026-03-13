@@ -71,22 +71,23 @@ cosign verify-blob \
 jq -e --arg tag "${tag}" '
   .schema_version == 1 and
   .tag == $tag and
-  (.policy.allowed_tcb_statuses | type == "array" and length > 0) and
-  (.policy.allowed_mrtd | type == "array") and
-  (.policy.allowed_rtmr0 | type == "array") and
-  (.policy.allowed_rtmr1 | type == "array") and
-  (.policy.allowed_rtmr2 | type == "array") and
-  (.policy.allowed_rtmr3 | type == "array") and
+  ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
+  (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array")) and
+  (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array")) and
+  (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array")) and
+  (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array")) and
+  (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array")) and
   (.kms.attest_endpoint == "/attest") and
   (.kms.default_binding_b64 | type == "string" and length > 0)
 ' "${policy_file}" >/dev/null
 
-allowed_tcb_statuses="$(jq -c '.policy.allowed_tcb_statuses' "${policy_file}")"
-allowed_mrtd="$(jq -c '.policy.allowed_mrtd' "${policy_file}")"
-allowed_rtmr0="$(jq -c '.policy.allowed_rtmr0' "${policy_file}")"
-allowed_rtmr1="$(jq -c '.policy.allowed_rtmr1' "${policy_file}")"
-allowed_rtmr2="$(jq -c '.policy.allowed_rtmr2' "${policy_file}")"
-allowed_rtmr3="$(jq -c '.policy.allowed_rtmr3' "${policy_file}")"
+# Merod verifies the KMS; use kms_allowed_* (fallback to allowed_* for legacy)
+allowed_tcb_statuses="$(jq -c '.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses' "${policy_file}")"
+allowed_mrtd="$(jq -c '.policy.kms_allowed_mrtd // .policy.allowed_mrtd' "${policy_file}")"
+allowed_rtmr0="$(jq -c '.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0' "${policy_file}")"
+allowed_rtmr1="$(jq -c '.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1' "${policy_file}")"
+allowed_rtmr2="$(jq -c '.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2' "${policy_file}")"
+allowed_rtmr3="$(jq -c '.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3' "${policy_file}")"
 binding_b64="$(jq -r '.kms.default_binding_b64' "${policy_file}")"
 commit_sha="$(jq -r '.commit_sha' "${policy_file}")"
 

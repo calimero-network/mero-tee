@@ -20,9 +20,6 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Phala KMS attestation task list (mero-tee)](docs/policies/kms-phala-attestation-task-list.md)
 - [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/policies/kms-phala-staging-probe.md)
-- [KMS policy promotion workflow (PR)](docs/policies/kms-phala-policy-promotion.md)
-- [KMS policy auto pipeline](docs/policies/kms-phala-policy-auto-pipeline.md)
-- [node-image-gcp policy promotion workflow (PR)](docs/policies/node-image-gcp-policy-promotion.md)
 - [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) – Verify nodes run the attested image
 - [Release verification output examples](docs/release/verification-examples.md)
 - [Migration & Implementation Plan](docs/architecture/migration-plan.md)
@@ -58,12 +55,12 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 - **mero-kms-phala release trust bundle**:
   - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
   - `kms-phala-checksums.txt` (SHA-256 for binary archives),
-  - `kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, policy registry entry path, and per-asset purpose labels such as operator-required/auditor-required),
+  - `kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, and per-asset purpose labels such as operator-required/auditor-required),
   - `kms-phala-container-metadata.json` (standalone signed container image metadata for auditors/operators),
   - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **Compatibility map artifact**:
-  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus pinned policy paths),
+  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus policy URLs),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
 - **mero-tee-vX.Y.Z**: MRTDs (`published-mrtds.json`, `mrtd-*.json`), attestation artifacts, release provenance, and `node-image-gcp-checksums.txt`
   - `node-image-gcp-policy.json` (profile-specific allowed MRTD/RTMR policy)
@@ -106,37 +103,23 @@ Apply signed policy directly to an existing `merod` node config:
 scripts/policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
-Collect candidate KMS allowlists automatically from a staged Phala deployment:
+KMS release flow (draft release + human approval):
 
-- Run GitHub Actions workflow `.github/workflows/kms-phala-staging-probe.yaml`
-- Requires repository secrets: `PHALA_CLOUD_API_KEY`, `ITA_API_KEY`
-- By default, workflow resolves image from latest release tag; optional `kms_image` override must be pinned and expose `/attest` (do not use container `:latest`)
-- Produces policy candidate artifacts for PR promotion
+- On version bump (Cargo.toml), `release-kms-phala.yaml` builds the container, runs the staging probe to collect KMS measurements, fetches node policy from the mero-tee release, and creates a **draft** release with all assets.
+- Human reviews the draft release (including attestation policy) and publishes when ready.
+- Policy is built from probe output + node release assets; no policy files in repo.
 
-Promote staged candidates into a reviewable, versioned policy PR:
+Node release flow:
 
-- Run GitHub Actions workflow `.github/workflows/kms-phala-policy-promotion-pr.yaml`
-- Input the probe run ID and target release tag
-- Workflow updates `policies/kms-phala/<tag>.json` + `index.json` and opens a PR
-  (or prints a manual PR compare URL if Actions PR creation is disabled)
-- `index.json` keeps a historical list of versioned policy entries (with SHA-256)
-- Automatic option: `.github/workflows/kms-phala-policy-auto-pipeline.yaml` dispatches
-  probe + promotion workflows after version bumps merged to `master`
-
-Release automation reads the policy registry directly (`policies/kms-phala`)
-for the target package version, so version bump + promoted policy stay aligned.
-
-node-image-gcp policy history is tracked under `policies/mero-tee` and
-can be promoted from release assets using
-`.github/workflows/node-image-gcp-policy-promotion-pr.yaml` (auto-dispatched by
-`release-node-image-gcp.yaml` after release publish, with manual fallback).
+- On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy (`node-image-gcp-policy.json`) is included in the release.
+- KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
 
 Recommended release order:
 
-1. Merge version bump PR for the target release tag.
-2. Auto policy pipeline dispatches probe + promotion PR (or run those manually).
-3. Review and merge policy PR for the same release tag.
-4. Release workflow publishes signed artifacts from the merged policy registry entry.
+1. Merge version bump PR (Cargo.toml and versions.json aligned).
+2. Node release runs first; KMS release waits for it, then creates draft.
+3. Human reviews and publishes KMS draft release.
+4. `update-compatibility-catalog` workflow runs on release publish and updates `compatibility-catalog.json` (used by MDMA).
 
 ## Related Repositories
 

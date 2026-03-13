@@ -7,9 +7,6 @@ on:
       - "mero-kms/Cargo.toml"
       - "Cargo.lock"
       - "mero-tee/versions.json"
-      - "policies/index.json"
-      - "policies/kms-phala/**"
-      - "policies/mero-tee/**"
       - "scripts/policy/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   push:
@@ -20,9 +17,6 @@ on:
       - "mero-kms/Cargo.toml"
       - "Cargo.lock"
       - "mero-tee/versions.json"
-      - "policies/index.json"
-      - "policies/kms-phala/**"
-      - "policies/mero-tee/**"
       - "scripts/policy/check_release_version_sync.sh"
       - ".github/workflows/release-version-sync-guard.yaml"
   workflow_dispatch:

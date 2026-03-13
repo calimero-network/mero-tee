@@ -1136,6 +1136,18 @@ jobs:
           ensure_policy_matches_mrtd "artifacts/mrtd-debug-read-only.json" "artifacts/measurement-policy-candidates-debug-read-only.json" "debug-read-only"
           ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
 
+          # Profiles must have different MRTDs (different builds). Identical = bug in build or artifact merge.
+          debug_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-debug.json | tr '[:upper:]' '[:lower:]')"
+          debug_ro_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
+          locked_mrtd="$(jq -r '.mrtd // empty' artifacts/mrtd-locked-read-only.json | tr '[:upper:]' '[:lower:]')"
+          if [[ "${debug_mrtd}" == "${debug_ro_mrtd}" && "${debug_ro_mrtd}" == "${locked_mrtd}" ]]; then
+            echo "::error::All three profiles have identical MRTD. Debug, debug-read-only, and locked-read-only must produce different builds with different measurements."
+            echo "  debug: ${debug_mrtd}"
+            echo "  debug-read-only: ${debug_ro_mrtd}"
+            echo "  locked-read-only: ${locked_mrtd}"
+            exit 1
+          fi
+
           jq -n \
             --arg tag "${{ needs.preflight.outputs.image_version }}" \
             --slurpfile debug artifacts/mrtd-debug.json \
@@ -1248,21 +1260,21 @@ jobs:
               }
             }' > artifacts/release-provenance.json
 
-          compatibility_entry_json="$(
-            jq -c --arg tag "${{ needs.preflight.outputs.image_version }}" '
-              [.releases[] | select(.version == $tag or .kms_tag == $tag or .node_image_tag == $tag)] | first // empty
-            ' policies/index.json
-          )"
-          if [[ -z "${compatibility_entry_json}" ]]; then
-            echo "::error::Could not resolve compatibility map entry for tag ${{ needs.preflight.outputs.image_version }}"
-            exit 1
-          fi
+          version="${{ needs.preflight.outputs.image_version }}"
+          kms_tag="mero-kms-v${version}"
+          node_image_tag="mero-tee-v${version}"
+          kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+          node_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${node_image_tag}/node-image-gcp-policy.json"
 
           jq -n \
             --arg tag "${{ needs.preflight.outputs.image_version }}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
-            --argjson entry "${compatibility_entry_json}" \
+            --arg version "${version}" \
+            --arg kms_tag "${kms_tag}" \
+            --arg node_image_tag "${node_image_tag}" \
+            --arg kms_policy_url "${kms_policy_url}" \
+            --arg node_policy_url "${node_policy_url}" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -1270,11 +1282,11 @@ jobs:
               workflow_run_attempt: $run_attempt,
               generated_at: (now | todate),
               compatibility: {
-                version: $entry.version,
-                kms_tag: $entry.kms_tag,
-                node_image_tag: $entry.node_image_tag,
-                kms_policy_file: $entry.kms_policy_file,
-                node_image_policy_file: $entry.node_image_policy_file
+                version: $version,
+                kms_tag: $kms_tag,
+                node_image_tag: $node_image_tag,
+                kms_policy_url: $kms_policy_url,
+                node_policy_url: $node_policy_url
               }
             }' > artifacts/node-image-gcp-compatibility-map.json
 
@@ -1313,8 +1325,8 @@ jobs:
 
           compatibility_kms_tag="$(jq -r '.compatibility.kms_tag' artifacts/node-image-gcp-compatibility-map.json)"
           compatibility_merod_tag="$(jq -r '.compatibility.node_image_tag' artifacts/node-image-gcp-compatibility-map.json)"
-          compatibility_kms_policy_file="$(jq -r '.compatibility.kms_policy_file' artifacts/node-image-gcp-compatibility-map.json)"
-          compatibility_node_image_policy_file="$(jq -r '.compatibility.node_image_policy_file' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_kms_policy_url="$(jq -r '.compatibility.kms_policy_url' artifacts/node-image-gcp-compatibility-map.json)"
+          compatibility_node_policy_url="$(jq -r '.compatibility.node_policy_url' artifacts/node-image-gcp-compatibility-map.json)"
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           {
@@ -1335,8 +1347,8 @@ jobs:
             echo "|---|---|"
             echo "| KMS release tag | \`${compatibility_kms_tag}\` |"
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
-            echo "| KMS policy path | \`${compatibility_kms_policy_file}\` |"
-            echo "| merod policy path | \`${compatibility_node_image_policy_file}\` |"
+            echo "| KMS policy URL | \`${compatibility_kms_policy_url}\` |"
+            echo "| Node policy URL | \`${compatibility_node_policy_url}\` |"
             echo ""
             echo "### Profile measurements"
             echo ""
@@ -1503,17 +1515,3 @@ jobs:
             gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${GITHUB_SHA}" --latest
           fi
 
-      - name: Trigger node-image-gcp policy promotion workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh workflow run "node-image-gcp-policy-promotion-pr.yaml" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref master \
-            -f release_tag="${{ needs.preflight.outputs.image_version }}" \
-            -f base_branch=master \
-            -f draft_pr=true; then
-            echo "Triggered node-image-gcp policy promotion workflow."
-          else
-            echo "::warning::Failed to auto-dispatch node-image-gcp policy promotion workflow. Run it manually for tag ${{ needs.preflight.outputs.image_version }}."
-          fi

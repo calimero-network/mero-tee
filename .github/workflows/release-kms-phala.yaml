@@ -9,8 +9,6 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
-      - "policies/kms-phala/**"
-      - "scripts/policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
       - ".github/workflows/deps/**"
   pull_request:
@@ -19,8 +17,6 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
-      - "policies/kms-phala/**"
-      - "scripts/policy/read-kms-phala-policy-registry.sh"
       - ".github/workflows/release-kms-phala.yaml"
       - ".github/workflows/deps/**"
   workflow_dispatch:
@@ -56,7 +52,6 @@ jobs:
         run: |
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/verify-kms-phala-release-assets.sh
-          bash -n scripts/policy/read-kms-phala-policy-registry.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
 
@@ -81,12 +76,8 @@ jobs:
               prerelease=true
             fi
             if ! gh release view "$kms_release_tag" --repo ${{ github.repository }} >/dev/null 2>&1; then
-              if scripts/policy/read-kms-phala-policy-registry.sh "$version" >/dev/null 2>&1; then
-                binary_release=true
-                docker_release=true
-              else
-                echo "::warning::Policy registry entry for ${version} not found; skipping release publication until policy PR is merged."
-              fi
+              binary_release=true
+              docker_release=true
             fi
           elif [ "${{ github.event_name }}" == "pull_request" ]; then
             docker_release=true
@@ -231,11 +222,81 @@ jobs:
           subject-digest: ${{ steps.build_and_push.outputs.digest }}
           push-to-registry: true
 
+  probe:
+    name: Run staging probe for attestation policy
+    if: needs.prepare.outputs.binary_release == 'true'
+    runs-on: ubuntu-latest
+    needs: [prepare, release-container]
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.download.outputs.artifact_name }}
+    steps:
+      - name: Trigger staging probe and wait
+        id: trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/mero-kms-phala@${{ needs.release-container.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gh workflow run "kms-phala-staging-probe.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f kms_image="${IMAGE_REF}" \
+            -f kms_tag="pinned"
+          for _ in $(seq 1 90); do
+            run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "kms-phala-staging-probe.yaml" \
+              --event workflow_dispatch \
+              --branch master \
+              --limit 5 \
+              --json databaseId,createdAt \
+              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -n "${run_id}" ]]; then
+              echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+              break
+            fi
+            sleep 10
+          done
+          if [[ -z "${run_id}" ]]; then
+            echo "::error::Could not find dispatched probe run"
+            exit 1
+          fi
+          echo "Waiting for probe run ${run_id}..."
+          gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+      - name: Download probe artifact
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="${{ steps.trigger.outputs.run_id }}"
+          artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+          if [[ -z "${artifact_name}" ]]; then
+            echo "::error::No probe artifact found for run ${run_id}"
+            exit 1
+          fi
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+          mkdir -p probe-artifacts
+          gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" --name "${artifact_name}" --dir probe-artifacts
+
+      - name: Upload probe artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: kms-probe-${{ needs.prepare.outputs.version }}
+          path: probe-artifacts/
+          retention-days: 2
+
   release-metadata:
     name: Release Metadata
     if: needs.prepare.outputs.binary_release == 'true'
     runs-on: ubuntu-latest
-    needs: [prepare, build-binaries, release-container]
+    needs: [prepare, build-binaries, release-container, probe]
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
@@ -255,6 +316,37 @@ jobs:
           pattern: artifacts-*
           path: artifacts/
           merge-multiple: true
+
+      - name: Download probe artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: kms-probe-${{ needs.prepare.outputs.version }}
+          path: probe-artifacts/
+
+      - name: Wait for node release and fetch node policy
+        id: node_policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NODE_TAG: mero-tee-v${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p node-policy
+          for attempt in $(seq 1 60); do
+            if gh release view "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              if gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+                --pattern "node-image-gcp-policy.json" --dir node-policy 2>/dev/null; then
+                echo "Fetched node policy from ${NODE_TAG}"
+                break
+              fi
+            fi
+            if [[ "${attempt}" -eq 60 ]]; then
+              echo "::error::Timed out waiting for node release ${NODE_TAG} with node-image-gcp-policy.json"
+              exit 1
+            fi
+            echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
+            sleep 30
+          done
 
       - name: Install Syft for SBOM generation
         uses: anchore/sbom-action/download-syft@v0
@@ -296,24 +388,47 @@ jobs:
             done < release-assets/kms-phala-checksums.txt | jq -s '.'
           )"
 
-          policy_registry_json="$(
-            scripts/policy/read-kms-phala-policy-registry.sh "${{ needs.prepare.outputs.version }}"
-          )"
-          compatibility_entry_json="$(
-            jq -c --arg tag "${{ needs.prepare.outputs.version }}" '
-              [.releases[] | select(.version == $tag or .kms_tag == $tag or .node_image_tag == $tag)] | first // empty
-            ' policies/index.json
-          )"
-          if [[ -z "${compatibility_entry_json}" ]]; then
-            echo "::error::Could not resolve compatibility map entry for tag ${{ needs.prepare.outputs.version }}"
+          version="${{ needs.prepare.outputs.version }}"
+          kms_tag="mero-kms-v${version}"
+          node_image_tag="mero-tee-v${version}"
+          kms_policy_url="https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+          node_policy_url="https://github.com/${{ github.repository }}/releases/download/${node_image_tag}/node-image-gcp-policy.json"
+
+          candidates_file="probe-artifacts/kms-policy-candidates.json"
+          node_policy_file="node-policy/node-image-gcp-policy.json"
+          if [[ ! -f "${candidates_file}" ]]; then
+            echo "::error::Probe candidates not found at ${candidates_file}"
             exit 1
           fi
+          if [[ ! -f "${node_policy_file}" ]]; then
+            echo "::error::Node policy not found at ${node_policy_file}"
+            exit 1
+          fi
+
+          kms_allowed_tcb_json="$(jq -c '.policy.allowed_tcb_statuses' "${candidates_file}")"
+          kms_allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' "${candidates_file}")"
+          kms_allowed_rtmr0_json="$(jq -c '.policy.allowed_rtmr0' "${candidates_file}")"
+          kms_allowed_rtmr1_json="$(jq -c '.policy.allowed_rtmr1' "${candidates_file}")"
+          kms_allowed_rtmr2_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file}")"
+          kms_allowed_rtmr3_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file}")"
+
+          np="$(jq '.profiles["locked-read-only"]' "${node_policy_file}")"
+          node_allowed_tcb_json="$(jq -c '.allowed_tcb_statuses' <<< "${np}")"
+          node_allowed_mrtd_json="$(jq -c '.allowed_mrtd' <<< "${np}")"
+          node_allowed_rtmr0_json="$(jq -c '.allowed_rtmr0' <<< "${np}")"
+          node_allowed_rtmr1_json="$(jq -c '.allowed_rtmr1' <<< "${np}")"
+          node_allowed_rtmr2_json="$(jq -c '.allowed_rtmr2' <<< "${np}")"
+          node_allowed_rtmr3_json="$(jq -c '.allowed_rtmr3' <<< "${np}")"
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
             --arg run_id "${{ github.run_id }}" \
             --arg run_attempt "${{ github.run_attempt }}" \
-            --argjson entry "${compatibility_entry_json}" \
+            --arg version "${version}" \
+            --arg kms_tag "${kms_tag}" \
+            --arg node_image_tag "${node_image_tag}" \
+            --arg kms_policy_url "${kms_policy_url}" \
+            --arg node_policy_url "${node_policy_url}" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -321,11 +436,11 @@ jobs:
               workflow_run_attempt: $run_attempt,
               generated_at: (now | todate),
               compatibility: {
-                version: $entry.version,
-                kms_tag: $entry.kms_tag,
-                node_image_tag: $entry.node_image_tag,
-                kms_policy_file: $entry.kms_policy_file,
-                node_image_policy_file: $entry.node_image_policy_file
+                version: $version,
+                kms_tag: $kms_tag,
+                node_image_tag: $node_image_tag,
+                kms_policy_url: $kms_policy_url,
+                node_policy_url: $node_policy_url
               }
             }' > release-assets/kms-phala-compatibility-map.json
 
@@ -353,21 +468,11 @@ jobs:
               compatibility_map_asset: $compat_asset
             }' > release-assets/kms-phala-container-metadata.json
 
-          policy_registry_source_path="$(jq -r '.source_policy_path' <<< "${policy_registry_json}")"
-          allowed_tcb_statuses_json="$(jq -c '.policy.allowed_tcb_statuses' <<< "${policy_registry_json}")"
-          allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' <<< "${policy_registry_json}")"
-          allowed_rtmr0_json="$(jq -c '.policy.allowed_rtmr0' <<< "${policy_registry_json}")"
-          allowed_rtmr1_json="$(jq -c '.policy.allowed_rtmr1' <<< "${policy_registry_json}")"
-          allowed_rtmr2_json="$(jq -c '.policy.allowed_rtmr2' <<< "${policy_registry_json}")"
-          allowed_rtmr3_json="$(jq -c '.policy.allowed_rtmr3' <<< "${policy_registry_json}")"
+          policy_registry_source_path="release-probe+node"
 
           for json_var in \
-            allowed_tcb_statuses_json \
-            allowed_mrtd_json \
-            allowed_rtmr0_json \
-            allowed_rtmr1_json \
-            allowed_rtmr2_json \
-            allowed_rtmr3_json; do
+            kms_allowed_tcb_json kms_allowed_mrtd_json kms_allowed_rtmr0_json kms_allowed_rtmr1_json kms_allowed_rtmr2_json kms_allowed_rtmr3_json \
+            node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json; do
             if ! jq -e 'type == "array"' <<< "${!json_var}" >/dev/null 2>&1; then
               echo "::error::${json_var} must be a JSON array. Got: ${!json_var}"
               exit 1
@@ -443,12 +548,18 @@ jobs:
             --arg policy_registry_source_path "${policy_registry_source_path}" \
             --arg default_binding_hex "${default_binding_hex}" \
             --arg default_binding_b64 "${default_binding_b64}" \
-            --argjson allowed_tcb_statuses "${allowed_tcb_statuses_json}" \
-            --argjson allowed_mrtd "${allowed_mrtd_json}" \
-            --argjson allowed_rtmr0 "${allowed_rtmr0_json}" \
-            --argjson allowed_rtmr1 "${allowed_rtmr1_json}" \
-            --argjson allowed_rtmr2 "${allowed_rtmr2_json}" \
-            --argjson allowed_rtmr3 "${allowed_rtmr3_json}" \
+            --argjson kms_allowed_tcb "${kms_allowed_tcb_json}" \
+            --argjson kms_allowed_mrtd "${kms_allowed_mrtd_json}" \
+            --argjson kms_allowed_rtmr0 "${kms_allowed_rtmr0_json}" \
+            --argjson kms_allowed_rtmr1 "${kms_allowed_rtmr1_json}" \
+            --argjson kms_allowed_rtmr2 "${kms_allowed_rtmr2_json}" \
+            --argjson kms_allowed_rtmr3 "${kms_allowed_rtmr3_json}" \
+            --argjson node_allowed_tcb "${node_allowed_tcb_json}" \
+            --argjson node_allowed_mrtd "${node_allowed_mrtd_json}" \
+            --argjson node_allowed_rtmr0 "${node_allowed_rtmr0_json}" \
+            --argjson node_allowed_rtmr1 "${node_allowed_rtmr1_json}" \
+            --argjson node_allowed_rtmr2 "${node_allowed_rtmr2_json}" \
+            --argjson node_allowed_rtmr3 "${node_allowed_rtmr3_json}" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -473,12 +584,18 @@ jobs:
                 default_binding_b64: $default_binding_b64
               },
               policy: {
-                allowed_tcb_statuses: $allowed_tcb_statuses,
-                allowed_mrtd: $allowed_mrtd,
-                allowed_rtmr0: $allowed_rtmr0,
-                allowed_rtmr1: $allowed_rtmr1,
-                allowed_rtmr2: $allowed_rtmr2,
-                allowed_rtmr3: $allowed_rtmr3
+                kms_allowed_tcb_statuses: $kms_allowed_tcb,
+                kms_allowed_mrtd: $kms_allowed_mrtd,
+                kms_allowed_rtmr0: $kms_allowed_rtmr0,
+                kms_allowed_rtmr1: $kms_allowed_rtmr1,
+                kms_allowed_rtmr2: $kms_allowed_rtmr2,
+                kms_allowed_rtmr3: $kms_allowed_rtmr3,
+                node_allowed_tcb_statuses: $node_allowed_tcb,
+                node_allowed_mrtd: $node_allowed_mrtd,
+                node_allowed_rtmr0: $node_allowed_rtmr0,
+                node_allowed_rtmr1: $node_allowed_rtmr1,
+                node_allowed_rtmr2: $node_allowed_rtmr2,
+                node_allowed_rtmr3: $node_allowed_rtmr3
               },
               merod_config_path: "tee.kms.phala.attestation"
             }' > release-assets/kms-phala-attestation-policy.json
@@ -499,12 +616,14 @@ jobs:
 
           compatibility_kms_tag="$(jq -r '.compatibility.kms_tag' release-assets/kms-phala-compatibility-map.json)"
           compatibility_merod_tag="$(jq -r '.compatibility.node_image_tag' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_kms_policy_file="$(jq -r '.compatibility.kms_policy_file' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_node_image_policy_file="$(jq -r '.compatibility.node_image_policy_file' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_url="$(jq -r '.compatibility.kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_node_policy_url="$(jq -r '.compatibility.node_policy_url' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           {
-            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
+            echo "## mero-kms release ${{ needs.prepare.outputs.version }} (draft)"
+            echo ""
+            echo "**This is a draft release.** Review the attestation policy and publish when ready."
             echo ""
             echo "### Release metadata"
             echo ""
@@ -522,8 +641,8 @@ jobs:
             echo "|---|---|"
             echo "| KMS release tag | \`${compatibility_kms_tag}\` |"
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
-            echo "| KMS policy path | \`${compatibility_kms_policy_file}\` |"
-            echo "| merod policy path | \`${compatibility_node_image_policy_file}\` |"
+            echo "| KMS policy URL | \`${compatibility_kms_policy_url}\` |"
+            echo "| Node policy URL | \`${compatibility_node_policy_url}\` |"
             echo ""
             echo "### Binary archives (SHA-256)"
             echo ""
@@ -557,7 +676,7 @@ jobs:
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
             echo "\`\`\`bash"
-            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.version }} https://<kms-url>/"
+            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.kms_release_tag }} https://<kms-url>/"
             echo "\`\`\`"
           } > release-assets/release-notes.md
 
@@ -678,13 +797,14 @@ jobs:
               "${asset}" >/dev/null
           done
 
-      - name: Upload release metadata assets
+      - name: Upload release metadata assets (draft)
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: ${{ needs.prepare.outputs.kms_release_tag }}
           make_latest: false
+          draft: true
           body_path: release-assets/release-notes.md
           fail_on_unmatched_files: true
           files: |
