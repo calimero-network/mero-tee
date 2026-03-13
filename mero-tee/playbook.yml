@@ -56,11 +56,6 @@
         content: "{{ lockdown_profile | default('locked-read-only') }}\n"
         dest: /etc/calimero/image-profile
         mode: "0644"
-    - name: Remove ubuntu user after conformance checks (R4)
-      include_role:
-        name: ansible/roles/merod-lockdown
-        tasks_from: remove_ubuntu
-      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
 
     # Hash profile-specific root content and inject into kernel cmdline (measured into RTMR[2]).
     # An attacker cannot forge: different root content = different hash = different measurement.
@@ -84,3 +79,10 @@
     - name: Update GRUB with root hash
       command: update-grub
       changed_when: true
+
+    # Remove ubuntu user last (R4); must run after all other tasks since Packer SSHs as ubuntu
+    - name: Remove ubuntu user after conformance checks (R4)
+      include_role:
+        name: ansible/roles/merod-lockdown
+        tasks_from: remove_ubuntu
+      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'

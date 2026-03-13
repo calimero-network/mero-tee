@@ -197,7 +197,7 @@ jobs:
         run: |
           if [[ -z "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
             echo "::warning::PACKER_GCP_SOURCE_IMAGE is unset; using pinned default. Set the repo variable to override."
-            echo "PACKER_GCP_SOURCE_IMAGE=ubuntu-2404-noble-amd64-v20260225" >> "${GITHUB_ENV}"
+            echo "PACKER_GCP_SOURCE_IMAGE=ubuntu-2510-amd64-v20260226" >> "${GITHUB_ENV}"
           fi
 
       - name: Setup packer
@@ -354,7 +354,7 @@ jobs:
             exit 1
           fi
 
-          image_name="merotee-ubuntu-noble-24-04-${cpu_architecture}-${profile}-${image_version//./-}"
+          image_name="merotee-ubuntu-questing-25-10-${cpu_architecture}-${profile}-${image_version//./-}"
           image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
 
           vm_project="${GCP_ATTESTATION_PROJECT_ID:-${image_project}}"

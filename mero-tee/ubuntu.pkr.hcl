@@ -90,14 +90,14 @@ variable "subnetwork" {
 source "googlecompute" "this" {
   project_id           = var.project_id
   source_image         = var.source_image != "" ? var.source_image : null
-  source_image_family  = var.source_image == "" ? "ubuntu-2404-lts-amd64" : null
+  source_image_family  = var.source_image == "" ? "ubuntu-2510-amd64" : null
   source_image_project_id = ["ubuntu-os-cloud"]
   disable_default_service_account = true
   zone                 = var.zone
   region               = var.region
-  image_name           = "merotee-ubuntu-noble-24-04-${var.cpu_architecture}-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
-  image_family         = "merotee-ubuntu-noble-${var.lockdown_profile}"
-  image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 24.04 LTS with Traefik and mero-auth"
+  image_name           = "merotee-ubuntu-questing-25-10-${var.cpu_architecture}-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
+  image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}"
+  image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 25.10 (Questing Quokka, kernel 6.17+) with Traefik and mero-auth"
   machine_type         = var.instance_type
   disk_size            = 20
   disk_type            = "pd-ssd"

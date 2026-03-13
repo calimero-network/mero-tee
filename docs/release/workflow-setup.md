@@ -9,7 +9,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 | Variable | Description |
 |----------|-------------|
 | `GCP_PACKER_PROJECT_ID` | GCP project for Packer |
-| `PACKER_GCP_SOURCE_IMAGE` | Base image (e.g. ubuntu-2404) |
+| `PACKER_GCP_SOURCE_IMAGE` | Base image (e.g. ubuntu-2510) |
 | `GCP_PACKER_REGION` | Region |
 | `GCP_PACKER_ZONE` | Zone |
 | `PACKER_GCP_SUBNETWORK` | Subnetwork URL |
