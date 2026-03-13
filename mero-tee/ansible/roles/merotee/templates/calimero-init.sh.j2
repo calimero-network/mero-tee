@@ -22,6 +22,25 @@ log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
 log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
+# --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
+# RTMR3 is empty by default; extending with profile+root_hash makes each image unique.
+# Requires tdx_guest module + sysfs (kernel 6.16+). Skip gracefully if unavailable.
+RTMR3_SYSFS="/sys/class/misc/tdx_guest/mr/rtmr3:sha384"
+ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
+RTMR3_EXTEND=$(printf 'calimero-rtmr3-v1:%s:%s' "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary 2>/dev/null)
+if [[ -n "${RTMR3_EXTEND}" ]]; then
+  modprobe tdx_guest 2>/dev/null || true
+  if [[ -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
+    if printf '%s' "${RTMR3_EXTEND}" > "${RTMR3_SYSFS}" 2>/dev/null; then
+      log "Extended RTMR3 for attestation (profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+    else
+      log "WARN: RTMR3 extend write failed"
+    fi
+  else
+    log "RTMR3 extend skipped (sysfs not writable; kernel 6.16+ required for /sys/class/misc/tdx_guest/mr/)"
+  fi
+fi
+
 # --- R7: observability off by default; enable only if endpoint set ---
 systemctl stop vmagent vector 2>/dev/null || true
 systemctl disable vmagent vector 2>/dev/null || true

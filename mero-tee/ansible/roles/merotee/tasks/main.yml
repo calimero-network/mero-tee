@@ -1,4 +1,32 @@
 ---
+# Ensure tdx_guest module for RTMR3 extend (TDX Confidential VMs)
+- name: Install linux-modules-extra for tdx_guest (RTMR3 extend)
+  apt:
+    name: "linux-modules-extra-{{ ansible_kernel }}"
+    state: present
+  ignore_errors: true
+  when: ansible_kernel is defined
+
+# Inject profile into kernel cmdline so it is measured into RTMR[2] (GCP TDX).
+# This differentiates profiles at attestation time; cannot be faked without rebuilding.
+- name: Ensure grub.d exists for profile drop-in
+  file:
+    path: /etc/default/grub.d
+    state: directory
+    mode: "0755"
+
+- name: Add calimero.profile to kernel cmdline (measured into RTMR[2])
+  copy:
+    content: |
+      # Profile-specific kernel param for TDX attestation (RTMR[2])
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.profile={{ lockdown_profile | default('locked-read-only') }}"
+    dest: /etc/default/grub.d/50-calimero-profile.cfg
+    mode: "0644"
+
+- name: Update GRUB with profile kernel param
+  command: update-grub
+  changed_when: true
+
 # Directories and config
 - name: Create calimero base directory
   file:

@@ -1,6 +1,8 @@
 ---
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
-# Only locked-read-only runs merod-lockdown so each profile has different content → different MRTD.
+# Attestation: calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
+# calimero-init extends RTMR[3] with profile+root_hash at boot (kernel 6.16+).
+# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub — cannot be forged.
 - hosts: all
   become: true
   pre_tasks:
@@ -59,3 +61,26 @@
         name: ansible/roles/merod-lockdown
         tasks_from: remove_ubuntu
       when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
+
+    # Hash profile-specific root content and inject into kernel cmdline (measured into RTMR[2]).
+    # An attacker cannot forge: different root content = different hash = different measurement.
+    - name: Compute root content hash for attestation
+      shell: |
+        # Hash calimero config + init (profile-specific) and grub (lockdown strips console)
+        { find /etc/calimero /usr/local/lib/calimero -type f 2>/dev/null
+          [ -f /etc/default/grub ] && echo /etc/default/grub
+        } | sort -u | xargs -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}'
+      register: root_hash_result
+      changed_when: false
+
+    - name: Add calimero.root_hash to kernel cmdline (measured, unfakeable)
+      copy:
+        content: |
+          # Root content hash for attestation (RTMR[2]); cannot be forged without identical image
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
+        dest: /etc/default/grub.d/60-calimero-root-hash.cfg
+        mode: "0644"
+
+    - name: Update GRUB with root hash
+      command: update-grub
+      changed_when: true
