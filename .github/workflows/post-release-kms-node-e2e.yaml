@@ -108,12 +108,16 @@ jobs:
             return 1
           }
 
-          kms_release_has_profile_assets() {
+          kms_release_has_required_assets() {
             local tag="$1"
             gh release view "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json assets \
-              --jq '([.assets[].name] | index("kms-phala-attestation-policy.debug.json") != null and index("kms-phala-attestation-policy.debug-read-only.json") != null and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
+              --jq '([.assets[].name]
+                | index("kms-phala-compatibility-map.json") != null
+                  and index("kms-phala-attestation-policy.debug.json") != null
+                  and index("kms-phala-attestation-policy.debug-read-only.json") != null
+                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
           }
 
           tee_tag=""
@@ -176,20 +180,20 @@ jobs:
               echo "::error::Input KMS release tag '${kms_tag}' not found in ${GITHUB_REPOSITORY}."
               exit 1
             fi
-            if [[ "$(kms_release_has_profile_assets "${kms_tag}")" != "true" ]]; then
-              echo "::error::Input KMS release tag '${kms_tag}' is missing required profile policy assets."
+            if [[ "$(kms_release_has_required_assets "${kms_tag}")" != "true" ]]; then
+              echo "::error::Input KMS release tag '${kms_tag}' is missing required e2e assets (compatibility map and profile policies)."
               exit 1
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_profile_assets "${default_kms_tag}")" == "true" ]]; then
+            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_required_assets "${default_kms_tag}")" == "true" ]]; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
             else
               fallback_kms_tag=""
               while IFS= read -r candidate_tag; do
                 [[ -z "${candidate_tag}" ]] && continue
-                if [[ "$(kms_release_has_profile_assets "${candidate_tag}")" == "true" ]]; then
+                if [[ "$(kms_release_has_required_assets "${candidate_tag}")" == "true" ]]; then
                   fallback_kms_tag="${candidate_tag}"
                   break
                 fi
@@ -203,13 +207,13 @@ jobs:
               if [[ -z "${fallback_kms_tag}" ]]; then
                 if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
                   should_run="false"
-                  skip_reason="No published mero-kms-v* release with required profile policy assets found yet."
+                  skip_reason="No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found yet."
                 else
-                  echo "::error::No published mero-kms-v* release with required profile policy assets found in ${GITHUB_REPOSITORY}."
+                  echo "::error::No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found in ${GITHUB_REPOSITORY}."
                   exit 1
                 fi
               else
-                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing profile policy assets; falling back to '${fallback_kms_tag}'."
+                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing required e2e assets; falling back to '${fallback_kms_tag}'."
                 kms_tag="${fallback_kms_tag}"
                 kms_tag_source="fallback-with-profile-assets"
               fi
