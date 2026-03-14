@@ -9,11 +9,12 @@ mod handlers;
 use std::net::SocketAddr;
 
 use axum::http::{HeaderValue, Method};
+use dstack_attest::{ccel::RuntimeEvent, emit_runtime_event};
 use eyre::{bail, Result as EyreResult};
 use sha2::Digest;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::handlers::create_router;
@@ -99,6 +100,7 @@ impl Default for Config {
 const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
 const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
+const KMS_PROFILE_RUNTIME_EVENT_NAME: &str = "calimero.kms.profile";
 
 impl Config {
     /// Load configuration from environment variables.
@@ -676,6 +678,43 @@ fn validate_policy_requirements(
     Ok(())
 }
 
+fn kms_profile_runtime_event_payload(profile: &str) -> Vec<u8> {
+    format!("calimero.kms.profile={}", profile).into_bytes()
+}
+
+fn ensure_kms_profile_runtime_event(profile: &str) -> EyreResult<()> {
+    let expected_payload = kms_profile_runtime_event_payload(profile);
+    let events = RuntimeEvent::read_all()
+        .map_err(|e| eyre::eyre!("Failed to read runtime event log: {}", e))?;
+
+    if let Some(existing) = events
+        .iter()
+        .find(|event| event.event == KMS_PROFILE_RUNTIME_EVENT_NAME)
+    {
+        if existing.payload == expected_payload {
+            info!(
+                "KMS profile runtime event already present: {}={}",
+                KMS_PROFILE_RUNTIME_EVENT_NAME, profile
+            );
+            return Ok(());
+        }
+        bail!(
+            "Existing runtime event '{}' payload does not match selected profile '{}'; \
+             refusing startup to avoid mixed profile measurements.",
+            KMS_PROFILE_RUNTIME_EVENT_NAME,
+            profile
+        );
+    }
+
+    emit_runtime_event(KMS_PROFILE_RUNTIME_EVENT_NAME, &expected_payload)
+        .map_err(|e| eyre::eyre!("Failed to emit runtime event '{}': {}", KMS_PROFILE_RUNTIME_EVENT_NAME, e))?;
+    info!(
+        "Emitted runtime event to extend RTMR3: {}={}",
+        KMS_PROFILE_RUNTIME_EVENT_NAME, profile
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     // Initialize tracing
@@ -729,9 +768,14 @@ async fn main() -> eyre::Result<()> {
     );
 
     if config.accept_mock_attestation {
-        tracing::warn!(
+        warn!(
             "WARNING: Mock attestation acceptance is enabled. This should NEVER be used in production!"
         );
+        warn!(
+            "Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled"
+        );
+    } else {
+        ensure_kms_profile_runtime_event(&config.kms_profile)?;
     }
 
     // Create router with handlers
@@ -829,6 +873,12 @@ mod tests {
     fn parse_bool_flag_rejects_invalid_value() {
         let err = parse_bool_flag("truthy").unwrap_err();
         assert!(err.to_string().contains("Invalid boolean value"));
+    }
+
+    #[test]
+    fn kms_profile_runtime_event_payload_contains_profile() {
+        let payload = kms_profile_runtime_event_payload("debug");
+        assert_eq!(payload, b"calimero.kms.profile=debug".to_vec());
     }
 
     #[test]
