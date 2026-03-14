@@ -1,0 +1,416 @@
+name: Node image GCP staging probe
+run-name: Node GCP staging probe (${{ inputs.probe_label != '' && inputs.probe_label || inputs.profile }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe_label:
+        description: "Optional unique label for dispatch/run correlation"
+        required: false
+        default: ""
+      deployment_name:
+        description: "Optional deterministic instance name override"
+        required: false
+        default: ""
+      profile:
+        description: "Node profile cohort"
+        required: true
+        type: choice
+        options:
+          - debug
+          - debug-read-only
+          - locked-read-only
+      image_name:
+        description: "GCP image name to boot"
+        required: true
+      image_project:
+        description: "GCP project that hosts image_name"
+        required: true
+      vm_project:
+        description: "Optional GCP project where the probe VM is created (defaults to image_project)"
+        required: false
+        default: ""
+      vm_zone:
+        description: "Optional probe VM zone override"
+        required: false
+        default: ""
+      vm_subnetwork:
+        description: "Optional probe VM subnet override"
+        required: false
+        default: ""
+      vm_machine_type:
+        description: "Optional probe VM machine type override"
+        required: false
+        default: ""
+      admin_api_port:
+        description: "Node admin API port"
+        required: true
+        default: "80"
+      wait_timeout_minutes:
+        description: "Health/attest readiness timeout"
+        required: true
+        default: "20"
+      ita_appraisal_url:
+        description: "Intel Trust Authority appraisal endpoint"
+        required: true
+        default: "https://api.trustauthority.intel.com/appraisal/v2/attest"
+      ita_policy_ids:
+        description: "Optional comma-separated ITA policy UUIDs"
+        required: false
+        default: ""
+      ita_policy_must_match:
+        description: "Require policy match when ITA policy IDs are supplied"
+        required: true
+        type: boolean
+        default: true
+      merod_version:
+        description: "Optional merod version metadata value"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Deploy node image + attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID }}
+      GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE }}
+      GCP_ATTESTATION_SUBNETWORK: ${{ vars.GCP_ATTESTATION_SUBNETWORK }}
+      GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
+      GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
+      GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
+      ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required secrets and scripts
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py
+          if [[ -z "${ITA_API_KEY}" ]]; then
+            echo "::error::ITA_API_KEY is required for release-grade node attestation verification."
+            exit 1
+          fi
+          if [[ ( -z "${WIF_PROVIDER}" || -z "${WIF_SERVICE_ACCOUNT}" ) && -z "${SA_KEY}" ]]; then
+            echo "::error::Missing GCP auth. Configure workload identity or service account key secrets."
+            exit 1
+          fi
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          mode="key"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode != 'wif' }}
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Prepare probe parameters
+        id: params
+        env:
+          PROFILE: ${{ inputs.profile }}
+          IMAGE_NAME_INPUT: ${{ inputs.image_name }}
+          IMAGE_PROJECT_INPUT: ${{ inputs.image_project }}
+          VM_PROJECT_INPUT: ${{ inputs.vm_project }}
+          VM_ZONE_INPUT: ${{ inputs.vm_zone }}
+          VM_SUBNETWORK_INPUT: ${{ inputs.vm_subnetwork }}
+          VM_MACHINE_TYPE_INPUT: ${{ inputs.vm_machine_type }}
+          ADMIN_API_PORT_INPUT: ${{ inputs.admin_api_port }}
+          MEROD_VERSION_INPUT: ${{ inputs.merod_version }}
+          DEPLOYMENT_NAME_INPUT: ${{ inputs.deployment_name }}
+        run: |
+          set -euo pipefail
+
+          image_name="${IMAGE_NAME_INPUT}"
+          image_project="${IMAGE_PROJECT_INPUT}"
+          if [[ -z "${image_name}" || -z "${image_project}" ]]; then
+            echo "::error::image_name and image_project are required."
+            exit 1
+          fi
+
+          vm_project="${VM_PROJECT_INPUT:-${GCP_ATTESTATION_PROJECT_ID:-${image_project}}}"
+          vm_zone="${VM_ZONE_INPUT:-${GCP_ATTESTATION_ZONE:-}}"
+          vm_machine_type="${VM_MACHINE_TYPE_INPUT:-${GCP_ATTESTATION_MACHINE_TYPE:-}}"
+          admin_api_port="${ADMIN_API_PORT_INPUT:-80}"
+          merod_version="${MEROD_VERSION_INPUT:-${GCP_ATTESTATION_MEROD_VERSION:-}}"
+          vm_subnetwork="${VM_SUBNETWORK_INPUT:-${GCP_ATTESTATION_SUBNETWORK:-}}"
+
+          if [[ -z "${vm_zone}" ]]; then
+            echo "::error::vm_zone is required (input or GCP_ATTESTATION_ZONE variable)."
+            exit 1
+          fi
+          if [[ -z "${vm_machine_type}" ]]; then
+            echo "::error::vm_machine_type is required (input or GCP_ATTESTATION_MACHINE_TYPE variable)."
+            exit 1
+          fi
+          if [[ ! "${admin_api_port}" =~ ^[0-9]+$ ]]; then
+            echo "::error::admin_api_port must be numeric."
+            exit 1
+          fi
+
+          vm_region="${vm_zone%-*}"
+          if [[ -z "${vm_subnetwork}" ]]; then
+            vm_subnetwork="$(gcloud compute networks subnets list \
+              --project "${vm_project}" \
+              --regions "${vm_region}" \
+              --format="value(name)" \
+              --limit=1)"
+          fi
+          if [[ -z "${vm_subnetwork}" ]]; then
+            echo "::error::Could not resolve vm_subnetwork in project=${vm_project}, region=${vm_region}."
+            exit 1
+          fi
+
+          vm_network="$(gcloud compute networks subnets describe "${vm_subnetwork}" \
+            --project "${vm_project}" \
+            --region "${vm_region}" \
+            --format='value(network.basename())')"
+
+          default_instance_name="tdx-e2e-${PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          instance_name="${DEPLOYMENT_NAME_INPUT:-${default_instance_name}}"
+          if [[ ! "${instance_name}" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then
+            echo "::error::deployment_name must match GCP instance regex ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$"
+            exit 1
+          fi
+
+          firewall_tag="tee-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          firewall_rule="tee-e2e-${PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          source_ranges="${GCP_ATTESTATION_ALLOWED_CIDRS:-}"
+          source_ranges="${source_ranges//[[:space:]]/}"
+          if [[ -z "${source_ranges}" ]]; then
+            runner_ipv4="$(curl -4fsS --retry 5 --retry-delay 2 https://checkip.amazonaws.com | tr -d '\r\n[:space:]')"
+            if [[ ! "${runner_ipv4}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+              echo "::error::Could not determine runner IPv4."
+              exit 1
+            fi
+            source_ranges="${runner_ipv4}/32"
+          fi
+
+          artifacts_dir="${RUNNER_TEMP}/node-gcp-probe-${PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${artifacts_dir}"
+
+          {
+            echo "profile=${PROFILE}"
+            echo "instance_name=${instance_name}"
+            echo "firewall_tag=${firewall_tag}"
+            echo "firewall_rule=${firewall_rule}"
+            echo "vm_project=${vm_project}"
+            echo "vm_zone=${vm_zone}"
+            echo "vm_region=${vm_region}"
+            echo "vm_machine_type=${vm_machine_type}"
+            echo "vm_subnetwork=${vm_subnetwork}"
+            echo "vm_network=${vm_network}"
+            echo "admin_api_port=${admin_api_port}"
+            echo "image_name=${image_name}"
+            echo "image_project=${image_project}"
+            echo "source_ranges=${source_ranges}"
+            echo "merod_version=${merod_version}"
+            echo "artifacts_dir=${artifacts_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Create ephemeral firewall rule for admin API
+        run: |
+          set -euo pipefail
+          gcloud compute firewall-rules create "${{ steps.params.outputs.firewall_rule }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --network "${{ steps.params.outputs.vm_network }}" \
+            --direction INGRESS \
+            --priority 1000 \
+            --action ALLOW \
+            --rules "tcp:${{ steps.params.outputs.admin_api_port }}" \
+            --source-ranges "${{ steps.params.outputs.source_ranges }}" \
+            --target-tags "${{ steps.params.outputs.firewall_tag }}" \
+            --description "Temporary node e2e ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
+
+      - name: Create ephemeral TDX VM
+        run: |
+          set -euo pipefail
+          gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --machine-type "${{ steps.params.outputs.vm_machine_type }}" \
+            --confidential-compute-type "TDX" \
+            --maintenance-policy "TERMINATE" \
+            --min-cpu-platform "Intel Sapphire Rapids" \
+            --no-service-account \
+            --no-scopes \
+            --image "${{ steps.params.outputs.image_name }}" \
+            --image-project "${{ steps.params.outputs.image_project }}" \
+            --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
+            --metadata "merod-version=${{ steps.params.outputs.merod_version }}" \
+            --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
+
+      - name: Wait for VM and admin API readiness
+        id: endpoint
+        env:
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+              --project "${{ steps.params.outputs.vm_project }}" \
+              --zone "${{ steps.params.outputs.vm_zone }}" \
+              --format='value(status)' || true)"
+            if [[ "${status}" == "RUNNING" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "::error::Instance did not reach RUNNING in time."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          nat_ip="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+          if [[ -z "${nat_ip}" ]]; then
+            echo "::error::No external IP found on probe VM."
+            exit 1
+          fi
+
+          base_url="http://${nat_ip}:${{ steps.params.outputs.admin_api_port }}"
+          timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
+          deadline=$(( $(date +%s) + timeout_seconds ))
+          ready="false"
+          while (( $(date +%s) < deadline )); do
+            http_code="$(curl -sS --max-time 8 -o "${{ steps.params.outputs.artifacts_dir }}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
+            if [[ "${http_code}" == "200" ]]; then
+              ready="true"
+              break
+            fi
+            sleep 5
+          done
+          if [[ "${ready}" != "true" ]]; then
+            echo "::error::Timed out waiting for ${base_url}/admin-api/health"
+            exit 1
+          fi
+
+          echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect attestation artifacts
+        run: |
+          set -euo pipefail
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          base_url="${{ steps.endpoint.outputs.base_url }}"
+
+          tee_info_code="$(curl -sS --max-time 15 -o "${artifacts_dir}/tee-info.json" -w "%{http_code}" "${base_url}/admin-api/tee/info" || true)"
+          if [[ "${tee_info_code}" != "200" ]]; then
+            echo "::error::Failed to fetch ${base_url}/admin-api/tee/info (HTTP ${tee_info_code:-error})"
+            exit 1
+          fi
+
+          nonce="$(openssl rand -hex 32)"
+          jq -n --arg nonce "${nonce}" '{nonce: $nonce}' > "${artifacts_dir}/tee-attest-request.json"
+          attest_code="$(curl -sS --max-time 20 -o "${artifacts_dir}/tee-attest-response.json" -w "%{http_code}" \
+            -X POST "${base_url}/admin-api/tee/attest" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-attest-request.json" || true)"
+          if [[ "${attest_code}" != "200" ]]; then
+            echo "::error::Failed to fetch ${base_url}/admin-api/tee/attest (HTTP ${attest_code:-error})"
+            exit 1
+          fi
+
+          jq -n \
+            --arg base_url "${base_url}" \
+            --arg nonce "${nonce}" \
+            --arg profile "${{ steps.params.outputs.profile }}" \
+            --arg instance "${{ steps.params.outputs.instance_name }}" \
+            --arg image "${{ steps.params.outputs.image_name }}" \
+            --arg project "${{ steps.params.outputs.vm_project }}" \
+            --arg zone "${{ steps.params.outputs.vm_zone }}" \
+            '{base_url: $base_url, nonce: $nonce, profile: $profile, instance: $instance, image: $image, project: $project, zone: $zone}' \
+            > "${artifacts_dir}/attestation-context.json"
+
+      - name: Verify quote externally and derive policy candidates
+        run: |
+          set -euo pipefail
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          policy_flags=()
+          if [[ -n "${{ inputs.ita_policy_ids }}" ]]; then
+            policy_flags+=(--policy-ids "${{ inputs.ita_policy_ids }}")
+          fi
+          if [[ "${{ inputs.ita_policy_must_match }}" == "true" ]]; then
+            policy_flags+=(--policy-must-match)
+          fi
+
+          python3 scripts/attestation/verify_tdx_quote_ita.py \
+            --attest-response "${artifacts_dir}/tee-attest-response.json" \
+            --tee-info "${artifacts_dir}/tee-info.json" \
+            --output-dir "${artifacts_dir}" \
+            --ita-url "${{ inputs.ita_appraisal_url }}" \
+            --ita-api-key "${ITA_API_KEY}" \
+            "${policy_flags[@]}"
+
+          claims_file="${artifacts_dir}/external-attestation-token-claims.json"
+          if [[ ! -f "${claims_file}" ]]; then
+            echo "::error::Missing external attestation claims file: ${claims_file}"
+            exit 1
+          fi
+
+          python3 scripts/attestation/extract_tdx_policy_candidates.py \
+            --claims "${claims_file}" \
+            --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
+            --allow-missing-tcb
+
+          cp "${artifacts_dir}/measurement-policy-candidates.json" \
+            "${artifacts_dir}/measurement-policy-candidates-${{ steps.params.outputs.profile }}.json"
+
+      - name: Upload node probe artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.params.outputs.artifacts_dir }}/
+          retention-days: 3
+
+      - name: Cleanup probe resources
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          gcloud compute instances delete "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --quiet || true
+          gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --quiet || true

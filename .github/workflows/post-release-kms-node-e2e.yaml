@@ -8,6 +8,7 @@ on:
       - ".github/workflows/post-release-kms-node-e2e.yaml"
       - ".github/workflows/release-node-image-gcp.yaml"
       - ".github/workflows/kms-phala-staging-probe.yaml"
+      - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-verify-kms-node-compatibility.sh"
       - "mero-kms/Cargo.toml"
       - "mero-tee/versions.json"
@@ -17,6 +18,7 @@ on:
       - ".github/workflows/post-release-kms-node-e2e.yaml"
       - ".github/workflows/release-node-image-gcp.yaml"
       - ".github/workflows/kms-phala-staging-probe.yaml"
+      - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-verify-kms-node-compatibility.sh"
       - "mero-kms/Cargo.toml"
       - "mero-tee/versions.json"
@@ -249,7 +251,7 @@ jobs:
             echo "- KMS release tag: ${{ steps.resolve.outputs.kms_tag || 'unresolved' }}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Download release assets and synthesize node candidates
+      - name: Download release assets
         if: ${{ steps.resolve.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -264,59 +266,10 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "published-mrtds.json" \
             --dir e2e/node
-
-          python3 - <<'PY'
-          import json
-          import pathlib
-          import sys
-
-
-          def fail(message: str) -> None:
-              print(f"[post-release-e2e] ERROR: {message}")
-              sys.exit(1)
-
-
-          base = pathlib.Path("e2e/node/published-mrtds.json")
-          if not base.exists():
-              fail("Missing published-mrtds.json from node release")
-
-          payload = json.loads(base.read_text(encoding="utf-8"))
-          profiles_payload = payload.get("profiles")
-          if not isinstance(profiles_payload, dict):
-              fail("Invalid published-mrtds.json: .profiles missing")
-
-          profiles = ["debug", "debug-read-only", "locked-read-only"]
-          keys = [
-              "allowed_tcb_statuses",
-              "allowed_mrtd",
-              "allowed_rtmr0",
-              "allowed_rtmr1",
-              "allowed_rtmr2",
-              "allowed_rtmr3",
-          ]
-
-          for profile in profiles:
-              profile_payload = profiles_payload.get(profile)
-              if not isinstance(profile_payload, dict):
-                  fail(f"Missing profile block in published-mrtds.json: {profile}")
-
-              policy = {}
-              for key in keys:
-                  values = profile_payload.get(key, [])
-                  if not isinstance(values, list) or len(values) == 0:
-                      fail(f"Invalid node allowlist for {profile}.{key}")
-                  policy[key] = values
-
-              out = {
-                  "schema_version": 1,
-                  "profile": profile,
-                  "policy": policy,
-              }
-              out_path = base.parent / f"measurement-policy-candidates-{profile}.json"
-              out_path.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
-
-          print("[post-release-e2e] OK: synthesized node measurement-policy-candidates artifacts")
-          PY
+          gh release download "${TEE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "release-provenance.json" \
+            --dir e2e/node
 
           for asset in \
             "kms-phala-compatibility-map.json" \
@@ -335,6 +288,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
+          TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
@@ -585,6 +539,184 @@ jobs:
             exit 1
           fi
 
+          node_release_provenance="e2e/node/release-provenance.json"
+          node_published_policy="e2e/node/published-mrtds.json"
+          if [[ ! -f "${node_release_provenance}" ]]; then
+            echo "::error::Missing node release provenance asset: ${node_release_provenance}"
+            exit 1
+          fi
+          if [[ ! -f "${node_published_policy}" ]]; then
+            echo "::error::Missing node policy asset: ${node_published_policy}"
+            exit 1
+          fi
+
+          node_probe_run_urls=()
+          for profile in debug debug-read-only locked-read-only; do
+            node_image_name="$(jq -r --arg profile "${profile}" '.profiles[$profile].image.name // empty' "${node_release_provenance}")"
+            node_image_project="$(jq -r --arg profile "${profile}" '.profiles[$profile].image.project // empty' "${node_release_provenance}")"
+            node_zone="$(jq -r --arg profile "${profile}" '.profiles[$profile].attestation_context.zone // empty' "${node_release_provenance}")"
+            node_admin_port="$(python3 - "${node_release_provenance}" "${profile}" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import urllib.parse
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          profile = sys.argv[2]
+          base_url = (
+              payload.get("profiles", {})
+              .get(profile, {})
+              .get("attestation_context", {})
+              .get("base_url", "")
+          )
+          if not base_url:
+              print("80")
+              raise SystemExit(0)
+          parsed = urllib.parse.urlparse(base_url)
+          if parsed.port:
+              print(str(parsed.port))
+          elif parsed.scheme == "https":
+              print("443")
+          else:
+              print("80")
+          PY
+            )"
+
+            if [[ -z "${node_image_name}" || -z "${node_image_project}" || -z "${node_zone}" ]]; then
+              echo "::error::Node release provenance missing image metadata for profile '${profile}'"
+              exit 1
+            fi
+
+            node_probe_label="post-release-node-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}"
+            expected_node_title="Node GCP staging probe (${node_probe_label})"
+            node_deployment_name="tdx-e2e-${version_slug}-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            node_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+            gh workflow run "node-image-gcp-staging-probe.yaml" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref master \
+              -f probe_label="${node_probe_label}" \
+              -f deployment_name="${node_deployment_name}" \
+              -f profile="${profile}" \
+              -f image_name="${node_image_name}" \
+              -f image_project="${node_image_project}" \
+              -f vm_project="${node_image_project}" \
+              -f vm_zone="${node_zone}" \
+              -f admin_api_port="${node_admin_port}"
+
+            node_probe_run_id=""
+            for attempt in $(seq 1 90); do
+              node_probe_run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "node-image-gcp-staging-probe.yaml" \
+                --event workflow_dispatch \
+                --branch master \
+                --limit 10 \
+                --json databaseId,createdAt,displayTitle \
+                --jq '[.[] | select(.createdAt >= "'"${node_dispatch_started_at}"'" and .displayTitle == "'"${expected_node_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+              if [[ -z "${node_probe_run_id}" ]]; then
+                node_probe_run_id="$(gh run list \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --workflow "node-image-gcp-staging-probe.yaml" \
+                  --event workflow_dispatch \
+                  --branch master \
+                  --limit 10 \
+                  --json databaseId,createdAt \
+                  --jq '[.[] | select(.createdAt >= "'"${node_dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+              fi
+              if [[ -n "${node_probe_run_id}" ]]; then
+                break
+              fi
+              sleep 10
+            done
+
+            if [[ -z "${node_probe_run_id}" ]]; then
+              echo "::error::Could not resolve node-image-gcp-staging-probe workflow run ID for profile '${profile}'"
+              exit 1
+            fi
+
+            if ! timeout 2700s gh run watch "${node_probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+              echo "::error::Timed out or failed while waiting for node probe run ${node_probe_run_id}"
+              exit 1
+            fi
+            node_probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${node_probe_run_id}")
+
+            node_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${node_probe_run_id}/artifacts" \
+              --jq '.artifacts | map(select(.expired == false and (.name | startswith("node-gcp-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+            if [[ -z "${node_artifact_name}" ]]; then
+              echo "::error::No non-expired node probe artifact found for run ${node_probe_run_id}"
+              exit 1
+            fi
+
+            node_probe_dir="e2e/node-probe/${profile}"
+            mkdir -p "${node_probe_dir}"
+            gh run download "${node_probe_run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${node_artifact_name}" \
+              --dir "${node_probe_dir}"
+
+            node_probe_candidates_file="$(python3 - "${node_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("measurement-policy-candidates.json"))
+          print(matches[0] if matches else "")
+          PY
+            )"
+            if [[ -z "${node_probe_candidates_file}" ]]; then
+              echo "::error::Could not locate measurement-policy-candidates.json for node profile '${profile}'"
+              exit 1
+            fi
+
+            cp "${node_probe_candidates_file}" "e2e/node/measurement-policy-candidates-${profile}.json"
+
+            python3 - "${profile}" "${node_probe_candidates_file}" "${node_published_policy}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          profile = sys.argv[1]
+          probe_file = pathlib.Path(sys.argv[2])
+          published_file = pathlib.Path(sys.argv[3])
+
+          def normalize(values):
+              out = []
+              for value in values:
+                  if isinstance(value, str):
+                      candidate = value.strip().lower().removeprefix("0x")
+                      if candidate:
+                          out.append(candidate)
+              return out
+
+          probe_payload = json.loads(probe_file.read_text(encoding="utf-8"))
+          probe_policy = probe_payload.get("policy", {})
+          published_payload = json.loads(published_file.read_text(encoding="utf-8"))
+          published_profile = published_payload.get("profiles", {}).get(profile, {})
+
+          keys = [
+              "allowed_tcb_statuses",
+              "allowed_mrtd",
+              "allowed_rtmr0",
+              "allowed_rtmr1",
+              "allowed_rtmr2",
+              "allowed_rtmr3",
+          ]
+          for key in keys:
+              probe_values = normalize(probe_policy.get(key, []))
+              published_values = normalize(published_profile.get(key, []))
+              if not probe_values:
+                  raise SystemExit(f"[post-release-e2e] ERROR: missing node probe values for {profile}.{key}")
+              if not published_values:
+                  raise SystemExit(f"[post-release-e2e] ERROR: missing published node policy values for {profile}.{key}")
+              if not set(probe_values).issubset(set(published_values)):
+                  raise SystemExit(
+                      "[post-release-e2e] ERROR: node probe values are not covered by published policy "
+                      f"for profile={profile} key={key}"
+                  )
+          print(f"[post-release-e2e] OK: probed node measurements match published policy for profile={profile}")
+          PY
+          done
+
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
             e2e/node \
             e2e/kms-release \
@@ -592,6 +724,8 @@ jobs:
 
           probe_urls_json="$(printf '%s\n' "${probe_run_urls[@]}" | jq -R . | jq -s .)"
           probe_urls_markdown="$(jq -r '.[] | "- \(.)"' <<< "${probe_urls_json}")"
+          node_probe_urls_json="$(printf '%s\n' "${node_probe_run_urls[@]}" | jq -R . | jq -s .)"
+          node_probe_urls_markdown="$(jq -r '.[] | "- \(.)"' <<< "${node_probe_urls_json}")"
 
           {
             echo "## Post-release e2e compatibility matrix"
@@ -601,5 +735,7 @@ jobs:
             echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
             echo "- KMS profile probe runs:"
             echo "${probe_urls_markdown}"
+            echo "- Node profile probe runs:"
+            echo "${node_probe_urls_markdown}"
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"

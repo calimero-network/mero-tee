@@ -56,14 +56,6 @@ def normalize(values: List[str]) -> List[str]:
     return [value for value in normalized if value]
 
 
-def first_value(payload: dict, key: str) -> str:
-    values = payload.get(key, [])
-    if not isinstance(values, list):
-        return ""
-    parsed = normalize(values)
-    return parsed[0] if parsed else ""
-
-
 def kms_measurement_values(policy: dict, key: str) -> List[str]:
     return normalize(policy.get(f"kms_{key}", policy.get(key, [])))
 
@@ -151,15 +143,21 @@ def policy_allows_node(node_profile: str, kms_profile: str) -> bool:
     node_policy = node_candidates[node_profile]
     kms_policy = kms_policies[kms_profile]
 
-    node_tcb = first_value(node_policy, "allowed_tcb_statuses")
-    allowed_tcb = normalize(kms_policy.get("node_allowed_tcb_statuses", kms_policy.get("allowed_tcb_statuses", [])))
-    if not node_tcb or node_tcb not in allowed_tcb:
+    node_tcb_values = normalize(node_policy.get("allowed_tcb_statuses", []))
+    allowed_tcb = normalize(
+        kms_policy.get("node_allowed_tcb_statuses", kms_policy.get("allowed_tcb_statuses", []))
+    )
+    if not node_tcb_values or not allowed_tcb:
+        return False
+    if not set(node_tcb_values).issubset(set(allowed_tcb)):
         return False
 
     for key in measurement_keys:
-        node_value = first_value(node_policy, key)
+        node_values = normalize(node_policy.get(key, []))
         allowed_values = normalize(kms_policy.get(f"node_{key}", kms_policy.get(key, [])))
-        if not node_value or node_value not in allowed_values:
+        if not node_values or not allowed_values:
+            return False
+        if not set(node_values).issubset(set(allowed_values)):
             return False
     return True
 
