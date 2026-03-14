@@ -1,6 +1,26 @@
 name: Post-release KMS-node compatibility e2e
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/post-release-kms-node-e2e.yaml"
+      - ".github/workflows/release-node-image-gcp.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
+      - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      - "mero-kms/Cargo.toml"
+      - "mero-tee/versions.json"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/post-release-kms-node-e2e.yaml"
+      - ".github/workflows/release-node-image-gcp.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
+      - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      - "mero-kms/Cargo.toml"
+      - "mero-tee/versions.json"
+      - "Cargo.lock"
   workflow_run:
     workflows:
       - Release mero-tee
@@ -27,6 +47,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  smoke_workflow_wiring:
+    name: Smoke post-release e2e wiring
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate helper script syntax
+        run: |
+          bash -n scripts/release/e2e-verify-kms-node-compatibility.sh
+
+      - name: Validate version manifest shape
+        run: |
+          jq -e '
+            (.imageVersion | type == "string" and length > 0) and
+            (.merodVersion | type == "string" and length > 0)
+          ' mero-tee/versions.json >/dev/null
+
   verify_released_compatibility:
     name: Verify released KMS-node compatibility
     runs-on: ubuntu-latest
