@@ -8,11 +8,6 @@ on:
       - "mero-tee/versions.json"
   workflow_dispatch:
     inputs:
-      force_run_on_non_master:
-        description: "Allow running the full pipeline on non-master refs (for PR pre-merge validation)"
-        required: true
-        type: boolean
-        default: false
       run_post_release_e2e:
         description: "Run the KMS↔node profile compatibility e2e matrix"
         required: true
@@ -94,9 +89,8 @@ jobs:
           reason=""
           latest_merod_version=""
           allow_non_master="false"
-          force_run_on_non_master="$(jq -r '.inputs.force_run_on_non_master // "false"' "${GITHUB_EVENT_PATH}" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
           requested_post_release_e2e="$(jq -r '.inputs.run_post_release_e2e // "true"' "${GITHUB_EVENT_PATH}" 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${force_run_on_non_master}" == "true" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             allow_non_master="true"
           fi
 
@@ -155,7 +149,7 @@ jobs:
             reason="Detected mero-tee/versions.json change on master."
             run_post_release_e2e="true"
           else
-            reason="Manual workflow_dispatch override enabled on non-master ref ${GITHUB_REF}."
+            reason="Manual workflow_dispatch run enabled on non-master ref ${GITHUB_REF}."
             if [[ "${requested_post_release_e2e}" == "true" ]]; then
               run_post_release_e2e="true"
             fi
