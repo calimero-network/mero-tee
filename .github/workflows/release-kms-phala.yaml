@@ -365,14 +365,26 @@ jobs:
           password: ${{ secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Generate release checksums, manifest, and attestation policy
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_WORKFLOW_NAME: ${{ github.workflow }}
+          GH_REF_NAME: ${{ github.ref }}
+          PREP_VERSION: ${{ needs.prepare.outputs.version }}
+          PREP_KMS_RELEASE_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
+          PREP_TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
+          RELEASE_IMAGE_DIGEST: ${{ needs.release-container.outputs.image_digest }}
+          RELEASE_IMAGE_TAGS: ${{ needs.release-container.outputs.image_tags }}
         run: |
           set -euo pipefail
           mkdir -p release-assets
 
           sha256sum artifacts/*.tar.gz | sort | sed 's#  artifacts/#  #' > release-assets/kms-phala-checksums.txt
 
-          image_name="ghcr.io/${{ github.repository_owner }}/mero-kms-phala"
-          image_digest="${{ needs.release-container.outputs.image_digest }}"
+          image_name="ghcr.io/${GH_REPOSITORY_OWNER}/mero-kms-phala"
+          image_digest="${RELEASE_IMAGE_DIGEST}"
           if [[ -z "${image_digest}" ]]; then
             echo "::error::Container image digest is empty"
             exit 1
@@ -382,8 +394,8 @@ jobs:
           syft "${image_ref}" -o "spdx-json=release-assets/kms-phala-container-sbom.spdx.json"
           syft dir:artifacts -o "spdx-json=release-assets/kms-phala-binaries-sbom.spdx.json"
 
-          cat > /tmp/mero-kms-tags.txt <<'EOF'
-          ${{ needs.release-container.outputs.image_tags }}
+          cat > /tmp/mero-kms-tags.txt <<EOF
+          ${RELEASE_IMAGE_TAGS}
           EOF
           tags_json="$(sed '/^[[:space:]]*$/d' /tmp/mero-kms-tags.txt | jq -R . | jq -s .)"
 
@@ -394,11 +406,11 @@ jobs:
             done < release-assets/kms-phala-checksums.txt | jq -s '.'
           )"
 
-          version="${{ needs.prepare.outputs.version }}"
+          version="${PREP_VERSION}"
           kms_tag="mero-kms-v${version}"
           node_image_tag="mero-tee-v${version}"
-          kms_policy_url="https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
-          node_policy_url="https://github.com/${{ github.repository }}/releases/download/${node_image_tag}/published-mrtds.json"
+          kms_policy_url="https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+          node_policy_url="https://github.com/${GH_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
           candidates_file="probe-artifacts/kms-policy-candidates.json"
           node_policy_file="node-policy/published-mrtds.json"
@@ -452,17 +464,17 @@ jobs:
           node_allowed_rtmr3_json="${node_allowed_rtmr3_locked_json}"
 
           jq -n \
-            --arg tag "${{ needs.prepare.outputs.version }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg tag "${PREP_VERSION}" \
+            --arg run_id "${GH_RUN_ID}" \
+            --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg version "${version}" \
             --arg kms_tag "${kms_tag}" \
             --arg node_image_tag "${node_image_tag}" \
             --arg kms_policy_url "${kms_policy_url}" \
             --arg node_policy_url "${node_policy_url}" \
-            --arg kms_policy_debug_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug.json" \
-            --arg kms_policy_debug_ro_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug-read-only.json" \
-            --arg kms_policy_locked_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.locked-read-only.json" \
+            --arg kms_policy_debug_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug.json" \
+            --arg kms_policy_debug_ro_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug-read-only.json" \
+            --arg kms_policy_locked_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.locked-read-only.json" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -512,10 +524,10 @@ jobs:
             }' > release-assets/kms-phala-compatibility-map.json
 
           jq -n \
-            --arg tag "${{ needs.prepare.outputs.version }}" \
-            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg tag "${PREP_VERSION}" \
+            --arg commit "${PREP_TARGET_COMMIT}" \
+            --arg run_id "${GH_RUN_ID}" \
+            --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
             --argjson tags "${tags_json}" \
@@ -602,10 +614,10 @@ jobs:
           )
 
           jq -n \
-            --arg tag "${{ needs.prepare.outputs.version }}" \
-            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg tag "${PREP_VERSION}" \
+            --arg commit "${PREP_TARGET_COMMIT}" \
+            --arg run_id "${GH_RUN_ID}" \
+            --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
             --arg policy_registry_source_path "${policy_registry_source_path}" \
@@ -669,13 +681,13 @@ jobs:
 
             jq -n \
               --arg profile "${profile}" \
-              --arg tag "${{ needs.prepare.outputs.version }}" \
-              --arg commit "${{ needs.prepare.outputs.target_commit }}" \
-              --arg run_id "${{ github.run_id }}" \
-              --arg run_attempt "${{ github.run_attempt }}" \
-              --arg repository "${{ github.repository }}" \
-              --arg workflow "${{ github.workflow }}" \
-              --arg ref "${{ github.ref }}" \
+              --arg tag "${PREP_VERSION}" \
+              --arg commit "${PREP_TARGET_COMMIT}" \
+              --arg run_id "${GH_RUN_ID}" \
+              --arg run_attempt "${GH_RUN_ATTEMPT}" \
+              --arg repository "${GH_REPOSITORY}" \
+              --arg workflow "${GH_WORKFLOW_NAME}" \
+              --arg ref "${GH_REF_NAME}" \
               --arg policy_registry_source_path "${policy_registry_source_path}" \
               --arg default_binding_hex "${default_binding_hex}" \
               --arg default_binding_b64 "${default_binding_b64}" \
@@ -813,7 +825,7 @@ jobs:
           compatibility_kms_policy_debug_url="$(jq -r '.compatibility.profiles.debug.kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_policy_debug_ro_url="$(jq -r '.compatibility.profiles["debug-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_policy_locked_url="$(jq -r '.compatibility.profiles["locked-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
-          run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          run_url="https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}"
 
           profile_policy_debug_file="release-assets/kms-phala-attestation-policy.debug.json"
           profile_policy_debug_ro_file="release-assets/kms-phala-attestation-policy.debug-read-only.json"
@@ -865,15 +877,15 @@ jobs:
           kms_rtmr3="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_rtmr3")"
 
           {
-            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
+            echo "## mero-kms release ${PREP_VERSION}"
             echo ""
             echo "### Release metadata"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`${{ needs.prepare.outputs.kms_release_tag }}\` |"
-            echo "| Commit | \`${{ needs.prepare.outputs.target_commit }}\` |"
-            echo "| Workflow run | [${{ github.run_id }}](${run_url}) |"
+            echo "| Tag | \`${PREP_KMS_RELEASE_TAG}\` |"
+            echo "| Commit | \`${PREP_TARGET_COMMIT}\` |"
+            echo "| Workflow run | [${GH_RUN_ID}](${run_url}) |"
             echo "| Container image | \`${image_ref}\` |"
             echo "| Policy registry source | \`${policy_registry_source_path}\` |"
             echo ""
@@ -981,12 +993,12 @@ jobs:
             echo ""
             echo "**Quick verify (operator):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-kms-phala-release-assets.sh ${{ needs.prepare.outputs.kms_release_tag }}"
+            echo "scripts/release/verify-kms-phala-release-assets.sh ${PREP_KMS_RELEASE_TAG}"
             echo "\`\`\`"
             echo ""
             echo "**Full audit (all release classes):**"
             echo "\`\`\`bash"
-            echo "scripts/release/verify-release-assets.sh ${{ needs.prepare.outputs.version }}"
+            echo "scripts/release/verify-release-assets.sh ${PREP_VERSION}"
             echo "\`\`\`"
             echo ""
             echo "### Trust assets (detailed)"
@@ -1011,14 +1023,14 @@ jobs:
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
             echo "\`\`\`bash"
-            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only ${{ needs.prepare.outputs.kms_release_tag }} https://<kms-url>/"
+            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only ${PREP_KMS_RELEASE_TAG} https://<kms-url>/"
             echo "\`\`\`"
           } > release-assets/release-notes.md
 
           {
-            echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
+            echo "## mero-kms release ${PREP_VERSION}"
             echo ""
-            echo "- Tag: ${{ needs.prepare.outputs.kms_release_tag }}"
+            echo "- Tag: ${PREP_KMS_RELEASE_TAG}"
             echo "- Compatible node: ${compatibility_merod_tag}"
             echo ""
             echo "### KMS measurement allowlists (locked-read-only policy)"
@@ -1044,6 +1056,9 @@ jobs:
       - name: Sign release metadata and binary archives with Sigstore keyless
         env:
           COSIGN_YES: "true"
+          PREP_VERSION: ${{ needs.prepare.outputs.version }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
@@ -1101,9 +1116,9 @@ jobs:
           )"
 
           jq -n \
-            --arg tag "${{ needs.prepare.outputs.version }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_attempt "${{ github.run_attempt }}" \
+            --arg tag "${PREP_VERSION}" \
+            --arg run_id "${GH_RUN_ID}" \
+            --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --argjson entries "${rekor_entries_json}" \
             '{
               schema_version: 1,
@@ -1131,10 +1146,11 @@ jobs:
       - name: Verify generated signatures (sanity check)
         env:
           COSIGN_CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          GH_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          cert_identity_regex="^https://github.com/${{ github.repository }}/.github/workflows/release-kms-phala.yaml@refs/heads/master$"
+          cert_identity_regex="^https://github.com/${GH_REPOSITORY}/.github/workflows/release-kms-phala.yaml@refs/heads/master$"
           signed_assets=(
             artifacts/*.tar.gz
             release-assets/kms-phala-checksums.txt
