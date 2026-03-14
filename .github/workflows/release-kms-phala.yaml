@@ -1028,6 +1028,26 @@ jobs:
           compatibility_kms_policy_debug_url="$(jq -r '.compatibility.profiles.debug.kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_policy_debug_ro_url="$(jq -r '.compatibility.profiles["debug-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_policy_locked_url="$(jq -r '.compatibility.profiles["locked-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_debug_tag="$(jq -r '.compatibility.profiles.debug.kms_image_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_debug_ro_tag="$(jq -r '.compatibility.profiles["debug-read-only"].kms_image_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_locked_tag="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_tag' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_debug_digest="$(jq -r '.compatibility.profiles.debug.kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_debug_ro_digest="$(jq -r '.compatibility.profiles["debug-read-only"].kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_image_locked_digest="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
+
+          profile_image_ref() {
+            local tag="$1"
+            local digest="$2"
+            if [[ -n "${digest}" ]]; then
+              printf '%s@%s' "${image_name}" "${digest}"
+            else
+              printf '%s:%s' "${image_name}" "${tag}"
+            fi
+          }
+
+          kms_image_debug_ref="$(profile_image_ref "${compatibility_kms_image_debug_tag}" "${compatibility_kms_image_debug_digest}")"
+          kms_image_debug_ro_ref="$(profile_image_ref "${compatibility_kms_image_debug_ro_tag}" "${compatibility_kms_image_debug_ro_digest}")"
+          kms_image_locked_ref="$(profile_image_ref "${compatibility_kms_image_locked_tag}" "${compatibility_kms_image_locked_digest}")"
           run_url="https://github.com/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}"
 
           profile_policy_debug_file="release-assets/kms-phala-attestation-policy.debug.json"
@@ -1103,6 +1123,14 @@ jobs:
             echo "| Debug profile policy URL | \`${compatibility_kms_policy_debug_url}\` |"
             echo "| Debug-read-only profile policy URL | \`${compatibility_kms_policy_debug_ro_url}\` |"
             echo "| Locked-read-only profile policy URL | \`${compatibility_kms_policy_locked_url}\` |"
+            echo ""
+            echo "### KMS release images (all profiles)"
+            echo ""
+            echo "| Profile | Release tag suffix | Digest | Preferred pull reference |"
+            echo "|---|---|---|---|"
+            echo "| debug | \`${compatibility_kms_image_debug_tag}\` | \`${compatibility_kms_image_debug_digest:-n/a}\` | \`${kms_image_debug_ref}\` |"
+            echo "| debug-read-only | \`${compatibility_kms_image_debug_ro_tag}\` | \`${compatibility_kms_image_debug_ro_digest:-n/a}\` | \`${kms_image_debug_ro_ref}\` |"
+            echo "| locked-read-only | \`${compatibility_kms_image_locked_tag}\` | \`${compatibility_kms_image_locked_digest:-n/a}\` | \`${kms_image_locked_ref}\` |"
             echo ""
             echo "### KMS measurement allowlists (enforced by merod against /attest)"
             echo ""
@@ -1235,6 +1263,13 @@ jobs:
             echo ""
             echo "- Tag: ${PREP_KMS_RELEASE_TAG}"
             echo "- Compatible node: ${compatibility_merod_tag}"
+            echo ""
+            echo "### KMS release images (all profiles)"
+            echo "| Profile | Pull reference |"
+            echo "|---|---|"
+            echo "| debug | \`${kms_image_debug_ref}\` |"
+            echo "| debug-read-only | \`${kms_image_debug_ro_ref}\` |"
+            echo "| locked-read-only | \`${kms_image_locked_ref}\` |"
             echo ""
             echo "### KMS measurement allowlists (locked-read-only policy)"
             echo "| Measurement | Allowed values |"

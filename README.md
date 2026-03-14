@@ -104,6 +104,7 @@ scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read
 KMS release flow (draft release + human approval):
 
 - On version bump (Cargo.toml), `release-kms-phala.yaml` builds three KMS profile images (`debug`, `debug-read-only`, `locked-read-only`) as distinct container digests, runs staged probing to collect profile measurements, fetches node policy from the mero-tee release, and creates a **draft** release with all assets.
+- The generated KMS release notes include all three profile image references (tag + digest-pinned pull refs) so operators can pin the exact image per cohort.
 - Human reviews the draft release (including attestation policy) and publishes when ready.
 - Policy is built from probe output + node release assets; no policy files in repo.
 

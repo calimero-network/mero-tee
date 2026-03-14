@@ -333,6 +333,7 @@ jobs:
         if: ${{ steps.resolve.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
         run: |
           set -euo pipefail
@@ -341,6 +342,36 @@ jobs:
           if [[ ! -f "${compatibility_map}" ]]; then
             echo "::error::Missing compatibility map asset: ${compatibility_map}"
             exit 1
+          fi
+
+          has_immutable_profile_digests="false"
+          if jq -e '
+            (.compatibility.profiles.debug.kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+            (.compatibility.profiles["debug-read-only"].kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+            (.compatibility.profiles["locked-read-only"].kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$"))
+          ' "${compatibility_map}" >/dev/null 2>&1; then
+            has_immutable_profile_digests="true"
+          fi
+
+          if [[ "${has_immutable_profile_digests}" != "true" ]]; then
+            reason="Selected KMS release '${KMS_TAG}' lacks immutable per-profile image digests in kms-phala-compatibility-map.json."
+            if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+              echo "::error::${reason}"
+              echo "::error::Run with a newer KMS tag that includes kms_image_digest for all profiles."
+              exit 1
+            fi
+
+            echo "::warning::${reason} Skipping strict per-profile probe until a newer KMS release is published."
+            {
+              echo "## Post-release e2e compatibility matrix"
+              echo ""
+              echo "- Status: skipped"
+              echo "- Reason: ${reason}"
+              echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+              echo "- KMS release tag: ${KMS_TAG}"
+              echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
           fi
 
           probe_run_urls=()
