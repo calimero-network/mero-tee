@@ -348,6 +348,26 @@ ensure_no_overlap() {
   fi
 }
 
+ensure_kms_profiles_not_identical() {
+  local left_label="$1"
+  local left_file="$2"
+  local right_label="$3"
+  local right_file="$4"
+  if jq -n -e \
+    --slurpfile left "${left_file}" \
+    --slurpfile right "${right_file}" '
+    def norm($arr): (($arr // []) | map((tostring | ascii_downcase)) | sort | unique);
+    (norm($left[0].policy.kms_allowed_mrtd // $left[0].policy.allowed_mrtd) == norm($right[0].policy.kms_allowed_mrtd // $right[0].policy.allowed_mrtd)) and
+    (norm($left[0].policy.kms_allowed_rtmr0 // $left[0].policy.allowed_rtmr0) == norm($right[0].policy.kms_allowed_rtmr0 // $right[0].policy.allowed_rtmr0)) and
+    (norm($left[0].policy.kms_allowed_rtmr1 // $left[0].policy.allowed_rtmr1) == norm($right[0].policy.kms_allowed_rtmr1 // $right[0].policy.allowed_rtmr1)) and
+    (norm($left[0].policy.kms_allowed_rtmr2 // $left[0].policy.allowed_rtmr2) == norm($right[0].policy.kms_allowed_rtmr2 // $right[0].policy.allowed_rtmr2)) and
+    (norm($left[0].policy.kms_allowed_rtmr3 // $left[0].policy.allowed_rtmr3) == norm($right[0].policy.kms_allowed_rtmr3 // $right[0].policy.allowed_rtmr3))
+  ' >/dev/null; then
+    echo "KMS profile measurements are identical between ${left_label} and ${right_label}; expected profile-separated KMS MRTD/RTMR values"
+    exit 1
+  fi
+}
+
 if [[ "${has_profile_policy_assets}" == "true" ]]; then
   for profile in debug debug-read-only locked-read-only; do
     profile_file="${tmp_dir}/kms-phala-attestation-policy.${profile}.json"
@@ -378,6 +398,16 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
     node_rtmr3_json="$(jq -c '.policy.node_allowed_rtmr3 // .policy.allowed_rtmr3' "${profile_file}")"
     ensure_no_overlap "${profile} RTMR3" "${kms_rtmr3_json}" "${node_rtmr3_json}"
   done
+
+  ensure_kms_profiles_not_identical \
+    "debug" "${tmp_dir}/kms-phala-attestation-policy.debug.json" \
+    "debug-read-only" "${tmp_dir}/kms-phala-attestation-policy.debug-read-only.json"
+  ensure_kms_profiles_not_identical \
+    "debug" "${tmp_dir}/kms-phala-attestation-policy.debug.json" \
+    "locked-read-only" "${tmp_dir}/kms-phala-attestation-policy.locked-read-only.json"
+  ensure_kms_profiles_not_identical \
+    "debug-read-only" "${tmp_dir}/kms-phala-attestation-policy.debug-read-only.json" \
+    "locked-read-only" "${tmp_dir}/kms-phala-attestation-policy.locked-read-only.json"
 fi
 
 manifest_commit="$(jq -r '.commit_sha' "${tmp_dir}/kms-phala-release-manifest.json")"
