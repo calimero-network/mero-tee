@@ -273,6 +273,7 @@ jobs:
 
           for asset in \
             "kms-phala-compatibility-map.json" \
+            "kms-phala-release-manifest.json" \
             "kms-phala-attestation-policy.debug.json" \
             "kms-phala-attestation-policy.debug-read-only.json" \
             "kms-phala-attestation-policy.locked-read-only.json"; do
@@ -393,6 +394,9 @@ jobs:
           probe_run_urls=()
           locked_probe_candidates_file=""
           version_slug="${RELEASE_VERSION//./-}"
+          release_manifest="e2e/kms-release/kms-phala-release-manifest.json"
+          release_probe_run_id="$(jq -r '.workflow_run_id // empty' "${release_manifest}" 2>/dev/null || true)"
+          release_probe_run_attempt="$(jq -r '.workflow_run_attempt // empty' "${release_manifest}" 2>/dev/null || true)"
 
           for profile in debug debug-read-only locked-read-only; do
             profile_digest="$(jq -r --arg profile "${profile}" '.compatibility.profiles[$profile].kms_image_digest // empty' "${compatibility_map}")"
@@ -406,83 +410,97 @@ jobs:
               exit 1
             fi
 
-            probe_label="post-release-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}"
-            expected_display_title="KMS staging probe (${probe_label})"
-            deployment_name="kms-profile-${version_slug}-${profile}"
-            dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            gh workflow run "kms-phala-staging-probe.yaml" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --ref master \
-              -f kms_image="${image_ref}" \
-              -f kms_tag="pinned" \
-              -f probe_label="${probe_label}" \
-              -f deployment_name="${deployment_name}"
+            deployment_name_candidates=("kms-profile-${version_slug}-${profile}")
+            if [[ -n "${release_probe_run_id}" && -n "${release_probe_run_attempt}" ]]; then
+              legacy_deployment_name="kms-profile-${version_slug}-${profile}-${release_probe_run_id}-${release_probe_run_attempt}"
+              if [[ "${legacy_deployment_name}" != "${deployment_name_candidates[0]}" ]]; then
+                deployment_name_candidates+=("${legacy_deployment_name}")
+              fi
+            fi
 
-            probe_run_id=""
-            for attempt in $(seq 1 90); do
-              probe_run_id="$(gh run list \
+            probe_validated="false"
+            last_probe_validation_error=""
+            selected_probe_candidates_file=""
+
+            candidate_index=0
+            for deployment_name in "${deployment_name_candidates[@]}"; do
+              candidate_index=$((candidate_index + 1))
+              probe_label="post-release-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}-dn${candidate_index}"
+              expected_display_title="KMS staging probe (${probe_label})"
+              dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+              gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
-                --workflow "kms-phala-staging-probe.yaml" \
-                --event workflow_dispatch \
-                --branch master \
-                --limit 10 \
-                --json databaseId,createdAt,displayTitle \
-                --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
-              if [[ -z "${probe_run_id}" ]]; then
+                --ref master \
+                -f kms_image="${image_ref}" \
+                -f kms_tag="pinned" \
+                -f probe_label="${probe_label}" \
+                -f deployment_name="${deployment_name}"
+
+              probe_run_id=""
+              for attempt in $(seq 1 90); do
                 probe_run_id="$(gh run list \
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "kms-phala-staging-probe.yaml" \
                   --event workflow_dispatch \
                   --branch master \
                   --limit 10 \
-                  --json databaseId,createdAt \
-                  --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+                  --json databaseId,createdAt,displayTitle \
+                  --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+                if [[ -z "${probe_run_id}" ]]; then
+                  probe_run_id="$(gh run list \
+                    --repo "${GITHUB_REPOSITORY}" \
+                    --workflow "kms-phala-staging-probe.yaml" \
+                    --event workflow_dispatch \
+                    --branch master \
+                    --limit 10 \
+                    --json databaseId,createdAt \
+                    --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+                fi
+                if [[ -n "${probe_run_id}" ]]; then
+                  break
+                fi
+                sleep 10
+              done
+
+              if [[ -z "${probe_run_id}" ]]; then
+                echo "::error::Could not resolve kms-phala-staging-probe workflow run ID for profile '${profile}'"
+                exit 1
               fi
-              if [[ -n "${probe_run_id}" ]]; then
-                break
+
+              if ! timeout 2700s gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+                echo "::error::Timed out or failed while waiting for probe run ${probe_run_id}"
+                exit 1
               fi
-              sleep 10
-            done
+              probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}")
 
-            if [[ -z "${probe_run_id}" ]]; then
-              echo "::error::Could not resolve kms-phala-staging-probe workflow run ID for profile '${profile}'"
-              exit 1
-            fi
+              probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
+                --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+              if [[ -z "${probe_artifact_name}" ]]; then
+                echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
+                exit 1
+              fi
 
-            if ! timeout 2700s gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
-              echo "::error::Timed out or failed while waiting for probe run ${probe_run_id}"
-              exit 1
-            fi
-            probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}")
+              profile_probe_dir="e2e/kms-probe/${profile}/dn${candidate_index}"
+              mkdir -p "${profile_probe_dir}"
+              gh run download "${probe_run_id}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${probe_artifact_name}" \
+                --dir "${profile_probe_dir}"
 
-            probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
-              --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
-            if [[ -z "${probe_artifact_name}" ]]; then
-              echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
-              exit 1
-            fi
-
-            profile_probe_dir="e2e/kms-probe/${profile}"
-            mkdir -p "${profile_probe_dir}"
-            gh run download "${probe_run_id}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${probe_artifact_name}" \
-              --dir "${profile_probe_dir}"
-
-            kms_probe_candidates_file="$(python3 - "${profile_probe_dir}" <<'PY'
+              kms_probe_candidates_file="$(python3 - "${profile_probe_dir}" <<'PY'
           import pathlib
           import sys
           base = pathlib.Path(sys.argv[1])
           matches = sorted(base.rglob("kms-policy-candidates.json"))
           print(matches[0] if matches else "")
           PY
-            )"
-            if [[ -z "${kms_probe_candidates_file}" ]]; then
-              echo "::error::Could not locate kms-policy-candidates.json for profile '${profile}'"
-              exit 1
-            fi
+              )"
+              if [[ -z "${kms_probe_candidates_file}" ]]; then
+                echo "::error::Could not locate kms-policy-candidates.json for profile '${profile}'"
+                exit 1
+              fi
 
-            python3 - "${profile}" "${kms_probe_candidates_file}" "e2e/kms-release" <<'PY'
+              if probe_validation_output="$(python3 - "${profile}" "${kms_probe_candidates_file}" "e2e/kms-release" <<'PY'
           import json
           import pathlib
           import sys
@@ -528,9 +546,28 @@ jobs:
                   )
           print(f"[post-release-e2e] OK: probed KMS measurements match release policy for profile={profile}")
           PY
+              )"; then
+                echo "${probe_validation_output}"
+                probe_validated="true"
+                selected_probe_candidates_file="${kms_probe_candidates_file}"
+                break
+              fi
+
+              last_probe_validation_error="${probe_validation_output}"
+              echo "::warning::Probe validation failed for profile '${profile}' with deployment '${deployment_name}'."
+              echo "::warning::${probe_validation_output}"
+            done
+
+            if [[ "${probe_validated}" != "true" ]]; then
+              echo "::error::KMS probe validation failed for profile '${profile}' after ${#deployment_name_candidates[@]} deployment name attempt(s)."
+              if [[ -n "${last_probe_validation_error}" ]]; then
+                echo "::error::${last_probe_validation_error}"
+              fi
+              exit 1
+            fi
 
             if [[ "${profile}" == "locked-read-only" ]]; then
-              locked_probe_candidates_file="${kms_probe_candidates_file}"
+              locked_probe_candidates_file="${selected_probe_candidates_file}"
             fi
           done
 
