@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -133,7 +134,17 @@ def parse_policy_ids(raw: str) -> List[str]:
     return [p for p in ids if p]
 
 
-def post_json(url: str, api_key: str, payload: Dict[str, Any], timeout: int = 60) -> Tuple[int, Dict[str, str], str]:
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def post_json(
+    url: str,
+    api_key: str,
+    payload: Dict[str, Any],
+    timeout: int = 60,
+    network_retries: int = 3,
+    network_backoff_seconds: int = 2,
+) -> Tuple[int, Dict[str, str], str]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url=url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -141,12 +152,27 @@ def post_json(url: str, api_key: str, payload: Dict[str, Any], timeout: int = 60
     req.add_header("x-api-key", api_key)
     req.add_header("api-key", api_key)
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, dict(resp.headers.items()), resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        return e.code, dict(e.headers.items()), body
+    attempts = max(1, int(network_retries))
+    backoff = max(1, int(network_backoff_seconds))
+    last_transport_error = ""
+
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, dict(resp.headers.items()), resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if e.code in RETRYABLE_HTTP_STATUS_CODES and attempt < attempts:
+                time.sleep(backoff * (2 ** (attempt - 1)))
+                continue
+            return e.code, dict(e.headers.items()), body
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_transport_error = str(e)
+            if attempt < attempts:
+                time.sleep(backoff * (2 ** (attempt - 1)))
+                continue
+
+    return 0, {}, f"transport_error_after_retries: {last_transport_error or 'unknown transport error'}"
 
 
 def looks_like_jwt(value: str) -> bool:
@@ -247,6 +273,18 @@ def main() -> int:
         action="store_true",
         help="Require policy match when policy IDs are supplied",
     )
+    parser.add_argument(
+        "--ita-network-retries",
+        type=int,
+        default=3,
+        help="Number of retry attempts for transient ITA HTTP/network failures",
+    )
+    parser.add_argument(
+        "--ita-network-backoff-seconds",
+        type=int,
+        default=2,
+        help="Base exponential backoff in seconds for ITA request retries",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -275,7 +313,13 @@ def main() -> int:
 
     for url in candidate_urls:
         for request_kind, payload in candidate_payloads:
-            status, headers, body = post_json(url=url, api_key=args.ita_api_key, payload=payload)
+            status, headers, body = post_json(
+                url=url,
+                api_key=args.ita_api_key,
+                payload=payload,
+                network_retries=args.ita_network_retries,
+                network_backoff_seconds=args.ita_network_backoff_seconds,
+            )
             attempt = {
                 "timestamp_utc": dt.datetime.utcnow().isoformat() + "Z",
                 "url": url,
