@@ -36,6 +36,7 @@ jobs:
       - name: Resolve release tags
         id: resolve
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG_FROM_EVENT: ${{ github.event.release.tag_name || '' }}
           INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
@@ -61,7 +62,36 @@ jobs:
             tee_tag="mero-tee-v${version}"
           fi
 
+          if ! gh release view "${tee_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+
+          kms_tag_source="default-for-version"
           kms_tag="${INPUT_KMS_TAG:-mero-kms-v${version}}"
+          if [[ -n "${INPUT_KMS_TAG}" ]]; then
+            kms_tag_source="input"
+          fi
+
+          if ! gh release view "${kms_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [[ -n "${INPUT_KMS_TAG}" ]]; then
+              echo "::error::Input KMS release tag '${kms_tag}' not found in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+            fallback_kms_tag="$(gh release list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --limit 200 \
+              --json tagName \
+              --jq '[.[] | .tagName | select(startswith("mero-kms-v"))][0] // empty')"
+            if [[ -z "${fallback_kms_tag}" ]]; then
+              echo "::error::No published mero-kms-v* releases found in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+            echo "::warning::Default KMS tag '${kms_tag}' was not found; falling back to latest published KMS tag '${fallback_kms_tag}'."
+            kms_tag="${fallback_kms_tag}"
+            kms_tag_source="fallback-latest-published"
+          fi
+
           if [[ -z "${kms_tag}" ]]; then
             echo "::error::Could not resolve KMS tag."
             exit 1
@@ -70,6 +100,7 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tee_tag=${tee_tag}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag=${kms_tag}" >> "${GITHUB_OUTPUT}"
+          echo "kms_tag_source=${kms_tag_source}" >> "${GITHUB_OUTPUT}"
 
       - name: Download release assets and synthesize node candidates
         env:
@@ -219,6 +250,7 @@ jobs:
             echo ""
             echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
             echo "- KMS release tag: ${KMS_TAG}"
+            echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
             echo "- KMS probe run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"
