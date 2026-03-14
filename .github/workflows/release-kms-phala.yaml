@@ -129,8 +129,10 @@ jobs:
     name: Release mero-kms-phala container
     needs: [prepare, build-binaries]
     outputs:
-      image_digest: ${{ steps.build_and_push.outputs.digest }}
-      image_tags: ${{ steps.metadata.outputs.tags }}
+      locked_image_digest: ${{ steps.build_locked.outputs.digest }}
+      debug_image_digest: ${{ steps.build_debug.outputs.digest }}
+      debug_ro_image_digest: ${{ steps.build_debug_ro.outputs.digest }}
+      image_tags: ${{ steps.all_tags.outputs.tags }}
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-kms-phala-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
@@ -198,17 +200,49 @@ jobs:
             type=ref,prefix=pr-,event=pr
             type=sha,prefix=,format=short
             type=raw,value=${{ needs.prepare.outputs.version }},enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
-            type=raw,value=${{ needs.prepare.outputs.version }}-debug,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
-            type=raw,value=${{ needs.prepare.outputs.version }}-debug-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
             type=raw,value=${{ needs.prepare.outputs.version }}-locked-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
-            type=raw,value=latest-debug,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
-            type=raw,value=latest-debug-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
             type=raw,value=latest-locked-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
             type=raw,value=prerelease,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'true' }}
 
-      - name: Build and push image
-        id: build_and_push
+      - name: Prepare profile image tag lists
+        id: profile_tags
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          VERSION: ${{ needs.prepare.outputs.version }}
+          IS_MASTER: ${{ github.ref == 'refs/heads/master' }}
+          DOCKER_RELEASE: ${{ needs.prepare.outputs.docker_release }}
+          IS_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          debug_tags=""
+          debug_ro_tags=""
+          extra_tags=""
+          if [[ "${IS_MASTER}" == "true" && "${DOCKER_RELEASE}" == "true" ]]; then
+            debug_tags="${IMAGE_NAME}:${VERSION}-debug"
+            debug_ro_tags="${IMAGE_NAME}:${VERSION}-debug-read-only"
+            extra_tags="${debug_tags}"$'\n'"${debug_ro_tags}"
+            if [[ "${IS_PRERELEASE}" == "false" ]]; then
+              debug_tags="${debug_tags}"$'\n'"${IMAGE_NAME}:latest-debug"
+              debug_ro_tags="${debug_ro_tags}"$'\n'"${IMAGE_NAME}:latest-debug-read-only"
+              extra_tags="${extra_tags}"$'\n'"${IMAGE_NAME}:latest-debug"$'\n'"${IMAGE_NAME}:latest-debug-read-only"
+            fi
+          fi
+
+          {
+            echo "debug_tags<<EOF"
+            echo "${debug_tags}"
+            echo "EOF"
+            echo "debug_ro_tags<<EOF"
+            echo "${debug_ro_tags}"
+            echo "EOF"
+            echo "extra_tags<<EOF"
+            echo "${extra_tags}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push locked-read-only image
+        id: build_locked
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -217,33 +251,130 @@ jobs:
           platforms: ${{ env.DOCKER_PLATFORMS }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            KMS_IMAGE_PROFILE=locked-read-only
           provenance: false
           sbom: false
 
+      - name: Build and push debug image
+        id: build_debug
+        if: ${{ steps.profile_tags.outputs.debug_tags != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/workflows/deps/prebuilt.mero-kms-phala.Dockerfile
+          push: ${{ needs.prepare.outputs.docker_push }}
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          tags: ${{ steps.profile_tags.outputs.debug_tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            KMS_IMAGE_PROFILE=debug
+          provenance: false
+          sbom: false
+
+      - name: Build and push debug-read-only image
+        id: build_debug_ro
+        if: ${{ steps.profile_tags.outputs.debug_ro_tags != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/workflows/deps/prebuilt.mero-kms-phala.Dockerfile
+          push: ${{ needs.prepare.outputs.docker_push }}
+          platforms: ${{ env.DOCKER_PLATFORMS }}
+          tags: ${{ steps.profile_tags.outputs.debug_ro_tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            KMS_IMAGE_PROFILE=debug-read-only
+          provenance: false
+          sbom: false
+
+      - name: Compose aggregated image tags
+        id: all_tags
+        env:
+          LOCKED_TAGS: ${{ steps.metadata.outputs.tags }}
+          EXTRA_TAGS: ${{ steps.profile_tags.outputs.extra_tags }}
+        run: |
+          set -euo pipefail
+          combined="$(printf '%s\n%s\n' "${LOCKED_TAGS}" "${EXTRA_TAGS}" | sed '/^[[:space:]]*$/d' | awk '!seen[$0]++')"
+          {
+            echo "tags<<EOF"
+            echo "${combined}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Attest container image build provenance
-        if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_and_push.outputs.digest != '' }}
+        if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_locked.outputs.digest != '' }}
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
-          subject-digest: ${{ steps.build_and_push.outputs.digest }}
+          subject-digest: ${{ steps.build_locked.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest debug image build provenance
+        if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_debug.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          subject-digest: ${{ steps.build_debug.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest debug-read-only image build provenance
+        if: ${{ needs.prepare.outputs.docker_push == 'true' && steps.build_debug_ro.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          subject-digest: ${{ steps.build_debug_ro.outputs.digest }}
           push-to-registry: true
 
   probe:
-    name: Run staging probe for attestation policy
+    name: Run staging probe (${{ matrix.profile }})
     if: needs.prepare.outputs.binary_release == 'true'
     runs-on: ubuntu-latest
     needs: [prepare, release-container]
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
     permissions:
       actions: write
       contents: read
-    outputs:
-      artifact_name: ${{ steps.download.outputs.artifact_name }}
     steps:
+      - name: Resolve profile image ref
+        id: profile_image
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          DEBUG_DIGEST: ${{ needs.release-container.outputs.debug_image_digest }}
+          DEBUG_RO_DIGEST: ${{ needs.release-container.outputs.debug_ro_image_digest }}
+          LOCKED_DIGEST: ${{ needs.release-container.outputs.locked_image_digest }}
+        run: |
+          set -euo pipefail
+          case "${PROFILE}" in
+            debug)
+              digest="${DEBUG_DIGEST}"
+              ;;
+            debug-read-only)
+              digest="${DEBUG_RO_DIGEST}"
+              ;;
+            locked-read-only)
+              digest="${LOCKED_DIGEST}"
+              ;;
+            *)
+              echo "::error::Unsupported profile '${PROFILE}'"
+              exit 1
+              ;;
+          esac
+          if [[ -z "${digest}" ]]; then
+            echo "::error::Missing container digest for profile ${PROFILE}"
+            exit 1
+          fi
+          echo "image_ref=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+
       - name: Trigger staging probe and wait
         id: trigger
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/mero-kms-phala@${{ needs.release-container.outputs.image_digest }}
+          IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
         run: |
           set -euo pipefail
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -294,7 +425,7 @@ jobs:
       - name: Upload probe artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: kms-probe-${{ needs.prepare.outputs.version }}
+          name: kms-probe-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
           path: probe-artifacts/
           retention-days: 2
 
@@ -326,7 +457,7 @@ jobs:
       - name: Download probe artifacts
         uses: actions/download-artifact@v8
         with:
-          name: kms-probe-${{ needs.prepare.outputs.version }}
+          pattern: kms-probe-${{ needs.prepare.outputs.version }}-*
           path: probe-artifacts/
 
       - name: Wait for node release and fetch node policy
@@ -375,7 +506,9 @@ jobs:
           PREP_VERSION: ${{ needs.prepare.outputs.version }}
           PREP_KMS_RELEASE_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
           PREP_TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
-          RELEASE_IMAGE_DIGEST: ${{ needs.release-container.outputs.image_digest }}
+          RELEASE_LOCKED_IMAGE_DIGEST: ${{ needs.release-container.outputs.locked_image_digest }}
+          RELEASE_DEBUG_IMAGE_DIGEST: ${{ needs.release-container.outputs.debug_image_digest }}
+          RELEASE_DEBUG_RO_IMAGE_DIGEST: ${{ needs.release-container.outputs.debug_ro_image_digest }}
           RELEASE_IMAGE_TAGS: ${{ needs.release-container.outputs.image_tags }}
         run: |
           set -euo pipefail
@@ -384,9 +517,22 @@ jobs:
           sha256sum artifacts/*.tar.gz | sort | sed 's#  artifacts/#  #' > release-assets/kms-phala-checksums.txt
 
           image_name="ghcr.io/${GH_REPOSITORY_OWNER}/mero-kms-phala"
-          image_digest="${RELEASE_IMAGE_DIGEST}"
+          image_digest="${RELEASE_LOCKED_IMAGE_DIGEST}"
           if [[ -z "${image_digest}" ]]; then
             echo "::error::Container image digest is empty"
+            exit 1
+          fi
+          for profile_digest_var in RELEASE_DEBUG_IMAGE_DIGEST RELEASE_DEBUG_RO_IMAGE_DIGEST RELEASE_LOCKED_IMAGE_DIGEST; do
+            if [[ -z "${!profile_digest_var}" ]]; then
+              echo "::error::${profile_digest_var} is empty; expected per-profile KMS image digest."
+              exit 1
+            fi
+          done
+          if [[ "${RELEASE_DEBUG_IMAGE_DIGEST}" == "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" \
+             || "${RELEASE_DEBUG_IMAGE_DIGEST}" == "${RELEASE_LOCKED_IMAGE_DIGEST}" \
+             || "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" == "${RELEASE_LOCKED_IMAGE_DIGEST}" ]]; then
+            echo "::error::KMS profile images must have unique digests (debug/debug-read-only/locked-read-only)."
+            echo "::error::debug=${RELEASE_DEBUG_IMAGE_DIGEST} debug-read-only=${RELEASE_DEBUG_RO_IMAGE_DIGEST} locked-read-only=${RELEASE_LOCKED_IMAGE_DIGEST}"
             exit 1
           fi
           image_ref="${image_name}@${image_digest}"
@@ -412,23 +558,41 @@ jobs:
           kms_policy_url="https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
           node_policy_url="https://github.com/${GH_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
-          candidates_file="probe-artifacts/kms-policy-candidates.json"
+          candidates_file_debug="probe-artifacts/kms-probe-${version}-debug/kms-policy-candidates.json"
+          candidates_file_debug_ro="probe-artifacts/kms-probe-${version}-debug-read-only/kms-policy-candidates.json"
+          candidates_file_locked="probe-artifacts/kms-probe-${version}-locked-read-only/kms-policy-candidates.json"
           node_policy_file="node-policy/published-mrtds.json"
-          if [[ ! -f "${candidates_file}" ]]; then
-            echo "::error::Probe candidates not found at ${candidates_file}"
-            exit 1
-          fi
+          for candidates_file in "${candidates_file_debug}" "${candidates_file_debug_ro}" "${candidates_file_locked}"; do
+            if [[ ! -f "${candidates_file}" ]]; then
+              echo "::error::Probe candidates not found at ${candidates_file}"
+              exit 1
+            fi
+          done
           if [[ ! -f "${node_policy_file}" ]]; then
             echo "::error::Node policy not found at ${node_policy_file}"
             exit 1
           fi
 
-          kms_allowed_tcb_json="$(jq -c '.policy.allowed_tcb_statuses' "${candidates_file}")"
-          kms_allowed_mrtd_json="$(jq -c '.policy.allowed_mrtd' "${candidates_file}")"
-          kms_allowed_rtmr0_json="$(jq -c '.policy.allowed_rtmr0' "${candidates_file}")"
-          kms_allowed_rtmr1_json="$(jq -c '.policy.allowed_rtmr1' "${candidates_file}")"
-          kms_allowed_rtmr2_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file}")"
-          kms_allowed_rtmr3_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file}")"
+          kms_allowed_tcb_debug_json="$(jq -c '.policy.allowed_tcb_statuses' "${candidates_file_debug}")"
+          kms_allowed_mrtd_debug_json="$(jq -c '.policy.allowed_mrtd' "${candidates_file_debug}")"
+          kms_allowed_rtmr0_debug_json="$(jq -c '.policy.allowed_rtmr0' "${candidates_file_debug}")"
+          kms_allowed_rtmr1_debug_json="$(jq -c '.policy.allowed_rtmr1' "${candidates_file_debug}")"
+          kms_allowed_rtmr2_debug_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file_debug}")"
+          kms_allowed_rtmr3_debug_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file_debug}")"
+
+          kms_allowed_tcb_debug_ro_json="$(jq -c '.policy.allowed_tcb_statuses' "${candidates_file_debug_ro}")"
+          kms_allowed_mrtd_debug_ro_json="$(jq -c '.policy.allowed_mrtd' "${candidates_file_debug_ro}")"
+          kms_allowed_rtmr0_debug_ro_json="$(jq -c '.policy.allowed_rtmr0' "${candidates_file_debug_ro}")"
+          kms_allowed_rtmr1_debug_ro_json="$(jq -c '.policy.allowed_rtmr1' "${candidates_file_debug_ro}")"
+          kms_allowed_rtmr2_debug_ro_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file_debug_ro}")"
+          kms_allowed_rtmr3_debug_ro_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file_debug_ro}")"
+
+          kms_allowed_tcb_locked_json="$(jq -c '.policy.allowed_tcb_statuses' "${candidates_file_locked}")"
+          kms_allowed_mrtd_locked_json="$(jq -c '.policy.allowed_mrtd' "${candidates_file_locked}")"
+          kms_allowed_rtmr0_locked_json="$(jq -c '.policy.allowed_rtmr0' "${candidates_file_locked}")"
+          kms_allowed_rtmr1_locked_json="$(jq -c '.policy.allowed_rtmr1' "${candidates_file_locked}")"
+          kms_allowed_rtmr2_locked_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file_locked}")"
+          kms_allowed_rtmr3_locked_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file_locked}")"
 
           np_debug="$(jq '.profiles.debug' "${node_policy_file}")"
           np_debug_ro="$(jq '.profiles["debug-read-only"]' "${node_policy_file}")"
@@ -472,6 +636,9 @@ jobs:
             --arg node_image_tag "${node_image_tag}" \
             --arg kms_policy_url "${kms_policy_url}" \
             --arg node_policy_url "${node_policy_url}" \
+            --arg kms_debug_digest "${RELEASE_DEBUG_IMAGE_DIGEST}" \
+            --arg kms_debug_ro_digest "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" \
+            --arg kms_locked_digest "${RELEASE_LOCKED_IMAGE_DIGEST}" \
             --arg kms_policy_debug_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug.json" \
             --arg kms_policy_debug_ro_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug-read-only.json" \
             --arg kms_policy_locked_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.locked-read-only.json" \
@@ -494,6 +661,7 @@ jobs:
                 profiles: {
                   debug: {
                     kms_image_tag: ($version + "-debug"),
+                    kms_image_digest: $kms_debug_digest,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug.json",
                     kms_policy_url: $kms_policy_debug_url,
@@ -503,6 +671,7 @@ jobs:
                   },
                   "debug-read-only": {
                     kms_image_tag: ($version + "-debug-read-only"),
+                    kms_image_digest: $kms_debug_ro_digest,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug-read-only.json",
                     kms_policy_url: $kms_policy_debug_ro_url,
@@ -512,6 +681,7 @@ jobs:
                   },
                   "locked-read-only": {
                     kms_image_tag: ($version + "-locked-read-only"),
+                    kms_image_digest: $kms_locked_digest,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.locked-read-only.json",
                     kms_policy_url: $kms_policy_locked_url,
@@ -530,6 +700,9 @@ jobs:
             --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
+            --arg debug_digest "${RELEASE_DEBUG_IMAGE_DIGEST}" \
+            --arg debug_ro_digest "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" \
+            --arg locked_digest "${RELEASE_LOCKED_IMAGE_DIGEST}" \
             --argjson tags "${tags_json}" \
             --arg compat_asset "kms-phala-compatibility-map.json" \
             '{
@@ -544,13 +717,20 @@ jobs:
                 digest: $digest,
                 tags: $tags
               },
+              container_profile_digests: {
+                debug: $debug_digest,
+                "debug-read-only": $debug_ro_digest,
+                "locked-read-only": $locked_digest
+              },
               compatibility_map_asset: $compat_asset
             }' > release-assets/kms-phala-container-metadata.json
 
           policy_registry_source_path="release-probe+node"
 
           for json_var in \
-            kms_allowed_tcb_json kms_allowed_mrtd_json kms_allowed_rtmr0_json kms_allowed_rtmr1_json kms_allowed_rtmr2_json kms_allowed_rtmr3_json \
+            kms_allowed_tcb_debug_json kms_allowed_mrtd_debug_json kms_allowed_rtmr0_debug_json kms_allowed_rtmr1_debug_json kms_allowed_rtmr2_debug_json kms_allowed_rtmr3_debug_json \
+            kms_allowed_tcb_debug_ro_json kms_allowed_mrtd_debug_ro_json kms_allowed_rtmr0_debug_ro_json kms_allowed_rtmr1_debug_ro_json kms_allowed_rtmr2_debug_ro_json kms_allowed_rtmr3_debug_ro_json \
+            kms_allowed_tcb_locked_json kms_allowed_mrtd_locked_json kms_allowed_rtmr0_locked_json kms_allowed_rtmr1_locked_json kms_allowed_rtmr2_locked_json kms_allowed_rtmr3_locked_json \
             node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json \
             node_allowed_tcb_debug_json node_allowed_mrtd_debug_json node_allowed_rtmr0_debug_json node_allowed_rtmr1_debug_json node_allowed_rtmr2_debug_json node_allowed_rtmr3_debug_json \
             node_allowed_tcb_debug_ro_json node_allowed_mrtd_debug_ro_json node_allowed_rtmr0_debug_ro_json node_allowed_rtmr1_debug_ro_json node_allowed_rtmr2_debug_ro_json node_allowed_rtmr3_debug_ro_json \
@@ -599,9 +779,9 @@ jobs:
             fi
           }
 
-          ensure_no_overlap "debug RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_json}"
-          ensure_no_overlap "debug-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_ro_json}"
-          ensure_no_overlap "locked-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_locked_json}"
+          ensure_no_overlap "debug RTMR3" "${kms_allowed_rtmr3_debug_json}" "${node_allowed_rtmr3_debug_json}"
+          ensure_no_overlap "debug-read-only RTMR3" "${kms_allowed_rtmr3_debug_ro_json}" "${node_allowed_rtmr3_debug_ro_json}"
+          ensure_no_overlap "locked-read-only RTMR3" "${kms_allowed_rtmr3_locked_json}" "${node_allowed_rtmr3_locked_json}"
 
           read -r default_binding_hex default_binding_b64 < <(
             python3 - <<'PY'
@@ -620,6 +800,9 @@ jobs:
             --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg image "${image_name}" \
             --arg digest "${image_digest}" \
+            --arg debug_digest "${RELEASE_DEBUG_IMAGE_DIGEST}" \
+            --arg debug_ro_digest "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" \
+            --arg locked_digest "${RELEASE_LOCKED_IMAGE_DIGEST}" \
             --arg policy_registry_source_path "${policy_registry_source_path}" \
             --argjson tags "${tags_json}" \
             --argjson binaries "${binaries_json}" \
@@ -634,6 +817,11 @@ jobs:
                 image: $image,
                 digest: $digest,
                 tags: $tags
+              },
+              container_profile_digests: {
+                debug: $debug_digest,
+                "debug-read-only": $debug_ro_digest,
+                "locked-read-only": $locked_digest
               },
               verification: {
                 kms_attest_endpoint: "/attest",
@@ -671,13 +859,19 @@ jobs:
 
           write_policy_file() {
             local profile="$1"
-            local node_tcb="$2"
-            local node_mrtd="$3"
-            local node_rtmr0="$4"
-            local node_rtmr1="$5"
-            local node_rtmr2="$6"
-            local node_rtmr3="$7"
-            local output_file="$8"
+            local kms_tcb="$2"
+            local kms_mrtd="$3"
+            local kms_rtmr0="$4"
+            local kms_rtmr1="$5"
+            local kms_rtmr2="$6"
+            local kms_rtmr3="$7"
+            local node_tcb="$8"
+            local node_mrtd="$9"
+            local node_rtmr0="${10}"
+            local node_rtmr1="${11}"
+            local node_rtmr2="${12}"
+            local node_rtmr3="${13}"
+            local output_file="${14}"
 
             jq -n \
               --arg profile "${profile}" \
@@ -691,12 +885,12 @@ jobs:
               --arg policy_registry_source_path "${policy_registry_source_path}" \
               --arg default_binding_hex "${default_binding_hex}" \
               --arg default_binding_b64 "${default_binding_b64}" \
-              --argjson kms_allowed_tcb "${kms_allowed_tcb_json}" \
-              --argjson kms_allowed_mrtd "${kms_allowed_mrtd_json}" \
-              --argjson kms_allowed_rtmr0 "${kms_allowed_rtmr0_json}" \
-              --argjson kms_allowed_rtmr1 "${kms_allowed_rtmr1_json}" \
-              --argjson kms_allowed_rtmr2 "${kms_allowed_rtmr2_json}" \
-              --argjson kms_allowed_rtmr3 "${kms_allowed_rtmr3_json}" \
+              --argjson kms_allowed_tcb "${kms_tcb}" \
+              --argjson kms_allowed_mrtd "${kms_mrtd}" \
+              --argjson kms_allowed_rtmr0 "${kms_rtmr0}" \
+              --argjson kms_allowed_rtmr1 "${kms_rtmr1}" \
+              --argjson kms_allowed_rtmr2 "${kms_rtmr2}" \
+              --argjson kms_allowed_rtmr3 "${kms_rtmr3}" \
               --argjson node_allowed_tcb "${node_tcb}" \
               --argjson node_allowed_mrtd "${node_mrtd}" \
               --argjson node_allowed_rtmr0 "${node_rtmr0}" \
@@ -753,6 +947,12 @@ jobs:
           }
 
           write_policy_file "debug" \
+            "${kms_allowed_tcb_debug_json}" \
+            "${kms_allowed_mrtd_debug_json}" \
+            "${kms_allowed_rtmr0_debug_json}" \
+            "${kms_allowed_rtmr1_debug_json}" \
+            "${kms_allowed_rtmr2_debug_json}" \
+            "${kms_allowed_rtmr3_debug_json}" \
             "${node_allowed_tcb_debug_json}" \
             "${node_allowed_mrtd_debug_json}" \
             "${node_allowed_rtmr0_debug_json}" \
@@ -762,6 +962,12 @@ jobs:
             "release-assets/kms-phala-attestation-policy.debug.json"
 
           write_policy_file "debug-read-only" \
+            "${kms_allowed_tcb_debug_ro_json}" \
+            "${kms_allowed_mrtd_debug_ro_json}" \
+            "${kms_allowed_rtmr0_debug_ro_json}" \
+            "${kms_allowed_rtmr1_debug_ro_json}" \
+            "${kms_allowed_rtmr2_debug_ro_json}" \
+            "${kms_allowed_rtmr3_debug_ro_json}" \
             "${node_allowed_tcb_debug_ro_json}" \
             "${node_allowed_mrtd_debug_ro_json}" \
             "${node_allowed_rtmr0_debug_ro_json}" \
@@ -771,6 +977,12 @@ jobs:
             "release-assets/kms-phala-attestation-policy.debug-read-only.json"
 
           write_policy_file "locked-read-only" \
+            "${kms_allowed_tcb_locked_json}" \
+            "${kms_allowed_mrtd_locked_json}" \
+            "${kms_allowed_rtmr0_locked_json}" \
+            "${kms_allowed_rtmr1_locked_json}" \
+            "${kms_allowed_rtmr2_locked_json}" \
+            "${kms_allowed_rtmr3_locked_json}" \
             "${node_allowed_tcb_locked_json}" \
             "${node_allowed_mrtd_locked_json}" \
             "${node_allowed_rtmr0_locked_json}" \
