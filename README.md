@@ -59,7 +59,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
   - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **Compatibility map artifact**:
-  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus profile-specific policy URLs/hashes),
+  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus profile-specific policy URLs/hashes and profile-specific KMS image tags/digests),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
 - **mero-tee-vX.Y.Z**: `published-mrtds.json` (MRTDs + measurement policy), `release-provenance.json`, SBOM, and `node-image-gcp-checksums.txt`
   - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
@@ -103,7 +103,7 @@ scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read
 
 KMS release flow (draft release + human approval):
 
-- On version bump (Cargo.toml), `release-kms-phala.yaml` builds the container, runs the staging probe to collect KMS measurements, fetches node policy from the mero-tee release, and creates a **draft** release with all assets.
+- On version bump (Cargo.toml), `release-kms-phala.yaml` builds three KMS profile images (`debug`, `debug-read-only`, `locked-read-only`) as distinct container digests, runs staged probing to collect profile measurements, fetches node policy from the mero-tee release, and creates a **draft** release with all assets.
 - Human reviews the draft release (including attestation policy) and publishes when ready.
 - Policy is built from probe output + node release assets; no policy files in repo.
 
@@ -111,7 +111,8 @@ Node release flow:
 
 - On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
 - KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
-- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`; a lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
+- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images and enforces that each profile's runtime measurements match its published profile policy before checking the strict node↔KMS allow/deny matrix.
+- A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 
 Recommended release order:
 
