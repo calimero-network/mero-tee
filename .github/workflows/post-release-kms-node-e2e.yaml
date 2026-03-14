@@ -88,12 +88,10 @@ jobs:
               exit 1
             fi
 
-            versions_json_b64="$(gh api "repos/${GITHUB_REPOSITORY}/contents/mero-tee/versions.json" \
-              -f ref="${WORKFLOW_RUN_HEAD_SHA}" \
-              --jq '.content' | tr -d '\n')"
-            version="$(printf '%s' "${versions_json_b64}" | base64 -d | jq -r '.imageVersion // empty')"
+            # Use the checked-out file at workflow_run.head_sha directly (more reliable than contents API with SHA ref).
+            version="$(jq -r '.imageVersion // empty' "mero-tee/versions.json")"
             if [[ -z "${version}" ]]; then
-              echo "::error::Could not resolve imageVersion from mero-tee/versions.json at ${WORKFLOW_RUN_HEAD_SHA}."
+              echo "::error::Could not resolve imageVersion from checked-out mero-tee/versions.json."
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
