@@ -706,8 +706,13 @@ fn ensure_kms_profile_runtime_event(profile: &str) -> EyreResult<()> {
         );
     }
 
-    emit_runtime_event(KMS_PROFILE_RUNTIME_EVENT_NAME, &expected_payload)
-        .map_err(|e| eyre::eyre!("Failed to emit runtime event '{}': {}", KMS_PROFILE_RUNTIME_EVENT_NAME, e))?;
+    emit_runtime_event(KMS_PROFILE_RUNTIME_EVENT_NAME, &expected_payload).map_err(|e| {
+        eyre::eyre!(
+            "Failed to emit runtime event '{}': {}",
+            KMS_PROFILE_RUNTIME_EVENT_NAME,
+            e
+        )
+    })?;
     info!(
         "Emitted runtime event to extend RTMR3: {}={}",
         KMS_PROFILE_RUNTIME_EVENT_NAME, profile
@@ -771,9 +776,7 @@ async fn main() -> eyre::Result<()> {
         warn!(
             "WARNING: Mock attestation acceptance is enabled. This should NEVER be used in production!"
         );
-        warn!(
-            "Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled"
-        );
+        warn!("Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled");
     } else {
         ensure_kms_profile_runtime_event(&config.kms_profile)?;
     }
