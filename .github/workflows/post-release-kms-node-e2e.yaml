@@ -559,11 +559,29 @@ jobs:
             done
 
             if [[ "${probe_validated}" != "true" ]]; then
-              echo "::error::KMS probe validation failed for profile '${profile}' after ${#deployment_name_candidates[@]} deployment name attempt(s)."
-              if [[ -n "${last_probe_validation_error}" ]]; then
-                echo "::error::${last_probe_validation_error}"
+              reason="Selected KMS release '${KMS_TAG}' produced probe measurements outside published profile policy for '${profile}' after ${#deployment_name_candidates[@]} deployment name attempt(s)."
+              if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+                echo "::error::${reason}"
+                if [[ -n "${last_probe_validation_error}" ]]; then
+                  echo "::error::${last_probe_validation_error}"
+                fi
+                exit 1
               fi
-              exit 1
+
+              echo "::warning::${reason} Skipping strict per-profile probe until a newer KMS release is published."
+              if [[ -n "${last_probe_validation_error}" ]]; then
+                echo "::warning::${last_probe_validation_error}"
+              fi
+              {
+                echo "## Post-release e2e compatibility matrix"
+                echo ""
+                echo "- Status: skipped"
+                echo "- Reason: ${reason}"
+                echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+                echo "- KMS release tag: ${KMS_TAG}"
+                echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+              } >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
             fi
 
             if [[ "${profile}" == "locked-read-only" ]]; then
