@@ -375,6 +375,67 @@ jobs:
             exit 0
           fi
 
+          has_distinct_kms_profile_measurements="$(
+            python3 - "e2e/kms-release" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          release_dir = pathlib.Path(sys.argv[1])
+          profiles = ["debug", "debug-read-only", "locked-read-only"]
+          keys = ["kms_allowed_mrtd", "kms_allowed_rtmr0", "kms_allowed_rtmr1", "kms_allowed_rtmr2", "kms_allowed_rtmr3"]
+
+          def norm(values):
+              normalized = []
+              for value in values or []:
+                  if isinstance(value, str):
+                      candidate = value.strip().lower().removeprefix("0x")
+                      if candidate:
+                          normalized.append(candidate)
+              return sorted(set(normalized))
+
+          snapshots = {}
+          for profile in profiles:
+              policy_path = release_dir / f"kms-phala-attestation-policy.{profile}.json"
+              payload = json.loads(policy_path.read_text(encoding="utf-8"))
+              policy = payload.get("policy", {})
+              snapshots[profile] = tuple(tuple(norm(policy.get(key, []))) for key in keys)
+
+          pairs = [
+              ("debug", "debug-read-only"),
+              ("debug", "locked-read-only"),
+              ("debug-read-only", "locked-read-only"),
+          ]
+          identical = [f"{left} vs {right}" for left, right in pairs if snapshots[left] == snapshots[right]]
+          if identical:
+              print("false:" + ", ".join(identical))
+          else:
+              print("true")
+          PY
+          )"
+
+          if [[ "${has_distinct_kms_profile_measurements}" != "true" ]]; then
+            collapsed_pairs="${has_distinct_kms_profile_measurements#false:}"
+            reason="Selected KMS release '${KMS_TAG}' has identical KMS measurement allowlists across profiles (${collapsed_pairs})."
+            if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+              echo "::error::${reason}"
+              echo "::error::Run with a newer KMS tag where debug/debug-read-only/locked-read-only KMS measurements differ."
+              exit 1
+            fi
+
+            echo "::warning::${reason} Skipping strict per-profile probe until a newer KMS release is published."
+            {
+              echo "## Post-release e2e compatibility matrix"
+              echo ""
+              echo "- Status: skipped"
+              echo "- Reason: ${reason}"
+              echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+              echo "- KMS release tag: ${KMS_TAG}"
+              echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
           probe_run_urls=()
           locked_probe_candidates_file=""
           version_slug="${RELEASE_VERSION//./-}"
