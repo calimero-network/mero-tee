@@ -1,9 +1,11 @@
 name: Post-release KMS-node compatibility e2e
 
 on:
-  release:
+  workflow_run:
+    workflows:
+      - Release mero-tee
     types:
-      - published
+      - completed
   workflow_dispatch:
     inputs:
       release_version:
@@ -21,38 +23,80 @@ permissions:
   actions: write
 
 concurrency:
-  group: post-release-kms-node-e2e-${{ github.event_name }}-${{ github.event.release.tag_name || github.run_id }}
+  group: post-release-kms-node-e2e-${{ github.event_name }}-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   verify_released_compatibility:
     name: Verify released KMS-node compatibility
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'mero-tee-v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Resolve release tags
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG_FROM_EVENT: ${{ github.event.release.tag_name || '' }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
           INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
           INPUT_KMS_TAG: ${{ github.event.inputs.kms_tag || '' }}
         run: |
           set -euo pipefail
 
+          release_exists() {
+            local tag="$1"
+            gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1
+          }
+
+          wait_for_release_tag() {
+            local tag="$1"
+            local attempts="${2:-24}"
+            local delay_secs="${3:-10}"
+            for attempt in $(seq 1 "${attempts}"); do
+              if release_exists "${tag}"; then
+                return 0
+              fi
+              sleep "${delay_secs}"
+            done
+            return 1
+          }
+
+          kms_release_has_profile_assets() {
+            local tag="$1"
+            gh release view "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '([.assets[].name] | index("kms-phala-attestation-policy.debug.json") != null and index("kms-phala-attestation-policy.debug-read-only.json") != null and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
+          }
+
           tee_tag=""
           version=""
-          if [[ "${EVENT_NAME}" == "release" ]]; then
-            tee_tag="${RELEASE_TAG_FROM_EVENT}"
-            if [[ "${tee_tag}" != mero-tee-v* ]]; then
-              echo "::error::Expected mero-tee release tag, got '${tee_tag}'."
+          if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+            if [[ "${WORKFLOW_NAME}" != "Release mero-tee" ]]; then
+              echo "::error::Expected workflow_run from 'Release mero-tee', got '${WORKFLOW_NAME}'."
               exit 1
             fi
-            version="${tee_tag#mero-tee-v}"
+            if [[ "${WORKFLOW_RUN_HEAD_BRANCH}" != "master" ]]; then
+              echo "::error::Expected master workflow_run, got branch '${WORKFLOW_RUN_HEAD_BRANCH}'."
+              exit 1
+            fi
+
+            versions_json_b64="$(gh api "repos/${GITHUB_REPOSITORY}/contents/mero-tee/versions.json" \
+              -f ref="${WORKFLOW_RUN_HEAD_SHA}" \
+              --jq '.content' | tr -d '\n')"
+            version="$(printf '%s' "${versions_json_b64}" | base64 -d | jq -r '.imageVersion // empty')"
+            if [[ -z "${version}" ]]; then
+              echo "::error::Could not resolve imageVersion from mero-tee/versions.json at ${WORKFLOW_RUN_HEAD_SHA}."
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
           else
             version="${INPUT_RELEASE_VERSION}"
             if [[ -z "${version}" ]]; then
@@ -62,38 +106,56 @@ jobs:
             tee_tag="mero-tee-v${version}"
           fi
 
-          if ! gh release view "${tee_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          if ! wait_for_release_tag "${tee_tag}" 30 10; then
             echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
             exit 1
           fi
 
-          kms_tag_source="default-for-version"
-          kms_tag="${INPUT_KMS_TAG:-mero-kms-v${version}}"
+          kms_tag=""
+          kms_tag_source=""
           if [[ -n "${INPUT_KMS_TAG}" ]]; then
             kms_tag_source="input"
-          fi
-
-          if ! gh release view "${kms_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            if [[ -n "${INPUT_KMS_TAG}" ]]; then
+            kms_tag="${INPUT_KMS_TAG}"
+            if ! release_exists "${kms_tag}"; then
               echo "::error::Input KMS release tag '${kms_tag}' not found in ${GITHUB_REPOSITORY}."
               exit 1
             fi
-            fallback_kms_tag="$(gh release list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --limit 200 \
-              --json tagName \
-              --jq '[.[] | .tagName | select(startswith("mero-kms-v"))][0] // empty')"
-            if [[ -z "${fallback_kms_tag}" ]]; then
-              echo "::error::No published mero-kms-v* releases found in ${GITHUB_REPOSITORY}."
+            if [[ "$(kms_release_has_profile_assets "${kms_tag}")" != "true" ]]; then
+              echo "::error::Input KMS release tag '${kms_tag}' is missing required profile policy assets."
               exit 1
             fi
-            echo "::warning::Default KMS tag '${kms_tag}' was not found; falling back to latest published KMS tag '${fallback_kms_tag}'."
-            kms_tag="${fallback_kms_tag}"
-            kms_tag_source="fallback-latest-published"
+          else
+            default_kms_tag="mero-kms-v${version}"
+            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_profile_assets "${default_kms_tag}")" == "true" ]]; then
+              kms_tag="${default_kms_tag}"
+              kms_tag_source="default-for-version"
+            else
+              fallback_kms_tag=""
+              while IFS= read -r candidate_tag; do
+                [[ -z "${candidate_tag}" ]] && continue
+                if [[ "$(kms_release_has_profile_assets "${candidate_tag}")" == "true" ]]; then
+                  fallback_kms_tag="${candidate_tag}"
+                  break
+                fi
+              done < <(
+                gh release list \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --limit 200 \
+                  --json tagName \
+                  --jq '.[] | .tagName | select(startswith("mero-kms-v"))'
+              )
+              if [[ -z "${fallback_kms_tag}" ]]; then
+                echo "::error::No published mero-kms-v* release with required profile policy assets found in ${GITHUB_REPOSITORY}."
+                exit 1
+              fi
+              echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing profile policy assets; falling back to '${fallback_kms_tag}'."
+              kms_tag="${fallback_kms_tag}"
+              kms_tag_source="fallback-with-profile-assets"
+            fi
           fi
 
-          if [[ -z "${kms_tag}" ]]; then
-            echo "::error::Could not resolve KMS tag."
+          if [[ -z "${kms_tag}" || -z "${kms_tag_source}" ]]; then
+            echo "::error::Could not resolve KMS tag selection."
             exit 1
           fi
 
