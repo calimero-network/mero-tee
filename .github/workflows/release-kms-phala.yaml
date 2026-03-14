@@ -10,7 +10,9 @@ on:
       - Cargo.lock
       - "mero-kms/src/**"
       - ".github/workflows/release-kms-phala.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
+      - "scripts/attestation/**"
   pull_request:
     paths:
       - Cargo.toml
@@ -18,7 +20,9 @@ on:
       - Cargo.lock
       - "mero-kms/src/**"
       - ".github/workflows/release-kms-phala.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
+      - "scripts/attestation/**"
   workflow_dispatch:
 
 permissions:

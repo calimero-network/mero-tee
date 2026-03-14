@@ -247,8 +247,28 @@ jobs:
             deploy_cmd+=(--region "${REGION}")
           fi
 
-          if ! "${deploy_cmd[@]}" > "${deploy_raw}" 2>&1; then
+          deploy_ok="false"
+          for deploy_attempt in $(seq 1 2); do
+            if "${deploy_cmd[@]}" > "${deploy_raw}" 2>&1; then
+              deploy_ok="true"
+              break
+            fi
+
+            deploy_output="$(tr '\n' ' ' < "${deploy_raw}")"
+            if [[ "${deploy_attempt}" -lt 2 && "${deploy_output}" == *"already exists"* ]]; then
+              echo "::warning::Stale CVM name collision for '${deploy_name}', deleting stale instance and retrying deploy."
+              phala cvms delete "${deploy_name}" --force --yes >/dev/null 2>&1 || true
+              sleep 5
+              continue
+            fi
+
             echo "::error::phala deploy command failed"
+            cat "${deploy_raw}"
+            exit 1
+          done
+
+          if [[ "${deploy_ok}" != "true" ]]; then
+            echo "::error::phala deploy command failed after retries"
             cat "${deploy_raw}"
             exit 1
           fi
