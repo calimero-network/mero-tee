@@ -247,6 +247,27 @@ jobs:
             deploy_cmd+=(--region "${REGION}")
           fi
 
+          wait_for_name_release() {
+            local name="$1"
+            for _ in $(seq 1 24); do
+              if phala cvms get "${name}" --json >/dev/null 2>&1; then
+                sleep 5
+              else
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          if phala cvms get "${deploy_name}" --json >/dev/null 2>&1; then
+            echo "::warning::Existing CVM named '${deploy_name}' found before deploy; deleting stale instance first."
+            phala cvms delete "${deploy_name}" --force --yes >/dev/null 2>&1 || true
+            if ! wait_for_name_release "${deploy_name}"; then
+              echo "::error::Timed out waiting for stale CVM '${deploy_name}' to be removed before deploy."
+              exit 1
+            fi
+          fi
+
           deploy_ok="false"
           for deploy_attempt in $(seq 1 2); do
             if "${deploy_cmd[@]}" > "${deploy_raw}" 2>&1; then
@@ -258,7 +279,10 @@ jobs:
             if [[ "${deploy_attempt}" -lt 2 && "${deploy_output}" == *"already exists"* ]]; then
               echo "::warning::Stale CVM name collision for '${deploy_name}', deleting stale instance and retrying deploy."
               phala cvms delete "${deploy_name}" --force --yes >/dev/null 2>&1 || true
-              sleep 5
+              if ! wait_for_name_release "${deploy_name}"; then
+                echo "::error::Timed out waiting for stale CVM '${deploy_name}' to be removed before retry."
+                exit 1
+              fi
               continue
             fi
 
