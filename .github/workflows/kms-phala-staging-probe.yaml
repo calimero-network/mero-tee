@@ -66,6 +66,9 @@ jobs:
     name: Deploy + attest + extract policy candidates
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    concurrency:
+      group: kms-phala-staging-probe-${{ github.repository }}
+      cancel-in-progress: false
     env:
       PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
