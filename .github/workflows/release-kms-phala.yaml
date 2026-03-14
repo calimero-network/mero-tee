@@ -745,6 +745,80 @@ jobs:
             fi
           done
 
+          ensure_kms_profiles_not_identical() {
+            local label="$1"
+            local left_mrtd="$2"
+            local left_rtmr0="$3"
+            local left_rtmr1="$4"
+            local left_rtmr2="$5"
+            local left_rtmr3="$6"
+            local right_mrtd="$7"
+            local right_rtmr0="$8"
+            local right_rtmr1="$9"
+            local right_rtmr2="${10}"
+            local right_rtmr3="${11}"
+            if jq -e \
+              --argjson left_mrtd "${left_mrtd}" \
+              --argjson left_rtmr0 "${left_rtmr0}" \
+              --argjson left_rtmr1 "${left_rtmr1}" \
+              --argjson left_rtmr2 "${left_rtmr2}" \
+              --argjson left_rtmr3 "${left_rtmr3}" \
+              --argjson right_mrtd "${right_mrtd}" \
+              --argjson right_rtmr0 "${right_rtmr0}" \
+              --argjson right_rtmr1 "${right_rtmr1}" \
+              --argjson right_rtmr2 "${right_rtmr2}" \
+              --argjson right_rtmr3 "${right_rtmr3}" \
+              '
+              def norm($arr): ($arr | map(ascii_downcase) | sort | unique);
+              (norm($left_mrtd) == norm($right_mrtd)) and
+              (norm($left_rtmr0) == norm($right_rtmr0)) and
+              (norm($left_rtmr1) == norm($right_rtmr1)) and
+              (norm($left_rtmr2) == norm($right_rtmr2)) and
+              (norm($left_rtmr3) == norm($right_rtmr3))
+              ' >/dev/null; then
+              echo "::error::${label} has identical KMS measurement allowlists (MRTD/RTMR0-3)."
+              echo "::error::KMS profile cohorts must differ to prevent profile spoofing."
+              exit 1
+            fi
+          }
+
+          ensure_kms_profiles_not_identical \
+            "KMS debug vs debug-read-only" \
+            "${kms_allowed_mrtd_debug_json}" \
+            "${kms_allowed_rtmr0_debug_json}" \
+            "${kms_allowed_rtmr1_debug_json}" \
+            "${kms_allowed_rtmr2_debug_json}" \
+            "${kms_allowed_rtmr3_debug_json}" \
+            "${kms_allowed_mrtd_debug_ro_json}" \
+            "${kms_allowed_rtmr0_debug_ro_json}" \
+            "${kms_allowed_rtmr1_debug_ro_json}" \
+            "${kms_allowed_rtmr2_debug_ro_json}" \
+            "${kms_allowed_rtmr3_debug_ro_json}"
+          ensure_kms_profiles_not_identical \
+            "KMS debug vs locked-read-only" \
+            "${kms_allowed_mrtd_debug_json}" \
+            "${kms_allowed_rtmr0_debug_json}" \
+            "${kms_allowed_rtmr1_debug_json}" \
+            "${kms_allowed_rtmr2_debug_json}" \
+            "${kms_allowed_rtmr3_debug_json}" \
+            "${kms_allowed_mrtd_locked_json}" \
+            "${kms_allowed_rtmr0_locked_json}" \
+            "${kms_allowed_rtmr1_locked_json}" \
+            "${kms_allowed_rtmr2_locked_json}" \
+            "${kms_allowed_rtmr3_locked_json}"
+          ensure_kms_profiles_not_identical \
+            "KMS debug-read-only vs locked-read-only" \
+            "${kms_allowed_mrtd_debug_ro_json}" \
+            "${kms_allowed_rtmr0_debug_ro_json}" \
+            "${kms_allowed_rtmr1_debug_ro_json}" \
+            "${kms_allowed_rtmr2_debug_ro_json}" \
+            "${kms_allowed_rtmr3_debug_ro_json}" \
+            "${kms_allowed_mrtd_locked_json}" \
+            "${kms_allowed_rtmr0_locked_json}" \
+            "${kms_allowed_rtmr1_locked_json}" \
+            "${kms_allowed_rtmr2_locked_json}" \
+            "${kms_allowed_rtmr3_locked_json}"
+
           for metric in mrtd rtmr0 rtmr1 rtmr2 rtmr3; do
             locked_var="node_allowed_${metric}_locked_json"
             debug_var="node_allowed_${metric}_debug_json"
