@@ -69,7 +69,7 @@ jobs:
   verify_released_compatibility:
     name: Verify released KMS-node compatibility
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master') || (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -84,6 +84,7 @@ jobs:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name || '' }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          REF_NAME: ${{ github.ref_name }}
           INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
           INPUT_KMS_TAG: ${{ github.event.inputs.kms_tag || '' }}
         run: |
@@ -107,12 +108,16 @@ jobs:
             return 1
           }
 
-          kms_release_has_profile_assets() {
+          kms_release_has_required_assets() {
             local tag="$1"
             gh release view "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json assets \
-              --jq '([.assets[].name] | index("kms-phala-attestation-policy.debug.json") != null and index("kms-phala-attestation-policy.debug-read-only.json") != null and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
+              --jq '([.assets[].name]
+                | index("kms-phala-compatibility-map.json") != null
+                  and index("kms-phala-attestation-policy.debug.json") != null
+                  and index("kms-phala-attestation-policy.debug-read-only.json") != null
+                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
           }
 
           tee_tag=""
@@ -136,6 +141,17 @@ jobs:
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ "${REF_NAME}" != "master" ]]; then
+              echo "::error::Expected push on master, got ref '${REF_NAME}'."
+              exit 1
+            fi
+            version="$(jq -r '.imageVersion // empty' "mero-tee/versions.json")"
+            if [[ -z "${version}" ]]; then
+              echo "::error::Could not resolve imageVersion from checked-out mero-tee/versions.json."
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
           else
             version="${INPUT_RELEASE_VERSION}"
             if [[ -z "${version}" ]]; then
@@ -146,7 +162,7 @@ jobs:
           fi
 
           if ! wait_for_release_tag "${tee_tag}" 30 10; then
-            if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+            if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
               should_run="false"
               skip_reason="Node release tag '${tee_tag}' is not published yet."
             else
@@ -164,20 +180,20 @@ jobs:
               echo "::error::Input KMS release tag '${kms_tag}' not found in ${GITHUB_REPOSITORY}."
               exit 1
             fi
-            if [[ "$(kms_release_has_profile_assets "${kms_tag}")" != "true" ]]; then
-              echo "::error::Input KMS release tag '${kms_tag}' is missing required profile policy assets."
+            if [[ "$(kms_release_has_required_assets "${kms_tag}")" != "true" ]]; then
+              echo "::error::Input KMS release tag '${kms_tag}' is missing required e2e assets (compatibility map and profile policies)."
               exit 1
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_profile_assets "${default_kms_tag}")" == "true" ]]; then
+            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_required_assets "${default_kms_tag}")" == "true" ]]; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
             else
               fallback_kms_tag=""
               while IFS= read -r candidate_tag; do
                 [[ -z "${candidate_tag}" ]] && continue
-                if [[ "$(kms_release_has_profile_assets "${candidate_tag}")" == "true" ]]; then
+                if [[ "$(kms_release_has_required_assets "${candidate_tag}")" == "true" ]]; then
                   fallback_kms_tag="${candidate_tag}"
                   break
                 fi
@@ -189,15 +205,15 @@ jobs:
                   --jq '.[] | .tagName | select(startswith("mero-kms-v"))'
               )
               if [[ -z "${fallback_kms_tag}" ]]; then
-                if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+                if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
                   should_run="false"
-                  skip_reason="No published mero-kms-v* release with required profile policy assets found yet."
+                  skip_reason="No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found yet."
                 else
-                  echo "::error::No published mero-kms-v* release with required profile policy assets found in ${GITHUB_REPOSITORY}."
+                  echo "::error::No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found in ${GITHUB_REPOSITORY}."
                   exit 1
                 fi
               else
-                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing profile policy assets; falling back to '${fallback_kms_tag}'."
+                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing required e2e assets; falling back to '${fallback_kms_tag}'."
                 kms_tag="${fallback_kms_tag}"
                 kms_tag_source="fallback-with-profile-assets"
               fi
@@ -205,7 +221,7 @@ jobs:
           fi
 
           if [[ "${should_run}" == "true" && ( -z "${kms_tag}" || -z "${kms_tag_source}" ) ]]; then
-            if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+            if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
               should_run="false"
               skip_reason="Could not resolve KMS tag selection for this release yet."
             else
@@ -303,6 +319,7 @@ jobs:
           PY
 
           for asset in \
+            "kms-phala-compatibility-map.json" \
             "kms-phala-attestation-policy.debug.json" \
             "kms-phala-attestation-policy.debug-read-only.json" \
             "kms-phala-attestation-policy.locked-read-only.json"; do
@@ -320,63 +337,149 @@ jobs:
         run: |
           set -euo pipefail
 
-          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          gh workflow run "kms-phala-staging-probe.yaml" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref master \
-            -f kms_tag="${KMS_TAG}"
+          compatibility_map="e2e/kms-release/kms-phala-compatibility-map.json"
+          if [[ ! -f "${compatibility_map}" ]]; then
+            echo "::error::Missing compatibility map asset: ${compatibility_map}"
+            exit 1
+          fi
 
-          probe_run_id=""
-          for attempt in $(seq 1 90); do
-            probe_run_id="$(gh run list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --workflow "kms-phala-staging-probe.yaml" \
-              --event workflow_dispatch \
-              --branch master \
-              --limit 8 \
-              --json databaseId,createdAt \
-              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
-            if [[ -n "${probe_run_id}" ]]; then
-              break
+          probe_run_urls=()
+          locked_probe_candidates_file=""
+
+          for profile in debug debug-read-only locked-read-only; do
+            profile_digest="$(jq -r --arg profile "${profile}" '.compatibility.profiles[$profile].kms_image_digest // empty' "${compatibility_map}")"
+            profile_tag="$(jq -r --arg profile "${profile}" '.compatibility.profiles[$profile].kms_image_tag // empty' "${compatibility_map}")"
+            if [[ -n "${profile_digest}" ]]; then
+              image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala@${profile_digest}"
+            elif [[ -n "${profile_tag}" ]]; then
+              image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:${profile_tag}"
+            else
+              echo "::error::Could not resolve KMS image reference for profile '${profile}' from compatibility map."
+              exit 1
             fi
-            sleep 10
-          done
 
-          if [[ -z "${probe_run_id}" ]]; then
-            echo "::error::Could not resolve kms-phala-staging-probe workflow run ID"
-            exit 1
-          fi
+            dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            gh workflow run "kms-phala-staging-probe.yaml" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --ref master \
+              -f kms_image="${image_ref}" \
+              -f kms_tag="pinned"
 
-          gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+            probe_run_id=""
+            for attempt in $(seq 1 90); do
+              probe_run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "kms-phala-staging-probe.yaml" \
+                --event workflow_dispatch \
+                --branch master \
+                --limit 10 \
+                --json databaseId,createdAt \
+                --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+              if [[ -n "${probe_run_id}" ]]; then
+                break
+              fi
+              sleep 10
+            done
 
-          probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
-            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
-          if [[ -z "${probe_artifact_name}" ]]; then
-            echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
-            exit 1
-          fi
+            if [[ -z "${probe_run_id}" ]]; then
+              echo "::error::Could not resolve kms-phala-staging-probe workflow run ID for profile '${profile}'"
+              exit 1
+            fi
 
-          gh run download "${probe_run_id}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --name "${probe_artifact_name}" \
-            --dir e2e/kms-probe
+            gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+            probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}")
 
-          kms_probe_candidates_file="$(python3 - <<'PY'
+            probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
+              --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+            if [[ -z "${probe_artifact_name}" ]]; then
+              echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
+              exit 1
+            fi
+
+            profile_probe_dir="e2e/kms-probe/${profile}"
+            mkdir -p "${profile_probe_dir}"
+            gh run download "${probe_run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${probe_artifact_name}" \
+              --dir "${profile_probe_dir}"
+
+            kms_probe_candidates_file="$(python3 - "${profile_probe_dir}" <<'PY'
           import pathlib
-          base = pathlib.Path("e2e/kms-probe")
+          import sys
+          base = pathlib.Path(sys.argv[1])
           matches = sorted(base.rglob("kms-policy-candidates.json"))
           print(matches[0] if matches else "")
           PY
-          )"
-          if [[ -z "${kms_probe_candidates_file}" ]]; then
-            echo "::error::Could not locate kms-policy-candidates.json in downloaded probe artifacts"
+            )"
+            if [[ -z "${kms_probe_candidates_file}" ]]; then
+              echo "::error::Could not locate kms-policy-candidates.json for profile '${profile}'"
+              exit 1
+            fi
+
+            python3 - "${profile}" "${kms_probe_candidates_file}" "e2e/kms-release" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          profile = sys.argv[1]
+          probe_file = pathlib.Path(sys.argv[2])
+          release_dir = pathlib.Path(sys.argv[3])
+          policy_file = release_dir / f"kms-phala-attestation-policy.{profile}.json"
+
+          def normalize(values):
+              out = []
+              for value in values:
+                  if isinstance(value, str):
+                      candidate = value.strip().lower().removeprefix("0x")
+                      if candidate:
+                          out.append(candidate)
+              return out
+
+          probe_payload = json.loads(probe_file.read_text(encoding="utf-8"))
+          probe_policy = probe_payload.get("policy", {})
+          release_payload = json.loads(policy_file.read_text(encoding="utf-8"))
+          release_policy = release_payload.get("policy", {})
+
+          keys = [
+              "allowed_tcb_statuses",
+              "allowed_mrtd",
+              "allowed_rtmr0",
+              "allowed_rtmr1",
+              "allowed_rtmr2",
+              "allowed_rtmr3",
+          ]
+          for key in keys:
+              probe_values = normalize(probe_policy.get(key, []))
+              release_values = normalize(release_policy.get(f"kms_{key}", release_policy.get(key, [])))
+              if not probe_values:
+                  raise SystemExit(f"[post-release-e2e] ERROR: missing probe values for {profile}.{key}")
+              if not release_values:
+                  raise SystemExit(f"[post-release-e2e] ERROR: missing release policy values for {profile}.{key}")
+              if not set(probe_values).issubset(set(release_values)):
+                  raise SystemExit(
+                      "[post-release-e2e] ERROR: probe values are not covered by release policy "
+                      f"for profile={profile} key={key}"
+                  )
+          print(f"[post-release-e2e] OK: probed KMS measurements match release policy for profile={profile}")
+          PY
+
+            if [[ "${profile}" == "locked-read-only" ]]; then
+              locked_probe_candidates_file="${kms_probe_candidates_file}"
+            fi
+          done
+
+          if [[ -z "${locked_probe_candidates_file}" ]]; then
+            echo "::error::Did not capture locked-read-only probe candidates."
             exit 1
           fi
 
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
             e2e/node \
             e2e/kms-release \
-            "${kms_probe_candidates_file}"
+            "${locked_probe_candidates_file}"
+
+          probe_urls_json="$(printf '%s\n' "${probe_run_urls[@]}" | jq -R . | jq -s .)"
+          probe_urls_markdown="$(jq -r '.[] | "- \(.)"' <<< "${probe_urls_json}")"
 
           {
             echo "## Post-release e2e compatibility matrix"
@@ -384,6 +487,7 @@ jobs:
             echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
             echo "- KMS release tag: ${KMS_TAG}"
             echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
-            echo "- KMS probe run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
+            echo "- KMS profile probe runs:"
+            echo "${probe_urls_markdown}"
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"

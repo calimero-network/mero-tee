@@ -108,7 +108,9 @@ attestation policy from the official release at boot (profile-aware):
 https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSION}/kms-phala-attestation-policy.{PROFILE}.json
 ```
 
-`PROFILE` is selected by `KMS_POLICY_PROFILE` (`debug`, `debug-read-only`, `locked-read-only`).
+`PROFILE` is selected from the image-pinned profile marker (`/etc/mero-kms/image-profile`).
+For released profile images, deploy-time `KMS_POLICY_PROFILE` overrides are rejected.
+`KMS_POLICY_PROFILE` is only used for legacy/non-pinned local runs.
 For backward compatibility, `locked-read-only` can fall back to `kms-phala-attestation-policy.json`.
 
 This ensures the policy cannot be tweaked via env vars; it comes from the
@@ -140,7 +142,7 @@ Environment variables:
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
 - `MERO_KMS_VERSION` – fetch policy from release (e.g. `2.1.14`); recommended
 - `MERO_KMS_RELEASE_TAG` – alternative (e.g. `mero-kms-v2.1.14`)
-- `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (default)
+- `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (legacy/non-pinned runs only)
 - `MERO_KMS_POLICY_SHA256` – required when fetching policy from release
 - `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
 - `KEY_NAMESPACE_PREFIX` – key namespace prefix (default: `merod/storage`)
@@ -166,7 +168,7 @@ attestation is disabled (`ACCEPT_MOCK_ATTESTATION=false`):
 
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Keep `ENFORCE_MEASUREMENT_POLICY=true`.
-- Keep `KMS_POLICY_PROFILE=locked-read-only` for production.
+- Use the `locked-read-only` image profile for production; do not rely on profile env overrides.
 - Require both quote verification and measurement verification for key release.
 - Pin trusted values from your built/deployed image:
   - MRTD (required),

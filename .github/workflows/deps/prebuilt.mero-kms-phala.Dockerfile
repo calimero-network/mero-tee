@@ -25,6 +25,13 @@ ARG TARGETARCH
 COPY bin/${TARGETARCH}/mero-kms-phala /usr/local/bin/
 RUN chmod +x /usr/local/bin/mero-kms-phala
 
+ARG KMS_IMAGE_PROFILE=locked-read-only
+LABEL io.calimero.kms_profile="${KMS_IMAGE_PROFILE}"
+RUN mkdir -p /etc/mero-kms \
+    && printf '%s\n' "${KMS_IMAGE_PROFILE}" > /etc/mero-kms/image-profile \
+    && chmod 0444 /etc/mero-kms/image-profile
+ENV KMS_IMAGE_PROFILE="${KMS_IMAGE_PROFILE}"
+
 USER user
 
 ENV LISTEN_ADDR=0.0.0.0:8080

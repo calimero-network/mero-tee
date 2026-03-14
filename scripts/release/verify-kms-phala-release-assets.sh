@@ -258,6 +258,10 @@ jq -e --arg tag "${logical_tag}" '
   (.binaries | type == "array" and length > 0) and
   (.container.image | type == "string" and length > 0) and
   (.container.digest | type == "string" and length > 0) and
+  (.container_profile_digests.debug | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container_profile_digests["debug-read-only"] | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container_profile_digests["locked-read-only"] | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  ([.container_profile_digests.debug, .container_profile_digests["debug-read-only"], .container_profile_digests["locked-read-only"]] | unique | length == 3) and
   (.verification.kms_attest_endpoint == "/attest") and
   (.verification.attestation_policy_asset == "kms-phala-attestation-policy.json") and
   (
@@ -277,6 +281,10 @@ jq -e --arg tag "${logical_tag}" '
   (.commit_sha | type == "string" and length > 0) and
   (.container.image | type == "string" and length > 0) and
   (.container.digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container_profile_digests.debug | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container_profile_digests["debug-read-only"] | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.container_profile_digests["locked-read-only"] | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  ([.container_profile_digests.debug, .container_profile_digests["debug-read-only"], .container_profile_digests["locked-read-only"]] | unique | length == 3) and
   (.container.tags | type == "array")
 ' "${tmp_dir}/kms-phala-container-metadata.json" >/dev/null
 
@@ -300,6 +308,10 @@ jq -e --arg tag "${logical_tag}" '
   (.compatibility.profiles.debug.kms_image_tag | type == "string" and length > 0) and
   (.compatibility.profiles["debug-read-only"].kms_image_tag | type == "string" and length > 0) and
   (.compatibility.profiles["locked-read-only"].kms_image_tag | type == "string" and length > 0) and
+  (.compatibility.profiles.debug.kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.compatibility.profiles["debug-read-only"].kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  (.compatibility.profiles["locked-read-only"].kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
+  ([.compatibility.profiles.debug.kms_image_digest, .compatibility.profiles["debug-read-only"].kms_image_digest, .compatibility.profiles["locked-read-only"].kms_image_digest] | unique | length == 3) and
   (.compatibility.profiles.debug.node_profile == "debug") and
   (.compatibility.profiles["debug-read-only"].node_profile == "debug-read-only") and
   (.compatibility.profiles["locked-read-only"].node_profile == "locked-read-only")
