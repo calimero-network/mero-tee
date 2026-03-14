@@ -375,9 +375,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
+          PROFILE: ${{ matrix.profile }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          version_slug="${RELEASE_VERSION//./-}"
+          deployment_name="kms-profile-${version_slug}-${PROFILE}"
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           expected_display_title="KMS staging probe (${PROBE_LABEL})"
           gh workflow run "kms-phala-staging-probe.yaml" \
@@ -385,7 +389,8 @@ jobs:
             --ref master \
             -f kms_image="${IMAGE_REF}" \
             -f kms_tag="pinned" \
-            -f probe_label="${PROBE_LABEL}"
+            -f probe_label="${PROBE_LABEL}" \
+            -f deployment_name="${deployment_name}"
           for _ in $(seq 1 90); do
             run_id="$(gh run list \
               --repo "${GITHUB_REPOSITORY}" \

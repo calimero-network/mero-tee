@@ -116,6 +116,7 @@ Node release flow:
 - A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 - Released KMS images are profile-pinned: startup reads the image profile marker and rejects `KMS_POLICY_PROFILE` env overrides, preventing deploy-time profile switching.
 - Staging probes are dispatched with unique probe labels so CI can deterministically map each profile to its own probe run artifact.
+- Release and post-release probes now pass a deterministic deployment name per version/profile to reduce run-context drift in measured RTMR values.
 
 Recommended release order:
 

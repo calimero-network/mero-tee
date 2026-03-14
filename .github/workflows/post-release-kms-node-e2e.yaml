@@ -335,6 +335,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
+          RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -376,6 +377,7 @@ jobs:
 
           probe_run_urls=()
           locked_probe_candidates_file=""
+          version_slug="${RELEASE_VERSION//./-}"
 
           for profile in debug debug-read-only locked-read-only; do
             profile_digest="$(jq -r --arg profile "${profile}" '.compatibility.profiles[$profile].kms_image_digest // empty' "${compatibility_map}")"
@@ -391,13 +393,15 @@ jobs:
 
             probe_label="post-release-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}"
             expected_display_title="KMS staging probe (${probe_label})"
+            deployment_name="kms-profile-${version_slug}-${profile}"
             dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             gh workflow run "kms-phala-staging-probe.yaml" \
               --repo "${GITHUB_REPOSITORY}" \
               --ref master \
               -f kms_image="${image_ref}" \
               -f kms_tag="pinned" \
-              -f probe_label="${probe_label}"
+              -f probe_label="${probe_label}" \
+              -f deployment_name="${deployment_name}"
 
             probe_run_id=""
             for attempt in $(seq 1 90); do
