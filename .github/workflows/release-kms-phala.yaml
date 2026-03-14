@@ -375,23 +375,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
+          PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          expected_display_title="KMS staging probe (${PROBE_LABEL})"
           gh workflow run "kms-phala-staging-probe.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref master \
             -f kms_image="${IMAGE_REF}" \
-            -f kms_tag="pinned"
+            -f kms_tag="pinned" \
+            -f probe_label="${PROBE_LABEL}"
           for _ in $(seq 1 90); do
             run_id="$(gh run list \
               --repo "${GITHUB_REPOSITORY}" \
               --workflow "kms-phala-staging-probe.yaml" \
               --event workflow_dispatch \
               --branch master \
-              --limit 5 \
-              --json databaseId,createdAt \
-              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+              --limit 20 \
+              --json databaseId,createdAt,displayTitle \
+              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -z "${run_id}" ]]; then
+              run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "kms-phala-staging-probe.yaml" \
+                --event workflow_dispatch \
+                --branch master \
+                --limit 20 \
+                --json databaseId,createdAt \
+                --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            fi
             if [[ -n "${run_id}" ]]; then
               echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
               break

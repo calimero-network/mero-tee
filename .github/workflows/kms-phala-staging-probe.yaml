@@ -1,8 +1,13 @@
 name: KMS staging probe (Phala)
+run-name: KMS staging probe (${{ inputs.probe_label != '' && inputs.probe_label || (inputs.kms_tag != '' && inputs.kms_tag || 'custom') }})
 
 on:
   workflow_dispatch:
     inputs:
+      probe_label:
+        description: "Optional unique label for correlating dispatch and run selection"
+        required: false
+        default: ""
       kms_image:
         description: "Optional explicit pinned image override (for example ghcr.io/calimero-network/mero-kms-phala:pr-1). If empty, workflow derives image from kms_tag."
         required: false
