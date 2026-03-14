@@ -619,14 +619,6 @@ jobs:
           node_allowed_rtmr2_locked_json="$(jq -c '.allowed_rtmr2' <<< "${np_locked}")"
           node_allowed_rtmr3_locked_json="$(jq -c '.allowed_rtmr3' <<< "${np_locked}")"
 
-          # Legacy/default alias points to locked-read-only profile.
-          node_allowed_tcb_json="${node_allowed_tcb_locked_json}"
-          node_allowed_mrtd_json="${node_allowed_mrtd_locked_json}"
-          node_allowed_rtmr0_json="${node_allowed_rtmr0_locked_json}"
-          node_allowed_rtmr1_json="${node_allowed_rtmr1_locked_json}"
-          node_allowed_rtmr2_json="${node_allowed_rtmr2_locked_json}"
-          node_allowed_rtmr3_json="${node_allowed_rtmr3_locked_json}"
-
           jq -n \
             --arg tag "${PREP_VERSION}" \
             --arg run_id "${GH_RUN_ID}" \
@@ -731,7 +723,6 @@ jobs:
             kms_allowed_tcb_debug_json kms_allowed_mrtd_debug_json kms_allowed_rtmr0_debug_json kms_allowed_rtmr1_debug_json kms_allowed_rtmr2_debug_json kms_allowed_rtmr3_debug_json \
             kms_allowed_tcb_debug_ro_json kms_allowed_mrtd_debug_ro_json kms_allowed_rtmr0_debug_ro_json kms_allowed_rtmr1_debug_ro_json kms_allowed_rtmr2_debug_ro_json kms_allowed_rtmr3_debug_ro_json \
             kms_allowed_tcb_locked_json kms_allowed_mrtd_locked_json kms_allowed_rtmr0_locked_json kms_allowed_rtmr1_locked_json kms_allowed_rtmr2_locked_json kms_allowed_rtmr3_locked_json \
-            node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json \
             node_allowed_tcb_debug_json node_allowed_mrtd_debug_json node_allowed_rtmr0_debug_json node_allowed_rtmr1_debug_json node_allowed_rtmr2_debug_json node_allowed_rtmr3_debug_json \
             node_allowed_tcb_debug_ro_json node_allowed_mrtd_debug_ro_json node_allowed_rtmr0_debug_ro_json node_allowed_rtmr1_debug_ro_json node_allowed_rtmr2_debug_ro_json node_allowed_rtmr3_debug_ro_json \
             node_allowed_tcb_locked_json node_allowed_mrtd_locked_json node_allowed_rtmr0_locked_json node_allowed_rtmr1_locked_json node_allowed_rtmr2_locked_json node_allowed_rtmr3_locked_json; do
