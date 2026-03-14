@@ -111,6 +111,9 @@ https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSIO
 `PROFILE` is selected from the image-pinned profile marker (`/etc/mero-kms/image-profile`).
 For released profile images, deploy-time `KMS_POLICY_PROFILE` overrides are rejected.
 `KMS_POLICY_PROFILE` is only used for legacy/non-pinned local runs.
+At startup (when mock attestation is disabled), KMS emits a runtime event
+`calimero.kms.profile=<profile>` to extend RTMR3 and bind measurements to the
+selected profile cohort.
 For backward compatibility, `locked-read-only` can fall back to `kms-phala-attestation-policy.json`.
 
 This ensures the policy cannot be tweaked via env vars; it comes from the
