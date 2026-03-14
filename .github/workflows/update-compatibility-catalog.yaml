@@ -24,8 +24,10 @@ jobs:
         run: |
           set -euo pipefail
           repo="${GITHUB_REPOSITORY}"
-          releases_json="$(gh api "repos/${repo}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"
-          versions="$(echo "${releases_json}" | grep -E '^"mero-kms-v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/"mero-kms-v//;s/"$//' | sort -V -u)"
+          versions="$(gh api "repos/${repo}/releases" \
+            --paginate \
+            --jq '.[] | select(.draft == false and (.tag_name | test("^mero-kms-v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | (.tag_name | sub("^mero-kms-v"; ""))' \
+            | sort -V -u)"
           catalog="[]"
           for v in ${versions}; do
             kms_tag="mero-kms-v${v}"

@@ -111,6 +111,7 @@ Node release flow:
 
 - On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
 - KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
+- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`; a lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 
 Recommended release order:
 

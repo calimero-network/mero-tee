@@ -1,6 +1,26 @@
 name: Post-release KMS-node compatibility e2e
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/post-release-kms-node-e2e.yaml"
+      - ".github/workflows/release-node-image-gcp.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
+      - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      - "mero-kms/Cargo.toml"
+      - "mero-tee/versions.json"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/post-release-kms-node-e2e.yaml"
+      - ".github/workflows/release-node-image-gcp.yaml"
+      - ".github/workflows/kms-phala-staging-probe.yaml"
+      - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      - "mero-kms/Cargo.toml"
+      - "mero-tee/versions.json"
+      - "Cargo.lock"
   workflow_run:
     workflows:
       - Release mero-tee
@@ -27,6 +47,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  smoke_workflow_wiring:
+    name: Smoke post-release e2e wiring
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate helper script syntax
+        run: |
+          bash -n scripts/release/e2e-verify-kms-node-compatibility.sh
+
+      - name: Validate version manifest shape
+        run: |
+          jq -e '
+            (.imageVersion | type == "string" and length > 0) and
+            (.merodVersion | type == "string" and length > 0)
+          ' mero-tee/versions.json >/dev/null
+
   verify_released_compatibility:
     name: Verify released KMS-node compatibility
     runs-on: ubuntu-latest
@@ -78,6 +117,8 @@ jobs:
 
           tee_tag=""
           version=""
+          should_run="true"
+          skip_reason=""
           if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
             if [[ "${WORKFLOW_NAME}" != "Release mero-tee" ]]; then
               echo "::error::Expected workflow_run from 'Release mero-tee', got '${WORKFLOW_NAME}'."
@@ -105,13 +146,18 @@ jobs:
           fi
 
           if ! wait_for_release_tag "${tee_tag}" 30 10; then
-            echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
-            exit 1
+            if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+              should_run="false"
+              skip_reason="Node release tag '${tee_tag}' is not published yet."
+            else
+              echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
           fi
 
           kms_tag=""
           kms_tag_source=""
-          if [[ -n "${INPUT_KMS_TAG}" ]]; then
+          if [[ "${should_run}" == "true" && -n "${INPUT_KMS_TAG}" ]]; then
             kms_tag_source="input"
             kms_tag="${INPUT_KMS_TAG}"
             if ! release_exists "${kms_tag}"; then
@@ -122,7 +168,7 @@ jobs:
               echo "::error::Input KMS release tag '${kms_tag}' is missing required profile policy assets."
               exit 1
             fi
-          else
+          elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
             if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_profile_assets "${default_kms_tag}")" == "true" ]]; then
               kms_tag="${default_kms_tag}"
@@ -143,26 +189,52 @@ jobs:
                   --jq '.[] | .tagName | select(startswith("mero-kms-v"))'
               )
               if [[ -z "${fallback_kms_tag}" ]]; then
-                echo "::error::No published mero-kms-v* release with required profile policy assets found in ${GITHUB_REPOSITORY}."
-                exit 1
+                if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+                  should_run="false"
+                  skip_reason="No published mero-kms-v* release with required profile policy assets found yet."
+                else
+                  echo "::error::No published mero-kms-v* release with required profile policy assets found in ${GITHUB_REPOSITORY}."
+                  exit 1
+                fi
+              else
+                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing profile policy assets; falling back to '${fallback_kms_tag}'."
+                kms_tag="${fallback_kms_tag}"
+                kms_tag_source="fallback-with-profile-assets"
               fi
-              echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing profile policy assets; falling back to '${fallback_kms_tag}'."
-              kms_tag="${fallback_kms_tag}"
-              kms_tag_source="fallback-with-profile-assets"
             fi
           fi
 
-          if [[ -z "${kms_tag}" || -z "${kms_tag_source}" ]]; then
-            echo "::error::Could not resolve KMS tag selection."
-            exit 1
+          if [[ "${should_run}" == "true" && ( -z "${kms_tag}" || -z "${kms_tag_source}" ) ]]; then
+            if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+              should_run="false"
+              skip_reason="Could not resolve KMS tag selection for this release yet."
+            else
+              echo "::error::Could not resolve KMS tag selection."
+              exit 1
+            fi
           fi
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tee_tag=${tee_tag}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag=${kms_tag}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag_source=${kms_tag_source}" >> "${GITHUB_OUTPUT}"
+          echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
+          echo "skip_reason=${skip_reason}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip e2e until compatible releases are available
+        if: ${{ steps.resolve.outputs.should_run != 'true' }}
+        run: |
+          {
+            echo "## Post-release e2e compatibility matrix"
+            echo ""
+            echo "- Status: skipped"
+            echo "- Reason: ${{ steps.resolve.outputs.skip_reason }}"
+            echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag || 'unknown' }}"
+            echo "- KMS release tag: ${{ steps.resolve.outputs.kms_tag || 'unresolved' }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Download release assets and synthesize node candidates
+        if: ${{ steps.resolve.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
@@ -241,6 +313,7 @@ jobs:
           done
 
       - name: Probe released KMS and verify strict profile matrix
+        if: ${{ steps.resolve.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
