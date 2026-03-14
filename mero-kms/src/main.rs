@@ -833,7 +833,8 @@ mod tests {
 
     #[test]
     fn resolve_kms_profile_uses_pinned_profile() {
-        let selected = resolve_kms_profile(Some("debug-read-only"), None).expect("profile resolves");
+        let selected =
+            resolve_kms_profile(Some("debug-read-only"), None).expect("profile resolves");
         assert_eq!(selected, "debug-read-only");
     }
 
