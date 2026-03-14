@@ -382,7 +382,7 @@ jobs:
         run: |
           set -euo pipefail
           version_slug="${RELEASE_VERSION//./-}"
-          deployment_name="kms-profile-${version_slug}-${PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          deployment_name="kms-profile-${version_slug}-${PROFILE}"
           dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           expected_display_title="KMS staging probe (${PROBE_LABEL})"
           gh workflow run "kms-phala-staging-probe.yaml" \
