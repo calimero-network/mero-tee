@@ -50,6 +50,17 @@ Choose the profile that matches your risk/operability requirements:
 - `debug-read-only`
 - `locked-read-only` (recommended production baseline)
 
+Recommended profile-to-KMS trust mapping:
+
+| Profile | Intended environment | KMS policy cohort |
+|---|---|---|
+| `debug` | local/dev only | debug/non-production KMS only |
+| `debug-read-only` | integration/pre-prod | non-production KMS only |
+| `locked-read-only` | production | production KMS policy |
+
+Do not point debug profiles at production KMS key-release policy.
+Use matching KMS profile policy/image cohorts (`*-debug`, `*-debug-read-only`, `*-locked-read-only`).
+
 Provision TDX-capable instances and pin to the exact image/version you verified.
 Avoid mutable deployment references.
 
@@ -81,10 +92,21 @@ During boot, the init service maps it to `MERO_TEE_VERSION` for `merod` via
 
 Use published measurements to verify running node state:
 
-- [Verify MRTD guide](../operations/verify-mrtd.md)
+- [Trust, verification, and measurements](../../release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr)
 
 This confirms the deployed node measurement matches the signed allowlist for the
 selected release/profile.
+
+Before promoting a release pair, verify KMS↔node compatibility mapping from the signed KMS assets:
+
+```bash
+TAG=2.1.10
+curl -fsSL \
+  "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v${TAG}/kms-phala-compatibility-map.json" \
+  | jq '.compatibility'
+```
+
+Check that `node_image_tag` matches the node release you deployed and that policy URLs resolve to reviewed signed assets.
 
 ---
 

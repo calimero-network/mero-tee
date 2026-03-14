@@ -110,6 +110,4 @@ Then enforce runtime attestation in deployed services.
 
 See:
 
-- [Trust & verification](../release/trust-and-verification.md)
-- [TEE verification for beginners](../release/verification-beginner.md)
-- [Verify MRTD](../runbooks/operations/verify-mrtd.md)
+- [Trust, verification, and measurements](../release/trust-and-verification.md)

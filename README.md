@@ -20,11 +20,10 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Phala KMS attestation task list (mero-tee)](docs/policies/kms-phala-attestation-task-list.md)
 - [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
 - [KMS staging probe workflow (Phala)](docs/policies/kms-phala-staging-probe.md)
-- [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) – Verify nodes run the attested image
+- [Trust, verification, and measurements](docs/release/trust-and-verification.md) – Canonical operator/client guide
 - [Release verification output examples](docs/release/verification-examples.md)
 - [Migration & Implementation Plan](docs/architecture/migration-plan.md)
 - [Architecture & verification boundaries](docs/architecture/trust-boundaries.md)
-- [TEE verification for beginners](docs/release/verification-beginner.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Architecture graph](docs/DOCS_GRAPH.md) – KMS, mero-tee, regular nodes, and attestation flow
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
@@ -51,7 +50,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 
 ## Releases
 
-- **mero-kms-vX.Y.Z**: KMS binaries and trust assets
+- **mero-kms-vX.Y.Z**: KMS binaries and trust assets (including profile policies for `debug`, `debug-read-only`, `locked-read-only`)
 - **mero-kms-phala release trust bundle**:
   - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
   - `kms-phala-checksums.txt` (SHA-256 for binary archives),
@@ -60,7 +59,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
   - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
   - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
 - **Compatibility map artifact**:
-  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus policy URLs),
+  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus profile-specific policy URLs/hashes),
   - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
 - **mero-tee-vX.Y.Z**: `published-mrtds.json` (MRTDs + measurement policy), `release-provenance.json`, SBOM, and `node-image-gcp-checksums.txt`
   - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
@@ -69,10 +68,10 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 
 - **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
 - **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
-- **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy. The build injects `calimero.profile` and `calimero.root_hash` into the kernel cmdline (RTMR[2]). At boot, calimero-init extends RTMR[3] with profile+root_hash (kernel 6.16+). Each image produces unique measurements; cannot be forged without an identical image. Still does not cover every environment/control-plane risk outside the attested boundary.
+- **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy. The build injects `calimero.role=node`, `calimero.profile`, and `calimero.root_hash` into the kernel cmdline (RTMR[2]). At boot, calimero-init extends RTMR[3] with role+profile+root_hash (kernel 6.16+). Each image produces unique measurements; cannot be forged without an identical image. Still does not cover every environment/control-plane risk outside the attested boundary.
 - **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Verify MRTD](docs/runbooks/operations/verify-mrtd.md) for step-by-step instructions.
+Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Trust, verification, and measurements](docs/release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr) for the concrete workflow.
 
 For a consolidated trust model and verification entry point, see [Trust & Verification](docs/release/trust-and-verification.md).
 
@@ -93,13 +92,13 @@ Need an explicit artifact list for air-gapped or bandwidth-limited environments?
 Generate a pinned `core` TEE config snippet from signed release policy:
 
 ```bash
-scripts/policy/generate-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/
+scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/
 ```
 
 Apply signed policy directly to an existing `merod` node config:
 
 ```bash
-scripts/policy/apply-merod-kms-phala-attestation-config.sh X.Y.Z https://<kms-url>/ /path/to/merod-home default
+scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/ /path/to/merod-home default
 ```
 
 KMS release flow (draft release + human approval):

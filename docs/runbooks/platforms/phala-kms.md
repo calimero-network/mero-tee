@@ -15,6 +15,8 @@ In the Phala lane:
 - `merod` (from `calimero-network/core`) proves node identity + attestation to KMS.
 - KMS verifies quote validity, challenge freshness, peer binding, and policy
   allowlists before releasing storage keys.
+- Production policy should require both quote verification and full measurement checks
+  (MRTD + RTMR0..3) for both directions (`merod` verifying KMS and KMS verifying `merod`).
 
 Implementation references:
 
@@ -69,7 +71,14 @@ services:
       CHALLENGE_TTL_SECS: "60"
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
+      MAX_PENDING_CHALLENGES: "10000"
+      KMS_POLICY_PROFILE: "locked-read-only"
+      KEY_NAMESPACE_PREFIX: "merod/storage"
+      # Required if using MERO_KMS_VERSION/MERO_KMS_RELEASE_TAG release-policy mode
+      # MERO_KMS_POLICY_SHA256: "<sha256 from compatibility map>"
       ALLOWED_TCB_STATUSES: "UpToDate"
+      # Optional HA/shared challenge store
+      # REDIS_URL: "redis://redis:6379/0"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
 ```
@@ -79,6 +88,9 @@ Production guidance:
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
 - Pin MRTD (and preferably RTMR0-3) allowlists.
 - Do not use mutable container tags (`:latest`).
+- Set `KMS_POLICY_PROFILE=locked-read-only` for production cohorts.
+- Keep KMS endpoints private to trusted network paths; do not expose key-release APIs publicly.
+- Use TLS (preferably mTLS) on any non-local network path between `merod` and KMS.
 
 ---
 
@@ -87,7 +99,7 @@ Production guidance:
 Use signed policy from the same reviewed release:
 
 ```bash
-scripts/policy/apply-merod-kms-phala-attestation-config.sh "${TAG}" http://mero-kms:8080/ /data default
+scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read-only "${TAG}" http://mero-kms:8080/ /data default
 ```
 
 This writes `tee.kms.phala.attestation.*` config values so `merod` verifies KMS
@@ -95,7 +107,24 @@ self-attestation (`/attest`) and enforces policy before key fetch.
 
 ---
 
-## 6) Runtime checks
+## 6) Profile compatibility and trust cohorts
+
+`node-image-gcp` publishes three profiles (`debug`, `debug-read-only`, `locked-read-only`), but production key-release policy should be treated as a separate trust cohort from debug/testing cohorts.
+
+Recommended mapping:
+
+| Node profile | KMS policy cohort | Keys |
+|---|---|---|
+| `debug` | dedicated debug/non-production KMS policy | non-production only |
+| `debug-read-only` | dedicated pre-production KMS policy | non-production only |
+| `locked-read-only` | production KMS policy | production keys |
+
+Do not mix debug profile measurements into production KMS allowlists.
+For release images, use profile-specific KMS tags (for example `vX.Y.Z-debug`, `vX.Y.Z-debug-read-only`, `vX.Y.Z-locked-read-only`).
+
+---
+
+## 7) Runtime checks
 
 - KMS health:
   - `GET /health`
@@ -108,14 +137,21 @@ self-attestation (`/attest`) and enforces policy before key fetch.
 The expected runtime sequence is documented in
 [Architecture](../../architecture/trust-boundaries.md#attestation-enforcement-points).
 
+Operational note for HA/LB deployments:
+
+- `/challenge` state is in-memory by default; set `REDIS_URL` for shared challenge state across replicas.
+- Without shared state, route `/challenge` and subsequent `/get-key` for the same caller to the same instance (session affinity/stickiness).
+- If this is misconfigured, expect intermittent `invalid_challenge` failures.
+
 ---
 
-## 7) Common mistakes to avoid
+## 8) Common mistakes to avoid
 
 - Treating this as a generic "Phala deployment" guide.
 - Reusing unpinned or unsigned policy inputs.
 - Enabling mock attestation in production.
 - Sharing one KMS across unrelated release cohorts without explicit policy governance.
+- Mixing debug profile nodes with production key-release policy.
 
 ---
 

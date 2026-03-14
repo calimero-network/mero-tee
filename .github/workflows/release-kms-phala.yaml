@@ -198,7 +198,13 @@ jobs:
             type=ref,prefix=pr-,event=pr
             type=sha,prefix=,format=short
             type=raw,value=${{ needs.prepare.outputs.version }},enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}-debug,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}-debug-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}-locked-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest-debug,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest-debug-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest-locked-read-only,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'false' }}
             type=raw,value=prerelease,enable=${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.docker_release == 'true' && needs.prepare.outputs.prerelease == 'true' }}
 
       - name: Build and push image
@@ -412,13 +418,38 @@ jobs:
           kms_allowed_rtmr2_json="$(jq -c '.policy.allowed_rtmr2' "${candidates_file}")"
           kms_allowed_rtmr3_json="$(jq -c '.policy.allowed_rtmr3' "${candidates_file}")"
 
-          np="$(jq '.profiles["locked-read-only"]' "${node_policy_file}")"
-          node_allowed_tcb_json="$(jq -c '.allowed_tcb_statuses' <<< "${np}")"
-          node_allowed_mrtd_json="$(jq -c '.allowed_mrtd' <<< "${np}")"
-          node_allowed_rtmr0_json="$(jq -c '.allowed_rtmr0' <<< "${np}")"
-          node_allowed_rtmr1_json="$(jq -c '.allowed_rtmr1' <<< "${np}")"
-          node_allowed_rtmr2_json="$(jq -c '.allowed_rtmr2' <<< "${np}")"
-          node_allowed_rtmr3_json="$(jq -c '.allowed_rtmr3' <<< "${np}")"
+          np_debug="$(jq '.profiles.debug' "${node_policy_file}")"
+          np_debug_ro="$(jq '.profiles["debug-read-only"]' "${node_policy_file}")"
+          np_locked="$(jq '.profiles["locked-read-only"]' "${node_policy_file}")"
+
+          node_allowed_tcb_debug_json="$(jq -c '.allowed_tcb_statuses' <<< "${np_debug}")"
+          node_allowed_mrtd_debug_json="$(jq -c '.allowed_mrtd' <<< "${np_debug}")"
+          node_allowed_rtmr0_debug_json="$(jq -c '.allowed_rtmr0' <<< "${np_debug}")"
+          node_allowed_rtmr1_debug_json="$(jq -c '.allowed_rtmr1' <<< "${np_debug}")"
+          node_allowed_rtmr2_debug_json="$(jq -c '.allowed_rtmr2' <<< "${np_debug}")"
+          node_allowed_rtmr3_debug_json="$(jq -c '.allowed_rtmr3' <<< "${np_debug}")"
+
+          node_allowed_tcb_debug_ro_json="$(jq -c '.allowed_tcb_statuses' <<< "${np_debug_ro}")"
+          node_allowed_mrtd_debug_ro_json="$(jq -c '.allowed_mrtd' <<< "${np_debug_ro}")"
+          node_allowed_rtmr0_debug_ro_json="$(jq -c '.allowed_rtmr0' <<< "${np_debug_ro}")"
+          node_allowed_rtmr1_debug_ro_json="$(jq -c '.allowed_rtmr1' <<< "${np_debug_ro}")"
+          node_allowed_rtmr2_debug_ro_json="$(jq -c '.allowed_rtmr2' <<< "${np_debug_ro}")"
+          node_allowed_rtmr3_debug_ro_json="$(jq -c '.allowed_rtmr3' <<< "${np_debug_ro}")"
+
+          node_allowed_tcb_locked_json="$(jq -c '.allowed_tcb_statuses' <<< "${np_locked}")"
+          node_allowed_mrtd_locked_json="$(jq -c '.allowed_mrtd' <<< "${np_locked}")"
+          node_allowed_rtmr0_locked_json="$(jq -c '.allowed_rtmr0' <<< "${np_locked}")"
+          node_allowed_rtmr1_locked_json="$(jq -c '.allowed_rtmr1' <<< "${np_locked}")"
+          node_allowed_rtmr2_locked_json="$(jq -c '.allowed_rtmr2' <<< "${np_locked}")"
+          node_allowed_rtmr3_locked_json="$(jq -c '.allowed_rtmr3' <<< "${np_locked}")"
+
+          # Legacy/default alias points to locked-read-only profile.
+          node_allowed_tcb_json="${node_allowed_tcb_locked_json}"
+          node_allowed_mrtd_json="${node_allowed_mrtd_locked_json}"
+          node_allowed_rtmr0_json="${node_allowed_rtmr0_locked_json}"
+          node_allowed_rtmr1_json="${node_allowed_rtmr1_locked_json}"
+          node_allowed_rtmr2_json="${node_allowed_rtmr2_locked_json}"
+          node_allowed_rtmr3_json="${node_allowed_rtmr3_locked_json}"
 
           jq -n \
             --arg tag "${{ needs.prepare.outputs.version }}" \
@@ -429,6 +460,9 @@ jobs:
             --arg node_image_tag "${node_image_tag}" \
             --arg kms_policy_url "${kms_policy_url}" \
             --arg node_policy_url "${node_policy_url}" \
+            --arg kms_policy_debug_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug.json" \
+            --arg kms_policy_debug_ro_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug-read-only.json" \
+            --arg kms_policy_locked_url "https://github.com/${{ github.repository }}/releases/download/${kms_tag}/kms-phala-attestation-policy.locked-read-only.json" \
             '{
               schema_version: 1,
               tag: $tag,
@@ -437,10 +471,43 @@ jobs:
               generated_at: (now | todate),
               compatibility: {
                 version: $version,
+                roles: {
+                  kms: "kms",
+                  node: "node"
+                },
                 kms_tag: $kms_tag,
                 node_image_tag: $node_image_tag,
                 kms_policy_url: $kms_policy_url,
-                node_policy_url: $node_policy_url
+                node_policy_url: $node_policy_url,
+                profiles: {
+                  debug: {
+                    kms_image_tag: ($version + "-debug"),
+                    kms_role: "kms",
+                    kms_policy_asset: "kms-phala-attestation-policy.debug.json",
+                    kms_policy_url: $kms_policy_debug_url,
+                    node_role: "node",
+                    node_profile: "debug",
+                    node_policy_url: $node_policy_url
+                  },
+                  "debug-read-only": {
+                    kms_image_tag: ($version + "-debug-read-only"),
+                    kms_role: "kms",
+                    kms_policy_asset: "kms-phala-attestation-policy.debug-read-only.json",
+                    kms_policy_url: $kms_policy_debug_ro_url,
+                    node_role: "node",
+                    node_profile: "debug-read-only",
+                    node_policy_url: $node_policy_url
+                  },
+                  "locked-read-only": {
+                    kms_image_tag: ($version + "-locked-read-only"),
+                    kms_role: "kms",
+                    kms_policy_asset: "kms-phala-attestation-policy.locked-read-only.json",
+                    kms_policy_url: $kms_policy_locked_url,
+                    node_role: "node",
+                    node_profile: "locked-read-only",
+                    node_policy_url: $node_policy_url
+                  }
+                }
               }
             }' > release-assets/kms-phala-compatibility-map.json
 
@@ -472,12 +539,57 @@ jobs:
 
           for json_var in \
             kms_allowed_tcb_json kms_allowed_mrtd_json kms_allowed_rtmr0_json kms_allowed_rtmr1_json kms_allowed_rtmr2_json kms_allowed_rtmr3_json \
-            node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json; do
-            if ! jq -e 'type == "array"' <<< "${!json_var}" >/dev/null 2>&1; then
-              echo "::error::${json_var} must be a JSON array. Got: ${!json_var}"
+            node_allowed_tcb_json node_allowed_mrtd_json node_allowed_rtmr0_json node_allowed_rtmr1_json node_allowed_rtmr2_json node_allowed_rtmr3_json \
+            node_allowed_tcb_debug_json node_allowed_mrtd_debug_json node_allowed_rtmr0_debug_json node_allowed_rtmr1_debug_json node_allowed_rtmr2_debug_json node_allowed_rtmr3_debug_json \
+            node_allowed_tcb_debug_ro_json node_allowed_mrtd_debug_ro_json node_allowed_rtmr0_debug_ro_json node_allowed_rtmr1_debug_ro_json node_allowed_rtmr2_debug_ro_json node_allowed_rtmr3_debug_ro_json \
+            node_allowed_tcb_locked_json node_allowed_mrtd_locked_json node_allowed_rtmr0_locked_json node_allowed_rtmr1_locked_json node_allowed_rtmr2_locked_json node_allowed_rtmr3_locked_json; do
+            if ! jq -e 'type == "array" and length > 0' <<< "${!json_var}" >/dev/null 2>&1; then
+              echo "::error::${json_var} must be a non-empty JSON array. Got: ${!json_var}"
               exit 1
             fi
           done
+
+          for metric in mrtd rtmr0 rtmr1 rtmr2 rtmr3; do
+            locked_var="node_allowed_${metric}_locked_json"
+            debug_var="node_allowed_${metric}_debug_json"
+            debug_ro_var="node_allowed_${metric}_debug_ro_json"
+            if jq -e --argjson locked "${!locked_var}" --argjson other "${!debug_var}" '
+              [($locked[] | ascii_downcase)] as $locked_norm
+              | [($other[] | ascii_downcase)] as $other_norm
+              | any($other_norm[] as $v; ($locked_norm | index($v)) != null)
+            ' >/dev/null; then
+              echo "::error::Locked profile ${metric} allowlist overlaps debug profile values."
+              exit 1
+            fi
+            if jq -e --argjson locked "${!locked_var}" --argjson other "${!debug_ro_var}" '
+              [($locked[] | ascii_downcase)] as $locked_norm
+              | [($other[] | ascii_downcase)] as $other_norm
+              | any($other_norm[] as $v; ($locked_norm | index($v)) != null)
+            ' >/dev/null; then
+              echo "::error::Locked profile ${metric} allowlist overlaps debug-read-only profile values."
+              exit 1
+            fi
+          done
+
+          # Role separation guardrail: KMS and node must not share RTMR3 values
+          # within the same profile cohort, otherwise image spoofing boundaries blur.
+          ensure_no_overlap() {
+            local label="$1"
+            local left_json="$2"
+            local right_json="$3"
+            if jq -e --argjson left "${left_json}" --argjson right "${right_json}" '
+              [($left[] | ascii_downcase)] as $l
+              | [($right[] | ascii_downcase)] as $r
+              | any($r[] as $v; ($l | index($v)) != null)
+            ' >/dev/null; then
+              echo "::error::${label} has overlapping allowlist values between KMS and node roles."
+              exit 1
+            fi
+          }
+
+          ensure_no_overlap "debug RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_json}"
+          ensure_no_overlap "debug-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_debug_ro_json}"
+          ensure_no_overlap "locked-read-only RTMR3" "${kms_allowed_rtmr3_json}" "${node_allowed_rtmr3_locked_json}"
 
           read -r default_binding_hex default_binding_b64 < <(
             python3 - <<'PY'
@@ -519,6 +631,11 @@ jobs:
                 },
                 policy_registry_entry_path: $policy_registry_source_path,
                 attestation_policy_asset: "kms-phala-attestation-policy.json",
+                policy_profile_assets: {
+                  debug: "kms-phala-attestation-policy.debug.json",
+                  "debug-read-only": "kms-phala-attestation-policy.debug-read-only.json",
+                  "locked-read-only": "kms-phala-attestation-policy.locked-read-only.json"
+                },
                 container_metadata_asset: "kms-phala-container-metadata.json",
                 rekor: {
                   index_asset: "kms-phala-rekor-index.json"
@@ -528,6 +645,9 @@ jobs:
                 "kms-phala-checksums.txt": ["operator-required", "auditor-required"],
                 "kms-phala-release-manifest.json": ["operator-required", "auditor-required"],
                 "kms-phala-attestation-policy.json": ["operator-required", "auditor-required"],
+                "kms-phala-attestation-policy.debug.json": ["operator-required", "auditor-required"],
+                "kms-phala-attestation-policy.debug-read-only.json": ["operator-required", "auditor-required"],
+                "kms-phala-attestation-policy.locked-read-only.json": ["operator-required", "auditor-required"],
                 "kms-phala-container-metadata.json": ["operator-required", "auditor-required"],
                 "kms-phala-rekor-index.json": ["auditor-required"],
                 "kms-phala-trust-bundle.tar.gz": ["operator-convenience", "auditor-convenience"],
@@ -537,73 +657,142 @@ jobs:
               }
             }' > release-assets/kms-phala-release-manifest.json
 
-          jq -n \
-            --arg tag "${{ needs.prepare.outputs.version }}" \
-            --arg commit "${{ needs.prepare.outputs.target_commit }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_attempt "${{ github.run_attempt }}" \
-            --arg repository "${{ github.repository }}" \
-            --arg workflow "${{ github.workflow }}" \
-            --arg ref "${{ github.ref }}" \
-            --arg policy_registry_source_path "${policy_registry_source_path}" \
-            --arg default_binding_hex "${default_binding_hex}" \
-            --arg default_binding_b64 "${default_binding_b64}" \
-            --argjson kms_allowed_tcb "${kms_allowed_tcb_json}" \
-            --argjson kms_allowed_mrtd "${kms_allowed_mrtd_json}" \
-            --argjson kms_allowed_rtmr0 "${kms_allowed_rtmr0_json}" \
-            --argjson kms_allowed_rtmr1 "${kms_allowed_rtmr1_json}" \
-            --argjson kms_allowed_rtmr2 "${kms_allowed_rtmr2_json}" \
-            --argjson kms_allowed_rtmr3 "${kms_allowed_rtmr3_json}" \
-            --argjson node_allowed_tcb "${node_allowed_tcb_json}" \
-            --argjson node_allowed_mrtd "${node_allowed_mrtd_json}" \
-            --argjson node_allowed_rtmr0 "${node_allowed_rtmr0_json}" \
-            --argjson node_allowed_rtmr1 "${node_allowed_rtmr1_json}" \
-            --argjson node_allowed_rtmr2 "${node_allowed_rtmr2_json}" \
-            --argjson node_allowed_rtmr3 "${node_allowed_rtmr3_json}" \
-            '{
-              schema_version: 1,
-              tag: $tag,
-              commit_sha: $commit,
-              workflow_run_id: $run_id,
-              workflow_run_attempt: $run_attempt,
-              generated_at: (now | todate),
-              source: {
-                repository: $repository,
-                workflow: $workflow,
-                ref: $ref
-              },
-              policy_registry_entry_path: $policy_registry_source_path,
-              kms: {
-                provider: "mero-kms-phala",
-                attest_endpoint: "/attest",
-                report_data_layout: {
-                  bytes_0_31: "nonce",
-                  bytes_32_63: "binding_or_default_domain_separator"
+          write_policy_file() {
+            local profile="$1"
+            local node_tcb="$2"
+            local node_mrtd="$3"
+            local node_rtmr0="$4"
+            local node_rtmr1="$5"
+            local node_rtmr2="$6"
+            local node_rtmr3="$7"
+            local output_file="$8"
+
+            jq -n \
+              --arg profile "${profile}" \
+              --arg tag "${{ needs.prepare.outputs.version }}" \
+              --arg commit "${{ needs.prepare.outputs.target_commit }}" \
+              --arg run_id "${{ github.run_id }}" \
+              --arg run_attempt "${{ github.run_attempt }}" \
+              --arg repository "${{ github.repository }}" \
+              --arg workflow "${{ github.workflow }}" \
+              --arg ref "${{ github.ref }}" \
+              --arg policy_registry_source_path "${policy_registry_source_path}" \
+              --arg default_binding_hex "${default_binding_hex}" \
+              --arg default_binding_b64 "${default_binding_b64}" \
+              --argjson kms_allowed_tcb "${kms_allowed_tcb_json}" \
+              --argjson kms_allowed_mrtd "${kms_allowed_mrtd_json}" \
+              --argjson kms_allowed_rtmr0 "${kms_allowed_rtmr0_json}" \
+              --argjson kms_allowed_rtmr1 "${kms_allowed_rtmr1_json}" \
+              --argjson kms_allowed_rtmr2 "${kms_allowed_rtmr2_json}" \
+              --argjson kms_allowed_rtmr3 "${kms_allowed_rtmr3_json}" \
+              --argjson node_allowed_tcb "${node_tcb}" \
+              --argjson node_allowed_mrtd "${node_mrtd}" \
+              --argjson node_allowed_rtmr0 "${node_rtmr0}" \
+              --argjson node_allowed_rtmr1 "${node_rtmr1}" \
+              --argjson node_allowed_rtmr2 "${node_rtmr2}" \
+              --argjson node_allowed_rtmr3 "${node_rtmr3}" \
+              '{
+                schema_version: 1,
+                role: "kms",
+                profile: $profile,
+                tag: $tag,
+                commit_sha: $commit,
+                workflow_run_id: $run_id,
+                workflow_run_attempt: $run_attempt,
+                generated_at: (now | todate),
+                source: {
+                  repository: $repository,
+                  workflow: $workflow,
+                  ref: $ref
                 },
-                default_binding_hex: $default_binding_hex,
-                default_binding_b64: $default_binding_b64
-              },
-              policy: {
-                kms_allowed_tcb_statuses: $kms_allowed_tcb,
-                kms_allowed_mrtd: $kms_allowed_mrtd,
-                kms_allowed_rtmr0: $kms_allowed_rtmr0,
-                kms_allowed_rtmr1: $kms_allowed_rtmr1,
-                kms_allowed_rtmr2: $kms_allowed_rtmr2,
-                kms_allowed_rtmr3: $kms_allowed_rtmr3,
-                node_allowed_tcb_statuses: $node_allowed_tcb,
-                node_allowed_mrtd: $node_allowed_mrtd,
-                node_allowed_rtmr0: $node_allowed_rtmr0,
-                node_allowed_rtmr1: $node_allowed_rtmr1,
-                node_allowed_rtmr2: $node_allowed_rtmr2,
-                node_allowed_rtmr3: $node_allowed_rtmr3
-              },
-              merod_config_path: "tee.kms.phala.attestation"
-            }' > release-assets/kms-phala-attestation-policy.json
+                policy_registry_entry_path: $policy_registry_source_path,
+                measurement_markers: {
+                  kms_role: "calimero.role=kms",
+                  node_role: "calimero.role=node",
+                  node_profile_key: "calimero.profile",
+                  node_root_hash_key: "calimero.root_hash"
+                },
+                kms: {
+                  provider: "mero-kms-phala",
+                  attest_endpoint: "/attest",
+                  report_data_layout: {
+                    bytes_0_31: "nonce",
+                    bytes_32_63: "binding_or_default_domain_separator"
+                  },
+                  default_binding_hex: $default_binding_hex,
+                  default_binding_b64: $default_binding_b64
+                },
+                policy: {
+                  kms_allowed_tcb_statuses: $kms_allowed_tcb,
+                  kms_allowed_mrtd: $kms_allowed_mrtd,
+                  kms_allowed_rtmr0: $kms_allowed_rtmr0,
+                  kms_allowed_rtmr1: $kms_allowed_rtmr1,
+                  kms_allowed_rtmr2: $kms_allowed_rtmr2,
+                  kms_allowed_rtmr3: $kms_allowed_rtmr3,
+                  node_allowed_tcb_statuses: $node_allowed_tcb,
+                  node_allowed_mrtd: $node_allowed_mrtd,
+                  node_allowed_rtmr0: $node_allowed_rtmr0,
+                  node_allowed_rtmr1: $node_allowed_rtmr1,
+                  node_allowed_rtmr2: $node_allowed_rtmr2,
+                  node_allowed_rtmr3: $node_allowed_rtmr3
+                },
+                merod_config_path: "tee.kms.phala.attestation"
+              }' > "${output_file}"
+          }
+
+          write_policy_file "debug" \
+            "${node_allowed_tcb_debug_json}" \
+            "${node_allowed_mrtd_debug_json}" \
+            "${node_allowed_rtmr0_debug_json}" \
+            "${node_allowed_rtmr1_debug_json}" \
+            "${node_allowed_rtmr2_debug_json}" \
+            "${node_allowed_rtmr3_debug_json}" \
+            "release-assets/kms-phala-attestation-policy.debug.json"
+
+          write_policy_file "debug-read-only" \
+            "${node_allowed_tcb_debug_ro_json}" \
+            "${node_allowed_mrtd_debug_ro_json}" \
+            "${node_allowed_rtmr0_debug_ro_json}" \
+            "${node_allowed_rtmr1_debug_ro_json}" \
+            "${node_allowed_rtmr2_debug_ro_json}" \
+            "${node_allowed_rtmr3_debug_ro_json}" \
+            "release-assets/kms-phala-attestation-policy.debug-read-only.json"
+
+          write_policy_file "locked-read-only" \
+            "${node_allowed_tcb_locked_json}" \
+            "${node_allowed_mrtd_locked_json}" \
+            "${node_allowed_rtmr0_locked_json}" \
+            "${node_allowed_rtmr1_locked_json}" \
+            "${node_allowed_rtmr2_locked_json}" \
+            "${node_allowed_rtmr3_locked_json}" \
+            "release-assets/kms-phala-attestation-policy.locked-read-only.json"
+
+          cp release-assets/kms-phala-attestation-policy.locked-read-only.json \
+            release-assets/kms-phala-attestation-policy.json
+
+          policy_sha_debug="$(sha256sum release-assets/kms-phala-attestation-policy.debug.json | awk '{print $1}')"
+          policy_sha_debug_ro="$(sha256sum release-assets/kms-phala-attestation-policy.debug-read-only.json | awk '{print $1}')"
+          policy_sha_locked="$(sha256sum release-assets/kms-phala-attestation-policy.locked-read-only.json | awk '{print $1}')"
+          jq \
+            --arg sha_debug "${policy_sha_debug}" \
+            --arg sha_debug_ro "${policy_sha_debug_ro}" \
+            --arg sha_locked "${policy_sha_locked}" \
+            '
+            .compatibility.profiles.debug.kms_policy_sha256 = $sha_debug
+            | .compatibility.profiles["debug-read-only"].kms_policy_sha256 = $sha_debug_ro
+            | .compatibility.profiles["locked-read-only"].kms_policy_sha256 = $sha_locked
+            | .compatibility.kms_policy_sha256 = $sha_locked
+            ' \
+            release-assets/kms-phala-compatibility-map.json > release-assets/kms-phala-compatibility-map.json.tmp
+          mv release-assets/kms-phala-compatibility-map.json.tmp release-assets/kms-phala-compatibility-map.json
 
           sha256sum \
             release-assets/kms-phala-checksums.txt \
             release-assets/kms-phala-release-manifest.json \
             release-assets/kms-phala-attestation-policy.json \
+            release-assets/kms-phala-attestation-policy.debug.json \
+            release-assets/kms-phala-attestation-policy.debug-read-only.json \
+            release-assets/kms-phala-attestation-policy.locked-read-only.json \
             | sed 's#  release-assets/#  #' \
             > release-assets/MANIFEST.txt
 
@@ -612,30 +801,68 @@ jobs:
             MANIFEST.txt \
             kms-phala-checksums.txt \
             kms-phala-release-manifest.json \
-            kms-phala-attestation-policy.json
+            kms-phala-attestation-policy.json \
+            kms-phala-attestation-policy.debug.json \
+            kms-phala-attestation-policy.debug-read-only.json \
+            kms-phala-attestation-policy.locked-read-only.json
 
           compatibility_kms_tag="$(jq -r '.compatibility.kms_tag' release-assets/kms-phala-compatibility-map.json)"
           compatibility_merod_tag="$(jq -r '.compatibility.node_image_tag' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_policy_url="$(jq -r '.compatibility.kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           compatibility_node_policy_url="$(jq -r '.compatibility.node_policy_url' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_debug_url="$(jq -r '.compatibility.profiles.debug.kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_debug_ro_url="$(jq -r '.compatibility.profiles["debug-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_policy_locked_url="$(jq -r '.compatibility.profiles["locked-read-only"].kms_policy_url' release-assets/kms-phala-compatibility-map.json)"
           run_url="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          # Node profile measurements (from node policy - images this KMS accepts)
-          debug_mrtd="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
-          debug_ro_mrtd="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
-          locked_ro_mrtd="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
-          debug_rtmr0="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
-          debug_rtmr1="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
-          debug_rtmr2="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
-          debug_rtmr3="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
-          debug_ro_rtmr0="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
-          debug_ro_rtmr1="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
-          debug_ro_rtmr2="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
-          debug_ro_rtmr3="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
-          locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
-          locked_ro_rtmr1="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' "${node_policy_file}")"
-          locked_ro_rtmr2="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
-          locked_ro_rtmr3="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' "${node_policy_file}")"
+          profile_policy_debug_file="release-assets/kms-phala-attestation-policy.debug.json"
+          profile_policy_debug_ro_file="release-assets/kms-phala-attestation-policy.debug-read-only.json"
+          profile_policy_locked_file="release-assets/kms-phala-attestation-policy.locked-read-only.json"
+
+          format_allowlist_md() {
+            local file="$1"
+            local key="$2"
+            jq -r --arg key "${key}" '
+              (.policy[$key] // [])
+              | if (type == "array" and length > 0) then
+                  map("`" + tostring + "`") | join("<br>")
+                else
+                  "n/a"
+                end
+            ' "${file}"
+          }
+
+          debug_mrtd="$(format_allowlist_md "${profile_policy_debug_file}" "node_allowed_mrtd")"
+          debug_ro_mrtd="$(format_allowlist_md "${profile_policy_debug_ro_file}" "node_allowed_mrtd")"
+          locked_ro_mrtd="$(format_allowlist_md "${profile_policy_locked_file}" "node_allowed_mrtd")"
+          debug_rtmr0="$(format_allowlist_md "${profile_policy_debug_file}" "node_allowed_rtmr0")"
+          debug_rtmr1="$(format_allowlist_md "${profile_policy_debug_file}" "node_allowed_rtmr1")"
+          debug_rtmr2="$(format_allowlist_md "${profile_policy_debug_file}" "node_allowed_rtmr2")"
+          debug_rtmr3="$(format_allowlist_md "${profile_policy_debug_file}" "node_allowed_rtmr3")"
+          debug_ro_rtmr0="$(format_allowlist_md "${profile_policy_debug_ro_file}" "node_allowed_rtmr0")"
+          debug_ro_rtmr1="$(format_allowlist_md "${profile_policy_debug_ro_file}" "node_allowed_rtmr1")"
+          debug_ro_rtmr2="$(format_allowlist_md "${profile_policy_debug_ro_file}" "node_allowed_rtmr2")"
+          debug_ro_rtmr3="$(format_allowlist_md "${profile_policy_debug_ro_file}" "node_allowed_rtmr3")"
+          locked_ro_rtmr0="$(format_allowlist_md "${profile_policy_locked_file}" "node_allowed_rtmr0")"
+          locked_ro_rtmr1="$(format_allowlist_md "${profile_policy_locked_file}" "node_allowed_rtmr1")"
+          locked_ro_rtmr2="$(format_allowlist_md "${profile_policy_locked_file}" "node_allowed_rtmr2")"
+          locked_ro_rtmr3="$(format_allowlist_md "${profile_policy_locked_file}" "node_allowed_rtmr3")"
+
+          debug_mrtd_preview="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_mrtd_preview="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_mrtd_preview="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr0_preview="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          debug_rtmr2_preview="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr0_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          debug_ro_rtmr2_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr0_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' "${node_policy_file}")"
+          locked_ro_rtmr2_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' "${node_policy_file}")"
+
+          kms_mrtd="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_mrtd")"
+          kms_rtmr0="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_rtmr0")"
+          kms_rtmr1="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_rtmr1")"
+          kms_rtmr2="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_rtmr2")"
+          kms_rtmr3="$(format_allowlist_md "${profile_policy_locked_file}" "kms_allowed_rtmr3")"
 
           {
             echo "## mero-kms release ${{ needs.prepare.outputs.version }}"
@@ -658,20 +885,89 @@ jobs:
             echo "| merod release tag | \`${compatibility_merod_tag}\` |"
             echo "| KMS policy URL | \`${compatibility_kms_policy_url}\` |"
             echo "| Node policy URL | \`${compatibility_node_policy_url}\` |"
+            echo "| Debug profile policy URL | \`${compatibility_kms_policy_debug_url}\` |"
+            echo "| Debug-read-only profile policy URL | \`${compatibility_kms_policy_debug_ro_url}\` |"
+            echo "| Locked-read-only profile policy URL | \`${compatibility_kms_policy_locked_url}\` |"
             echo ""
-            echo "### Node profile measurements (images this KMS accepts)"
+            echo "### KMS measurement allowlists (enforced by merod against /attest)"
+            echo ""
+            echo "| Measurement | Allowed values |"
+            echo "|---|---|"
+            echo "| MRTD | ${kms_mrtd} |"
+            echo "| RTMR0 | ${kms_rtmr0} |"
+            echo "| RTMR1 | ${kms_rtmr1} |"
+            echo "| RTMR2 | ${kms_rtmr2} |"
+            echo "| RTMR3 | ${kms_rtmr3} |"
+            echo ""
+            echo "### Node profile measurements (enforced by KMS for /get-key)"
             echo ""
             echo "| Profile | MRTD |"
             echo "|---|---|"
-            echo "| debug | \`${debug_mrtd}\` |"
-            echo "| debug-read-only | \`${debug_ro_mrtd}\` |"
-            echo "| locked-read-only | \`${locked_ro_mrtd}\` |"
+            echo "| debug | ${debug_mrtd} |"
+            echo "| debug-read-only | ${debug_ro_mrtd} |"
+            echo "| locked-read-only | ${locked_ro_mrtd} |"
             echo ""
             echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
             echo "|---|---|---|---|---|"
-            echo "| debug | \`${debug_rtmr0}\` | \`${debug_rtmr1}\` | \`${debug_rtmr2}\` | \`${debug_rtmr3}\` |"
-            echo "| debug-read-only | \`${debug_ro_rtmr0}\` | \`${debug_ro_rtmr1}\` | \`${debug_ro_rtmr2}\` | \`${debug_ro_rtmr3}\` |"
-            echo "| locked-read-only | \`${locked_ro_rtmr0}\` | \`${locked_ro_rtmr1}\` | \`${locked_ro_rtmr2}\` | \`${locked_ro_rtmr3}\` |"
+            echo "| debug | ${debug_rtmr0} | ${debug_rtmr1} | ${debug_rtmr2} | ${debug_rtmr3} |"
+            echo "| debug-read-only | ${debug_ro_rtmr0} | ${debug_ro_rtmr1} | ${debug_ro_rtmr2} | ${debug_ro_rtmr3} |"
+            echo "| locked-read-only | ${locked_ro_rtmr0} | ${locked_ro_rtmr1} | ${locked_ro_rtmr2} | ${locked_ro_rtmr3} |"
+            echo ""
+            echo "### Full attestation policies (all MRTD/RTMR arrays)"
+            echo ""
+            echo "#### Profile: debug"
+            echo "\`\`\`json"
+            jq '.policy | {
+              kms_allowed_tcb_statuses,
+              kms_allowed_mrtd,
+              kms_allowed_rtmr0,
+              kms_allowed_rtmr1,
+              kms_allowed_rtmr2,
+              kms_allowed_rtmr3,
+              node_allowed_tcb_statuses,
+              node_allowed_mrtd,
+              node_allowed_rtmr0,
+              node_allowed_rtmr1,
+              node_allowed_rtmr2,
+              node_allowed_rtmr3
+            }' "${profile_policy_debug_file}"
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: debug-read-only"
+            echo "\`\`\`json"
+            jq '.policy | {
+              kms_allowed_tcb_statuses,
+              kms_allowed_mrtd,
+              kms_allowed_rtmr0,
+              kms_allowed_rtmr1,
+              kms_allowed_rtmr2,
+              kms_allowed_rtmr3,
+              node_allowed_tcb_statuses,
+              node_allowed_mrtd,
+              node_allowed_rtmr0,
+              node_allowed_rtmr1,
+              node_allowed_rtmr2,
+              node_allowed_rtmr3
+            }' "${profile_policy_debug_ro_file}"
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: locked-read-only"
+            echo "\`\`\`json"
+            jq '.policy | {
+              kms_allowed_tcb_statuses,
+              kms_allowed_mrtd,
+              kms_allowed_rtmr0,
+              kms_allowed_rtmr1,
+              kms_allowed_rtmr2,
+              kms_allowed_rtmr3,
+              node_allowed_tcb_statuses,
+              node_allowed_mrtd,
+              node_allowed_rtmr0,
+              node_allowed_rtmr1,
+              node_allowed_rtmr2,
+              node_allowed_rtmr3
+            }' "${profile_policy_locked_file}"
+            echo "\`\`\`"
             echo ""
             echo "### Binary archives (SHA-256)"
             echo ""
@@ -693,19 +989,29 @@ jobs:
             echo "scripts/release/verify-release-assets.sh ${{ needs.prepare.outputs.version }}"
             echo "\`\`\`"
             echo ""
-            echo "### Trust assets"
+            echo "### Trust assets (detailed)"
             echo ""
-            echo "- \`kms-phala-trust-bundle.tar.gz\` (\`MANIFEST.txt\`, checksums, manifest, policy)"
-            echo "- \`kms-phala-release-manifest.json\` and \`.sig/.pem/.bundle.json\`"
-            echo "- Container metadata asset: \`kms-phala-container-metadata.json\`"
-            echo "- \`kms-phala-rekor-index.json\` and \`.sig/.pem/.bundle.json\`"
-            echo "- \`kms-phala-container-sbom.spdx.json\` and \`kms-phala-binaries-sbom.spdx.json\`"
-            echo "- \`kms-phala-compatibility-map.json\`"
+            echo "| Asset | What it contains | Why operators need it |"
+            echo "|---|---|---|"
+            echo "| \`kms-phala-trust-bundle.tar.gz\` | Canonical trust bundle (\`MANIFEST.txt\`, checksums, manifest, policies) | Offline transfer and audit-friendly verification seed |"
+            echo "| \`kms-phala-checksums.txt\` | SHA-256 of published binary archives | Integrity verification before extraction/deploy |"
+            echo "| \`kms-phala-release-manifest.json\` | Release metadata, container digest/tags, verification contract | Primary machine-readable release contract |"
+            echo "| \`kms-phala-attestation-policy.json\` | Legacy/default policy alias (locked-read-only) | Backward compatibility for existing tooling |"
+            echo "| \`kms-phala-attestation-policy.debug.json\` | Full debug profile policy (KMS+node allowlists) | Debug cohort deployments only |"
+            echo "| \`kms-phala-attestation-policy.debug-read-only.json\` | Full debug-read-only profile policy | Pre-production hardening cohort |"
+            echo "| \`kms-phala-attestation-policy.locked-read-only.json\` | Full production profile policy | Production deployment baseline |"
+            echo "| \`kms-phala-compatibility-map.json\` | KMS↔mero-tee mapping + per-profile policy URLs/hashes | Prevents profile/version mismatch rollout |"
+            echo "| \`kms-phala-container-metadata.json\` | Container image digest/tags and linkage to release | Digest-pinned deployment verification |"
+            echo "| \`kms-phala-rekor-index.json\` | Transparency log lookup data for signed assets | Independent signature transparency audit |"
+            echo "| \`kms-phala-container-sbom.spdx.json\` | SBOM for released container image | Supply-chain review/compliance |"
+            echo "| \`kms-phala-binaries-sbom.spdx.json\` | SBOM for released binary artifacts | Binary supply-chain review/compliance |"
+            echo ""
+            echo "Every listed trust asset has Sigstore keyless sidecars (\`.sig\`, \`.pem\`, and where applicable \`.bundle.json\`)."
             echo ""
             echo "### Generate merod attestation config (release-pinned)"
             echo ""
             echo "\`\`\`bash"
-            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh ${{ needs.prepare.outputs.kms_release_tag }} https://<kms-url>/"
+            echo "scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only ${{ needs.prepare.outputs.kms_release_tag }} https://<kms-url>/"
             echo "\`\`\`"
           } > release-assets/release-notes.md
 
@@ -715,12 +1021,21 @@ jobs:
             echo "- Tag: ${{ needs.prepare.outputs.kms_release_tag }}"
             echo "- Compatible node: ${compatibility_merod_tag}"
             echo ""
-            echo "### Node profile measurements (accepted by this KMS)"
+            echo "### KMS measurement allowlists (locked-read-only policy)"
+            echo "| Measurement | Allowed values |"
+            echo "|---|---|"
+            echo "| MRTD | ${kms_mrtd} |"
+            echo "| RTMR0 | ${kms_rtmr0} |"
+            echo "| RTMR1 | ${kms_rtmr1} |"
+            echo "| RTMR2 | ${kms_rtmr2} |"
+            echo "| RTMR3 | ${kms_rtmr3} |"
+            echo ""
+            echo "### Node profile measurements (node policy reference)"
             echo "| Profile | MRTD | RTMR0 | RTMR2 |"
             echo "|---|---|---|---|"
-            echo "| debug | ${debug_mrtd:0:24}... | ${debug_rtmr0:0:24}... | ${debug_rtmr2:0:24}... |"
-            echo "| debug-read-only | ${debug_ro_mrtd:0:24}... | ${debug_ro_rtmr0:0:24}... | ${debug_ro_rtmr2:0:24}... |"
-            echo "| locked-read-only | ${locked_ro_mrtd:0:24}... | ${locked_ro_rtmr0:0:24}... | ${locked_ro_rtmr2:0:24}... |"
+            echo "| debug | ${debug_mrtd_preview:0:24}... | ${debug_rtmr0_preview:0:24}... | ${debug_rtmr2_preview:0:24}... |"
+            echo "| debug-read-only | ${debug_ro_mrtd_preview:0:24}... | ${debug_ro_rtmr0_preview:0:24}... | ${debug_ro_rtmr2_preview:0:24}... |"
+            echo "| locked-read-only | ${locked_ro_mrtd_preview:0:24}... | ${locked_ro_rtmr0_preview:0:24}... | ${locked_ro_rtmr2_preview:0:24}... |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing
@@ -736,6 +1051,9 @@ jobs:
             artifacts/*.tar.gz
             release-assets/kms-phala-checksums.txt
             release-assets/kms-phala-attestation-policy.json
+            release-assets/kms-phala-attestation-policy.debug.json
+            release-assets/kms-phala-attestation-policy.debug-read-only.json
+            release-assets/kms-phala-attestation-policy.locked-read-only.json
             release-assets/kms-phala-container-metadata.json
             release-assets/kms-phala-container-sbom.spdx.json
             release-assets/kms-phala-binaries-sbom.spdx.json
@@ -822,6 +1140,9 @@ jobs:
             release-assets/kms-phala-checksums.txt
             release-assets/kms-phala-release-manifest.json
             release-assets/kms-phala-attestation-policy.json
+            release-assets/kms-phala-attestation-policy.debug.json
+            release-assets/kms-phala-attestation-policy.debug-read-only.json
+            release-assets/kms-phala-attestation-policy.locked-read-only.json
             release-assets/kms-phala-container-metadata.json
             release-assets/kms-phala-container-sbom.spdx.json
             release-assets/kms-phala-binaries-sbom.spdx.json
@@ -864,6 +1185,15 @@ jobs:
             release-assets/kms-phala-attestation-policy.json
             release-assets/kms-phala-attestation-policy.json.sig
             release-assets/kms-phala-attestation-policy.json.pem
+            release-assets/kms-phala-attestation-policy.debug.json
+            release-assets/kms-phala-attestation-policy.debug.json.sig
+            release-assets/kms-phala-attestation-policy.debug.json.pem
+            release-assets/kms-phala-attestation-policy.debug-read-only.json
+            release-assets/kms-phala-attestation-policy.debug-read-only.json.sig
+            release-assets/kms-phala-attestation-policy.debug-read-only.json.pem
+            release-assets/kms-phala-attestation-policy.locked-read-only.json
+            release-assets/kms-phala-attestation-policy.locked-read-only.json.sig
+            release-assets/kms-phala-attestation-policy.locked-read-only.json.pem
             release-assets/kms-phala-container-metadata.json
             release-assets/kms-phala-container-metadata.json.sig
             release-assets/kms-phala-container-metadata.json.pem
@@ -882,6 +1212,9 @@ jobs:
             release-assets/kms-phala-compatibility-map.json.pem
             release-assets/kms-phala-compatibility-map.json.bundle.json
             release-assets/kms-phala-attestation-policy.json.bundle.json
+            release-assets/kms-phala-attestation-policy.debug.json.bundle.json
+            release-assets/kms-phala-attestation-policy.debug-read-only.json.bundle.json
+            release-assets/kms-phala-attestation-policy.locked-read-only.json.bundle.json
             release-assets/kms-phala-rekor-index.json
             release-assets/kms-phala-rekor-index.json.sig
             release-assets/kms-phala-rekor-index.json.pem

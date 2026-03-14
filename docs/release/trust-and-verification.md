@@ -1,63 +1,138 @@
-# Trust & Verification
+# Trust, Verification, and Measurements (Canonical Guide)
 
-This page is the single entry point for how trust is established for released artifacts in `mero-tee`.
+This is the **single canonical guide** for operators and clients validating trust in the `mero-tee` release and runtime model.
 
-## Scope
+It replaces fragmented onboarding/measurement pages with one concrete flow.
 
-This repository publishes two trust-asset families per release tag:
+## What gets released
 
-1. **KMS release assets** on tag `X.Y.Z` (`mero-kms-phala` binaries + policy/manifest/signatures)
-2. **node-image-gcp assets** on tag `mero-tee-vX.Y.Z` (MRTDs, policy, release provenance, signatures)
+Per version `X.Y.Z`, there are two signed artifact families:
 
-These map to two deployment lanes with different responsibilities:
+1. **KMS family** on `mero-kms-vX.Y.Z`
+   - `mero-kms-phala` binaries/container metadata
+   - KMS attestation policy assets (profile-scoped + default alias)
+   - compatibility map and signatures
+2. **Node-image family** on `mero-tee-vX.Y.Z`
+   - `published-mrtds.json` (profile measurement policy)
+   - release provenance, checksums, SBOM, signatures
 
-- **Phala KMS lane** (operate `mero-kms-phala`): [../runbooks/platforms/phala-kms.md](../runbooks/platforms/phala-kms.md)
-- **GCP node lane** (deploy locked `merod` image): [../runbooks/platforms/gcp-merod.md](../runbooks/platforms/gcp-merod.md)
+## What signatures prove (and what they do not)
 
-## What signatures prove (and do not prove)
+- **Prove**: artifact provenance (expected CI workflow identity) and integrity.
+- **Do not prove**: that your running deployment is currently in the approved state.
 
-- **Proves**: an artifact was produced by the expected GitHub Actions workflow identity and was not modified after signing.
-- **Does not prove**: source code quality, absence of vulnerabilities, or fitness for your deployment model.
+So you need **both**:
+- release verification (artifact trust), and
+- runtime attestation verification (state trust).
 
-Use signatures together with:
+## Verification direction matrix (who verifies whom)
 
-- policy review (`published-mrtds.json`, `kms-phala-attestation-policy.json`)
-- compatibility checks (`policies/index.json` + compatibility map artifacts)
-- runtime quote verification for deployed nodes
+| Verifier | Subject | Evidence/API | Required checks |
+|---|---|---|---|
+| `merod` (client node) | KMS (`mero-kms-phala`) | `POST /attest` quote + report data | quote crypto validity, nonce/binding freshness, KMS TCB + MRTD + RTMR0..3 policy |
+| KMS (`mero-kms-phala`) | `merod` node | `POST /challenge` + `POST /get-key` | peer signature/identity, challenge freshness, quote crypto validity, node TCB + MRTD + RTMR0..3 policy |
+| Operator/Auditor | release assets | signatures/checksums/manifests/compat map | workflow identity, integrity, version/profile compatibility |
 
-## Canonical verification commands
+If any verification step fails, rollout/key-release must fail closed.
+
+## Profile compatibility (debug vs production)
+
+Three node profiles exist:
+- `debug`
+- `debug-read-only`
+- `locked-read-only`
+
+Use profile-isolated trust cohorts:
+
+| Node profile | KMS policy/image cohort | Intended use |
+|---|---|---|
+| `debug` | debug-only | local/dev |
+| `debug-read-only` | debug-read-only-only | integration/pre-production |
+| `locked-read-only` | locked-read-only-only | production |
+
+Never mix debug profile measurements into production key-release cohorts.
+
+## Operator quick path (release acceptance)
 
 ```bash
-scripts/release/verify-kms-phala-release-assets.sh <tag>
-scripts/release/verify-node-image-gcp-release-assets.sh <tag>
-scripts/release/verify-release-assets.sh <tag>
+TAG=2.1.10
+scripts/release/verify-release-assets.sh "${TAG}"
 ```
 
-## Verification workflow identities
+Then inspect compatibility:
 
-Keyless signatures are expected from these workflow identities on `master`:
+```bash
+curl -fsSL \
+  "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v${TAG}/kms-phala-compatibility-map.json" \
+  | jq '.compatibility'
+```
 
-- `https://github.com/<org>/<repo>/.github/workflows/release-kms-phala.yaml@refs/heads/master`
-- `https://github.com/<org>/<repo>/.github/workflows/release-node-image-gcp.yaml@refs/heads/master`
+Confirm:
+- `kms_tag == mero-kms-v${TAG}`
+- `node_image_tag == mero-tee-v${TAG}`
+- profile entries under `.compatibility.profiles.*` match your rollout profile
+- policy URLs/hashes are from reviewed signed assets
 
-OIDC issuer is expected to be:
+## Client/node configuration (release-pinned)
 
+Generate or apply release-pinned `merod` KMS attestation config:
+
+```bash
+scripts/policy/generate-merod-kms-phala-attestation-config.sh \
+  --profile locked-read-only \
+  "${TAG}" \
+  https://<kms-url>/
+```
+
+```bash
+scripts/policy/apply-merod-kms-phala-attestation-config.sh \
+  --profile locked-read-only \
+  "${TAG}" \
+  https://<kms-url>/ \
+  /path/to/merod-home \
+  default
+```
+
+## Runtime node measurement verification (MRTD/RTMR)
+
+### 1) Get observed values from a verified quote path
+- Prefer a quote verification path (Intel collateral via verifier) that outputs MRTD/RTMR values.
+- As a quick check, operators may read node admin API values, but quote-verified extraction is the strong path.
+
+### 2) Compare against `published-mrtds.json`
+- Match by **release + profile**.
+- Require policy match for:
+  - `allowed_mrtd`
+  - `allowed_rtmr0`
+  - `allowed_rtmr1`
+  - `allowed_rtmr2`
+  - `allowed_rtmr3`
+  - allowed TCB statuses
+
+### Why some RTMRs may match across different image profiles
+
+This is expected in some cases and does **not** automatically indicate a bug.
+
+- **MRTD** usually changes whenever measured image/rootfs content differs.
+- **RTMR0/RTMR1** can match across profiles if early boot chain and firmware/kernel components are identical.
+- **RTMR2/RTMR3** are more likely to diverge between profiles because cmdline/runtime extensions include role/profile/root-hash-sensitive material (`calimero.role`, `calimero.profile`, `calimero.root_hash`).
+
+Practical rule:
+- Do not infer compatibility from one field.
+- Always enforce the full policy tuple (TCB + MRTD + RTMR0..3) for the selected profile.
+
+## Workflow identity expectations
+
+Expected signing workflows (on `master`):
+- `release-kms-phala.yaml`
+- `release-node-image-gcp.yaml`
+
+OIDC issuer:
 - `https://token.actions.githubusercontent.com`
-
-## Recommended operator flow
-
-1. Pick the release tag you plan to deploy.
-2. Run `scripts/release/verify-release-assets.sh <tag>`.
-3. Generate release-pinned config snippets for `merod` using:
-   - `scripts/policy/generate-merod-kms-phala-attestation-config.sh`
-4. Roll out with digest-pinned images and release-pinned policy/config.
 
 ## Related docs
 
-- [TEE verification for beginners](verification-beginner.md)
 - [Platform runbooks](../runbooks/platforms/README.md)
-- [Verify MRTD](../runbooks/operations/verify-mrtd.md)
 - [Release verification examples](verification-examples.md)
-- [Architecture](../architecture/trust-boundaries.md)
-- [Release taxonomy](taxonomy.md)
+- [Architecture boundaries](../architecture/trust-boundaries.md)
 - [Documentation source index](../DOCS_INDEX.md)

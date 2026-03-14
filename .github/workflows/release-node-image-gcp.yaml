@@ -52,6 +52,7 @@ jobs:
           bash -n mero-tee/build-and-release.sh
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/verify-kms-phala-release-assets.sh
+          bash -n scripts/release/e2e-verify-kms-node-compatibility.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
           python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py
@@ -79,8 +80,12 @@ jobs:
           run_pipeline="false"
           reason=""
           latest_merod_version=""
+          allow_non_master="false"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            allow_non_master="true"
+          fi
 
-          if [[ "${GITHUB_REF}" != "refs/heads/master" ]]; then
+          if [[ "${GITHUB_REF}" != "refs/heads/master" && "${allow_non_master}" != "true" ]]; then
             reason="Workflow is restricted to refs/heads/master; current ref is ${GITHUB_REF}."
             echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
             echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -130,7 +135,11 @@ jobs:
           done
 
           run_pipeline="true"
-          reason="Detected mero-tee/versions.json change on master."
+          if [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
+            reason="Detected mero-tee/versions.json change on master."
+          else
+            reason="Manual workflow_dispatch run enabled on non-master ref ${GITHUB_REF}."
+          fi
 
           echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
           echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
@@ -1020,7 +1029,11 @@ jobs:
         uses: anchore/sbom-action/download-syft@v0
 
       - name: Assemble published MRTD payload
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.image_version }}
         run: |
+          release_version="${RELEASE_VERSION}"
+
           validate_mrtd_file() {
             local file_path="$1"
             local label="$2"
@@ -1056,10 +1069,10 @@ jobs:
             jq -e '
               .schema_version == 1
               and (.policy.allowed_mrtd | type == "array" and length > 0)
-              and (.policy.allowed_rtmr0 | type == "array")
-              and (.policy.allowed_rtmr1 | type == "array")
-              and (.policy.allowed_rtmr2 | type == "array")
-              and (.policy.allowed_rtmr3 | type == "array")
+              and (.policy.allowed_rtmr0 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr1 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr2 | type == "array" and length > 0)
+              and (.policy.allowed_rtmr3 | type == "array" and length > 0)
             ' "${file_path}" >/dev/null || {
               echo "Invalid measurement policy candidate in ${label}"
               exit 1
@@ -1143,7 +1156,7 @@ jobs:
           ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
 
           # MRTD is firmware-only (TDVF) per GCP TDX docs; identical for all profiles.
-          # RTMR[2] includes kernel cmdline; we inject calimero.profile=<profile> so each profile
+          # RTMR[2] includes kernel cmdline; we inject calimero.role=node + calimero.profile=<profile> so each profile
           # produces different RTMRs. At least one RTMR must differ so KMS can distinguish images.
           debug_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug.json | tr '[:upper:]' '[:lower:]')"
           debug_ro_rtmr0="$(jq -r '.policy.allowed_rtmr0[0] // empty' artifacts/measurement-policy-candidates-debug-read-only.json | tr '[:upper:]' '[:lower:]')"
@@ -1171,14 +1184,14 @@ jobs:
             fi
           fi
           if [[ "${profiles_differ}" != "true" ]]; then
-            echo "::error::All three profiles have identical RTMR0/RTMR2/RTMR3. Profiles must produce different measurements (calimero.profile+root_hash in RTMR[2], RTMR3 extend at boot)."
+            echo "::error::All three profiles have identical RTMR0/RTMR2/RTMR3. Profiles must produce different measurements (calimero.role+calimero.profile+root_hash in RTMR[2], RTMR3 extend at boot)."
             echo "  RTMR2: debug=${debug_rtmr2:0:24}... debug-ro=${debug_ro_rtmr2:0:24}... locked-ro=${locked_ro_rtmr2:0:24}..."
             echo "  RTMR3: debug=${debug_rtmr3:0:24}... (empty if kernel <6.16)"
             exit 1
           fi
 
           jq -n \
-            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${release_version}" \
             --slurpfile debug artifacts/mrtd-debug.json \
             --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
             --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
@@ -1186,8 +1199,14 @@ jobs:
             --slurpfile debug_ro_policy artifacts/measurement-policy-candidates-debug-read-only.json \
             --slurpfile locked_ro_policy artifacts/measurement-policy-candidates-locked-read-only.json \
             '{
+              role: "node",
               tag: $tag,
               generated_at: (now | todate),
+              measurement_markers: {
+                role: "calimero.role=node",
+                profile_key: "calimero.profile",
+                root_hash_key: "calimero.root_hash"
+              },
               profiles: {
                 debug: (
                   $debug[0] + {
@@ -1222,14 +1241,36 @@ jobs:
               }
             }' > artifacts/published-mrtds.json
 
-          version="${{ needs.preflight.outputs.image_version }}"
+          jq -e '
+            .role == "node" and
+            (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0) and
+            (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
+            (.profiles.debug.allowed_rtmr0 | type == "array" and length > 0) and
+            (.profiles.debug.allowed_rtmr1 | type == "array" and length > 0) and
+            (.profiles.debug.allowed_rtmr2 | type == "array" and length > 0) and
+            (.profiles.debug.allowed_rtmr3 | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_mrtd | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_rtmr2 | type == "array" and length > 0) and
+            (.profiles["debug-read-only"].allowed_rtmr3 | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_mrtd | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_rtmr2 | type == "array" and length > 0) and
+            (.profiles["locked-read-only"].allowed_rtmr3 | type == "array" and length > 0)
+          ' artifacts/published-mrtds.json >/dev/null
+
+          version="${release_version}"
           kms_tag="mero-kms-v${version}"
           node_image_tag="mero-tee-v${version}"
           kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
           node_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
           jq -n \
-            --arg tag "${{ needs.preflight.outputs.image_version }}" \
+            --arg tag "${release_version}" \
             --arg commit "${GITHUB_SHA}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -1243,6 +1284,7 @@ jobs:
             --slurpfile locked_ro artifacts/profile-provenance-locked-read-only.json \
             --slurpfile mrtds artifacts/published-mrtds.json \
             '{
+              role: "node",
               tag: $tag,
               commit_sha: $commit,
               workflow_run_id: $run_id,
@@ -1282,32 +1324,61 @@ jobs:
             | sed 's#  artifacts/#  #' \
             > artifacts/node-image-gcp-checksums.txt
 
-          debug_mrtd="$(jq -r '.profiles.debug.mrtd' artifacts/published-mrtds.json)"
-          debug_ro_mrtd="$(jq -r '.profiles["debug-read-only"].mrtd' artifacts/published-mrtds.json)"
-          locked_ro_mrtd="$(jq -r '.profiles["locked-read-only"].mrtd' artifacts/published-mrtds.json)"
-          debug_rtmr0="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr1="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr2="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_rtmr3="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr0="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr1="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr2="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          debug_ro_rtmr3="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr0="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr1="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr2="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
-          locked_ro_rtmr3="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          format_profile_allowlist_md() {
+            local profile="$1"
+            local key="$2"
+            jq -r --arg profile "${profile}" --arg key "${key}" '
+              (.profiles[$profile][$key] // [])
+              | if (type == "array" and length > 0) then
+                  map("`" + tostring + "`") | join("<br>")
+                else
+                  "n/a"
+                end
+            ' artifacts/published-mrtds.json
+          }
+
+          debug_mrtd="$(format_profile_allowlist_md "debug" "allowed_mrtd")"
+          debug_ro_mrtd="$(format_profile_allowlist_md "debug-read-only" "allowed_mrtd")"
+          locked_ro_mrtd="$(format_profile_allowlist_md "locked-read-only" "allowed_mrtd")"
+          debug_rtmr0="$(format_profile_allowlist_md "debug" "allowed_rtmr0")"
+          debug_rtmr1="$(format_profile_allowlist_md "debug" "allowed_rtmr1")"
+          debug_rtmr2="$(format_profile_allowlist_md "debug" "allowed_rtmr2")"
+          debug_rtmr3="$(format_profile_allowlist_md "debug" "allowed_rtmr3")"
+          debug_ro_rtmr0="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr0")"
+          debug_ro_rtmr1="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr1")"
+          debug_ro_rtmr2="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr2")"
+          debug_ro_rtmr3="$(format_profile_allowlist_md "debug-read-only" "allowed_rtmr3")"
+          locked_ro_rtmr0="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr0")"
+          locked_ro_rtmr1="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr1")"
+          locked_ro_rtmr2="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr2")"
+          locked_ro_rtmr3="$(format_profile_allowlist_md "locked-read-only" "allowed_rtmr3")"
+
+          debug_mrtd_preview="$(jq -r '.profiles.debug.allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_mrtd_preview="$(jq -r '.profiles["debug-read-only"].allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_mrtd_preview="$(jq -r '.profiles["locked-read-only"].allowed_mrtd[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr0_preview="$(jq -r '.profiles.debug.allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr1_preview="$(jq -r '.profiles.debug.allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr2_preview="$(jq -r '.profiles.debug.allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_rtmr3_preview="$(jq -r '.profiles.debug.allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr0_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr1_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr2_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          debug_ro_rtmr3_preview="$(jq -r '.profiles["debug-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr0_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr0[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr1_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr1[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr2_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr2[0] // "n/a"' artifacts/published-mrtds.json)"
+          locked_ro_rtmr3_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0] // "n/a"' artifacts/published-mrtds.json)"
 
           run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           {
-            echo "## mero-tee release ${{ needs.preflight.outputs.image_version }}"
+            echo "## mero-tee release ${release_version}"
             echo ""
             echo "### Release metadata"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`mero-tee-v${{ needs.preflight.outputs.image_version }}\` |"
+            echo "| Tag | \`mero-tee-v${release_version}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Workflow run | [${GITHUB_RUN_ID}](${run_url}) |"
             echo "| Checksums | \`node-image-gcp-checksums.txt\` |"
@@ -1325,51 +1396,98 @@ jobs:
             echo ""
             echo "| Profile | MRTD |"
             echo "|---|---|"
-            echo "| debug | \`${debug_mrtd}\` |"
-            echo "| debug-read-only | \`${debug_ro_mrtd}\` |"
-            echo "| locked-read-only | \`${locked_ro_mrtd}\` |"
+            echo "| debug | ${debug_mrtd} |"
+            echo "| debug-read-only | ${debug_ro_mrtd} |"
+            echo "| locked-read-only | ${locked_ro_mrtd} |"
             echo ""
-            echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
-            echo "|---|---|---|---|---|"
-            echo "| debug | \`${debug_rtmr0}\` | \`${debug_rtmr1}\` | \`${debug_rtmr2}\` | \`${debug_rtmr3}\` |"
-            echo "| debug-read-only | \`${debug_ro_rtmr0}\` | \`${debug_ro_rtmr1}\` | \`${debug_ro_rtmr2}\` | \`${debug_ro_rtmr3}\` |"
-            echo "| locked-read-only | \`${locked_ro_rtmr0}\` | \`${locked_ro_rtmr1}\` | \`${locked_ro_rtmr2}\` | \`${locked_ro_rtmr3}\` |"
-            echo ""
-            echo "### Verification commands"
-            echo ""
-            echo "**Quick verify (operator):**"
-            echo "\`\`\`bash"
-            echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${{ needs.preflight.outputs.image_version }}"
-            echo "\`\`\`"
-            echo ""
-            echo "**Full audit (all release classes):**"
-            echo "\`\`\`bash"
-            echo "scripts/release/verify-release-assets.sh ${{ needs.preflight.outputs.image_version }}"
-            echo "\`\`\`"
-            echo ""
-            echo "### Trust assets"
-            echo ""
-            echo "- \`published-mrtds.json\` (MRTDs + measurement policy)"
-            echo "- \`release-provenance.json\`"
-            echo "- \`node-image-gcp-release-sbom.spdx.json\`"
-            echo "- \`node-image-gcp-checksums.txt\`"
-            echo "- All assets signed with Sigstore keyless (\`.sig\`, \`.pem\`)"
-          } > artifacts/release-notes.md
-
-          {
-            echo "## Published MRTDs"
-            echo ""
-            echo "- Tag: ${{ needs.preflight.outputs.image_version }}"
-            echo "- Debug MRTD: ${debug_mrtd}"
-            echo "- Debug read-only MRTD: ${debug_ro_mrtd}"
-            echo "- Locked read-only MRTD: ${locked_ro_mrtd}"
-            echo ""
-            echo "### RTMRs"
             echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
             echo "|---|---|---|---|---|"
             echo "| debug | ${debug_rtmr0} | ${debug_rtmr1} | ${debug_rtmr2} | ${debug_rtmr3} |"
             echo "| debug-read-only | ${debug_ro_rtmr0} | ${debug_ro_rtmr1} | ${debug_ro_rtmr2} | ${debug_ro_rtmr3} |"
             echo "| locked-read-only | ${locked_ro_rtmr0} | ${locked_ro_rtmr1} | ${locked_ro_rtmr2} | ${locked_ro_rtmr3} |"
+            echo ""
+            echo "### Full profile allowlists (all MRTD/RTMR arrays)"
+            echo ""
+            echo "#### Profile: debug"
+            echo "\`\`\`json"
+            jq '.profiles.debug | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: debug-read-only"
+            echo "\`\`\`json"
+            jq '.profiles["debug-read-only"] | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
+            echo ""
+            echo "#### Profile: locked-read-only"
+            echo "\`\`\`json"
+            jq '.profiles["locked-read-only"] | {
+              mrtd,
+              allowed_tcb_statuses,
+              allowed_mrtd,
+              allowed_rtmr0,
+              allowed_rtmr1,
+              allowed_rtmr2,
+              allowed_rtmr3
+            }' artifacts/published-mrtds.json
+            echo "\`\`\`"
+            echo ""
+            echo "### Verification commands"
+            echo ""
+            echo "**Quick verify (operator):**"
+            echo "\`\`\`bash"
+            echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${release_version}"
+            echo "\`\`\`"
+            echo ""
+            echo "**Full audit (all release classes):**"
+            echo "\`\`\`bash"
+            echo "scripts/release/verify-release-assets.sh ${release_version}"
+            echo "\`\`\`"
+            echo ""
+            echo "### Trust assets (detailed)"
+            echo ""
+            echo "| Asset | What it contains | Why operators need it |"
+            echo "|---|---|---|"
+            echo "| \`published-mrtds.json\` | Profile measurement policy (MRTD/RTMR allowlists) | Runtime quote measurement validation baseline |"
+            echo "| \`release-provenance.json\` | Build/attestation metadata, compatibility references, and profile verification records | Audit and release-governance evidence |"
+            echo "| \`node-image-gcp-release-sbom.spdx.json\` | SBOM for release trust artifacts | Supply-chain and compliance review |"
+            echo "| \`node-image-gcp-checksums.txt\` | SHA-256 for release trust artifacts | Integrity verification before policy usage |"
+            echo "| \`*.sig / *.pem\` | Sigstore keyless signatures/certificates | Verifiable provenance and authenticity checks |"
+            echo ""
+            echo "KMS-side profile policies for the matching release are linked via:"
+            echo "- \`${kms_policy_url}\` (default/locked policy alias)"
+            echo "- Profile-specific URLs in \`kms-phala-compatibility-map.json\` under \`.compatibility.profiles.*.kms_policy_url\`"
+          } > artifacts/release-notes.md
+
+          {
+            echo "## Published MRTDs"
+            echo ""
+            echo "- Tag: ${release_version}"
+            echo "- Debug MRTD: ${debug_mrtd_preview}"
+            echo "- Debug read-only MRTD: ${debug_ro_mrtd_preview}"
+            echo "- Locked read-only MRTD: ${locked_ro_mrtd_preview}"
+            echo ""
+            echo "### RTMRs"
+            echo "| Profile | RTMR0 | RTMR1 | RTMR2 | RTMR3 |"
+            echo "|---|---|---|---|---|"
+            echo "| debug | ${debug_rtmr0_preview} | ${debug_rtmr1_preview} | ${debug_rtmr2_preview} | ${debug_rtmr3_preview} |"
+            echo "| debug-read-only | ${debug_ro_rtmr0_preview} | ${debug_ro_rtmr1_preview} | ${debug_ro_rtmr2_preview} | ${debug_ro_rtmr3_preview} |"
+            echo "| locked-read-only | ${locked_ro_rtmr0_preview} | ${locked_ro_rtmr1_preview} | ${locked_ro_rtmr2_preview} | ${locked_ro_rtmr3_preview} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Install cosign for keyless signing

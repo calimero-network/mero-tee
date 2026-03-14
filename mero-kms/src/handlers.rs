@@ -1,9 +1,5 @@
 //! HTTP request handlers for the key release service.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -18,22 +14,17 @@ use libp2p_identity::PublicKey;
 use rand::random;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info, warn};
 
+use crate::challenge_store::{ChallengeStore, ChallengeStoreError, PendingChallenge};
 use crate::Config;
 
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
-    pub challenges: Arc<Mutex<HashMap<String, PendingChallenge>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingChallenge {
-    pub nonce: [u8; 32],
-    pub peer_id: String,
-    pub expires_at: u64,
+    pub challenge_store: ChallengeStore,
 }
 
 /// Request body for the challenge endpoint.
@@ -118,7 +109,9 @@ pub struct ErrorResponse {
 #[derive(Debug)]
 pub enum ServiceError {
     InvalidBase64(String),
+    InvalidPeerId(String),
     InvalidAttestationRequest(String),
+    RateLimited(String),
     InvalidChallenge(String),
     InvalidPeerPublicKey(String),
     InvalidSignature(String),
@@ -141,10 +134,24 @@ impl IntoResponse for ServiceError {
                     details: Some(msg.clone()),
                 },
             ),
+            ServiceError::InvalidPeerId(msg) => (
+                StatusCode::BAD_REQUEST,
+                ErrorResponse {
+                    error: "invalid_peer_id".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
             ServiceError::InvalidAttestationRequest(msg) => (
                 StatusCode::BAD_REQUEST,
                 ErrorResponse {
                     error: "invalid_attestation_request".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
+            ServiceError::RateLimited(msg) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                ErrorResponse {
+                    error: "rate_limited".to_string(),
                     details: Some(msg.clone()),
                 },
             ),
@@ -233,18 +240,20 @@ impl IntoResponse for ServiceError {
 }
 
 /// Create the router with all endpoints.
-pub fn create_router(config: Config) -> Router {
+pub fn create_router(config: Config) -> eyre::Result<Router> {
+    let challenge_store = ChallengeStore::from_redis_url(config.redis_url.as_deref())
+        .map_err(|e| eyre::eyre!("failed to initialize challenge store: {}", e))?;
     let state = AppState {
         config,
-        challenges: Arc::new(Mutex::new(HashMap::new())),
+        challenge_store,
     };
 
-    Router::new()
+    Ok(Router::new()
         .route("/health", get(health_handler))
         .route("/challenge", post(challenge_handler))
         .route("/get-key", post(get_key_handler))
         .route("/attest", post(attest_kms_handler))
-        .with_state(state)
+        .with_state(state))
 }
 
 /// Health check endpoint.
@@ -301,26 +310,31 @@ async fn challenge_handler(
     State(state): State<AppState>,
     Json(request): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServiceError> {
+    validate_peer_id_shape(&request.peer_id)?;
     let nonce: [u8; 32] = random();
 
     let challenge_id = create_challenge_id();
     let now = unix_now_secs()?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
-
-    let mut guard = state
-        .challenges
-        .lock()
-        .map_err(|_| ServiceError::InvalidChallenge("challenge store lock poisoned".to_owned()))?;
-
-    prune_expired_challenges(&mut guard, now);
-    guard.insert(
-        challenge_id.clone(),
-        PendingChallenge {
-            nonce,
-            peer_id: request.peer_id,
-            expires_at,
-        },
-    );
+    state
+        .challenge_store
+        .insert(
+            challenge_id.clone(),
+            PendingChallenge {
+                nonce,
+                peer_id: request.peer_id,
+                expires_at,
+            },
+            state.config.challenge_ttl_secs,
+            state.config.max_pending_challenges,
+        )
+        .await
+        .map_err(|err| match err {
+            ChallengeStoreError::CapacityExceeded => {
+                ServiceError::RateLimited("Too many pending challenges. Retry shortly.".to_string())
+            }
+            _ => ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", err)),
+        })?;
 
     Ok(Json(ChallengeResponse {
         challenge_id,
@@ -336,6 +350,8 @@ async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
+    validate_peer_id_shape(&request.peer_id)?;
+    validate_challenge_id(&request.challenge_id)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
     // Decode the base64 quote
@@ -345,7 +361,10 @@ async fn get_key_handler(
 
     debug!(quote_len = quote_bytes.len(), "Decoded quote");
 
-    let challenge_nonce = consume_challenge(&state, &request.challenge_id, &request.peer_id)
+    let challenge_nonce = state
+        .challenge_store
+        .consume(&request.challenge_id, &request.peer_id)
+        .await
         .map_err(|msg| {
             ServiceError::InvalidChallenge(format!("Challenge validation failed: {}", msg))
         })?;
@@ -435,7 +454,7 @@ async fn get_key_handler(
     }
 
     // Derive the key using dstack SDK (returns hex-encoded key)
-    let key_path = format!("merod/storage/{}", request.peer_id);
+    let key_path = key_path_for_peer(&state.config, &request.peer_id);
     let client = DstackClient::new(Some(&state.config.dstack_socket_path));
     let key_response = client
         .get_key(Some(key_path), None)
@@ -475,34 +494,47 @@ fn create_challenge_id() -> String {
     hex::encode(raw)
 }
 
-fn prune_expired_challenges(store: &mut HashMap<String, PendingChallenge>, now: u64) {
-    store.retain(|_, challenge| challenge.expires_at > now);
+fn validate_peer_id_shape(peer_id: &str) -> Result<(), ServiceError> {
+    const MAX_PEER_ID_LENGTH: usize = 128;
+    let trimmed = peer_id.trim();
+    if trimmed.is_empty() {
+        return Err(ServiceError::InvalidPeerId(
+            "peer ID must not be empty".to_string(),
+        ));
+    }
+    if trimmed.len() > MAX_PEER_ID_LENGTH {
+        return Err(ServiceError::InvalidPeerId(format!(
+            "peer ID exceeds max length {}",
+            MAX_PEER_ID_LENGTH
+        )));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| matches!(c, '1'..='9' | 'A'..='H' | 'J'..='N' | 'P'..='Z' | 'a'..='k' | 'm'..='z'))
+    {
+        return Err(ServiceError::InvalidPeerId(
+            "peer ID contains non-base58btc characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
-fn consume_challenge(
-    state: &AppState,
-    challenge_id: &str,
-    peer_id: &str,
-) -> Result<[u8; 32], String> {
-    let now = unix_now_secs().map_err(|e| format!("{:?}", e))?;
-    let mut guard = state
-        .challenges
-        .lock()
-        .map_err(|_| "challenge store lock poisoned".to_owned())?;
-    prune_expired_challenges(&mut guard, now);
-
-    let challenge = guard
-        .remove(challenge_id)
-        .ok_or_else(|| "challenge not found or expired".to_owned())?;
-    if challenge.peer_id != peer_id {
-        return Err("challenge peer mismatch".to_owned());
+fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceError> {
+    if challenge_id.len() != 32 || !challenge_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ServiceError::InvalidChallenge(
+            "challenge ID must be 32 hex characters".to_string(),
+        ));
     }
+    Ok(())
+}
 
-    if challenge.expires_at <= now {
-        return Err("challenge has expired".to_owned());
-    }
-
-    Ok(challenge.nonce)
+fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
+    format!(
+        "{}/{}/{}",
+        config.key_namespace_prefix.trim_matches('/'),
+        config.kms_profile,
+        peer_id
+    )
 }
 
 fn verify_peer_signature(
@@ -582,6 +614,12 @@ fn enforce_attestation_policy(
         )));
     }
 
+    require_non_empty_allowlist("MRTD", &policy.allowed_mrtd)?;
+    require_non_empty_allowlist("RTMR0", &policy.allowed_rtmr0)?;
+    require_non_empty_allowlist("RTMR1", &policy.allowed_rtmr1)?;
+    require_non_empty_allowlist("RTMR2", &policy.allowed_rtmr2)?;
+    require_non_empty_allowlist("RTMR3", &policy.allowed_rtmr3)?;
+
     let body = &verification_result.quote.body;
     enforce_measurement_allowlist("MRTD", &body.mrtd, &policy.allowed_mrtd)?;
     enforce_measurement_allowlist("RTMR0", &body.rtmr0, &policy.allowed_rtmr0)?;
@@ -592,15 +630,24 @@ fn enforce_attestation_policy(
     Ok(())
 }
 
+fn require_non_empty_allowlist(
+    label: &str,
+    allowed_measurements: &[String],
+) -> Result<(), ServiceError> {
+    if allowed_measurements.is_empty() {
+        return Err(ServiceError::MeasurementPolicyRejected(format!(
+            "{} allowlist is empty",
+            label
+        )));
+    }
+    Ok(())
+}
+
 fn enforce_measurement_allowlist(
     label: &str,
     actual_measurement: &str,
     allowed_measurements: &[String],
 ) -> Result<(), ServiceError> {
-    if allowed_measurements.is_empty() {
-        return Ok(());
-    }
-
     let normalized_actual = normalize_measurement(actual_measurement);
     if allowed_measurements
         .iter()
@@ -793,6 +840,18 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_peer_id_shape_rejects_non_base58() {
+        let err = validate_peer_id_shape("not-valid-peer-id-0OIl").unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidPeerId(_)));
+    }
+
+    #[test]
+    fn test_validate_challenge_id_rejects_invalid_shape() {
+        let err = validate_challenge_id("abc").unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidChallenge(_)));
+    }
+
+    #[test]
     fn test_resolve_attestation_binding_defaults_to_domain_separator() {
         let binding = resolve_attestation_binding(None).unwrap();
         assert_eq!(binding.len(), 32);
@@ -877,7 +936,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_endpoint_response() {
-        let app = create_router(Config::default());
+        let app = create_router(Config::default()).expect("router should build");
         let response = app
             .oneshot(
                 Request::builder()
@@ -897,7 +956,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_attest_endpoint_rejects_invalid_nonce_length() {
-        let app = create_router(Config::default());
+        let app = create_router(Config::default()).expect("router should build");
         let bad_nonce_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 31]);
         let body = serde_json::json!({
             "nonceB64": bad_nonce_b64
@@ -922,8 +981,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_challenge_is_single_use_even_when_signature_fails() {
-        let app = create_router(Config::default());
-        let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
+        let app = create_router(Config::default()).expect("router should build");
+        let keypair = Keypair::generate_ed25519();
+        let peer_id = keypair.public().to_peer_id().to_base58();
         let challenge_body = serde_json::json!({
             "peerId": peer_id
         });

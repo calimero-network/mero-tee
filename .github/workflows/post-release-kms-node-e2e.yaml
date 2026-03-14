@@ -1,0 +1,256 @@
+name: Post-release KMS-node compatibility e2e
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Released mero-tee version to validate (example: 2.1.39)"
+        required: true
+        type: string
+      kms_tag:
+        description: "Optional KMS release tag override (example: mero-kms-v2.1.39)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: post-release-kms-node-e2e-${{ github.event_name }}-${{ github.event.release.tag_name || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  verify_released_compatibility:
+    name: Verify released KMS-node compatibility
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'mero-tee-v') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Resolve release tags
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG_FROM_EVENT: ${{ github.event.release.tag_name || '' }}
+          INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
+          INPUT_KMS_TAG: ${{ github.event.inputs.kms_tag || '' }}
+        run: |
+          set -euo pipefail
+
+          tee_tag=""
+          version=""
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            tee_tag="${RELEASE_TAG_FROM_EVENT}"
+            if [[ "${tee_tag}" != mero-tee-v* ]]; then
+              echo "::error::Expected mero-tee release tag, got '${tee_tag}'."
+              exit 1
+            fi
+            version="${tee_tag#mero-tee-v}"
+          else
+            version="${INPUT_RELEASE_VERSION}"
+            if [[ -z "${version}" ]]; then
+              echo "::error::workflow_dispatch requires release_version."
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
+          fi
+
+          if ! gh release view "${tee_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
+            exit 1
+          fi
+
+          kms_tag_source="default-for-version"
+          kms_tag="${INPUT_KMS_TAG:-mero-kms-v${version}}"
+          if [[ -n "${INPUT_KMS_TAG}" ]]; then
+            kms_tag_source="input"
+          fi
+
+          if ! gh release view "${kms_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [[ -n "${INPUT_KMS_TAG}" ]]; then
+              echo "::error::Input KMS release tag '${kms_tag}' not found in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+            fallback_kms_tag="$(gh release list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --limit 200 \
+              --json tagName \
+              --jq '[.[] | .tagName | select(startswith("mero-kms-v"))][0] // empty')"
+            if [[ -z "${fallback_kms_tag}" ]]; then
+              echo "::error::No published mero-kms-v* releases found in ${GITHUB_REPOSITORY}."
+              exit 1
+            fi
+            echo "::warning::Default KMS tag '${kms_tag}' was not found; falling back to latest published KMS tag '${fallback_kms_tag}'."
+            kms_tag="${fallback_kms_tag}"
+            kms_tag_source="fallback-latest-published"
+          fi
+
+          if [[ -z "${kms_tag}" ]]; then
+            echo "::error::Could not resolve KMS tag."
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tee_tag=${tee_tag}" >> "${GITHUB_OUTPUT}"
+          echo "kms_tag=${kms_tag}" >> "${GITHUB_OUTPUT}"
+          echo "kms_tag_source=${kms_tag_source}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download release assets and synthesize node candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
+          KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p e2e/node e2e/kms-release e2e/kms-probe
+
+          gh release download "${TEE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "published-mrtds.json" \
+            --dir e2e/node
+
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import sys
+
+
+          def fail(message: str) -> None:
+              print(f"[post-release-e2e] ERROR: {message}")
+              sys.exit(1)
+
+
+          base = pathlib.Path("e2e/node/published-mrtds.json")
+          if not base.exists():
+              fail("Missing published-mrtds.json from node release")
+
+          payload = json.loads(base.read_text(encoding="utf-8"))
+          profiles_payload = payload.get("profiles")
+          if not isinstance(profiles_payload, dict):
+              fail("Invalid published-mrtds.json: .profiles missing")
+
+          profiles = ["debug", "debug-read-only", "locked-read-only"]
+          keys = [
+              "allowed_tcb_statuses",
+              "allowed_mrtd",
+              "allowed_rtmr0",
+              "allowed_rtmr1",
+              "allowed_rtmr2",
+              "allowed_rtmr3",
+          ]
+
+          for profile in profiles:
+              profile_payload = profiles_payload.get(profile)
+              if not isinstance(profile_payload, dict):
+                  fail(f"Missing profile block in published-mrtds.json: {profile}")
+
+              policy = {}
+              for key in keys:
+                  values = profile_payload.get(key, [])
+                  if not isinstance(values, list) or len(values) == 0:
+                      fail(f"Invalid node allowlist for {profile}.{key}")
+                  policy[key] = values
+
+              out = {
+                  "schema_version": 1,
+                  "profile": profile,
+                  "policy": policy,
+              }
+              out_path = base.parent / f"measurement-policy-candidates-{profile}.json"
+              out_path.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
+
+          print("[post-release-e2e] OK: synthesized node measurement-policy-candidates artifacts")
+          PY
+
+          for asset in \
+            "kms-phala-attestation-policy.debug.json" \
+            "kms-phala-attestation-policy.debug-read-only.json" \
+            "kms-phala-attestation-policy.locked-read-only.json"; do
+            gh release download "${KMS_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset}" \
+              --dir e2e/kms-release
+          done
+
+      - name: Probe released KMS and verify strict profile matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
+        run: |
+          set -euo pipefail
+
+          dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          gh workflow run "kms-phala-staging-probe.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref master \
+            -f kms_tag="${KMS_TAG}"
+
+          probe_run_id=""
+          for attempt in $(seq 1 90); do
+            probe_run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "kms-phala-staging-probe.yaml" \
+              --event workflow_dispatch \
+              --branch master \
+              --limit 8 \
+              --json databaseId,createdAt \
+              --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -n "${probe_run_id}" ]]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [[ -z "${probe_run_id}" ]]; then
+            echo "::error::Could not resolve kms-phala-staging-probe workflow run ID"
+            exit 1
+          fi
+
+          gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+
+          probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
+            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
+          if [[ -z "${probe_artifact_name}" ]]; then
+            echo "::error::No non-expired kms-staging-probe artifact found for run ${probe_run_id}"
+            exit 1
+          fi
+
+          gh run download "${probe_run_id}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${probe_artifact_name}" \
+            --dir e2e/kms-probe
+
+          kms_probe_candidates_file="$(python3 - <<'PY'
+          import pathlib
+          base = pathlib.Path("e2e/kms-probe")
+          matches = sorted(base.rglob("kms-policy-candidates.json"))
+          print(matches[0] if matches else "")
+          PY
+          )"
+          if [[ -z "${kms_probe_candidates_file}" ]]; then
+            echo "::error::Could not locate kms-policy-candidates.json in downloaded probe artifacts"
+            exit 1
+          fi
+
+          bash scripts/release/e2e-verify-kms-node-compatibility.sh \
+            e2e/node \
+            e2e/kms-release \
+            "${kms_probe_candidates_file}"
+
+          {
+            echo "## Post-release e2e compatibility matrix"
+            echo ""
+            echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+            echo "- KMS release tag: ${KMS_TAG}"
+            echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+            echo "- KMS probe run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
+            echo "- Result: strict profile allow/deny matrix verified."
+          } >> "${GITHUB_STEP_SUMMARY}"

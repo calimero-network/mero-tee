@@ -15,11 +15,12 @@
     state: directory
     mode: "0755"
 
-- name: Add calimero.profile to kernel cmdline (measured into RTMR[2])
+- name: Add calimero.role and calimero.profile to kernel cmdline (measured into RTMR[2])
   copy:
     content: |
-      # Profile-specific kernel param for TDX attestation (RTMR[2])
-      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.profile={{ lockdown_profile | default('locked-read-only') }}"
+      # Role/profile kernel params for TDX attestation (RTMR[2]).
+      # role differentiates node images from KMS role measurements.
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=node calimero.profile={{ lockdown_profile | default('locked-read-only') }}"
     dest: /etc/default/grub.d/50-calimero-profile.cfg
     mode: "0644"
 
