@@ -98,6 +98,7 @@ impl Default for Config {
 
 const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
+const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
 
 impl Config {
     /// Load configuration from environment variables.
@@ -131,11 +132,17 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
-        let kms_profile = parse_profile(
-            std::env::var("KMS_POLICY_PROFILE")
-                .ok()
-                .as_deref()
-                .unwrap_or("locked-read-only"),
+        let pinned_image_profile = read_image_profile_from_file()?;
+        let env_profile_override = match std::env::var("KMS_POLICY_PROFILE") {
+            Ok(value) => Some(value),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("KMS_POLICY_PROFILE must be valid UTF-8")
+            }
+        };
+        let kms_profile = resolve_kms_profile(
+            pinned_image_profile.as_deref(),
+            env_profile_override.as_deref(),
         )?;
 
         let key_namespace_prefix = std::env::var("KEY_NAMESPACE_PREFIX")
@@ -406,6 +413,53 @@ fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
             bail!("{} must be valid UTF-8", name)
         }
     }
+}
+
+fn read_image_profile_from_file() -> EyreResult<Option<String>> {
+    let raw = match std::fs::read_to_string(IMAGE_PROFILE_PATH) {
+        Ok(value) => value,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            bail!(
+                "Failed to read pinned KMS image profile from {}: {}",
+                IMAGE_PROFILE_PATH,
+                err
+            )
+        }
+    };
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!(
+            "Pinned KMS image profile file {} is empty; refusing startup",
+            IMAGE_PROFILE_PATH
+        );
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn resolve_kms_profile(
+    pinned_image_profile: Option<&str>,
+    env_profile_override: Option<&str>,
+) -> EyreResult<String> {
+    if let Some(pinned) = pinned_image_profile {
+        if let Some(override_value) = env_profile_override {
+            if !override_value.trim().is_empty() {
+                bail!(
+                    "KMS_POLICY_PROFILE override is not allowed for profile-pinned images. \
+                     Build/deploy the matching KMS image profile instead."
+                );
+            }
+        }
+        return parse_profile(pinned);
+    }
+
+    parse_profile(
+        env_profile_override
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("locked-read-only"),
+    )
 }
 
 fn parse_profile(value: &str) -> EyreResult<String> {
@@ -775,6 +829,26 @@ mod tests {
     fn parse_bool_flag_rejects_invalid_value() {
         let err = parse_bool_flag("truthy").unwrap_err();
         assert!(err.to_string().contains("Invalid boolean value"));
+    }
+
+    #[test]
+    fn resolve_kms_profile_uses_pinned_profile() {
+        let selected = resolve_kms_profile(Some("debug-read-only"), None).expect("profile resolves");
+        assert_eq!(selected, "debug-read-only");
+    }
+
+    #[test]
+    fn resolve_kms_profile_rejects_override_for_pinned_image() {
+        let err = resolve_kms_profile(Some("locked-read-only"), Some("debug")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("KMS_POLICY_PROFILE override is not allowed"));
+    }
+
+    #[test]
+    fn resolve_kms_profile_allows_env_profile_without_pinned_image() {
+        let selected = resolve_kms_profile(None, Some("debug")).expect("profile resolves");
+        assert_eq!(selected, "debug");
     }
 
     #[test]
