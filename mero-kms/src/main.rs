@@ -778,7 +778,12 @@ async fn main() -> eyre::Result<()> {
         );
         warn!("Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled");
     } else {
-        ensure_kms_profile_runtime_event(&config.kms_profile)?;
+        if let Err(err) = ensure_kms_profile_runtime_event(&config.kms_profile) {
+            warn!("Failed to emit KMS profile RTMR3 runtime marker; continuing startup: {err:#}");
+            warn!(
+                "Profile pinning is still enforced, but runtime profile-measurement separation may be reduced"
+            );
+        }
     }
 
     // Create router with handlers

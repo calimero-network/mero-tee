@@ -454,7 +454,7 @@ jobs:
 
             probe_label="post-release-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}"
             expected_display_title="KMS staging probe (${probe_label})"
-            deployment_name="kms-profile-${version_slug}-${profile}"
+            deployment_name="kms-profile-${version_slug}-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             gh workflow run "kms-phala-staging-probe.yaml" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -495,7 +495,10 @@ jobs:
               exit 1
             fi
 
-            gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status
+            if ! timeout 2700s gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+              echo "::error::Timed out or failed while waiting for probe run ${probe_run_id}"
+              exit 1
+            fi
             probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}")
 
             probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
