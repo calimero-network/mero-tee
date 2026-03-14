@@ -115,6 +115,7 @@ Node release flow:
 - `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images and enforces that each profile's runtime measurements match its published profile policy before checking the strict node↔KMS allow/deny matrix.
 - A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 - Released KMS images are profile-pinned: startup reads the image profile marker and rejects `KMS_POLICY_PROFILE` env overrides, preventing deploy-time profile switching.
+- Staging probes are dispatched with unique probe labels so CI can deterministically map each profile to its own probe run artifact.
 
 Recommended release order:
 
