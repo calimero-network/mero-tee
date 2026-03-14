@@ -8,6 +8,10 @@ on:
         description: "Optional unique label for correlating dispatch and run selection"
         required: false
         default: ""
+      deployment_name:
+        description: "Optional deterministic deployment name override for probe reproducibility"
+        required: false
+        default: ""
       kms_image:
         description: "Optional explicit pinned image override (for example ghcr.io/calimero-network/mero-kms-phala:pr-1). If empty, workflow derives image from kms_tag."
         required: false
@@ -206,13 +210,18 @@ jobs:
       - name: Deploy ephemeral CVM
         id: deploy
         env:
+          DEPLOY_NAME_INPUT: ${{ inputs.deployment_name }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           REGION: ${{ inputs.region }}
           COMPOSE_FILE: ${{ steps.prepare.outputs.compose_file }}
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
-          deploy_name="kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          deploy_name="${DEPLOY_NAME_INPUT:-kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
+          if [[ ! "${deploy_name}" =~ ^[a-zA-Z0-9._-]{3,100}$ ]]; then
+            echo "::error::deployment_name must match ^[a-zA-Z0-9._-]{3,100}$"
+            exit 1
+          fi
           deploy_json="${ARTIFACTS_DIR}/phala-deploy.json"
           deploy_raw="${ARTIFACTS_DIR}/phala-deploy.raw.log"
 
