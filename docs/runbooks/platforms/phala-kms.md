@@ -21,7 +21,8 @@ In the Phala lane:
 Implementation references:
 
 - KMS verification and policy enforcement:
-  - `mero-kms/src/handlers.rs`
+  - `mero-kms/src/handlers/get_key.rs`
+  - `mero-kms/src/handlers/attest.rs`
 - `merod` KMS client and KMS self-attestation verification:
   - `core/crates/merod/src/kms.rs`
 

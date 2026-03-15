@@ -5,7 +5,6 @@
 /.github/workflows/release-kms-phala.yaml @chefsale
 /.github/workflows/release-node-image-gcp.yaml @chefsale
 /.github/workflows/kms-phala-staging-probe.yaml @chefsale
-/.github/workflows/kms-phala-policy-promotion-pr.yaml @chefsale
 
 # KMS package
 /mero-kms/ @chefsale

@@ -6,6 +6,56 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.50] - 2026-03-15
+
+### Added
+
+- Regression test coverage for `mero-kms` config/policy loading, including:
+  - strict pinned-profile override rejection,
+  - policy JSON role/profile mismatch guards,
+  - env-policy loading combinations (`USE_ENV_POLICY`, hash-pin gating, malformed allowlists).
+- Lightweight inline documentation in release scripts (`scripts/release/kms-phala/*.sh`,
+  `scripts/release/node-image-gcp/*.sh`) and modular KMS code paths.
+
+### Changed
+
+- Enforced strict pinned-profile behavior in `mero-kms`:
+  - empty `/etc/mero-kms/image-profile` now fails startup,
+  - `KMS_POLICY_PROFILE` override is rejected whenever image profile pinning is active.
+- Synchronized release version to `2.1.50` across:
+  - `mero-kms/Cargo.toml`,
+  - `Cargo.lock` (`mero-kms-phala` package),
+  - `mero-tee/versions.json` (`imageVersion`).
+- Cleaned/updated docs that referenced missing policy workflows and aligned them with
+  current probe/script-driven promotion flow.
+
+## [2.1.49] - 2026-03-14
+
+### Added
+
+- Modular release workflow helper scripts:
+  - `scripts/release/kms-phala/*`
+  - `scripts/release/node-image-gcp/*`
+- New `mero-kms` modules:
+  - `src/config.rs`
+  - `src/policy.rs`
+  - `src/runtime_event.rs`
+  - endpoint-split handlers under `src/handlers/`.
+
+### Changed
+
+- Refactored monolithic release workflows into reusable script components:
+  - `.github/workflows/release-kms-phala.yaml`
+  - `.github/workflows/release-node-image-gcp.yaml`.
+- Split `mero-kms/src/main.rs` and `mero-kms/src/handlers.rs` into smaller modules/files
+  for maintainability and clearer ownership boundaries.
+- Hardened CI compatibility for release scripts (shellcheck/docs-guard alignment).
+
+### Notes
+
+- Earlier entries remain preserved below; this section brings the changelog in sync
+  with the current `2.1.49+` release line.
+
 ## [2.1.16] - 2026-03-12
 
 ### Added

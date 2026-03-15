@@ -20,7 +20,7 @@ The key design rule is to separate:
 
 Implementation references:
 
-- `mero-tee`: `mero-kms/src/handlers.rs`
+- `mero-tee`: `mero-kms/src/handlers/get_key.rs`, `mero-kms/src/handlers/attest.rs`
 - `core`: `crates/merod/src/kms.rs`
 
 ---
@@ -65,7 +65,7 @@ Source: `core/crates/merod/src/kms.rs` (`verify_kms_attestation`, `fetch_from_ph
 4. Enforces measurement policy allowlists
 5. Derives/releases key
 
-Source: `mero-kms/src/handlers.rs` (`get_key_handler`, policy enforcement)
+Source: `mero-kms/src/handlers/get_key.rs` (`get_key_handler`, policy enforcement)
 
 ---
 

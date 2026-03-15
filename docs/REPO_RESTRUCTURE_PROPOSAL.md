@@ -66,8 +66,8 @@ Avoid mixing lane names inside one artifact family.
 | `release-mero-kms-phala.yaml` | `release-kms-phala.yaml` |
 | `gcp_locked_image_build.yaml` | `release-node-image-gcp.yaml` |
 | `kms_staging_probe_phala.yaml` | `kms-phala-staging-probe.yaml` |
-| `kms_policy_promotion_pr.yaml` | `kms-phala-policy-promotion-pr.yaml` |
-| `locked_image_policy_promotion_pr.yaml` | `node-image-gcp-policy-promotion-pr.yaml` |
+| `kms_policy_promotion_pr.yaml` | PR-based promotion via `kms-phala-staging-probe.yaml` + `scripts/policy/*.sh` |
+| `locked_image_policy_promotion_pr.yaml` | PR-based promotion via `release-node-image-gcp.yaml` + `scripts/release/node-image-gcp/*.sh` |
 
 ## Script names
 

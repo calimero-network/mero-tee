@@ -28,8 +28,8 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
 ## Running it
 
-This workflow is used by the automatic pipeline (`kms-phala-policy-auto-pipeline.yaml`)
-and can also be run manually (`workflow_dispatch`) with:
+This workflow is used for both automated release preparation and manual
+promotion flows (`workflow_dispatch`) with:
 
 - `kms_tag`:
   - explicit release tag (recommended, for example `2.1.3`), or
@@ -56,11 +56,7 @@ The workflow uploads an artifact bundle `kms-staging-probe-<run_id>-<attempt>` c
 
 ## Promotion to governed policy PR
 
-After collecting probe artifacts, run:
-
-- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
-
-with the probe run ID and target release tag. This creates/updates:
+After collecting probe artifacts, promote reviewed values into:
 
 - `policies/kms-phala/<tag>.json`
 - `policies/index.json`
