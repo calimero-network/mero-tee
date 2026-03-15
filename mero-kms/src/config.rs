@@ -735,47 +735,65 @@ mod tests {
         assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
     }
 
-    #[tokio::test]
-    async fn from_env_accepts_env_policy_mode_with_valid_allowlists() {
+    #[test]
+    fn from_env_accepts_env_policy_mode_with_valid_allowlists() {
         let _lock = env_lock().lock().expect("env lock");
         let _guard = apply_string_overrides(valid_env_policy_overrides());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
 
-        let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
-            .await
+        let config = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                "/tmp/nonexistent-kms-profile",
+            ))
             .expect("env-policy mode should load");
         assert_eq!(config.kms_profile, "locked-read-only");
         assert_eq!(config.attestation_policy.allowed_mrtd.len(), 1);
         assert_eq!(config.attestation_policy.allowed_rtmr3.len(), 1);
     }
 
-    #[tokio::test]
-    async fn from_env_use_env_policy_ignores_release_version_without_hash_pin() {
+    #[test]
+    fn from_env_use_env_policy_ignores_release_version_without_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
         let mut overrides = valid_env_policy_overrides();
         overrides.push(("MERO_KMS_VERSION", "2.1.49".to_string()));
         let _guard = apply_string_overrides(overrides);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
 
-        let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
-            .await
+        let config = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                "/tmp/nonexistent-kms-profile",
+            ))
             .expect("env-policy mode should not require MERO_KMS_POLICY_SHA256");
         assert_eq!(config.kms_profile, "locked-read-only");
     }
 
-    #[tokio::test]
-    async fn from_env_rejects_release_version_without_policy_hash_pin() {
+    #[test]
+    fn from_env_rejects_release_version_without_policy_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
         let _guard = EnvGuard::apply(&[("MERO_KMS_VERSION", "2.1.49")]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
 
-        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
-            .await
+        let err = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                "/tmp/nonexistent-kms-profile",
+            ))
             .expect_err("missing policy hash pin should fail");
         assert!(err
             .to_string()
             .contains("MERO_KMS_POLICY_SHA256 is required"));
     }
 
-    #[tokio::test]
-    async fn from_env_rejects_malformed_measurement_list() {
+    #[test]
+    fn from_env_rejects_malformed_measurement_list() {
         let _lock = env_lock().lock().expect("env lock");
         let mut overrides = valid_env_policy_overrides();
         for (key, value) in &mut overrides {
@@ -784,23 +802,35 @@ mod tests {
             }
         }
         let _guard = apply_string_overrides(overrides);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
 
-        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
-            .await
+        let err = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                "/tmp/nonexistent-kms-profile",
+            ))
             .expect_err("malformed ALLOWED_MRTD should fail");
         assert!(err.to_string().contains("Expected 48 bytes"));
     }
 
-    #[tokio::test]
-    async fn from_env_rejects_override_when_profile_is_pinned() {
+    #[test]
+    fn from_env_rejects_override_when_profile_is_pinned() {
         let _lock = env_lock().lock().expect("env lock");
         let mut overrides = valid_env_policy_overrides();
         overrides.push(("KMS_POLICY_PROFILE", "debug".to_string()));
         let _guard = apply_string_overrides(overrides);
         let profile_file = TempProfileFile::new("locked-read-only\n");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
 
-        let err = Config::from_env_with_image_profile_path(profile_file.as_str())
-            .await
+        let err = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                profile_file.as_str(),
+            ))
             .expect_err("pinned image should reject KMS_POLICY_PROFILE override");
         assert!(err
             .to_string()
