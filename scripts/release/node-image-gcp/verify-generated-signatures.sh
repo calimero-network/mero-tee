@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Verify node-image asset signatures against workflow identity.
+# Inputs: GITHUB_REPOSITORY plus artifacts/*.sig and *.pem files.
+
 assets=(
   "artifacts/published-mrtds.json"
   "artifacts/release-provenance.json"

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Create/update the consolidated top-level release entry.
+# Inputs: VERSION, TARGET_COMMIT, GITHUB_REPOSITORY.
+
 if [[ -z "${VERSION:-}" || -z "${TARGET_COMMIT:-}" ]]; then
   echo "::error::VERSION and TARGET_COMMIT are required"
   exit 1

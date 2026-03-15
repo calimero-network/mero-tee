@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Best-effort cleanup for attestation VMs/firewall rules.
+# Removes current-run resources and stale leftovers matching naming conventions.
+
 vm_project="${GCP_ATTESTATION_PROJECT_ID:-${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}}"
 max_age_hours="${GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS:-24}"
 if ! [[ "${max_age_hours}" =~ ^[0-9]+$ ]]; then

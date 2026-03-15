@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Download the latest non-expired probe artifact for a run.
+# Inputs: RUN_ID, GITHUB_REPOSITORY, GH_TOKEN context.
+# Output (GITHUB_OUTPUT): artifact_name.
+
 if [[ -z "${RUN_ID:-}" ]]; then
   echo "::error::RUN_ID is required"
   exit 1

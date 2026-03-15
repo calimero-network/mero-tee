@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sign all KMS release trust assets with keyless Sigstore.
+# Requires cosign to be available and release assets to be staged in
+# `artifacts/` and `release-assets/`.
+
 assets_for_rekor=(
   artifacts/*.tar.gz
   release-assets/kms-phala-checksums.txt

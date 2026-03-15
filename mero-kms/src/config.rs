@@ -46,10 +46,12 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Load runtime configuration from process environment.
     pub async fn from_env() -> EyreResult<Self> {
         Self::from_env_with_image_profile_path(IMAGE_PROFILE_PATH).await
     }
 
+    /// Internal loader that allows overriding image-profile path for tests.
     async fn from_env_with_image_profile_path(image_profile_path: &str) -> EyreResult<Self> {
         let listen_addr = std::env::var("LISTEN_ADDR")
             .ok()
@@ -341,6 +343,7 @@ fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     }
 }
 
+/// Read and validate the image-pinned policy profile, if present.
 fn read_image_profile_from_file(image_profile_path: &str) -> EyreResult<Option<String>> {
     match std::fs::read_to_string(image_profile_path) {
         Ok(raw) => {
@@ -362,6 +365,8 @@ fn read_image_profile_from_file(image_profile_path: &str) -> EyreResult<Option<S
     }
 }
 
+/// Resolve effective KMS policy profile with strict pinning semantics:
+/// if image profile is pinned, env overrides are rejected.
 fn resolve_kms_profile(
     pinned_profile: Option<&str>,
     env_override: Option<&str>,

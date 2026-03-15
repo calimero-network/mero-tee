@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sign node-image release trust assets with keyless Sigstore.
+# Requires prepared artifact files in artifacts/.
+
 assets=(
   "artifacts/published-mrtds.json"
   "artifacts/release-provenance.json"

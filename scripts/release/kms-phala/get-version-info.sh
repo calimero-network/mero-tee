@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve KMS release metadata for workflow jobs.
+# Inputs: TARGET_COMMIT/GITHUB_SHA, GH_REF/GITHUB_REF, GITHUB_EVENT_NAME, GITHUB_REPOSITORY.
+# Outputs (GITHUB_OUTPUT): target_commit, version, kms_release_tag, prerelease,
+# binary_release, docker_release.
+
 target_commit="${TARGET_COMMIT:-${GITHUB_SHA:-}}"
 if [[ -z "${target_commit}" ]]; then
   echo "::error::TARGET_COMMIT (or GITHUB_SHA) is required"

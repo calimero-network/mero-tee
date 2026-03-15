@@ -1,3 +1,5 @@
+//! `/attest` endpoint: returns KMS quote + event log for client verification.
+
 use axum::extract::State;
 use axum::Json;
 use base64::Engine;

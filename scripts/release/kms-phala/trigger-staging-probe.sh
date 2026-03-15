@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dispatch and wait for the KMS staging probe workflow.
+# Inputs: IMAGE_REF, PROFILE, RELEASE_VERSION, PROBE_LABEL, GH_TOKEN context.
+# Output (GITHUB_OUTPUT): run_id of the completed probe run.
+
 if [[ -z "${IMAGE_REF:-}" || -z "${PROFILE:-}" || -z "${RELEASE_VERSION:-}" || -z "${PROBE_LABEL:-}" ]]; then
   echo "::error::IMAGE_REF, PROFILE, RELEASE_VERSION, and PROBE_LABEL are required"
   exit 1

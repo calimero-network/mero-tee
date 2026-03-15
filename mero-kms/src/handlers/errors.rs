@@ -1,3 +1,5 @@
+//! Shared API error types and HTTP mapping for handler modules.
+
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;

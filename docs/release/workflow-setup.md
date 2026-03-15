@@ -81,10 +81,13 @@ And `kms_tag` must be:
 
 This keeps release metadata aligned with node-image release tags.
 
-## KMS policy automation
+## KMS policy operations
 
-Policy probe/promotion automation (`kms-phala-policy-auto-pipeline.yaml`) reuses the
-same secrets as `kms-phala-staging-probe.yaml`:
+KMS policy generation/rollout currently uses staging probes plus policy scripts.
+Operationally, treat `kms-phala-staging-probe.yaml` and `scripts/policy/*.sh` as
+the canonical execution path.
+
+These operations reuse:
 
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve image, VM, firewall, and artifact parameters for attestation jobs.
+# Inputs: PROFILE plus optional GCP_* overrides and versions.json.
+# Outputs (GITHUB_OUTPUT): image/VM/firewall fields consumed by later jobs.
+
 if [[ -z "${PROFILE:-}" ]]; then
   echo "::error::PROFILE is required"
   exit 1

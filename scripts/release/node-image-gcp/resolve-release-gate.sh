@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Decide whether node-image release should proceed and resolve merod tag.
+# Inputs: GITHUB_REF, GITHUB_EVENT_NAME, GH_TOKEN, mero-tee/versions.json.
+# Outputs (GITHUB_OUTPUT): run_pipeline, latest_merod_version, reason.
+
 if [[ -z "${GH_TOKEN:-}" ]]; then
   echo "::error::GH_TOKEN is required"
   exit 1

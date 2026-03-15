@@ -1,3 +1,5 @@
+//! `/challenge` endpoint: issues short-lived nonce challenges.
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;

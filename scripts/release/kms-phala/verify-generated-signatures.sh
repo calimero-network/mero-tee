@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Verify all generated KMS signatures/certificates against workflow identity.
+# Inputs: GH_REPOSITORY and COSIGN_CERTIFICATE_OIDC_ISSUER.
+
 cert_identity_regex="^https://github.com/${GH_REPOSITORY}/.github/workflows/release-kms-phala.yaml@refs/heads/master$"
 signed_assets=(
   artifacts/*.tar.gz

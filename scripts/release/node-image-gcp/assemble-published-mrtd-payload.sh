@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Validate profile artifacts and assemble published MRTD/provenance outputs.
+# Inputs: RELEASE_VERSION and generated files in artifacts/.
+# Produces: published-mrtds.json, release-provenance.json, release-notes.md, checksums.
+
 release_tag="${RELEASE_VERSION:?RELEASE_VERSION is required}"
 
 validate_mrtd_file() {
