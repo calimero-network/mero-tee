@@ -33,6 +33,8 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/policies/node-image-gcp-policy-promotion.md` | node-image-gcp policy promotion flow | `release-node-image-gcp.yaml`, `scripts/release/node-image-gcp/assemble-published-mrtd-payload.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh` | Release engineers |
 | `docs/release/pipeline-sequence-diagrams.md` | Visual sequence diagrams for release workflows and auditing | `release-kms-phala.yaml`, `release-node-image-gcp.yaml`, `release-auditor.yaml` | Maintainers, release engineers |
 | `docs/release/workflow-setup.md` | Required GitHub variables/secrets | All release/policy workflows | Maintainers |
+| `docs/GLOSSARY.md` | Canonical terminology for lanes, profiles, release terms, and attestation vocabulary | All docs/workflows/scripts (naming consistency) | Maintainers, operators |
+| `docs/adr/README.md` + `docs/adr/*.md` | Accepted architecture/security/process decisions | `mero-kms/src/config.rs`, release workflows, `scripts/policy/check_release_version_sync.sh` | Maintainers, auditors |
 | `scripts/policy/check_release_version_sync.sh` | Validates KMS/merod version bump coupling and policy index consistency | `.github/workflows/release-version-sync-guard.yaml` | Maintainers |
 | `docs/policies/kms-phala-attestation-task-list.md` | KMS attestation implementation checklist | `mero-kms/src/*`, release scripts | Maintainers |
 | `docs/architecture/phala-kms-key-protection-proposal.md` | Key protection direction/proposal | N/A (design doc) | Maintainers |

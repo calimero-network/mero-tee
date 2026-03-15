@@ -24,6 +24,8 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 - [Release verification output examples](docs/release/verification-examples.md)
 - [Migration & Implementation Plan](docs/architecture/migration-plan.md)
 - [Architecture & verification boundaries](docs/architecture/trust-boundaries.md)
+- [Terminology glossary](docs/GLOSSARY.md)
+- [Architecture decision records (ADRs)](docs/adr/README.md)
 - [Documentation source index](docs/DOCS_INDEX.md)
 - [Architecture graph](docs/DOCS_GRAPH.md) – KMS, mero-tee, regular nodes, and attestation flow
 - [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
