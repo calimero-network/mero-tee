@@ -132,3 +132,6 @@ versioned scripts:
 
 The workflows call these scripts directly, and CI runs syntax/lint checks on them.
 When changing release behavior, update both the script and this documentation.
+
+Operational note: jobs that execute repository scripts must include a checkout
+step (`actions/checkout`) before invoking `bash scripts/...`.
