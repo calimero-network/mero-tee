@@ -12,8 +12,6 @@ if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
   exit 1
 fi
 
-echo "target_commit=${target_commit}" >> "${GITHUB_OUTPUT}"
-
 version="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | jq -r '.packages[] | select(.name=="mero-kms-phala") | .version' || echo "0.1.0")"
 if [[ -z "${version}" || "${version}" == "null" ]]; then
   version="0.1.0"
@@ -36,8 +34,11 @@ elif [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
   docker_release=true
 fi
 
-echo "version=${version}" >> "${GITHUB_OUTPUT}"
-echo "kms_release_tag=${kms_release_tag}" >> "${GITHUB_OUTPUT}"
-echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
-echo "binary_release=${binary_release}" >> "${GITHUB_OUTPUT}"
-echo "docker_release=${docker_release}" >> "${GITHUB_OUTPUT}"
+{
+  echo "target_commit=${target_commit}"
+  echo "version=${version}"
+  echo "kms_release_tag=${kms_release_tag}"
+  echo "prerelease=${prerelease}"
+  echo "binary_release=${binary_release}"
+  echo "docker_release=${docker_release}"
+} >> "${GITHUB_OUTPUT}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release_version="${RELEASE_VERSION}"
+release_tag="${RELEASE_VERSION:?RELEASE_VERSION is required}"
 
 validate_mrtd_file() {
   local file_path="$1"
@@ -160,7 +160,7 @@ if [[ "${profiles_differ}" != "true" ]]; then
 fi
 
 jq -n \
-  --arg tag "${release_version}" \
+  --arg tag "${release_tag}" \
   --slurpfile debug artifacts/mrtd-debug.json \
   --slurpfile debug_ro artifacts/mrtd-debug-read-only.json \
   --slurpfile locked_ro artifacts/mrtd-locked-read-only.json \
@@ -232,14 +232,14 @@ jq -e '
   (.profiles["locked-read-only"].allowed_rtmr3 | type == "array" and length > 0)
 ' artifacts/published-mrtds.json >/dev/null
 
-version="${release_version}"
+version="${release_tag}"
 kms_tag="mero-kms-v${version}"
 node_image_tag="mero-tee-v${version}"
 kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
 node_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
 jq -n \
-  --arg tag "${release_version}" \
+  --arg tag "${release_tag}" \
   --arg commit "${GITHUB_SHA}" \
   --arg run_id "${GITHUB_RUN_ID}" \
   --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
@@ -341,13 +341,13 @@ locked_ro_rtmr3_preview="$(jq -r '.profiles["locked-read-only"].allowed_rtmr3[0]
 run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
 {
-  echo "## mero-tee release ${release_version}"
+  echo "## mero-tee release ${release_tag}"
   echo ""
   echo "### Release metadata"
   echo ""
   echo "| Field | Value |"
   echo "|---|---|"
-  echo "| Tag | \`mero-tee-v${release_version}\` |"
+  echo "| Tag | \`mero-tee-v${release_tag}\` |"
   echo "| Commit | \`${GITHUB_SHA}\` |"
   echo "| Workflow run | [${GITHUB_RUN_ID}](${run_url}) |"
   echo "| Checksums | \`node-image-gcp-checksums.txt\` |"
@@ -420,12 +420,12 @@ run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
   echo ""
   echo "**Quick verify (operator):**"
   echo "\`\`\`bash"
-  echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${release_version}"
+  echo "scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v${release_tag}"
   echo "\`\`\`"
   echo ""
   echo "**Full audit (all release classes):**"
   echo "\`\`\`bash"
-  echo "scripts/release/verify-release-assets.sh ${release_version}"
+  echo "scripts/release/verify-release-assets.sh ${release_tag}"
   echo "\`\`\`"
   echo ""
   echo "### Trust assets (detailed)"
@@ -446,7 +446,7 @@ run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 {
   echo "## Published MRTDs"
   echo ""
-  echo "- Tag: ${release_version}"
+  echo "- Tag: ${release_tag}"
   echo "- Debug MRTD: ${debug_mrtd_preview}"
   echo "- Debug read-only MRTD: ${debug_ro_mrtd_preview}"
   echo "- Locked read-only MRTD: ${locked_ro_mrtd_preview}"

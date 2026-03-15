@@ -21,9 +21,11 @@ fi
 
 if [[ "${GITHUB_REF}" != "refs/heads/master" && "${allow_non_master}" != "true" ]]; then
   reason="Workflow is restricted to refs/heads/master; current ref is ${GITHUB_REF}."
-  echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
-  echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
-  echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+  {
+    echo "run_pipeline=${run_pipeline}"
+    echo "latest_merod_version=${latest_merod_version}"
+    echo "reason=${reason}"
+  } >> "${GITHUB_OUTPUT}"
   exit 0
 fi
 
@@ -75,6 +77,8 @@ else
   reason="Manual workflow_dispatch run enabled on non-master ref ${GITHUB_REF}."
 fi
 
-echo "run_pipeline=${run_pipeline}" >> "${GITHUB_OUTPUT}"
-echo "latest_merod_version=${latest_merod_version}" >> "${GITHUB_OUTPUT}"
-echo "reason=${reason}" >> "${GITHUB_OUTPUT}"
+{
+  echo "run_pipeline=${run_pipeline}"
+  echo "latest_merod_version=${latest_merod_version}"
+  echo "reason=${reason}"
+} >> "${GITHUB_OUTPUT}"

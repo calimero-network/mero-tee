@@ -118,3 +118,14 @@ as the GitHub Release body (`body_path`).
   - workflow run reference
   - profile MRTD summary
   - verification command snippets
+
+## Workflow modularization layout
+
+To keep release workflows reviewable, large inline shell blocks are extracted into
+versioned scripts:
+
+- KMS release lane: `scripts/release/kms-phala/*.sh`
+- Node-image release lane: `scripts/release/node-image-gcp/*.sh`
+
+The workflows call these scripts directly, and CI runs syntax/lint checks on them.
+When changing release behavior, update both the script and this documentation.
