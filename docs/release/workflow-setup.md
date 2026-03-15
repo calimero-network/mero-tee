@@ -94,6 +94,12 @@ release events:
   for release validation.
 - KMS and node staging probes are dispatched on the resolved workflow ref and
   validated against an expected `headSha` before artifacts are accepted.
+- Node staging probes must also produce `node-client-verification.json`, which
+  proves client-visible anti-fake checks succeeded:
+  - positive quote verification passes,
+  - wrong nonce is rejected,
+  - tampered quote is rejected,
+  - wrong expected application hash is rejected.
 
 `push` on `master` can still skip when release assets are not yet published, but
 release-triggered validation is expected to fail explicitly on missing or

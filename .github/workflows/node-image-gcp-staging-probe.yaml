@@ -362,6 +362,140 @@ jobs:
             '{base_url: $base_url, nonce: $nonce, profile: $profile, instance: $instance, image: $image, project: $project, zone: $zone}' \
             > "${artifacts_dir}/attestation-context.json"
 
+      - name: Verify client-side node quote checks (anti-fake)
+        run: |
+          set -euo pipefail
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          base_url="${{ steps.endpoint.outputs.base_url }}"
+          verify_endpoint="${base_url}/admin-api/tee/verify-quote"
+
+          quote_b64="$(jq -r '.data.quoteB64 // empty' "${artifacts_dir}/tee-attest-response.json")"
+          nonce_hex="$(jq -r '.nonce // empty' "${artifacts_dir}/tee-attest-request.json")"
+          if [[ -z "${quote_b64}" || -z "${nonce_hex}" ]]; then
+            echo "::error::Missing quote or nonce in collected node attestation artifacts."
+            exit 1
+          fi
+
+          jq -n \
+            --arg quoteB64 "${quote_b64}" \
+            --arg nonce "${nonce_hex}" \
+            '{quoteB64: $quoteB64, nonce: $nonce}' \
+            > "${artifacts_dir}/tee-verify-quote-positive-request.json"
+          positive_status="$(curl -sS --max-time 20 \
+            -o "${artifacts_dir}/tee-verify-quote-positive-response.json" \
+            -w "%{http_code}" \
+            -X POST "${verify_endpoint}" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-verify-quote-positive-request.json" || true)"
+          if [[ "${positive_status}" != "200" ]]; then
+            echo "::error::Positive /verify-quote check failed (HTTP ${positive_status})."
+            exit 1
+          fi
+          if ! jq -e '.data.quoteVerified == true and .data.nonceVerified == true' \
+            "${artifacts_dir}/tee-verify-quote-positive-response.json" >/dev/null 2>&1; then
+            echo "::error::Positive /verify-quote check did not return quoteVerified=true and nonceVerified=true."
+            jq . "${artifacts_dir}/tee-verify-quote-positive-response.json" || true
+            exit 1
+          fi
+          positive_passed="true"
+
+          wrong_nonce_hex="$(python3 -c 'import sys; n=sys.argv[1].strip().lower(); assert len(n)==64, "nonce must be 64 hex chars"; flip=("0" if n[0]!="0" else "1"); print(flip + n[1:])' "${nonce_hex}")"
+          jq -n \
+            --arg quoteB64 "${quote_b64}" \
+            --arg nonce "${wrong_nonce_hex}" \
+            '{quoteB64: $quoteB64, nonce: $nonce}' \
+            > "${artifacts_dir}/tee-verify-quote-wrong-nonce-request.json"
+          wrong_nonce_status="$(curl -sS --max-time 20 \
+            -o "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" \
+            -w "%{http_code}" \
+            -X POST "${verify_endpoint}" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-verify-quote-wrong-nonce-request.json" || true)"
+          wrong_nonce_rejected="false"
+          if [[ "${wrong_nonce_status}" != "200" ]]; then
+            wrong_nonce_rejected="true"
+          elif jq -e '.data.nonceVerified == false or .data.quoteVerified == false' \
+            "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" >/dev/null 2>&1; then
+            wrong_nonce_rejected="true"
+          fi
+          if [[ "${wrong_nonce_rejected}" != "true" ]]; then
+            echo "::error::Wrong nonce was not rejected by /verify-quote."
+            jq . "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" || true
+            exit 1
+          fi
+
+          tampered_quote_b64="$(python3 -c 'import base64,sys; raw=base64.b64decode(sys.argv[1], validate=False); assert len(raw)>0, "empty quote bytes"; b=bytearray(raw); b[0]^=0x01; print(base64.b64encode(bytes(b)).decode("ascii"))' "${quote_b64}")"
+          jq -n \
+            --arg quoteB64 "${tampered_quote_b64}" \
+            --arg nonce "${nonce_hex}" \
+            '{quoteB64: $quoteB64, nonce: $nonce}' \
+            > "${artifacts_dir}/tee-verify-quote-tampered-quote-request.json"
+          tampered_quote_status="$(curl -sS --max-time 20 \
+            -o "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" \
+            -w "%{http_code}" \
+            -X POST "${verify_endpoint}" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-verify-quote-tampered-quote-request.json" || true)"
+          tampered_quote_rejected="false"
+          if [[ "${tampered_quote_status}" != "200" ]]; then
+            tampered_quote_rejected="true"
+          elif jq -e '.data.quoteVerified == false' \
+            "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" >/dev/null 2>&1; then
+            tampered_quote_rejected="true"
+          fi
+          if [[ "${tampered_quote_rejected}" != "true" ]]; then
+            echo "::error::Tampered quote was not rejected by /verify-quote."
+            jq . "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" || true
+            exit 1
+          fi
+
+          wrong_app_hash_hex="$(openssl rand -hex 32)"
+          jq -n \
+            --arg quoteB64 "${quote_b64}" \
+            --arg nonce "${nonce_hex}" \
+            --arg expectedApplicationHash "${wrong_app_hash_hex}" \
+            '{quoteB64: $quoteB64, nonce: $nonce, expectedApplicationHash: $expectedApplicationHash}' \
+            > "${artifacts_dir}/tee-verify-quote-wrong-app-hash-request.json"
+          wrong_app_hash_status="$(curl -sS --max-time 20 \
+            -o "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" \
+            -w "%{http_code}" \
+            -X POST "${verify_endpoint}" \
+            -H "Content-Type: application/json" \
+            -d @"${artifacts_dir}/tee-verify-quote-wrong-app-hash-request.json" || true)"
+          wrong_app_hash_rejected="false"
+          if [[ "${wrong_app_hash_status}" != "200" ]]; then
+            wrong_app_hash_rejected="true"
+          elif jq -e '.data.applicationHashVerified == false or .data.quoteVerified == false' \
+            "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" >/dev/null 2>&1; then
+            wrong_app_hash_rejected="true"
+          fi
+          if [[ "${wrong_app_hash_rejected}" != "true" ]]; then
+            echo "::error::Wrong expected application hash was not rejected by /verify-quote."
+            jq . "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" || true
+            exit 1
+          fi
+
+          jq -n \
+            --arg endpoint "${verify_endpoint}" \
+            --arg positive_status "${positive_status}" \
+            --arg wrong_nonce_status "${wrong_nonce_status}" \
+            --arg tampered_quote_status "${tampered_quote_status}" \
+            --arg wrong_app_hash_status "${wrong_app_hash_status}" \
+            --argjson positive_passed "${positive_passed}" \
+            --argjson wrong_nonce_rejected "${wrong_nonce_rejected}" \
+            --argjson tampered_quote_rejected "${tampered_quote_rejected}" \
+            --argjson wrong_app_hash_rejected "${wrong_app_hash_rejected}" \
+            '{
+              schema_version: 1,
+              verify_quote_endpoint: $endpoint,
+              checks: {
+                positive: {http_status: $positive_status, passed: $positive_passed},
+                wrong_nonce: {http_status: $wrong_nonce_status, rejected: $wrong_nonce_rejected},
+                tampered_quote: {http_status: $tampered_quote_status, rejected: $tampered_quote_rejected},
+                wrong_expected_application_hash: {http_status: $wrong_app_hash_status, rejected: $wrong_app_hash_rejected}
+              }
+            }' > "${artifacts_dir}/node-client-verification.json"
+
       - name: Verify quote externally and derive policy candidates
         run: |
           set -euo pipefail

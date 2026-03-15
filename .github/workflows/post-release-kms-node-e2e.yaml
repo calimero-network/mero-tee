@@ -761,6 +761,20 @@ jobs:
 
             cp "${node_probe_candidates_file}" "e2e/node/measurement-policy-candidates-${profile}.json"
 
+            node_client_verification_file="$(python3 - "${node_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("node-client-verification.json"))
+          print(matches[0] if matches else "")
+          PY
+            )"
+            if [[ -z "${node_client_verification_file}" ]]; then
+              echo "::error::Could not locate node-client-verification.json for node profile '${profile}'"
+              exit 1
+            fi
+            cp "${node_client_verification_file}" "e2e/node/node-client-verification-${profile}.json"
+
             python3 - "${profile}" "${node_probe_candidates_file}" "${node_published_policy}" <<'PY'
           import json
           import pathlib
@@ -806,6 +820,35 @@ jobs:
                   )
           print(f"[post-release-e2e] OK: probed node measurements match published policy for profile={profile}")
           PY
+
+            python3 - "${profile}" "${node_client_verification_file}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          profile = sys.argv[1]
+          verification_file = pathlib.Path(sys.argv[2])
+          payload = json.loads(verification_file.read_text(encoding="utf-8"))
+          checks = payload.get("checks", {})
+
+          def assert_true(path: str, value):
+              if value is not True:
+                  raise SystemExit(
+                      f"[post-release-e2e] ERROR: node client verification check failed for profile={profile}: {path} expected true, got {value!r}"
+                  )
+
+          assert_true("checks.positive.passed", checks.get("positive", {}).get("passed"))
+          assert_true("checks.wrong_nonce.rejected", checks.get("wrong_nonce", {}).get("rejected"))
+          assert_true("checks.tampered_quote.rejected", checks.get("tampered_quote", {}).get("rejected"))
+          assert_true(
+              "checks.wrong_expected_application_hash.rejected",
+              checks.get("wrong_expected_application_hash", {}).get("rejected"),
+          )
+          print(
+              "[post-release-e2e] OK: node client-side anti-fake verification checks passed "
+              f"for profile={profile}"
+          )
+          PY
           done
 
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
@@ -828,5 +871,6 @@ jobs:
             echo "${probe_urls_markdown}"
             echo "- Node profile probe runs:"
             echo "${node_probe_urls_markdown}"
+            echo "- Node client-side anti-fake checks: passed (quote verification + nonce/hash/tamper rejection)."
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"
