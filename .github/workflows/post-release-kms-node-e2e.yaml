@@ -413,7 +413,9 @@ jobs:
 
           probe_run_urls=()
           locked_probe_candidates_file=""
-          locked_kms_base_url=""
+          cross_profile_locked_kms_base_url=""
+          cross_profile_kms_run_url=""
+          cross_profile_kms_run_id=""
           version_slug="${RELEASE_VERSION//./-}"
           release_manifest="e2e/kms-release/kms-phala-release-manifest.json"
           release_probe_run_id="$(jq -r '.workflow_run_id // empty' "${release_manifest}" 2>/dev/null || true)"
@@ -442,7 +444,6 @@ jobs:
             probe_validated="false"
             last_probe_validation_error=""
             selected_probe_candidates_file=""
-            selected_probe_dir=""
 
             candidate_index=0
             for deployment_name in "${deployment_name_candidates[@]}"; do
@@ -580,7 +581,6 @@ jobs:
                 echo "${probe_validation_output}"
                 probe_validated="true"
                 selected_probe_candidates_file="${kms_probe_candidates_file}"
-                selected_probe_dir="${profile_probe_dir}"
                 break
               fi
 
@@ -617,27 +617,6 @@ jobs:
 
             if [[ "${profile}" == "locked-read-only" ]]; then
               locked_probe_candidates_file="${selected_probe_candidates_file}"
-              if [[ -z "${selected_probe_dir}" ]]; then
-                echo "::error::Missing selected probe directory for locked-read-only profile."
-                exit 1
-              fi
-              locked_kms_context_file="$(python3 - "${selected_probe_dir}" <<'PY'
-          import pathlib
-          import sys
-          base = pathlib.Path(sys.argv[1])
-          matches = sorted(base.rglob("attestation-context.json"))
-          print(matches[0] if matches else "")
-          PY
-              )"
-              if [[ -z "${locked_kms_context_file}" ]]; then
-                echo "::error::Could not locate attestation-context.json for locked-read-only KMS probe."
-                exit 1
-              fi
-              locked_kms_base_url="$(jq -r '.base_url // empty' "${locked_kms_context_file}")"
-              if [[ -z "${locked_kms_base_url}" ]]; then
-                echo "::error::Locked-read-only KMS probe context is missing base_url."
-                exit 1
-              fi
             fi
           done
 
@@ -645,8 +624,108 @@ jobs:
             echo "::error::Did not capture locked-read-only probe candidates."
             exit 1
           fi
-          if [[ -z "${locked_kms_base_url}" ]]; then
-            echo "::error::Did not capture locked-read-only KMS base URL."
+
+          locked_profile_digest="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_digest // empty' "${compatibility_map}")"
+          locked_profile_tag="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_tag // empty' "${compatibility_map}")"
+          if [[ -n "${locked_profile_digest}" ]]; then
+            cross_profile_locked_image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala@${locked_profile_digest}"
+          elif [[ -n "${locked_profile_tag}" ]]; then
+            cross_profile_locked_image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:${locked_profile_tag}"
+          else
+            echo "::error::Could not resolve locked-read-only KMS image reference for cross-profile runtime check."
+            exit 1
+          fi
+
+          cross_profile_probe_label="post-release-cross-profile-kms-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cross_profile_expected_title="KMS staging probe (${cross_profile_probe_label})"
+          cross_profile_deployment_name="kms-cross-profile-${version_slug}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cross_profile_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          gh workflow run "kms-phala-staging-probe.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${PROBE_WORKFLOW_REF}" \
+            -f kms_image="${cross_profile_locked_image_ref}" \
+            -f kms_tag="pinned" \
+            -f probe_label="${cross_profile_probe_label}" \
+            -f deployment_name="${cross_profile_deployment_name}" \
+            -f hold_after_upload_seconds="2400"
+
+          for attempt in $(seq 1 90); do
+            cross_profile_kms_run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "kms-phala-staging-probe.yaml" \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,createdAt,displayTitle \
+              --jq '[.[] | select(.createdAt >= "'"${cross_profile_dispatch_started_at}"'" and .displayTitle == "'"${cross_profile_expected_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -z "${cross_profile_kms_run_id}" ]]; then
+              cross_profile_kms_run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "kms-phala-staging-probe.yaml" \
+                --event workflow_dispatch \
+                --limit 10 \
+                --json databaseId,createdAt \
+                --jq '[.[] | select(.createdAt >= "'"${cross_profile_dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            fi
+            if [[ -n "${cross_profile_kms_run_id}" ]]; then
+              break
+            fi
+            sleep 10
+          done
+          if [[ -z "${cross_profile_kms_run_id}" ]]; then
+            echo "::error::Could not resolve cross-profile live locked KMS probe run ID."
+            exit 1
+          fi
+          cross_profile_kms_head_sha="$(gh run view "${cross_profile_kms_run_id}" --repo "${GITHUB_REPOSITORY}" --json headSha --jq '.headSha // empty')"
+          if [[ -z "${cross_profile_kms_head_sha}" ]]; then
+            echo "::error::Could not read head SHA for cross-profile KMS probe run ${cross_profile_kms_run_id}"
+            exit 1
+          fi
+          if [[ "${cross_profile_kms_head_sha}" != "${PROBE_EXPECTED_SHA}" ]]; then
+            echo "::error::Cross-profile KMS probe run ${cross_profile_kms_run_id} used unexpected head SHA ${cross_profile_kms_head_sha}; expected ${PROBE_EXPECTED_SHA}."
+            echo "::error::Refusing to validate release with probe artifacts from a different revision."
+            exit 1
+          fi
+          cross_profile_kms_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${cross_profile_kms_run_id}"
+
+          cross_profile_probe_dir="e2e/kms-probe/locked-read-only/cross-profile-live"
+          mkdir -p "${cross_profile_probe_dir}"
+          cross_profile_artifact_name=""
+          cross_profile_artifact_downloaded="false"
+          for attempt in $(seq 1 90); do
+            cross_profile_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${cross_profile_kms_run_id}/artifacts" \
+              --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""' 2>/dev/null || true)"
+            if [[ -n "${cross_profile_artifact_name}" ]]; then
+              if gh run download "${cross_profile_kms_run_id}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${cross_profile_artifact_name}" \
+                --dir "${cross_profile_probe_dir}" >/dev/null 2>&1; then
+                cross_profile_artifact_downloaded="true"
+                break
+              fi
+            fi
+            sleep 10
+          done
+          if [[ "${cross_profile_artifact_downloaded}" != "true" ]]; then
+            echo "::error::Could not locate cross-profile locked KMS probe artifact while run was active."
+            exit 1
+          fi
+
+          cross_profile_kms_context_file="$(python3 - "${cross_profile_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("attestation-context.json"))
+          print(matches[0] if matches else "")
+          PY
+          )"
+          if [[ -z "${cross_profile_kms_context_file}" ]]; then
+            echo "::error::Could not locate attestation-context.json for cross-profile locked KMS probe."
+            exit 1
+          fi
+          cross_profile_locked_kms_base_url="$(jq -r '.base_url // empty' "${cross_profile_kms_context_file}")"
+          if [[ -z "${cross_profile_locked_kms_base_url}" ]]; then
+            echo "::error::Cross-profile locked KMS probe context is missing base_url."
             exit 1
           fi
 
@@ -715,7 +794,7 @@ jobs:
             )
             if [[ "${profile}" == "debug" ]]; then
               node_dispatch_args+=(
-                -f kms_probe_url="${locked_kms_base_url}"
+                -f kms_probe_url="${cross_profile_locked_kms_base_url}"
                 -f kms_probe_expected_outcome="failure"
                 -f kms_probe_expected_codes="KMS_PROFILE_POLICY_REJECTED,KMS_GET_KEY_REJECTED"
               )
@@ -942,6 +1021,13 @@ jobs:
             fi
           done
 
+          if [[ -n "${cross_profile_kms_run_id}" ]]; then
+            if ! timeout 3600s gh run watch "${cross_profile_kms_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+              echo "::error::Timed out or failed while waiting for cross-profile KMS probe run ${cross_profile_kms_run_id}"
+              exit 1
+            fi
+          fi
+
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
             e2e/node \
             e2e/kms-release \
@@ -960,6 +1046,8 @@ jobs:
             echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
             echo "- KMS profile probe runs:"
             echo "${probe_urls_markdown}"
+            echo "- Cross-profile locked KMS run (held alive for debug-node runtime probe):"
+            echo "- ${cross_profile_kms_run_url}"
             echo "- Node profile probe runs:"
             echo "${node_probe_urls_markdown}"
             echo "- Node client-side anti-fake checks: passed (quote verification + nonce/hash/tamper rejection)."

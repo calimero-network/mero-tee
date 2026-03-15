@@ -101,9 +101,10 @@ release events:
   - tampered quote is rejected,
   - wrong expected application hash is rejected.
 - Post-release e2e also runs an explicit cross-profile runtime negative probe:
-  a `debug` node executes `merod kms probe` against the probed
-  `locked-read-only` KMS endpoint, and the run is accepted only if that probe is
-  rejected (expected code set includes `KMS_PROFILE_POLICY_REJECTED`).
+  a `debug` node executes `merod kms probe` against a live
+  `locked-read-only` KMS endpoint (kept alive briefly before cleanup), and the
+  run is accepted only if that probe is rejected (expected code set includes
+  `KMS_PROFILE_POLICY_REJECTED`).
 
 `push` on `master` can still skip when release assets are not yet published, but
 release-triggered validation is expected to fail explicitly on missing or

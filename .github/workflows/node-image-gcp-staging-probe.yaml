@@ -262,13 +262,17 @@ jobs:
       - name: Create ephemeral firewall rule for admin API
         run: |
           set -euo pipefail
+          firewall_rules="tcp:${{ steps.params.outputs.admin_api_port }}"
+          if [[ "${{ inputs.kms_probe_expected_outcome }}" != "skip" ]]; then
+            firewall_rules="${firewall_rules},tcp:22"
+          fi
           gcloud compute firewall-rules create "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --network "${{ steps.params.outputs.vm_network }}" \
             --direction INGRESS \
             --priority 1000 \
             --action ALLOW \
-            --rules "tcp:${{ steps.params.outputs.admin_api_port }},tcp:22" \
+            --rules "${firewall_rules}" \
             --source-ranges "${{ steps.params.outputs.source_ranges }}" \
             --target-tags "${{ steps.params.outputs.firewall_tag }}" \
             --description "Temporary node e2e ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
