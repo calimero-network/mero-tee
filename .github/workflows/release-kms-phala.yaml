@@ -13,6 +13,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
+      - "scripts/release/kms-phala/**"
   pull_request:
     paths:
       - Cargo.toml
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
+      - "scripts/release/kms-phala/**"
   workflow_dispatch:
 
 permissions:
@@ -58,40 +60,20 @@ jobs:
           bash -n scripts/release/verify-kms-phala-release-assets.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
+          bash -n scripts/release/kms-phala/get-version-info.sh
+          bash -n scripts/release/kms-phala/trigger-staging-probe.sh
+          bash -n scripts/release/kms-phala/download-probe-artifact.sh
+          bash -n scripts/release/kms-phala/sign-release-assets.sh
+          bash -n scripts/release/kms-phala/verify-generated-signatures.sh
+          bash -n scripts/release/kms-phala/upsert-umbrella-release-links.sh
 
       - name: Get version info
         id: version_info
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "target_commit=${{ github.sha }}" >> $GITHUB_OUTPUT
-          version=$(cargo metadata --format-version 1 --no-deps 2>/dev/null | jq -r '.packages[] | select(.name=="mero-kms-phala") | .version' || echo "0.1.0")
-          if [[ -z "$version" || "$version" == "null" ]]; then
-            version="0.1.0"
-          fi
-          kms_release_tag="mero-kms-v${version}"
-
-          prerelease=false
-          binary_release=false
-          docker_release=false
-
-          if [ "${{ github.ref }}" == "refs/heads/master" ]; then
-            if [[ "$version" =~ -[a-z]+(\.[0-9]+)?$ ]]; then
-              prerelease=true
-            fi
-            if ! gh release view "$kms_release_tag" --repo ${{ github.repository }} >/dev/null 2>&1; then
-              binary_release=true
-              docker_release=true
-            fi
-          elif [ "${{ github.event_name }}" == "pull_request" ]; then
-            docker_release=true
-          fi
-
-          echo "version=$version" >> $GITHUB_OUTPUT
-          echo "kms_release_tag=$kms_release_tag" >> $GITHUB_OUTPUT
-          echo "prerelease=$prerelease" >> $GITHUB_OUTPUT
-          echo "binary_release=$binary_release" >> $GITHUB_OUTPUT
-          echo "docker_release=$docker_release" >> $GITHUB_OUTPUT
+          TARGET_COMMIT: ${{ github.sha }}
+          GH_REF: ${{ github.ref }}
+        run: bash scripts/release/kms-phala/get-version-info.sh
 
   build-binaries:
     name: Build Binaries (${{ matrix.name }})
@@ -383,100 +365,14 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          version_slug="${RELEASE_VERSION//./-}"
-          deployment_name="kms-profile-${version_slug}-${PROFILE}"
-          max_probe_attempts=2
-          run_id=""
-
-          for probe_attempt in $(seq 1 "${max_probe_attempts}"); do
-            probe_label="${PROBE_LABEL}-try${probe_attempt}"
-            dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            expected_display_title="KMS staging probe (${probe_label})"
-
-            gh workflow run "kms-phala-staging-probe.yaml" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --ref master \
-              -f kms_image="${IMAGE_REF}" \
-              -f kms_tag="pinned" \
-              -f probe_label="${probe_label}" \
-              -f deployment_name="${deployment_name}"
-
-            if [[ -z "${run_id}" ]]; then
-              run_id=""
-              for _ in $(seq 1 90); do
-                run_id="$(gh run list \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --workflow "kms-phala-staging-probe.yaml" \
-                  --event workflow_dispatch \
-                  --branch master \
-                  --limit 20 \
-                  --json databaseId,createdAt,displayTitle \
-                  --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
-                if [[ -z "${run_id}" ]]; then
-                  run_id="$(gh run list \
-                    --repo "${GITHUB_REPOSITORY}" \
-                    --workflow "kms-phala-staging-probe.yaml" \
-                    --event workflow_dispatch \
-                    --branch master \
-                    --limit 20 \
-                    --json databaseId,createdAt \
-                    --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
-                fi
-                if [[ -n "${run_id}" ]]; then
-                  break
-                fi
-                sleep 10
-              done
-            fi
-
-            if [[ -z "${run_id}" ]]; then
-              if [[ "${probe_attempt}" -lt "${max_probe_attempts}" ]]; then
-                echo "::warning::Could not find dispatched probe run on attempt ${probe_attempt}; retrying..."
-                continue
-              fi
-              echo "::error::Could not find dispatched probe run"
-              exit 1
-            fi
-
-            echo "Waiting for probe run ${run_id} (attempt ${probe_attempt}/${max_probe_attempts})..."
-            if timeout 2700s gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
-              echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
-              break
-            fi
-
-            if [[ "${probe_attempt}" -lt "${max_probe_attempts}" ]]; then
-              echo "::warning::Probe run ${run_id} failed on attempt ${probe_attempt}; retrying once..."
-              run_id=""
-              continue
-            fi
-
-            echo "::error::Timed out or failed while waiting for probe run ${run_id}"
-            exit 1
-          done
-
-          if [[ -z "${run_id}" ]]; then
-            echo "::error::No successful staging probe run found after retries."
-            exit 1
-          fi
+        run: bash scripts/release/kms-phala/trigger-staging-probe.sh
 
       - name: Download probe artifact
         id: download
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          run_id="${{ steps.trigger.outputs.run_id }}"
-          artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
-            --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
-          if [[ -z "${artifact_name}" ]]; then
-            echo "::error::No probe artifact found for run ${run_id}"
-            exit 1
-          fi
-          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
-          mkdir -p probe-artifacts
-          gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" --name "${artifact_name}" --dir probe-artifacts
+          RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        run: bash scripts/release/kms-phala/download-probe-artifact.sh
 
       - name: Upload probe artifacts
         uses: actions/upload-artifact@v7
@@ -1439,123 +1335,13 @@ jobs:
           PREP_VERSION: ${{ needs.prepare.outputs.version }}
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-
-          assets_for_rekor=(
-            artifacts/*.tar.gz
-            release-assets/kms-phala-checksums.txt
-            release-assets/kms-phala-attestation-policy.json
-            release-assets/kms-phala-attestation-policy.debug.json
-            release-assets/kms-phala-attestation-policy.debug-read-only.json
-            release-assets/kms-phala-attestation-policy.locked-read-only.json
-            release-assets/kms-phala-container-metadata.json
-            release-assets/kms-phala-container-sbom.spdx.json
-            release-assets/kms-phala-binaries-sbom.spdx.json
-            release-assets/kms-phala-trust-bundle.tar.gz
-            release-assets/kms-phala-compatibility-map.json
-          )
-
-          for asset in "${assets_for_rekor[@]}"; do
-            base_name="$(basename "${asset}")"
-            cosign sign-blob \
-              --yes \
-              --output-signature "release-assets/${base_name}.sig" \
-              --output-certificate "release-assets/${base_name}.pem" \
-              --bundle "release-assets/${base_name}.bundle.json" \
-              "${asset}"
-          done
-
-          rekor_entries_json="$(
-            for asset in "${assets_for_rekor[@]}"; do
-              base_name="$(basename "${asset}")"
-              bundle_file="release-assets/${base_name}.bundle.json"
-              asset_sha256="$(sha256sum "${asset}" | awk '{print $1}')"
-              sigstore_search_url="https://search.sigstore.dev/?hash=sha256:${asset_sha256}"
-              log_index="$(jq -r '.verificationMaterial.tlogEntries[0].logIndex // .VerificationMaterial.tlogEntries[0].logIndex // .tlogEntries[0].logIndex // empty' "${bundle_file}")"
-              integrated_time="$(jq -r '.verificationMaterial.tlogEntries[0].integratedTime // .VerificationMaterial.tlogEntries[0].integratedTime // .tlogEntries[0].integratedTime // empty' "${bundle_file}")"
-              log_id="$(jq -r '.verificationMaterial.tlogEntries[0].logId.keyId // .VerificationMaterial.tlogEntries[0].logId.keyId // .tlogEntries[0].logId.keyId // empty' "${bundle_file}")"
-              jq -nc \
-                --arg asset "${base_name}" \
-                --arg bundle_asset "${base_name}.bundle.json" \
-                --arg hash "sha256:${asset_sha256}" \
-                --arg sigstore_search_url "${sigstore_search_url}" \
-                --arg log_index "${log_index}" \
-                --arg integrated_time "${integrated_time}" \
-                --arg log_id "${log_id}" \
-                '{
-                  asset: $asset,
-                  bundle_asset: $bundle_asset,
-                  hash: $hash,
-                  sigstore_search_url: $sigstore_search_url,
-                  log_index: $log_index,
-                  integrated_time: $integrated_time,
-                  log_id: $log_id
-                }'
-            done | jq -s '.'
-          )"
-
-          jq -n \
-            --arg tag "${PREP_VERSION}" \
-            --arg run_id "${GH_RUN_ID}" \
-            --arg run_attempt "${GH_RUN_ATTEMPT}" \
-            --argjson entries "${rekor_entries_json}" \
-            '{
-              schema_version: 1,
-              tag: $tag,
-              workflow_run_id: $run_id,
-              workflow_run_attempt: $run_attempt,
-              generated_at: (now | todate),
-              entries: $entries
-            }' > release-assets/kms-phala-rekor-index.json
-
-          post_assets=(
-            release-assets/kms-phala-rekor-index.json
-            release-assets/kms-phala-release-manifest.json
-          )
-          for asset in "${post_assets[@]}"; do
-            base_name="$(basename "${asset}")"
-            cosign sign-blob \
-              --yes \
-              --output-signature "release-assets/${base_name}.sig" \
-              --output-certificate "release-assets/${base_name}.pem" \
-              --bundle "release-assets/${base_name}.bundle.json" \
-              "${asset}"
-          done
+        run: bash scripts/release/kms-phala/sign-release-assets.sh
 
       - name: Verify generated signatures (sanity check)
         env:
           COSIGN_CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
           GH_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          cert_identity_regex="^https://github.com/${GH_REPOSITORY}/.github/workflows/release-kms-phala.yaml@refs/heads/master$"
-          signed_assets=(
-            artifacts/*.tar.gz
-            release-assets/kms-phala-checksums.txt
-            release-assets/kms-phala-release-manifest.json
-            release-assets/kms-phala-attestation-policy.json
-            release-assets/kms-phala-attestation-policy.debug.json
-            release-assets/kms-phala-attestation-policy.debug-read-only.json
-            release-assets/kms-phala-attestation-policy.locked-read-only.json
-            release-assets/kms-phala-container-metadata.json
-            release-assets/kms-phala-container-sbom.spdx.json
-            release-assets/kms-phala-binaries-sbom.spdx.json
-            release-assets/kms-phala-trust-bundle.tar.gz
-            release-assets/kms-phala-compatibility-map.json
-            release-assets/kms-phala-rekor-index.json
-          )
-
-          for asset in "${signed_assets[@]}"; do
-            base_name="$(basename "${asset}")"
-            cosign verify-blob \
-              --certificate "release-assets/${base_name}.pem" \
-              --signature "release-assets/${base_name}.sig" \
-              --certificate-identity-regexp "${cert_identity_regex}" \
-              --certificate-oidc-issuer "${COSIGN_CERTIFICATE_OIDC_ISSUER}" \
-              "${asset}" >/dev/null
-          done
+        run: bash scripts/release/kms-phala/verify-generated-signatures.sh
 
       - name: Upload release metadata assets
         uses: softprops/action-gh-release@v2
@@ -1627,23 +1413,7 @@ jobs:
       - name: Upsert umbrella version release links
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version="${{ needs.prepare.outputs.version }}"
-          kms_tag="${{ needs.prepare.outputs.kms_release_tag }}"
-          tee_tag="mero-tee-v${version}"
-          notes_file="$(mktemp)"
-          {
-            echo "## Consolidated release ${version}"
-            echo
-            echo "This is an index release that links to component releases:"
-            echo
-            echo "- mero-kms: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${kms_tag}"
-            echo "- mero-tee: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tee_tag}"
-          } > "${notes_file}"
-
-          if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release edit "${version}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${version}" --draft
-          else
-            gh release create "${version}" --repo "${GITHUB_REPOSITORY}" --title "${version}" --notes-file "${notes_file}" --target "${{ needs.prepare.outputs.target_commit }}" --draft
-          fi
+          VERSION: ${{ needs.prepare.outputs.version }}
+          KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
+          TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
+        run: bash scripts/release/kms-phala/upsert-umbrella-release-links.sh
