@@ -81,10 +81,13 @@ And `kms_tag` must be:
 
 This keeps release metadata aligned with node-image release tags.
 
-## KMS policy automation
+## KMS policy operations
 
-Policy probe/promotion automation (`kms-phala-policy-auto-pipeline.yaml`) reuses the
-same secrets as `kms-phala-staging-probe.yaml`:
+KMS policy generation/rollout currently uses staging probes plus policy scripts.
+Operationally, treat `kms-phala-staging-probe.yaml` and `scripts/policy/*.sh` as
+the canonical execution path.
+
+These operations reuse:
 
 - `PHALA_CLOUD_API_KEY`
 - `ITA_API_KEY`
@@ -118,3 +121,14 @@ as the GitHub Release body (`body_path`).
   - workflow run reference
   - profile MRTD summary
   - verification command snippets
+
+## Workflow modularization layout
+
+To keep release workflows reviewable, large inline shell blocks are extracted into
+versioned scripts:
+
+- KMS release lane: `scripts/release/kms-phala/*.sh`
+- Node-image release lane: `scripts/release/node-image-gcp/*.sh`
+
+The workflows call these scripts directly, and CI runs syntax/lint checks on them.
+When changing release behavior, update both the script and this documentation.

@@ -66,6 +66,6 @@ Release and attestation workflows are security-sensitive. If you modify:
 - `.github/workflows/release-kms-phala.yaml`
 - `.github/workflows/release-node-image-gcp.yaml`
 - `.github/workflows/kms-phala-staging-probe.yaml`
-- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
+- `scripts/policy/*.sh`
 
 please include a brief risk assessment in the PR description.

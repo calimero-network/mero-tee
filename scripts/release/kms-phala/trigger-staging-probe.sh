@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dispatch and wait for the KMS staging probe workflow.
+# Inputs: IMAGE_REF, PROFILE, RELEASE_VERSION, PROBE_LABEL, GH_TOKEN context.
+# Output (GITHUB_OUTPUT): run_id of the completed probe run.
+
+if [[ -z "${IMAGE_REF:-}" || -z "${PROFILE:-}" || -z "${RELEASE_VERSION:-}" || -z "${PROBE_LABEL:-}" ]]; then
+  echo "::error::IMAGE_REF, PROFILE, RELEASE_VERSION, and PROBE_LABEL are required"
+  exit 1
+fi
+
+if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
+  echo "::error::GITHUB_OUTPUT is required"
+  exit 1
+fi
+
+version_slug="${RELEASE_VERSION//./-}"
+deployment_name="kms-profile-${version_slug}-${PROFILE}"
+max_probe_attempts=2
+run_id=""
+
+for probe_attempt in $(seq 1 "${max_probe_attempts}"); do
+  probe_label="${PROBE_LABEL}-try${probe_attempt}"
+  dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  expected_display_title="KMS staging probe (${probe_label})"
+
+  gh workflow run "kms-phala-staging-probe.yaml" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --ref master \
+    -f kms_image="${IMAGE_REF}" \
+    -f kms_tag="pinned" \
+    -f probe_label="${probe_label}" \
+    -f deployment_name="${deployment_name}"
+
+  if [[ -z "${run_id}" ]]; then
+    run_id=""
+    for _ in $(seq 1 90); do
+      run_id="$(gh run list \
+        --repo "${GITHUB_REPOSITORY}" \
+        --workflow "kms-phala-staging-probe.yaml" \
+        --event workflow_dispatch \
+        --branch master \
+        --limit 20 \
+        --json databaseId,createdAt,displayTitle \
+        --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+      if [[ -z "${run_id}" ]]; then
+        run_id="$(gh run list \
+          --repo "${GITHUB_REPOSITORY}" \
+          --workflow "kms-phala-staging-probe.yaml" \
+          --event workflow_dispatch \
+          --branch master \
+          --limit 20 \
+          --json databaseId,createdAt \
+          --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+      fi
+      if [[ -n "${run_id}" ]]; then
+        break
+      fi
+      sleep 10
+    done
+  fi
+
+  if [[ -z "${run_id}" ]]; then
+    if [[ "${probe_attempt}" -lt "${max_probe_attempts}" ]]; then
+      echo "::warning::Could not find dispatched probe run on attempt ${probe_attempt}; retrying..."
+      continue
+    fi
+    echo "::error::Could not find dispatched probe run"
+    exit 1
+  fi
+
+  echo "Waiting for probe run ${run_id} (attempt ${probe_attempt}/${max_probe_attempts})..."
+  if timeout 2700s gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+    echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+    break
+  fi
+
+  if [[ "${probe_attempt}" -lt "${max_probe_attempts}" ]]; then
+    echo "::warning::Probe run ${run_id} failed on attempt ${probe_attempt}; retrying once..."
+    run_id=""
+    continue
+  fi
+
+  echo "::error::Timed out or failed while waiting for probe run ${run_id}"
+  exit 1
+done
+
+if [[ -z "${run_id}" ]]; then
+  echo "::error::No successful staging probe run found after retries."
+  exit 1
+fi

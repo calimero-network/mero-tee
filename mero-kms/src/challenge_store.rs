@@ -1,3 +1,8 @@
+//! Challenge storage abstraction used by `/challenge` and `/get-key`.
+//!
+//! Supports in-memory mode for local/dev and Redis-backed mode for shared,
+//! multi-instance deployments.
+
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
@@ -52,6 +57,8 @@ pub enum ChallengeStore {
 }
 
 impl ChallengeStore {
+    /// Initialize storage backend from optional Redis URL.
+    /// Falls back to in-memory storage when URL is absent.
     pub fn from_redis_url(redis_url: Option<&str>) -> Result<Self, ChallengeStoreError> {
         if let Some(url) = redis_url {
             let client = redis::Client::open(url)
@@ -62,6 +69,7 @@ impl ChallengeStore {
         }
     }
 
+    /// Insert a pending challenge with TTL/capacity enforcement.
     pub async fn insert(
         &self,
         challenge_id: String,
@@ -127,6 +135,7 @@ impl ChallengeStore {
         }
     }
 
+    /// Consume and validate a challenge (single-use semantics).
     pub async fn consume(
         &self,
         challenge_id: &str,

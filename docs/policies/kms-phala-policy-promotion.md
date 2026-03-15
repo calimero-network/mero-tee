@@ -1,30 +1,25 @@
-# KMS policy promotion workflow (PR)
+# KMS policy promotion process (PR-based governance)
 
 This workflow promotes a previously collected staging probe artifact into a
 reviewable pull request that updates versioned policy files in this repository.
 
-Workflow file:
+Canonical automation/components:
 
-- `.github/workflows/kms-phala-policy-promotion-pr.yaml`
+- `.github/workflows/kms-phala-staging-probe.yaml`
+- `scripts/policy/generate-merod-kms-phala-attestation-config.sh`
+- `scripts/policy/apply-merod-kms-phala-attestation-config.sh`
+- `scripts/policy/check_release_version_sync.sh`
 
 ## Purpose
 
 `kms-phala-staging-probe.yaml` collects **candidate** values from a staged CVM.
-This workflow turns those candidates into a PR so policy changes are reviewed
-before release publication/signing.
+Policy changes are promoted through normal PR review in this repository (policy
+files + index updates), then consumed by release automation.
 
 Each release tag gets an immutable policy record, so operators can keep multiple
 release lines active at the same time and audit policy history later.
 
-## Inputs
-
-- `probe_run_id` (required): run ID of `kms-phala-staging-probe.yaml`
-- `release_tag` (required): target policy tag (for example `1.2.3`)
-- `probe_artifact_name` (optional): artifact name override
-- `base_branch` (default `master`)
-- `draft_pr` (default `true`)
-
-## Outputs
+## Promotion outputs
 
 The workflow updates:
 
@@ -38,40 +33,33 @@ automation. The shared `policies/index.json` file acts as the historical registr
 - KMS and merod policy file paths
 - policy SHA-256 digests
 
-Then it opens/updates a PR with:
+Promotion PRs should include:
 
 - source probe run URL
 - artifact name
 - policy digest (`policy_sha256`)
 - candidate values for reviewer inspection
 
-If repository policy blocks PR creation from GitHub Actions, the workflow still
-pushes the promotion branch and prints a manual compare URL in the job summary.
-
-To enable automatic PR creation in restricted repositories, configure:
-
-- `GHCR_PUSH_TOKEN`
-
-with repository write access. The workflow falls back to `github.token` when
-this secret is not set.
+Automation can prepare artifacts and candidate payloads; PR creation/merge
+remains repository-governed.
 
 ## Recommended flow
 
 ### Automatic mode (recommended)
 
 1. Merge version bump PR for target `mero-kms-phala` release tag.
-2. `kms-phala-policy-auto-pipeline.yaml` dispatches:
-   - `kms-phala-staging-probe.yaml`
-   - `kms-phala-policy-promotion-pr.yaml`
-3. Review and merge generated policy PR.
-4. Release workflow runs on policy merge and publishes signed artifacts.
+2. Run `kms-phala-staging-probe.yaml` (or an equivalent staged probe run).
+3. Promote candidate values into `policies/kms-phala/<release_tag>.json` and
+   `policies/index.json` via PR.
+4. Review and merge policy PR.
+5. Release workflow publishes signed artifacts from merged policy inputs.
 
 ### Manual mode (fallback)
 
 1. Merge version bump PR for same release tag.
 2. Run `kms-phala-staging-probe.yaml`.
 3. Review probe artifacts and summary.
-4. Run `kms-phala-policy-promotion-pr.yaml` with the probe run ID.
+4. Update `policies/kms-phala/<tag>.json` and `policies/index.json` in a PR.
 5. Review and merge policy PR.
 6. Release workflow runs on policy merge and publishes signed artifacts.
 

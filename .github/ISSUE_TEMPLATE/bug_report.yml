@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible defect in mero-tee
+description: Report a reproducible defect in mero-tee (canonical form template)
 title: "[bug] "
 labels:
   - bug

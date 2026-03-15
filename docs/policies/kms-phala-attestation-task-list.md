@@ -24,7 +24,8 @@ Legend:
 - [x] Guarantee `report_data_hex` layout is exactly:
   - bytes `[0..32]` = nonce
   - bytes `[32..64]` = binding
-  - Enforced by implementation and unit test in `mero-kms/src/handlers.rs`.
+  - Enforced by implementation and unit tests in
+    `mero-kms/src/handlers/attest.rs` and `mero-kms/src/handlers/mod.rs`.
 - [~] Ensure `/attest` + `/challenge` + `/get-key` compatibility.
   - Endpoints are implemented and compatible by design.
   - Missing full end-to-end integration test in this repo.
@@ -55,8 +56,8 @@ Legend:
 - [x] Automate staging measurement collection for policy candidates.
   - `kms-phala-staging-probe.yaml` + `scripts/attestation/extract_tdx_policy_candidates.py`.
 - [x] Gate policy promotion through reviewed PR updates.
-  - `kms-phala-policy-promotion-pr.yaml` writes `policies/kms-phala/<tag>.json`
-    and opens a pull request for approval before release publication.
+  - Staging probe outputs are promoted via PR updates to
+    `policies/kms-phala/<tag>.json` and `policies/index.json` before release publication.
 - [x] Use versioned policy registry as release input source of truth.
   - `release-kms-phala.yaml` reads `policies/index.json` and the mapped
     per-tag policy file instead of repository variable overrides.

@@ -1,20 +1,23 @@
 # KMS policy auto pipeline
 
-Workflow file:
-
-- `.github/workflows/kms-phala-policy-auto-pipeline.yaml`
+Status: historical design note. There is no dedicated
+`kms-phala-policy-auto-pipeline.yaml` workflow in this repository today.
 
 ## Purpose
 
-Automate policy probe + promotion when a new `mero-kms-phala` version is merged
-to `master`, so operators do not need to manually dispatch workflows.
+Describe the intended automation model for policy probe + promotion after a
+`mero-kms-phala` version bump.
 
-## Trigger
+## Current implementation path
 
-- Push to `master` that changes `mero-kms/Cargo.toml`
-- Manual fallback via `workflow_dispatch`
+- Run `.github/workflows/kms-phala-staging-probe.yaml` to collect candidates.
+- Promote reviewed values via PR updates to:
+  - `policies/kms-phala/<tag>.json`
+  - `policies/index.json`
+- Release publication remains driven by `release-kms-phala.yaml` after policy
+  PR merge.
 
-## What it does
+## Intended end-state (if reintroduced as a dedicated workflow)
 
 1. Resolves target `mero-kms-phala` version from Cargo metadata.
 2. Skips if:
@@ -28,7 +31,7 @@ to `master`, so operators do not need to manually dispatch workflows.
    this wait and proceeds directly.
 4. Dispatches `kms-phala-staging-probe.yaml` (using `ghcr.io/<owner>/mero-kms-phala:edge`).
 5. Waits for probe completion.
-6. Dispatches `kms-phala-policy-promotion-pr.yaml` with the probe run ID and release tag.
+6. Opens/updates a policy PR from probe outputs.
 
-The workflow creates/updates the policy PR; release publication still occurs via
-`release-kms-phala.yaml` after the policy PR is merged.
+The auto pipeline would create/update the policy PR; release publication would
+still occur via `release-kms-phala.yaml` after the policy PR is merged.

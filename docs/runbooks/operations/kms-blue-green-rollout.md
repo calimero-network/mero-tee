@@ -69,8 +69,9 @@ scripts/release/verify-kms-phala-release-assets.sh X.Y.Z
 
 ### D2. Policy entry promoted?
 
-- Recommended: `kms-phala-policy-auto-pipeline.yaml` handles probe + promotion after version bump merge.
-- Manual fallback: run `kms-phala-staging-probe.yaml`, then `kms-phala-policy-promotion-pr.yaml`.
+- Recommended: run `kms-phala-staging-probe.yaml`, then promote reviewed values
+  via PR updates to `policies/kms-phala/<X.Y.Z>.json` and `policies/index.json`.
+- Manual fallback: perform the same flow with explicit artifact review + policy edits.
 - Gate condition: `policies/kms-phala/<X.Y.Z>.json` exists and `policies/index.json` references it.
 
 ### D3. Green KMS healthy?
