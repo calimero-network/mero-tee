@@ -260,10 +260,12 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Create ephemeral firewall rule for admin API
+        env:
+          KMS_PROBE_EXPECTED_OUTCOME: ${{ inputs.kms_probe_expected_outcome }}
         run: |
           set -euo pipefail
           firewall_rules="tcp:${{ steps.params.outputs.admin_api_port }}"
-          if [[ "${{ inputs.kms_probe_expected_outcome }}" != "skip" ]]; then
+          if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" != "skip" ]]; then
             firewall_rules="${firewall_rules},tcp:22"
           fi
           gcloud compute firewall-rules create "${{ steps.params.outputs.firewall_rule }}" \
