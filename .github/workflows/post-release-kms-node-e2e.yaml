@@ -182,13 +182,9 @@ jobs:
             if [[ "${strict_release_mode}" == "true" ]]; then
               echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
               exit 1
-            elif [[ "${EVENT_NAME}" == "push" ]]; then
-              should_run="false"
-              skip_reason="Node release tag '${tee_tag}' is not published yet."
-            else
-              echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
-              exit 1
             fi
+            should_run="false"
+            skip_reason="Node release tag '${tee_tag}' is not published yet."
           fi
 
           kms_tag=""
@@ -214,13 +210,9 @@ jobs:
                 echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets (compatibility map and profile policies)."
                 echo "::error::Release validation requires same-version node/KMS tags unless explicit kms_tag override is provided."
                 exit 1
-              elif [[ "${EVENT_NAME}" == "push" ]]; then
-                should_run="false"
-                skip_reason="KMS release '${default_kms_tag}' is not published with required e2e assets yet."
-              else
-                echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets (compatibility map and profile policies)."
-                exit 1
               fi
+              should_run="false"
+              skip_reason="KMS release '${default_kms_tag}' is not published with required e2e assets yet."
             fi
           fi
 
@@ -228,13 +220,9 @@ jobs:
             if [[ "${strict_release_mode}" == "true" ]]; then
               echo "::error::Could not resolve KMS tag selection."
               exit 1
-            elif [[ "${EVENT_NAME}" == "push" ]]; then
-              should_run="false"
-              skip_reason="Could not resolve KMS tag selection for this release yet."
-            else
-              echo "::error::Could not resolve KMS tag selection."
-              exit 1
             fi
+            should_run="false"
+            skip_reason="Could not resolve KMS tag selection for this release yet."
           fi
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
@@ -692,7 +680,8 @@ jobs:
           mkdir -p "${cross_profile_probe_dir}"
           cross_profile_artifact_name=""
           cross_profile_artifact_downloaded="false"
-          for attempt in $(seq 1 90); do
+          artifact_poll_deadline=$(( $(date +%s) + 3600 ))
+          while [[ "$(date +%s)" -lt "${artifact_poll_deadline}" ]]; do
             cross_profile_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${cross_profile_kms_run_id}/artifacts" \
               --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""' 2>/dev/null || true)"
             if [[ -n "${cross_profile_artifact_name}" ]]; then
@@ -704,10 +693,26 @@ jobs:
                 break
               fi
             fi
+
+            run_state="$(gh run view "${cross_profile_kms_run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")' 2>/dev/null || true)"
+            run_status="${run_state%%:*}"
+            run_conclusion="${run_state#*:}"
+            if [[ "${run_status}" == "completed" ]]; then
+              if [[ -z "${run_conclusion}" ]]; then
+                run_conclusion="unknown"
+              fi
+              echo "::error::Cross-profile locked KMS probe run ${cross_profile_kms_run_id} completed (conclusion=${run_conclusion}) before probe artifacts became available."
+              echo "::error::Run URL: ${cross_profile_kms_run_url}"
+              exit 1
+            fi
             sleep 10
           done
           if [[ "${cross_profile_artifact_downloaded}" != "true" ]]; then
-            echo "::error::Could not locate cross-profile locked KMS probe artifact while run was active."
+            echo "::error::Timed out waiting (60m) for cross-profile locked KMS probe artifacts from run ${cross_profile_kms_run_id}."
+            echo "::error::Run URL: ${cross_profile_kms_run_url}"
             exit 1
           fi
 
