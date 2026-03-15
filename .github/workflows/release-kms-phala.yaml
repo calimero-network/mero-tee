@@ -326,6 +326,11 @@ jobs:
       actions: write
       contents: read
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
       - name: Resolve profile image ref
         id: profile_image
         env:
