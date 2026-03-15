@@ -81,6 +81,24 @@ And `kms_tag` must be:
 
 This keeps release metadata aligned with node-image release tags.
 
+## Post-release KMS-node e2e guardrails
+
+`post-release-kms-node-e2e.yaml` has strict release-validation behavior for
+release events:
+
+- `workflow_run` and `workflow_dispatch` operate in strict release mode
+  (fail-closed).
+- Node/KMS pairing defaults to same-version tags only:
+  `mero-tee-vX.Y.Z` with `mero-kms-vX.Y.Z`.
+- Automatic fallback to unrelated `mero-kms-v*` tags is intentionally disabled
+  for release validation.
+- KMS and node staging probes are dispatched on the resolved workflow ref and
+  validated against an expected `headSha` before artifacts are accepted.
+
+`push` on `master` can still skip when release assets are not yet published, but
+release-triggered validation is expected to fail explicitly on missing or
+mismatched release inputs.
+
 ## KMS policy operations
 
 KMS policy generation/rollout currently uses staging probes plus policy scripts.
