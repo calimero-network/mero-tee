@@ -413,6 +413,7 @@ jobs:
 
           probe_run_urls=()
           locked_probe_candidates_file=""
+          locked_kms_base_url=""
           version_slug="${RELEASE_VERSION//./-}"
           release_manifest="e2e/kms-release/kms-phala-release-manifest.json"
           release_probe_run_id="$(jq -r '.workflow_run_id // empty' "${release_manifest}" 2>/dev/null || true)"
@@ -441,6 +442,7 @@ jobs:
             probe_validated="false"
             last_probe_validation_error=""
             selected_probe_candidates_file=""
+            selected_probe_dir=""
 
             candidate_index=0
             for deployment_name in "${deployment_name_candidates[@]}"; do
@@ -578,6 +580,7 @@ jobs:
                 echo "${probe_validation_output}"
                 probe_validated="true"
                 selected_probe_candidates_file="${kms_probe_candidates_file}"
+                selected_probe_dir="${profile_probe_dir}"
                 break
               fi
 
@@ -614,11 +617,36 @@ jobs:
 
             if [[ "${profile}" == "locked-read-only" ]]; then
               locked_probe_candidates_file="${selected_probe_candidates_file}"
+              if [[ -z "${selected_probe_dir}" ]]; then
+                echo "::error::Missing selected probe directory for locked-read-only profile."
+                exit 1
+              fi
+              locked_kms_context_file="$(python3 - "${selected_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("attestation-context.json"))
+          print(matches[0] if matches else "")
+          PY
+              )"
+              if [[ -z "${locked_kms_context_file}" ]]; then
+                echo "::error::Could not locate attestation-context.json for locked-read-only KMS probe."
+                exit 1
+              fi
+              locked_kms_base_url="$(jq -r '.base_url // empty' "${locked_kms_context_file}")"
+              if [[ -z "${locked_kms_base_url}" ]]; then
+                echo "::error::Locked-read-only KMS probe context is missing base_url."
+                exit 1
+              fi
             fi
           done
 
           if [[ -z "${locked_probe_candidates_file}" ]]; then
             echo "::error::Did not capture locked-read-only probe candidates."
+            exit 1
+          fi
+          if [[ -z "${locked_kms_base_url}" ]]; then
+            echo "::error::Did not capture locked-read-only KMS base URL."
             exit 1
           fi
 
@@ -675,17 +703,28 @@ jobs:
             node_deployment_name="tdx-e2e-${version_slug}-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             node_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+            node_dispatch_args=(
+              -f probe_label="${node_probe_label}"
+              -f deployment_name="${node_deployment_name}"
+              -f profile="${profile}"
+              -f image_name="${node_image_name}"
+              -f image_project="${node_image_project}"
+              -f vm_project="${node_image_project}"
+              -f vm_zone="${node_zone}"
+              -f admin_api_port="${node_admin_port}"
+            )
+            if [[ "${profile}" == "debug" ]]; then
+              node_dispatch_args+=(
+                -f kms_probe_url="${locked_kms_base_url}"
+                -f kms_probe_expected_outcome="failure"
+                -f kms_probe_expected_codes="KMS_PROFILE_POLICY_REJECTED,KMS_GET_KEY_REJECTED"
+              )
+            fi
+
             gh workflow run "node-image-gcp-staging-probe.yaml" \
               --repo "${GITHUB_REPOSITORY}" \
               --ref "${PROBE_WORKFLOW_REF}" \
-              -f probe_label="${node_probe_label}" \
-              -f deployment_name="${node_deployment_name}" \
-              -f profile="${profile}" \
-              -f image_name="${node_image_name}" \
-              -f image_project="${node_image_project}" \
-              -f vm_project="${node_image_project}" \
-              -f vm_zone="${node_zone}" \
-              -f admin_api_port="${node_admin_port}"
+              "${node_dispatch_args[@]}"
 
             node_probe_run_id=""
             for attempt in $(seq 1 90); do
@@ -849,6 +888,58 @@ jobs:
               f"for profile={profile}"
           )
           PY
+
+            if [[ "${profile}" == "debug" ]]; then
+              node_kms_probe_result_file="$(python3 - "${node_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("node-kms-probe-result.json"))
+          print(matches[0] if matches else "")
+          PY
+              )"
+              if [[ -z "${node_kms_probe_result_file}" ]]; then
+                echo "::error::Could not locate node-kms-probe-result.json for debug profile"
+                exit 1
+              fi
+              cp "${node_kms_probe_result_file}" "e2e/node/node-kms-probe-debug-to-locked.json"
+
+              python3 - "${node_kms_probe_result_file}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          probe_file = pathlib.Path(sys.argv[1])
+          payload = json.loads(probe_file.read_text(encoding="utf-8"))
+          expected_outcome = payload.get("expected_outcome")
+          probe = payload.get("probe", {})
+          checks = payload.get("checks", {})
+          expected_codes = payload.get("expected_codes") or []
+          code = probe.get("code")
+          ok = probe.get("ok")
+
+          if expected_outcome != "failure":
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: expected_outcome must be 'failure' for debug->locked probe, got {expected_outcome!r}"
+              )
+          if ok is not False:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: debug node unexpectedly succeeded against locked KMS (probe.ok={ok!r})"
+              )
+          if checks.get("outcome_matches") is not True:
+              raise SystemExit(
+                  "[post-release-e2e] ERROR: debug->locked probe outcome did not match expected failure"
+              )
+          if checks.get("expected_code_matches") is not True:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: debug->locked probe code {code!r} not in expected set {expected_codes!r}"
+              )
+          print(
+              "[post-release-e2e] OK: debug node->locked KMS runtime probe failed as expected "
+              f"(code={code})"
+          )
+          PY
+            fi
           done
 
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
@@ -872,5 +963,6 @@ jobs:
             echo "- Node profile probe runs:"
             echo "${node_probe_urls_markdown}"
             echo "- Node client-side anti-fake checks: passed (quote verification + nonce/hash/tamper rejection)."
+            echo "- Cross-profile runtime check: debug node -> locked-read-only KMS rejected as expected."
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"
