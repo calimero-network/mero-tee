@@ -47,6 +47,10 @@ impl Default for Config {
 
 impl Config {
     pub async fn from_env() -> EyreResult<Self> {
+        Self::from_env_with_image_profile_path(IMAGE_PROFILE_PATH).await
+    }
+
+    async fn from_env_with_image_profile_path(image_profile_path: &str) -> EyreResult<Self> {
         let listen_addr = std::env::var("LISTEN_ADDR")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -74,7 +78,7 @@ impl Config {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
-        let pinned_image_profile = read_image_profile_from_file()?;
+        let pinned_image_profile = read_image_profile_from_file(image_profile_path)?;
         let env_profile_override = match std::env::var("KMS_POLICY_PROFILE") {
             Ok(value) => Some(value),
             Err(std::env::VarError::NotPresent) => None,
@@ -337,17 +341,24 @@ fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     }
 }
 
-fn read_image_profile_from_file() -> EyreResult<Option<String>> {
-    match std::fs::read_to_string(IMAGE_PROFILE_PATH) {
+fn read_image_profile_from_file(image_profile_path: &str) -> EyreResult<Option<String>> {
+    match std::fs::read_to_string(image_profile_path) {
         Ok(raw) => {
             let value = raw.trim();
             if value.is_empty() {
-                return Ok(None);
+                bail!(
+                    "Pinned KMS image profile file {} is empty; refusing startup",
+                    image_profile_path
+                );
             }
             parse_profile(value).map(Some)
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => bail!("Failed reading {}: {}", IMAGE_PROFILE_PATH, err),
+        Err(err) => bail!(
+            "Failed to read pinned KMS image profile from {}: {}",
+            image_profile_path,
+            err
+        ),
     }
 }
 
@@ -355,18 +366,22 @@ fn resolve_kms_profile(
     pinned_profile: Option<&str>,
     env_override: Option<&str>,
 ) -> EyreResult<String> {
-    let pinned = pinned_profile.map(parse_profile).transpose()?;
-    let env_profile = env_override.map(parse_profile).transpose()?;
-    match (pinned, env_profile) {
-        (Some(pinned), Some(env_profile)) if pinned != env_profile => bail!(
-            "KMS_POLICY_PROFILE={} conflicts with pinned image profile {}",
-            env_profile,
-            pinned
-        ),
-        (Some(pinned), _) => Ok(pinned),
-        (None, Some(env_profile)) => Ok(env_profile),
-        (None, None) => Ok("locked-read-only".to_string()),
+    if let Some(pinned) = pinned_profile {
+        if env_override.is_some() {
+            bail!(
+                "KMS_POLICY_PROFILE override is not allowed for profile-pinned images. \
+                 Build/deploy the matching KMS image profile instead."
+            );
+        }
+        return parse_profile(pinned);
     }
+
+    parse_profile(
+        env_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("locked-read-only"),
+    )
 }
 
 fn parse_profile(raw: &str) -> EyreResult<String> {
@@ -502,4 +517,293 @@ fn normalize_hex(raw: &str, expected_bytes: usize) -> EyreResult<String> {
         bail!("Value contains non-hex characters");
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    const ENV_KEYS: &[&str] = &[
+        "LISTEN_ADDR",
+        "DSTACK_SOCKET_PATH",
+        "CHALLENGE_TTL_SECS",
+        "MAX_PENDING_CHALLENGES",
+        "ACCEPT_MOCK_ATTESTATION",
+        "REDIS_URL",
+        "KMS_POLICY_PROFILE",
+        "KEY_NAMESPACE_PREFIX",
+        "MERO_KMS_POLICY_SHA256",
+        "CORS_ALLOWED_ORIGINS",
+        "ENFORCE_MEASUREMENT_POLICY",
+        "USE_ENV_POLICY",
+        "MERO_KMS_RELEASE_TAG",
+        "MERO_KMS_VERSION",
+        "ALLOWED_TCB_STATUSES",
+        "ALLOWED_MRTD",
+        "ALLOWED_RTMR0",
+        "ALLOWED_RTMR1",
+        "ALLOWED_RTMR2",
+        "ALLOWED_RTMR3",
+    ];
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvGuard {
+        previous: HashMap<String, Option<String>>,
+    }
+
+    impl EnvGuard {
+        fn apply(overrides: &[(&str, &str)]) -> Self {
+            let mut previous = HashMap::new();
+            for key in ENV_KEYS {
+                previous.insert((*key).to_string(), std::env::var(key).ok());
+                std::env::remove_var(key);
+            }
+            for (key, value) in overrides {
+                std::env::set_var(key, value);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.previous {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    struct TempProfileFile {
+        path: PathBuf,
+    }
+
+    impl TempProfileFile {
+        fn new(contents: &str) -> Self {
+            let mut path = std::env::temp_dir();
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic")
+                .as_nanos();
+            path.push(format!("mero-kms-profile-{}.txt", unique));
+            std::fs::write(&path, contents).expect("should write temp profile file");
+            Self { path }
+        }
+
+        fn as_str(&self) -> &str {
+            self.path
+                .to_str()
+                .expect("temp profile path should be valid utf-8")
+        }
+    }
+
+    impl Drop for TempProfileFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    fn valid_measurement_hex() -> String {
+        "ab".repeat(48)
+    }
+
+    fn valid_env_policy_overrides() -> Vec<(&'static str, String)> {
+        let measurement = valid_measurement_hex();
+        vec![
+            ("USE_ENV_POLICY", "true".to_string()),
+            ("ALLOWED_TCB_STATUSES", "uptodate".to_string()),
+            ("ALLOWED_MRTD", measurement.clone()),
+            ("ALLOWED_RTMR0", measurement.clone()),
+            ("ALLOWED_RTMR1", measurement.clone()),
+            ("ALLOWED_RTMR2", measurement.clone()),
+            ("ALLOWED_RTMR3", measurement),
+        ]
+    }
+
+    fn apply_string_overrides(overrides: Vec<(&'static str, String)>) -> EnvGuard {
+        let owned: Vec<(&str, &str)> = overrides.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        EnvGuard::apply(&owned)
+    }
+
+    #[test]
+    fn resolve_kms_profile_uses_pinned_profile() {
+        let selected =
+            resolve_kms_profile(Some("debug-read-only"), None).expect("profile resolves");
+        assert_eq!(selected, "debug-read-only");
+    }
+
+    #[test]
+    fn resolve_kms_profile_rejects_override_for_pinned_image() {
+        let err = resolve_kms_profile(Some("locked-read-only"), Some("locked-read-only"))
+            .expect_err("override should be rejected for pinned profile");
+        assert!(err
+            .to_string()
+            .contains("KMS_POLICY_PROFILE override is not allowed"));
+    }
+
+    #[test]
+    fn resolve_kms_profile_allows_env_profile_without_pinned_image() {
+        let selected = resolve_kms_profile(None, Some("debug")).expect("profile resolves");
+        assert_eq!(selected, "debug");
+    }
+
+    #[test]
+    fn read_image_profile_from_file_rejects_empty_file() {
+        let temp = TempProfileFile::new("\n");
+        let err = read_image_profile_from_file(temp.as_str())
+            .expect_err("empty pinned profile file should fail");
+        assert!(err.to_string().contains("is empty; refusing startup"));
+    }
+
+    #[test]
+    fn parse_policy_json_rejects_mismatched_profile() {
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "role": "kms",
+            "profile": "debug",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": ["ab".repeat(48)],
+                "node_allowed_rtmr0": ["cd".repeat(48)],
+                "node_allowed_rtmr1": ["ef".repeat(48)],
+                "node_allowed_rtmr2": ["01".repeat(48)],
+                "node_allowed_rtmr3": ["23".repeat(48)]
+            }
+        });
+        let err = Config::parse_policy_json(
+            &policy_json.to_string(),
+            "2.1.38",
+            "locked-read-only",
+            false,
+        )
+        .expect_err("mismatched profile should fail");
+        assert!(err.to_string().contains("Policy profile mismatch"));
+    }
+
+    #[test]
+    fn parse_policy_json_rejects_non_kms_role() {
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "role": "node",
+            "profile": "locked-read-only",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": ["aa".repeat(48)],
+                "node_allowed_rtmr0": ["bb".repeat(48)],
+                "node_allowed_rtmr1": ["cc".repeat(48)],
+                "node_allowed_rtmr2": ["dd".repeat(48)],
+                "node_allowed_rtmr3": ["ee".repeat(48)]
+            }
+        });
+        let err = Config::parse_policy_json(
+            &policy_json.to_string(),
+            "2.1.38",
+            "locked-read-only",
+            false,
+        )
+        .expect_err("non-kms role should fail");
+        assert!(err.to_string().contains("Policy role mismatch"));
+    }
+
+    #[test]
+    fn parse_policy_json_allows_locked_legacy_missing_profile() {
+        let policy_json = serde_json::json!({
+            "tag": "2.1.38",
+            "policy": {
+                "node_allowed_tcb_statuses": ["uptodate"],
+                "node_allowed_mrtd": ["aa".repeat(48)],
+                "node_allowed_rtmr0": ["bb".repeat(48)],
+                "node_allowed_rtmr1": ["cc".repeat(48)],
+                "node_allowed_rtmr2": ["dd".repeat(48)],
+                "node_allowed_rtmr3": ["ee".repeat(48)]
+            }
+        });
+        let parsed =
+            Config::parse_policy_json(&policy_json.to_string(), "2.1.38", "locked-read-only", true)
+                .expect("legacy policy should parse for locked profile");
+        assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
+    }
+
+    #[tokio::test]
+    async fn from_env_accepts_env_policy_mode_with_valid_allowlists() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _guard = apply_string_overrides(valid_env_policy_overrides());
+
+        let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .await
+            .expect("env-policy mode should load");
+        assert_eq!(config.kms_profile, "locked-read-only");
+        assert_eq!(config.attestation_policy.allowed_mrtd.len(), 1);
+        assert_eq!(config.attestation_policy.allowed_rtmr3.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn from_env_use_env_policy_ignores_release_version_without_hash_pin() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.push(("MERO_KMS_VERSION", "2.1.49".to_string()));
+        let _guard = apply_string_overrides(overrides);
+
+        let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .await
+            .expect("env-policy mode should not require MERO_KMS_POLICY_SHA256");
+        assert_eq!(config.kms_profile, "locked-read-only");
+    }
+
+    #[tokio::test]
+    async fn from_env_rejects_release_version_without_policy_hash_pin() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _guard = EnvGuard::apply(&[("MERO_KMS_VERSION", "2.1.49")]);
+
+        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .await
+            .expect_err("missing policy hash pin should fail");
+        assert!(err
+            .to_string()
+            .contains("MERO_KMS_POLICY_SHA256 is required"));
+    }
+
+    #[tokio::test]
+    async fn from_env_rejects_malformed_measurement_list() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        for (key, value) in &mut overrides {
+            if *key == "ALLOWED_MRTD" {
+                *value = "zzzz".to_string();
+            }
+        }
+        let _guard = apply_string_overrides(overrides);
+
+        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .await
+            .expect_err("malformed ALLOWED_MRTD should fail");
+        assert!(err.to_string().contains("Expected 48 bytes"));
+    }
+
+    #[tokio::test]
+    async fn from_env_rejects_override_when_profile_is_pinned() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.push(("KMS_POLICY_PROFILE", "debug".to_string()));
+        let _guard = apply_string_overrides(overrides);
+        let profile_file = TempProfileFile::new("locked-read-only\n");
+
+        let err = Config::from_env_with_image_profile_path(profile_file.as_str())
+            .await
+            .expect_err("pinned image should reject KMS_POLICY_PROFILE override");
+        assert!(err
+            .to_string()
+            .contains("KMS_POLICY_PROFILE override is not allowed"));
+    }
 }

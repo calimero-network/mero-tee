@@ -87,3 +87,53 @@ pub fn validate_policy_requirements(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strict_policy() -> AttestationPolicy {
+        let measurement = "ab".repeat(48);
+        AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: vec!["uptodate".to_string()],
+            allowed_mrtd: vec![measurement.clone()],
+            allowed_rtmr0: vec![measurement.clone()],
+            allowed_rtmr1: vec![measurement.clone()],
+            allowed_rtmr2: vec![measurement.clone()],
+            allowed_rtmr3: vec![measurement],
+        }
+    }
+
+    #[test]
+    fn validate_policy_requirements_rejects_missing_rtmr3() {
+        let mut policy = strict_policy();
+        policy.allowed_rtmr3.clear();
+        let err =
+            validate_policy_requirements(&policy, false).expect_err("missing RTMR3 should fail");
+        assert!(err.to_string().contains("ALLOWED_RTMR3"));
+    }
+
+    #[test]
+    fn validate_policy_requirements_rejects_missing_tcb_statuses() {
+        let mut policy = strict_policy();
+        policy.allowed_tcb_statuses.clear();
+        let err = validate_policy_requirements(&policy, false)
+            .expect_err("missing TCB status allowlist should fail");
+        assert!(err.to_string().contains("ALLOWED_TCB_STATUSES"));
+    }
+
+    #[test]
+    fn validate_policy_requirements_allows_when_mock_enabled() {
+        let policy = AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: Vec::new(),
+            allowed_mrtd: Vec::new(),
+            allowed_rtmr0: Vec::new(),
+            allowed_rtmr1: Vec::new(),
+            allowed_rtmr2: Vec::new(),
+            allowed_rtmr3: Vec::new(),
+        };
+        assert!(validate_policy_requirements(&policy, true).is_ok());
+    }
+}
