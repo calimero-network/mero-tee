@@ -5,18 +5,12 @@ mod challenge;
 pub mod errors;
 mod get_key;
 
-use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use crate::challenge_store::ChallengeStore;
 use crate::Config;
-
-pub use attest::{KmsAttestRequest, KmsAttestResponse};
-pub use challenge::{ChallengeRequest, ChallengeResponse};
-pub use errors::{ErrorResponse, ServiceError};
-pub use get_key::{GetKeyRequest, GetKeyResponse};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -61,6 +55,7 @@ mod tests {
 
     use crate::AttestationPolicy;
 
+    use super::errors::ServiceError;
     use super::*;
 
     #[test]
@@ -78,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_error_response_serialization() {
-        let error = ErrorResponse {
+        let error = errors::ErrorResponse {
             error: "test_error".to_string(),
             details: Some("Test details".to_string()),
         };
@@ -86,7 +81,7 @@ mod tests {
         assert!(json.contains("test_error"));
         assert!(json.contains("Test details"));
 
-        let error_no_details = ErrorResponse {
+        let error_no_details = errors::ErrorResponse {
             error: "test_error".to_string(),
             details: None,
         };
