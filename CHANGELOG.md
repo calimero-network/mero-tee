@@ -6,6 +6,21 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.51] - 2026-03-15
+
+### Fixed
+
+- `release-kms-phala.yaml`: added missing repository checkout in the `probe` job
+  before running modular script helpers (`scripts/release/kms-phala/*.sh`),
+  fixing release failures caused by missing script files in CI job workspaces.
+
+### Changed
+
+- Synchronized release version to `2.1.51` across:
+  - `mero-kms/Cargo.toml`,
+  - `Cargo.lock` (`mero-kms-phala` package),
+  - `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.1.50] - 2026-03-15
 
 ### Added
