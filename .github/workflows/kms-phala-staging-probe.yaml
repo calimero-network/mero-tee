@@ -303,10 +303,10 @@ jobs:
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
 
-      - name: Wait for CVM to boot (provision_prod calls start like MDMA)
+      - name: Wait for CVM to boot (provision_prod polls+start like MDMA)
         if: ${{ success() }}
         run: |
-          sleep 60
+          sleep 90
 
       - name: Collect CVM metadata
         if: ${{ success() }}

@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -119,9 +120,32 @@ def main() -> int:
     committed_app_id = (commit.get("app_id") or app_id).strip()
     status = (commit.get("status") or "").strip().lower() or "creating"
 
+    # Match MDMA: poll GET /cvms until we have status, then start if stopped/created.
+    # Commit may return "creating" before CVM is queryable; MDMA polls get_kms_status.
+    norm_id = committed_app_id if committed_app_id.startswith("app_") else f"app_{committed_app_id}"
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": api_key,
+        "X-Phala-Version": "2026-01-21",
+    }
+    for attempt in range(18):  # 18 * 10s = 3 min
+        if status not in ("creating", ""):
+            break
+        try:
+            req = urllib.request.Request(f"{base_url}/cvms/{norm_id}", method="GET", headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                cvm = json.loads(resp.read().decode("utf-8"))
+            status = (cvm.get("status") or cvm.get("hosted", {}).get("status") or "").strip().lower()
+            print(f"[provision_prod] Poll {attempt + 1}: status={status or 'unknown'}", file=sys.stderr)
+        except (urllib.error.HTTPError, OSError) as e:
+            if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+                pass
+            print(f"[provision_prod] Poll {attempt + 1}: {e}", file=sys.stderr)
+        if attempt < 17:
+            time.sleep(10)
+
     # Match MDMA: Phala provision creates but may not auto-start; call start if stopped.
     if status in ("stopped", "created") and committed_app_id:
-        norm_id = committed_app_id if committed_app_id.startswith("app_") else f"app_{committed_app_id}"
         try:
             req = urllib.request.Request(
                 f"{base_url}/cvms/{norm_id}/start",
