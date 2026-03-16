@@ -81,6 +81,18 @@ And `kms_tag` must be:
 
 This keeps release metadata aligned with node-image release tags.
 
+## KMS release metadata dependency on node release
+
+`release-kms-phala.yaml` requires node policy assets from
+`mero-tee-v<version>` (`published-mrtds.json`) when generating release
+metadata.
+
+On `push` runs, if `mero-tee/versions.json` was not changed in the triggering
+commit and the expected `mero-tee-v<version>` release is missing, the workflow
+fails fast with an explicit error instead of waiting for the full polling
+timeout. For coordinated release pushes that do update `mero-tee/versions.json`,
+the existing polling behavior is preserved.
+
 ## Post-release KMS-node e2e guardrails
 
 `post-release-kms-node-e2e.yaml` has strict release-validation behavior for
