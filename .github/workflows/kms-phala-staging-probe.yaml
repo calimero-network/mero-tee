@@ -33,9 +33,9 @@ on:
         required: true
         default: "8080"
       phala_public_domain_suffix:
-        description: "Default Phala endpoint suffix used to derive service URL"
+        description: "Default Phala endpoint suffix used to derive service URL (match MDMA prod: dstack-pha-prod5.phala.network)"
         required: true
-        default: "dstack-prod5.phala.network"
+        default: "dstack-pha-prod5.phala.network"
       kms_url_override:
         description: "Optional explicit KMS base URL override (for example https://app_x-8080.example)"
         required: false
