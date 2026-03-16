@@ -76,6 +76,7 @@ def main() -> int:
         provision_payload["region"] = args.region
 
     try:
+        print("[provision_prod] POST /cvms/provision ...", file=sys.stderr)
         req = urllib.request.Request(
             f"{base_url}/cvms/provision",
             data=json.dumps(provision_payload).encode("utf-8"),
@@ -88,8 +89,9 @@ def main() -> int:
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             provision = json.loads(resp.read().decode("utf-8"))
+        print(f"[provision_prod] Provision OK: app_id={provision.get('app_id')!r}", file=sys.stderr)
     except Exception as e:
-        print(f"Provision failed: {e}", file=sys.stderr)
+        print(f"[provision_prod] Provision failed: {e}", file=sys.stderr)
         return 1
 
     app_id = (provision.get("app_id") or "").strip()
@@ -100,6 +102,7 @@ def main() -> int:
 
     commit_payload = {"app_id": app_id, "compose_hash": compose_hash}
     try:
+        print("[provision_prod] POST /cvms (commit) ...", file=sys.stderr)
         req = urllib.request.Request(
             f"{base_url}/cvms",
             data=json.dumps(commit_payload).encode("utf-8"),
@@ -112,8 +115,9 @@ def main() -> int:
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
             commit = json.loads(resp.read().decode("utf-8"))
+        print(f"[provision_prod] Commit OK: vm_uuid={commit.get('vm_uuid')!r} app_id={commit.get('app_id')!r} status={commit.get('status')!r}", file=sys.stderr)
     except Exception as e:
-        print(f"Commit failed: {e}", file=sys.stderr)
+        print(f"[provision_prod] Commit failed: {e}", file=sys.stderr)
         return 1
 
     vm_uuid = (commit.get("vm_uuid") or "").strip()
@@ -171,6 +175,7 @@ def main() -> int:
             print(f"[provision_prod] Start failed (non-fatal): {e}", file=sys.stderr)
 
     result = {"app_id": committed_app_id, "vm_uuid": vm_uuid, "status": status}
+    print(f"[provision_prod] Done: app_id={committed_app_id} vm_uuid={vm_uuid} status={status}", file=sys.stderr)
     out = json.dumps(result, indent=2) + "\n"
 
     if args.output:

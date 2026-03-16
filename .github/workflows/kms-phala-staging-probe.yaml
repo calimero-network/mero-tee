@@ -285,13 +285,16 @@ jobs:
             fi
           fi
 
+          echo "[deploy] Running provision_prod.py ..."
           python3 scripts/phala/provision_prod.py \
             --name "${deploy_name}" \
             --compose "${COMPOSE_FILE}" \
             --instance-type "${INSTANCE_TYPE}" \
             --region "${REGION}" \
-            --output "${deploy_json}"
+            --output "${deploy_json}" 2>&1 | tee "${ARTIFACTS_DIR}/provision_prod.log" || true
 
+          echo "[deploy] Provision result:"
+          cat "${deploy_json}"
           vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
           app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
           if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then
@@ -302,6 +305,7 @@ jobs:
 
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
+          echo "[deploy] vm_uuid=${vm_uuid} app_id=${app_id}"
 
       - name: Wait for CVM to boot (provision_prod polls+start like MDMA)
         if: ${{ success() }}
@@ -315,8 +319,11 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
-          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm.json" || true
-          phala cvms attestation "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-attestation.json" || true
+          echo "[collect] Fetching CVM metadata for ${VM_UUID} ..."
+          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm.json" 2>&1 || echo "[collect] phala cvms get failed"
+          phala cvms attestation "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-attestation.json" 2>&1 || true
+          cvm_status="$(jq -r '.status // .hosted.status // "n/a"' "${ARTIFACTS_DIR}/phala-cvm.json" 2>/dev/null || echo "parse failed")"
+          echo "[collect] CVM status from metadata: ${cvm_status}"
 
       - name: Probe /health and /attest
         id: probe
@@ -334,7 +341,10 @@ jobs:
 
           # Query live CVM metadata right before probing so endpoint discovery
           # follows the actual gateway domain assigned by Phala.
-          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-live.json" || true
+          echo "[probe] Fetching live CVM metadata for URL discovery ..."
+          phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-live.json" 2>&1 || true
+          gateway_domain="$(jq -r '.gateway.base_domain // "n/a"' "${ARTIFACTS_DIR}/phala-cvm-live.json" 2>/dev/null || echo "n/a")"
+          echo "[probe] gateway.base_domain=${gateway_domain}"
 
           python3 - <<'PY' > "${ARTIFACTS_DIR}/candidate-urls.json"
           import json
@@ -405,9 +415,10 @@ jobs:
           mapfile -t candidate_urls < <(jq -r '.urls[]' "${ARTIFACTS_DIR}/candidate-urls.json")
           if [[ "${#candidate_urls[@]}" -eq 0 ]]; then
             echo "::error::No candidate KMS URLs available"
+            echo "[probe] candidate-urls.json: $(cat "${ARTIFACTS_DIR}/candidate-urls.json" 2>/dev/null || echo "empty")"
             exit 1
           fi
-          printf "Candidate probe URLs:\n"
+          echo "[probe] Candidate URLs (${#candidate_urls[@]}):"
           printf "  - %s\n" "${candidate_urls[@]}"
 
           timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
@@ -434,8 +445,9 @@ jobs:
           done
 
           if [[ -z "${base_url}" ]]; then
-            echo "::error::Timed out waiting for KMS /health on candidate URLs"
-            phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-late.json" || true
+            echo "::error::Timed out waiting for KMS /health on candidate URLs after ${attempt} attempts"
+            echo "[probe] Last health.json: $(cat "${ARTIFACTS_DIR}/health.json" 2>/dev/null | head -c 500 || echo "empty")"
+            phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-late.json" 2>&1 || true
             phala logs --cvm-id "${VM_UUID}" --serial --tail 400 > "${ARTIFACTS_DIR}/cvm-serial.log" || true
             phala logs --cvm-id "${VM_UUID}" --tail 400 > "${ARTIFACTS_DIR}/cvm-container.log" || true
             exit 1

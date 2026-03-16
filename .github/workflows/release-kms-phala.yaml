@@ -368,8 +368,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          # Skip KMS_POLICY_VERSION for 2.1.61 and 2.1.63: previous policy from dstack-dev or probe fallback.
-          if [[ "${RELEASE_VERSION}" == "2.1.61" || "${RELEASE_VERSION}" == "2.1.63" ]]; then
+          # Skip KMS_POLICY_VERSION for 2.1.61, 2.1.63, 2.1.65: previous policy from dstack-dev.
+          if [[ "${RELEASE_VERSION}" == "2.1.61" || "${RELEASE_VERSION}" == "2.1.63" || "${RELEASE_VERSION}" == "2.1.65" ]]; then
             echo "version=" >> "${GITHUB_OUTPUT}"
             echo "Skipping policy test for ${RELEASE_VERSION} (previous policy from dstack-dev)"
             exit 0
