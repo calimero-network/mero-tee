@@ -34,6 +34,7 @@ promotion flows (`workflow_dispatch`) with:
 - `kms_tag`:
   - explicit release tag (recommended, for example `2.1.3`), or
   - `latest` (default) to auto-use the latest GitHub release tag (staging convenience only)
+- `kms_policy_version` (optional): when set (e.g. `2.1.55`), the KMS fetches policy from the release and enforces it. Use the previous release version when testing a new release. The release pipeline passes this automatically.
 - optional `kms_image` override pinned to a reviewed tag/digest that includes `/attest`
   (for example `ghcr.io/calimero-network/mero-kms-phala@sha256:<digest>`)
 - optional `region`

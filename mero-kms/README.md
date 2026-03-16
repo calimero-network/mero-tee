@@ -123,7 +123,7 @@ canonical source. If the fetch fails, startup fails closed.
 Production recommendation:
 
 - keep release policy as primary source (`MERO_KMS_VERSION` or `MERO_KMS_RELEASE_TAG`);
-- require `MERO_KMS_POLICY_SHA256` from reviewed release metadata for release-policy mode;
+- optionally verify policy with `MERO_KMS_POLICY_SHA256` when fetching from release;
 - use `USE_ENV_POLICY=true` only for explicit air-gapped env-policy mode;
 - treat startup failures on missing/invalid policy as fail-closed signals, not something to bypass.
 
@@ -147,7 +147,7 @@ Environment variables:
 - `MERO_KMS_VERSION` – fetch policy from release (e.g. `2.1.14`); recommended
 - `MERO_KMS_RELEASE_TAG` – alternative (e.g. `mero-kms-v2.1.14`)
 - `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (legacy/non-pinned runs only)
-- `MERO_KMS_POLICY_SHA256` – required when fetching policy from release
+- `MERO_KMS_POLICY_SHA256` – optional; when set, verifies the fetched policy matches this SHA256
 - `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
 - `KEY_NAMESPACE_PREFIX` – key namespace prefix (default: `merod/storage`)
 - `REDIS_URL` – optional Redis connection URL for shared challenge state

@@ -114,13 +114,7 @@ impl Config {
         } else {
             Self::release_version_from_env()
         };
-        if release_version.is_some() && policy_sha256.is_none() {
-            bail!(
-                "MERO_KMS_POLICY_SHA256 is required when loading policy from release. \
-                 Set MERO_KMS_POLICY_SHA256 to the reviewed policy hash, or set USE_ENV_POLICY=true \
-                 for air-gapped env-policy mode."
-            );
-        }
+        // MERO_KMS_POLICY_SHA256 is optional; when set, verifies the fetched policy matches.
 
         let mut attestation_policy = if use_env_policy {
             Self::load_policy_from_env()?
@@ -779,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn from_env_rejects_release_version_without_policy_hash_pin() {
+    fn from_env_accepts_release_version_without_policy_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
         let _guard = EnvGuard::apply(&[("MERO_KMS_VERSION", "2.1.49")]);
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -787,14 +781,18 @@ mod tests {
             .build()
             .expect("runtime");
 
-        let err = runtime
-            .block_on(Config::from_env_with_image_profile_path(
-                "/tmp/nonexistent-kms-profile",
-            ))
-            .expect_err("missing policy hash pin should fail");
-        assert!(err
-            .to_string()
-            .contains("MERO_KMS_POLICY_SHA256 is required"));
+        // MERO_KMS_POLICY_SHA256 is optional; config loads when it can fetch policy from release.
+        let result = runtime.block_on(Config::from_env_with_image_profile_path(
+            "/tmp/nonexistent-kms-profile",
+        ));
+        // May succeed (if network/release available) or fail for other reasons (e.g. fetch).
+        if let Err(e) = &result {
+            assert!(
+                !e.to_string().contains("MERO_KMS_POLICY_SHA256 is required"),
+                "policy hash pin should no longer be required: {}",
+                e
+            );
+        }
     }
 
     #[test]

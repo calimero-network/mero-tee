@@ -362,6 +362,19 @@ jobs:
           fi
           echo "image_ref=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
 
+      - name: Resolve previous release version for policy test
+        id: policy_version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 30 --json tagName -q '.[].tagName' 2>/dev/null | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+          if [[ -n "${latest_tag}" ]]; then
+            echo "version=${latest_tag#mero-kms-v}" >> "${GITHUB_OUTPUT}"
+            echo "Using policy from previous release: ${latest_tag}"
+          else
+            echo "version=" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Trigger staging probe and wait
         id: trigger
         env:
@@ -370,6 +383,7 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          KMS_POLICY_VERSION: ${{ steps.policy_version.outputs.version }}
         run: bash scripts/release/kms-phala/trigger-staging-probe.sh
 
       - name: Download probe artifact
