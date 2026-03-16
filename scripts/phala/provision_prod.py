@@ -4,6 +4,8 @@
 Matches MDMA's phala_provider.provision_kms_deployment behavior so probe
 lands on the same cluster as production (dstack-0.5.7, not dstack-dev-0.5.7).
 
+Pinned via DSTACK_PREFER_DEV (default false) and DSTACK_VERSION (default 0.5.7).
+
 Usage:
   scripts/phala/provision_prod.py --name NAME --compose COMPOSE_FILE \\
     --instance-type tdx.small [--region REGION] [--output OUTPUT_JSON]
@@ -19,6 +21,10 @@ import os
 import sys
 import urllib.request
 
+# Pinned dstack cluster version (prefer_dev=False => dstack-0.5.7 prod).
+DSTACK_VERSION_DEFAULT = "0.5.7"
+DSTACK_PREFER_DEV_DEFAULT = False
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Provision CVM via Phala API (prefer_dev=False)")
@@ -33,6 +39,10 @@ def main() -> int:
     if not api_key:
         print("PHALA_CLOUD_API_KEY is required", file=sys.stderr)
         return 1
+
+    prefer_dev = os.environ.get("DSTACK_PREFER_DEV", str(DSTACK_PREFER_DEV_DEFAULT)).strip().lower() in ("1", "true", "yes")
+    dstack_version = (os.environ.get("DSTACK_VERSION") or DSTACK_VERSION_DEFAULT).strip()
+    print(f"[provision_prod] Pinned dstack: version={dstack_version} prefer_dev={prefer_dev}", file=sys.stderr)
 
     base_url = (
         os.environ.get("PHALA_CLOUD_API_PREFIX")
@@ -50,7 +60,7 @@ def main() -> int:
         "name": args.name,
         "instance_type": args.instance_type,
         "kms": "PHALA",
-        "prefer_dev": False,
+        "prefer_dev": prefer_dev,
         "listed": False,
         "compose_file": {
             "name": "",

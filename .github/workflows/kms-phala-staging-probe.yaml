@@ -80,6 +80,9 @@ jobs:
     env:
       PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+      # Pinned dstack cluster (matches MDMA prod: dstack-0.5.7)
+      DSTACK_VERSION: "0.5.7"
+      DSTACK_PREFER_DEV: "false"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -239,7 +242,7 @@ jobs:
           echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Deploy ephemeral CVM (prod cluster, prefer_dev=false)
+      - name: Deploy ephemeral CVM (prod cluster, dstack 0.5.7 pinned)
         id: deploy
         env:
           DEPLOY_NAME_INPUT: ${{ inputs.deployment_name }}
