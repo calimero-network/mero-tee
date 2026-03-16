@@ -197,21 +197,8 @@ jobs:
           compose_file="${artifacts_dir}/docker-compose.kms-probe.yaml"
           mkdir -p "${artifacts_dir}"
 
-          env_block='                LISTEN_ADDR: "0.0.0.0:8080"
-                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
-                CHALLENGE_TTL_SECS: "60"
-                ACCEPT_MOCK_ATTESTATION: "false"
-                ENFORCE_MEASUREMENT_POLICY: "false"'
           if [[ -n "${KMS_POLICY_VERSION}" ]]; then
-            env_block="                LISTEN_ADDR: \"0.0.0.0:8080\"
-                DSTACK_SOCKET_PATH: \"/var/run/dstack.sock\"
-                CHALLENGE_TTL_SECS: \"60\"
-                ACCEPT_MOCK_ATTESTATION: \"false\"
-                ENFORCE_MEASUREMENT_POLICY: \"true\"
-                MERO_KMS_VERSION: \"${KMS_POLICY_VERSION}\""
-          fi
-
-          cat > "${compose_file}" <<EOF
+            cat > "${compose_file}" <<EOF
           services:
             mero-kms:
               image: ${resolved_kms_image}
@@ -219,10 +206,33 @@ jobs:
               ports:
                 - "${SERVICE_PORT}:8080"
               environment:
-${env_block}
+                LISTEN_ADDR: "0.0.0.0:8080"
+                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
+                CHALLENGE_TTL_SECS: "60"
+                ACCEPT_MOCK_ATTESTATION: "false"
+                ENFORCE_MEASUREMENT_POLICY: "true"
+                MERO_KMS_VERSION: "${KMS_POLICY_VERSION}"
               volumes:
                 - /var/run/dstack.sock:/var/run/dstack.sock
           EOF
+          else
+            cat > "${compose_file}" <<EOF
+          services:
+            mero-kms:
+              image: ${resolved_kms_image}
+              restart: unless-stopped
+              ports:
+                - "${SERVICE_PORT}:8080"
+              environment:
+                LISTEN_ADDR: "0.0.0.0:8080"
+                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
+                CHALLENGE_TTL_SECS: "60"
+                ACCEPT_MOCK_ATTESTATION: "false"
+                ENFORCE_MEASUREMENT_POLICY: "false"
+              volumes:
+                - /var/run/dstack.sock:/var/run/dstack.sock
+          EOF
+          fi
 
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
