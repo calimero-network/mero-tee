@@ -1,6 +1,6 @@
 [package]
 name = "mero-kms-phala"
-version = "2.1.62"
+version = "2.1.63"
 authors = ["Calimero Limited <info@calimero.network>"]
 edition = "2021"
 repository = "https://github.com/calimero-network/mero-tee"
