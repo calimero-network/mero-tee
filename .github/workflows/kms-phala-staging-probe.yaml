@@ -285,33 +285,22 @@ jobs:
             fi
           fi
 
-          echo "[deploy] Running provision_prod.py ..."
-          if ! python3 scripts/phala/provision_prod.py \
+          echo "[deploy] Running provision_prod.py (dstack-0.5.7 prod only; no phala deploy fallback - that uses dstack-dev)"
+          python3 scripts/phala/provision_prod.py \
             --name "${deploy_name}" \
             --compose "${COMPOSE_FILE}" \
             --instance-type "${INSTANCE_TYPE}" \
             --region "${REGION}" \
-            --output "${deploy_json}" 2>&1 | tee "${ARTIFACTS_DIR}/provision_prod.log"; then
-            echo "::warning::provision_prod failed, trying phala deploy fallback"
-            phala deploy -n "${deploy_name}" -c "${COMPOSE_FILE}" -t "${INSTANCE_TYPE}" \
-              ${REGION:+-r "${REGION}"} --wait --no-listed 2>&1 | tee "${ARTIFACTS_DIR}/phala-deploy.log" || true
-            sleep 10
-            cvm_get="$(phala cvms get "${deploy_name}" --json 2>/dev/null || true)"
-            if [[ -n "${cvm_get}" ]]; then
-              echo "${cvm_get}" > "${deploy_json}"
-            fi
-          fi
+            --output "${deploy_json}" 2>&1 | tee "${ARTIFACTS_DIR}/provision_prod.log"
 
           echo "[deploy] Provision result:"
-          cat "${deploy_json}" 2>/dev/null || echo "(empty)"
-          vm_uuid="$(jq -r '.vm_uuid // .id // .hosted.id // empty' "${deploy_json}" 2>/dev/null || true)"
-          app_id="$(jq -r '.app_id // .hosted.app_id // empty' "${deploy_json}" 2>/dev/null || true)"
+          cat "${deploy_json}"
+          vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
+          app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
           if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then
-            echo "::error::Missing vm_uuid/app_id after provision_prod and fallback"
+            echo "::error::Missing vm_uuid/app_id in provision result"
             echo "[deploy] provision_prod.log tail:"
-            tail -50 "${ARTIFACTS_DIR}/provision_prod.log" 2>/dev/null || true
-            echo "[deploy] phala-deploy.log tail (if any):"
-            tail -50 "${ARTIFACTS_DIR}/phala-deploy.log" 2>/dev/null || true
+            tail -80 "${ARTIFACTS_DIR}/provision_prod.log" 2>/dev/null || true
             exit 1
           fi
 
