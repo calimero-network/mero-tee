@@ -303,39 +303,10 @@ jobs:
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
 
-      - name: Wait for CVM and start (provision may not auto-start)
+      - name: Wait for CVM to boot (provision_prod calls start like MDMA)
         if: ${{ success() }}
-        env:
-          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
-          APP_ID: ${{ steps.deploy.outputs.app_id }}
         run: |
-          set -euo pipefail
-          cvm_id="${APP_ID:-${VM_UUID}}"
-          if [[ -z "${cvm_id}" ]]; then
-            echo "::error::Missing app_id/vm_uuid"
-            exit 1
-          fi
-          if ! [[ "${cvm_id}" =~ ^app_ ]]; then
-            cvm_id="app_${cvm_id}"
-          fi
-          # Wait for CVM to exist and be startable (creating -> stopped/created).
-          get_id="${VM_UUID:-${cvm_id}}"
-          for i in $(seq 1 24); do
-            if cvm_json="$(phala cvms get "${get_id}" --json 2>/dev/null)" && [[ -n "${cvm_json}" ]]; then
-              status="$(echo "${cvm_json}" | jq -r '.status // .hosted.status // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
-              echo "CVM status: ${status:-unknown}"
-              if [[ "${status}" == "stopped" || "${status}" == "created" ]]; then
-                phala cvms start "${cvm_id}" 2>/dev/null || true
-                break
-              fi
-              if [[ "${status}" == "running" ]]; then
-                echo "CVM already running"
-                break
-              fi
-            fi
-            [[ $i -lt 24 ]] && sleep 15
-          done
-          sleep 30
+          sleep 60
 
       - name: Collect CVM metadata
         if: ${{ success() }}

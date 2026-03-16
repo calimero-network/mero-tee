@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 # Pinned dstack cluster version (prefer_dev=False => dstack-0.5.7 prod).
@@ -116,8 +117,36 @@ def main() -> int:
 
     vm_uuid = (commit.get("vm_uuid") or "").strip()
     committed_app_id = (commit.get("app_id") or app_id).strip()
+    status = (commit.get("status") or "").strip().lower() or "creating"
 
-    result = {"app_id": committed_app_id, "vm_uuid": vm_uuid}
+    # Match MDMA: Phala provision creates but may not auto-start; call start if stopped.
+    if status in ("stopped", "created") and committed_app_id:
+        norm_id = committed_app_id if committed_app_id.startswith("app_") else f"app_{committed_app_id}"
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/cvms/{norm_id}/start",
+                data=b"",
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": api_key,
+                    "X-Phala-Version": "2026-01-21",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                pass  # 204 or 200
+            print(f"[provision_prod] Started CVM (status was {status})", file=sys.stderr)
+        except urllib.error.HTTPError as e:
+            if e.code in (404,) or "not found" in str(e).lower():
+                pass
+            elif "already" in str(e).lower() and "running" in str(e).lower():
+                pass
+            else:
+                print(f"[provision_prod] Start failed (non-fatal): {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[provision_prod] Start failed (non-fatal): {e}", file=sys.stderr)
+
+    result = {"app_id": committed_app_id, "vm_uuid": vm_uuid, "status": status}
     out = json.dumps(result, indent=2) + "\n"
 
     if args.output:
