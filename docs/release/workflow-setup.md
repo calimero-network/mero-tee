@@ -87,11 +87,14 @@ This keeps release metadata aligned with node-image release tags.
 `mero-tee-v<version>` (`published-mrtds.json`) when generating release
 metadata.
 
-On `push` runs, if `mero-tee/versions.json` was not changed in the triggering
-commit and the expected `mero-tee-v<version>` release is missing, the workflow
-fails fast with an explicit error instead of waiting for the full polling
-timeout. For coordinated release pushes that do update `mero-tee/versions.json`,
-the existing polling behavior is preserved.
+On `push` runs, if the expected `mero-tee-v<version>` release is missing, the
+KMS workflow checks whether a same-commit `Release mero-tee` run exists:
+
+- if node release is actively queued/in-progress for that commit, KMS keeps
+  polling;
+- if no matching node release run exists and `mero-tee/versions.json` was not
+  changed in the triggering push, KMS fails fast with an explicit error instead
+  of waiting for the full polling timeout.
 
 ## Post-release KMS-node e2e guardrails
 
