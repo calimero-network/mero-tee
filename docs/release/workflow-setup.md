@@ -179,3 +179,6 @@ When changing release behavior, update both the script and this documentation.
 
 Operational note: jobs that execute repository scripts must include a checkout
 step (`actions/checkout`) before invoking `bash scripts/...`.
+
+In particular, the node-image `cleanup_attestation_resources` job must checkout
+the repo before invoking `scripts/release/node-image-gcp/sweep-attestation-resources.sh`.
