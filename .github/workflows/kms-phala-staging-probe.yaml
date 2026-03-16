@@ -303,6 +303,25 @@ jobs:
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
 
+      - name: Start CVM (provision may not auto-start)
+        if: ${{ success() }}
+        env:
+          VM_UUID: ${{ steps.deploy.outputs.vm_uuid }}
+          APP_ID: ${{ steps.deploy.outputs.app_id }}
+        run: |
+          set -euo pipefail
+          # Phala provision creates but may not auto-start (same as MDMA start_kms_deployment).
+          cvm_id="${APP_ID:-${VM_UUID}}"
+          if [[ -z "${cvm_id}" ]]; then
+            echo "::error::Missing app_id/vm_uuid for start"
+            exit 1
+          fi
+          if ! [[ "${cvm_id}" =~ ^app_ ]]; then
+            cvm_id="app_${cvm_id}"
+          fi
+          phala cvms start "${cvm_id}" 2>/dev/null || true
+          sleep 10
+
       - name: Collect CVM metadata
         if: ${{ success() }}
         env:
