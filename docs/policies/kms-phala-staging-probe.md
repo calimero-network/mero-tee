@@ -8,7 +8,7 @@ Workflow file:
 
 ## What it does
 
-1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image.
+1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image via the Phala REST API with `prefer_dev=false` (dstack-0.5.7 prod cluster, matching MDMA).
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
 4. Verifies the quote via Intel Trust Authority (`scripts/attestation/verify_tdx_quote_ita.py`).

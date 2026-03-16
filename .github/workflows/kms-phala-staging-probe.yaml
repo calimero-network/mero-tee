@@ -109,7 +109,7 @@ jobs:
       - name: Install probe dependencies
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py
+          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py scripts/phala/provision_prod.py
           npm install -g phala@latest
           phala --version
           jq --version
@@ -239,7 +239,7 @@ jobs:
           echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Deploy ephemeral CVM
+      - name: Deploy ephemeral CVM (prod cluster, prefer_dev=false)
         id: deploy
         env:
           DEPLOY_NAME_INPUT: ${{ inputs.deployment_name }}
@@ -255,27 +255,12 @@ jobs:
             exit 1
           fi
           deploy_json="${ARTIFACTS_DIR}/phala-deploy.json"
-          deploy_raw="${ARTIFACTS_DIR}/phala-deploy.raw.log"
 
           # Emit deploy_name early so cleanup can still run on partial failures.
           echo "deploy_name=${deploy_name}" >> "${GITHUB_OUTPUT}"
 
-          deploy_cmd=(
-            phala
-            deploy
-            --json
-            --name "${deploy_name}"
-            --compose "${COMPOSE_FILE}"
-            --instance-type "${INSTANCE_TYPE}"
-            --wait
-            --no-listed
-            --no-public-logs
-            --no-public-sysinfo
-          )
-          if [[ -n "${REGION}" ]]; then
-            deploy_cmd+=(--region "${REGION}")
-          fi
-
+          # Use Phala REST API with prefer_dev=false (dstack-0.5.7 prod) to match MDMA.
+          # phala deploy CLI defaults to dstack-dev-0.5.7, causing RTMR2/RTMR3 mismatch.
           wait_for_name_release() {
             local name="$1"
             for _ in $(seq 1 24); do
@@ -297,75 +282,17 @@ jobs:
             fi
           fi
 
-          deploy_ok="false"
-          for deploy_attempt in $(seq 1 2); do
-            if "${deploy_cmd[@]}" > "${deploy_raw}" 2>&1; then
-              deploy_ok="true"
-              break
-            fi
-
-            deploy_output="$(tr '\n' ' ' < "${deploy_raw}")"
-            if [[ "${deploy_attempt}" -lt 2 && "${deploy_output}" == *"already exists"* ]]; then
-              echo "::warning::Stale CVM name collision for '${deploy_name}', deleting stale instance and retrying deploy."
-              phala cvms delete "${deploy_name}" --force --yes >/dev/null 2>&1 || true
-              if ! wait_for_name_release "${deploy_name}"; then
-                echo "::error::Timed out waiting for stale CVM '${deploy_name}' to be removed before retry."
-                exit 1
-              fi
-              continue
-            fi
-
-            echo "::error::phala deploy command failed"
-            cat "${deploy_raw}"
-            exit 1
-          done
-
-          if [[ "${deploy_ok}" != "true" ]]; then
-            echo "::error::phala deploy command failed after retries"
-            cat "${deploy_raw}"
-            exit 1
-          fi
-
-          # phala CLI may print progress lines around JSON; extract structured payload robustly.
-          if ! python3 - "${deploy_raw}" "${deploy_json}" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          raw_path = pathlib.Path(sys.argv[1])
-          out_path = pathlib.Path(sys.argv[2])
-          content = raw_path.read_text(encoding="utf-8", errors="replace")
-          decoder = json.JSONDecoder()
-
-          selected = None
-          for index, char in enumerate(content):
-              if char != "{":
-                  continue
-              try:
-                  candidate, _ = decoder.raw_decode(content[index:])
-              except json.JSONDecodeError:
-                  continue
-              if isinstance(candidate, dict) and "vm_uuid" in candidate and "app_id" in candidate:
-                  selected = candidate
-                  break
-
-          if selected is None:
-              print("Could not extract deploy JSON payload from phala output", file=sys.stderr)
-              print(content, file=sys.stderr)
-              sys.exit(1)
-
-          out_path.write_text(json.dumps(selected, indent=2) + "\n", encoding="utf-8")
-          PY
-          then
-            echo "::error::phala deploy --json did not return parseable JSON payload"
-            cat "${deploy_raw}"
-            exit 1
-          fi
+          python3 scripts/phala/provision_prod.py \
+            --name "${deploy_name}" \
+            --compose "${COMPOSE_FILE}" \
+            --instance-type "${INSTANCE_TYPE}" \
+            --region "${REGION}" \
+            --output "${deploy_json}"
 
           vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
           app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
           if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then
-            echo "::error::Missing vm_uuid/app_id in deploy result"
+            echo "::error::Missing vm_uuid/app_id in provision result"
             cat "${deploy_json}"
             exit 1
           fi
