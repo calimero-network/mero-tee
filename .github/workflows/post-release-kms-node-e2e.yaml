@@ -45,7 +45,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: post-release-kms-node-e2e-${{ github.event_name }}-${{ github.event.workflow_run.id || github.run_id }}
+  group: post-release-kms-node-e2e-${{ github.event_name }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:

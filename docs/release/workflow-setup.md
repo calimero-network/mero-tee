@@ -125,6 +125,22 @@ release events:
 release-triggered validation is expected to fail explicitly on missing or
 mismatched release inputs.
 
+Workflow-level concurrency keys in this file must remain event-safe. When
+combining `push`/`workflow_run` triggers, guard `github.event.workflow_run.*`
+references behind an event-name check so non-`workflow_run` executions do not
+fail during workflow evaluation.
+
+## Compatibility catalog automation
+
+`update-compatibility-catalog.yaml` runs on release publish and updates
+`compatibility-catalog.json` on `master`.
+
+- The job checks out `master` explicitly.
+- Push uses `git push origin HEAD:master` so release-event detached checkouts do
+  not fail during commit/push.
+- Workflow concurrency is serialized (`update-compatibility-catalog-master`) to
+  avoid overlapping catalog updates.
+
 ## KMS policy operations
 
 KMS policy generation/rollout currently uses staging probes plus policy scripts.

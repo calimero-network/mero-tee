@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+concurrency:
+  group: update-compatibility-catalog-master
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -16,6 +20,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: master
 
       - name: Fetch releases and build catalog
         id: catalog
@@ -58,8 +63,10 @@ jobs:
       - name: Commit and push
         if: steps.diff.outputs.changed == 'true'
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add compatibility-catalog.json
           git commit -m "chore: update compatibility catalog (${{ steps.catalog.outputs.catalog_count }} releases)"
-          git push
+          # Release-triggered checkouts can be detached; always push explicitly to master.
+          git push origin HEAD:master
