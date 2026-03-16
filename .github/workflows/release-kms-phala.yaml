@@ -423,9 +423,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
           NODE_TAG: mero-tee-v${{ needs.prepare.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           mkdir -p node-policy
+          versions_manifest_changed="unknown"
+          if [[ "${EVENT_NAME}" == "push" && -f "${GITHUB_EVENT_PATH:-}" ]]; then
+            if jq -e '
+              [ .commits[]? | (.added // []) + (.modified // []) + (.removed // []) ]
+              | flatten
+              | any(. == "mero-tee/versions.json")
+            ' "${GITHUB_EVENT_PATH}" >/dev/null 2>&1; then
+              versions_manifest_changed="true"
+            else
+              versions_manifest_changed="false"
+            fi
+          fi
           for attempt in $(seq 1 60); do
             if gh release view "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
               if gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
@@ -433,6 +446,12 @@ jobs:
                 echo "Fetched node policy from ${NODE_TAG}"
                 break
               fi
+            fi
+            if [[ "${attempt}" -eq 1 && "${versions_manifest_changed}" == "false" ]]; then
+              echo "::error::Node release ${NODE_TAG} is missing and this push did not modify mero-tee/versions.json."
+              echo "::error::Release mero-kms cannot proceed without ${NODE_TAG}/published-mrtds.json."
+              echo "::error::Run the 'Release mero-tee' workflow for imageVersion ${VERSION}, then rerun this workflow."
+              exit 1
             fi
             if [[ "${attempt}" -eq 60 ]]; then
               echo "::error::Timed out waiting for node release ${NODE_TAG} with published-mrtds.json"
