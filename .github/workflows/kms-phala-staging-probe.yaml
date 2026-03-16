@@ -57,6 +57,10 @@ on:
         description: "Timeout for /health readiness check"
         required: true
         default: "20"
+      hold_after_upload_seconds:
+        description: "Optional hold window after artifact upload and before cleanup"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -624,6 +628,23 @@ jobs:
           name: kms-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.prepare.outputs.artifacts_dir }}/
           retention-days: 14
+
+      - name: Optional hold window before cleanup
+        if: ${{ always() && steps.prepare.outcome == 'success' && steps.probe.outcome == 'success' }}
+        env:
+          HOLD_AFTER_UPLOAD_SECONDS: ${{ inputs.hold_after_upload_seconds }}
+        run: |
+          set -euo pipefail
+          hold_seconds="${HOLD_AFTER_UPLOAD_SECONDS:-0}"
+          if [[ ! "${hold_seconds}" =~ ^[0-9]+$ ]]; then
+            echo "::error::hold_after_upload_seconds must be a non-negative integer."
+            exit 1
+          fi
+          if [[ "${hold_seconds}" == "0" ]]; then
+            exit 0
+          fi
+          echo "Holding for ${hold_seconds}s before cleanup to keep CVM reachable for downstream probes."
+          sleep "${hold_seconds}"
 
       - name: Cleanup ephemeral CVM
         if: ${{ always() && steps.prepare.outcome == 'success' }}

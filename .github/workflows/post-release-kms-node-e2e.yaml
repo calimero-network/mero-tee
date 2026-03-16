@@ -126,6 +126,9 @@ jobs:
           version=""
           should_run="true"
           skip_reason=""
+          strict_release_mode="false"
+          probe_workflow_ref=""
+          probe_expected_sha=""
           if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
             if [[ "${WORKFLOW_NAME}" != "Release mero-tee" ]]; then
               echo "::error::Expected workflow_run from 'Release mero-tee', got '${WORKFLOW_NAME}'."
@@ -143,6 +146,13 @@ jobs:
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
+            strict_release_mode="true"
+            probe_workflow_ref="${WORKFLOW_RUN_HEAD_BRANCH}"
+            probe_expected_sha="${WORKFLOW_RUN_HEAD_SHA}"
+            if [[ -z "${probe_workflow_ref}" || -z "${probe_expected_sha}" ]]; then
+              echo "::error::workflow_run must provide head branch and head SHA."
+              exit 1
+            fi
           elif [[ "${EVENT_NAME}" == "push" ]]; then
             if [[ "${REF_NAME}" != "master" ]]; then
               echo "::error::Expected push on master, got ref '${REF_NAME}'."
@@ -154,6 +164,8 @@ jobs:
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
+            probe_workflow_ref="${REF_NAME}"
+            probe_expected_sha="${GITHUB_SHA}"
           else
             version="${INPUT_RELEASE_VERSION}"
             if [[ -z "${version}" ]]; then
@@ -161,16 +173,18 @@ jobs:
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
+            strict_release_mode="true"
+            probe_workflow_ref="${REF_NAME}"
+            probe_expected_sha="${GITHUB_SHA}"
           fi
 
           if ! wait_for_release_tag "${tee_tag}" 30 10; then
-            if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
-              should_run="false"
-              skip_reason="Node release tag '${tee_tag}' is not published yet."
-            else
+            if [[ "${strict_release_mode}" == "true" ]]; then
               echo "::error::Node release tag '${tee_tag}' not found in ${GITHUB_REPOSITORY}."
               exit 1
             fi
+            should_run="false"
+            skip_reason="Node release tag '${tee_tag}' is not published yet."
           fi
 
           kms_tag=""
@@ -192,44 +206,23 @@ jobs:
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
             else
-              fallback_kms_tag=""
-              while IFS= read -r candidate_tag; do
-                [[ -z "${candidate_tag}" ]] && continue
-                if [[ "$(kms_release_has_required_assets "${candidate_tag}")" == "true" ]]; then
-                  fallback_kms_tag="${candidate_tag}"
-                  break
-                fi
-              done < <(
-                gh release list \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --limit 200 \
-                  --json tagName \
-                  --jq '.[] | .tagName | select(startswith("mero-kms-v"))'
-              )
-              if [[ -z "${fallback_kms_tag}" ]]; then
-                if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
-                  should_run="false"
-                  skip_reason="No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found yet."
-                else
-                  echo "::error::No published mero-kms-v* release with required e2e assets (compatibility map and profile policies) found in ${GITHUB_REPOSITORY}."
-                  exit 1
-                fi
-              else
-                echo "::warning::Default KMS tag '${default_kms_tag}' unavailable or missing required e2e assets; falling back to '${fallback_kms_tag}'."
-                kms_tag="${fallback_kms_tag}"
-                kms_tag_source="fallback-with-profile-assets"
+              if [[ "${strict_release_mode}" == "true" ]]; then
+                echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets (compatibility map and profile policies)."
+                echo "::error::Release validation requires same-version node/KMS tags unless explicit kms_tag override is provided."
+                exit 1
               fi
+              should_run="false"
+              skip_reason="KMS release '${default_kms_tag}' is not published with required e2e assets yet."
             fi
           fi
 
           if [[ "${should_run}" == "true" && ( -z "${kms_tag}" || -z "${kms_tag_source}" ) ]]; then
-            if [[ "${EVENT_NAME}" == "workflow_run" || "${EVENT_NAME}" == "push" ]]; then
-              should_run="false"
-              skip_reason="Could not resolve KMS tag selection for this release yet."
-            else
+            if [[ "${strict_release_mode}" == "true" ]]; then
               echo "::error::Could not resolve KMS tag selection."
               exit 1
             fi
+            should_run="false"
+            skip_reason="Could not resolve KMS tag selection for this release yet."
           fi
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
@@ -238,6 +231,9 @@ jobs:
           echo "kms_tag_source=${kms_tag_source}" >> "${GITHUB_OUTPUT}"
           echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
           echo "skip_reason=${skip_reason}" >> "${GITHUB_OUTPUT}"
+          echo "strict_release_mode=${strict_release_mode}" >> "${GITHUB_OUTPUT}"
+          echo "probe_workflow_ref=${probe_workflow_ref}" >> "${GITHUB_OUTPUT}"
+          echo "probe_expected_sha=${probe_expected_sha}" >> "${GITHUB_OUTPUT}"
 
       - name: Skip e2e until compatible releases are available
         if: ${{ steps.resolve.outputs.should_run != 'true' }}
@@ -291,8 +287,20 @@ jobs:
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
           TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
+          STRICT_RELEASE_MODE: ${{ steps.resolve.outputs.strict_release_mode }}
+          PROBE_WORKFLOW_REF: ${{ steps.resolve.outputs.probe_workflow_ref }}
+          PROBE_EXPECTED_SHA: ${{ steps.resolve.outputs.probe_expected_sha }}
         run: |
           set -euo pipefail
+
+          if [[ -z "${PROBE_WORKFLOW_REF}" ]]; then
+            echo "::error::Missing probe workflow ref."
+            exit 1
+          fi
+          if [[ -z "${PROBE_EXPECTED_SHA}" ]]; then
+            echo "::error::Missing probe expected SHA."
+            exit 1
+          fi
 
           compatibility_map="e2e/kms-release/kms-phala-compatibility-map.json"
           if [[ ! -f "${compatibility_map}" ]]; then
@@ -311,7 +319,7 @@ jobs:
 
           if [[ "${has_immutable_profile_digests}" != "true" ]]; then
             reason="Selected KMS release '${KMS_TAG}' lacks immutable per-profile image digests in kms-phala-compatibility-map.json."
-            if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${EVENT_NAME}" == "workflow_dispatch" || "${STRICT_RELEASE_MODE}" == "true" ]]; then
               echo "::error::${reason}"
               echo "::error::Run with a newer KMS tag that includes kms_image_digest for all profiles."
               exit 1
@@ -372,7 +380,7 @@ jobs:
           if [[ "${has_distinct_kms_profile_measurements}" != "true" ]]; then
             collapsed_pairs="${has_distinct_kms_profile_measurements#false:}"
             reason="Selected KMS release '${KMS_TAG}' has identical KMS measurement allowlists across profiles (${collapsed_pairs})."
-            if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${EVENT_NAME}" == "workflow_dispatch" || "${STRICT_RELEASE_MODE}" == "true" ]]; then
               echo "::error::${reason}"
               echo "::error::Run with a newer KMS tag where debug/debug-read-only/locked-read-only KMS measurements differ."
               exit 1
@@ -393,6 +401,9 @@ jobs:
 
           probe_run_urls=()
           locked_probe_candidates_file=""
+          cross_profile_locked_kms_base_url=""
+          cross_profile_kms_run_url=""
+          cross_profile_kms_run_id=""
           version_slug="${RELEASE_VERSION//./-}"
           release_manifest="e2e/kms-release/kms-phala-release-manifest.json"
           release_probe_run_id="$(jq -r '.workflow_run_id // empty' "${release_manifest}" 2>/dev/null || true)"
@@ -430,7 +441,7 @@ jobs:
               dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
-                --ref master \
+                --ref "${PROBE_WORKFLOW_REF}" \
                 -f kms_image="${image_ref}" \
                 -f kms_tag="pinned" \
                 -f probe_label="${probe_label}" \
@@ -442,7 +453,6 @@ jobs:
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "kms-phala-staging-probe.yaml" \
                   --event workflow_dispatch \
-                  --branch master \
                   --limit 10 \
                   --json databaseId,createdAt,displayTitle \
                   --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'" and .displayTitle == "'"${expected_display_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
@@ -451,7 +461,6 @@ jobs:
                     --repo "${GITHUB_REPOSITORY}" \
                     --workflow "kms-phala-staging-probe.yaml" \
                     --event workflow_dispatch \
-                    --branch master \
                     --limit 10 \
                     --json databaseId,createdAt \
                     --jq '[.[] | select(.createdAt >= "'"${dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
@@ -464,6 +473,16 @@ jobs:
 
               if [[ -z "${probe_run_id}" ]]; then
                 echo "::error::Could not resolve kms-phala-staging-probe workflow run ID for profile '${profile}'"
+                exit 1
+              fi
+              probe_run_head_sha="$(gh run view "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --json headSha --jq '.headSha // empty')"
+              if [[ -z "${probe_run_head_sha}" ]]; then
+                echo "::error::Could not read head SHA for probe run ${probe_run_id}"
+                exit 1
+              fi
+              if [[ "${probe_run_head_sha}" != "${PROBE_EXPECTED_SHA}" ]]; then
+                echo "::error::Probe run ${probe_run_id} used unexpected head SHA ${probe_run_head_sha}; expected ${PROBE_EXPECTED_SHA}."
+                echo "::error::Refusing to validate release with probe artifacts from a different revision."
                 exit 1
               fi
 
@@ -560,7 +579,7 @@ jobs:
 
             if [[ "${probe_validated}" != "true" ]]; then
               reason="Selected KMS release '${KMS_TAG}' produced probe measurements outside published profile policy for '${profile}' after ${#deployment_name_candidates[@]} deployment name attempt(s)."
-              if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+              if [[ "${EVENT_NAME}" == "workflow_dispatch" || "${STRICT_RELEASE_MODE}" == "true" ]]; then
                 echo "::error::${reason}"
                 if [[ -n "${last_probe_validation_error}" ]]; then
                   echo "::error::${last_probe_validation_error}"
@@ -591,6 +610,127 @@ jobs:
 
           if [[ -z "${locked_probe_candidates_file}" ]]; then
             echo "::error::Did not capture locked-read-only probe candidates."
+            exit 1
+          fi
+
+          locked_profile_digest="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_digest // empty' "${compatibility_map}")"
+          locked_profile_tag="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_tag // empty' "${compatibility_map}")"
+          if [[ -n "${locked_profile_digest}" ]]; then
+            cross_profile_locked_image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala@${locked_profile_digest}"
+          elif [[ -n "${locked_profile_tag}" ]]; then
+            cross_profile_locked_image_ref="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:${locked_profile_tag}"
+          else
+            echo "::error::Could not resolve locked-read-only KMS image reference for cross-profile runtime check."
+            exit 1
+          fi
+
+          cross_profile_probe_label="post-release-cross-profile-kms-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cross_profile_expected_title="KMS staging probe (${cross_profile_probe_label})"
+          cross_profile_deployment_name="kms-cross-profile-${version_slug}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cross_profile_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          gh workflow run "kms-phala-staging-probe.yaml" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref "${PROBE_WORKFLOW_REF}" \
+            -f kms_image="${cross_profile_locked_image_ref}" \
+            -f kms_tag="pinned" \
+            -f probe_label="${cross_profile_probe_label}" \
+            -f deployment_name="${cross_profile_deployment_name}" \
+            -f hold_after_upload_seconds="2400"
+
+          for attempt in $(seq 1 90); do
+            cross_profile_kms_run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow "kms-phala-staging-probe.yaml" \
+              --event workflow_dispatch \
+              --limit 10 \
+              --json databaseId,createdAt,displayTitle \
+              --jq '[.[] | select(.createdAt >= "'"${cross_profile_dispatch_started_at}"'" and .displayTitle == "'"${cross_profile_expected_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            if [[ -z "${cross_profile_kms_run_id}" ]]; then
+              cross_profile_kms_run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow "kms-phala-staging-probe.yaml" \
+                --event workflow_dispatch \
+                --limit 10 \
+                --json databaseId,createdAt \
+                --jq '[.[] | select(.createdAt >= "'"${cross_profile_dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
+            fi
+            if [[ -n "${cross_profile_kms_run_id}" ]]; then
+              break
+            fi
+            sleep 10
+          done
+          if [[ -z "${cross_profile_kms_run_id}" ]]; then
+            echo "::error::Could not resolve cross-profile live locked KMS probe run ID."
+            exit 1
+          fi
+          cross_profile_kms_head_sha="$(gh run view "${cross_profile_kms_run_id}" --repo "${GITHUB_REPOSITORY}" --json headSha --jq '.headSha // empty')"
+          if [[ -z "${cross_profile_kms_head_sha}" ]]; then
+            echo "::error::Could not read head SHA for cross-profile KMS probe run ${cross_profile_kms_run_id}"
+            exit 1
+          fi
+          if [[ "${cross_profile_kms_head_sha}" != "${PROBE_EXPECTED_SHA}" ]]; then
+            echo "::error::Cross-profile KMS probe run ${cross_profile_kms_run_id} used unexpected head SHA ${cross_profile_kms_head_sha}; expected ${PROBE_EXPECTED_SHA}."
+            echo "::error::Refusing to validate release with probe artifacts from a different revision."
+            exit 1
+          fi
+          cross_profile_kms_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${cross_profile_kms_run_id}"
+
+          cross_profile_probe_dir="e2e/kms-probe/locked-read-only/cross-profile-live"
+          mkdir -p "${cross_profile_probe_dir}"
+          cross_profile_artifact_name=""
+          cross_profile_artifact_downloaded="false"
+          artifact_poll_deadline=$(( $(date +%s) + 3600 ))
+          while [[ "$(date +%s)" -lt "${artifact_poll_deadline}" ]]; do
+            cross_profile_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${cross_profile_kms_run_id}/artifacts" \
+              --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""' 2>/dev/null || true)"
+            if [[ -n "${cross_profile_artifact_name}" ]]; then
+              if gh run download "${cross_profile_kms_run_id}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${cross_profile_artifact_name}" \
+                --dir "${cross_profile_probe_dir}" >/dev/null 2>&1; then
+                cross_profile_artifact_downloaded="true"
+                break
+              fi
+            fi
+
+            run_state="$(gh run view "${cross_profile_kms_run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")' 2>/dev/null || true)"
+            run_status="${run_state%%:*}"
+            run_conclusion="${run_state#*:}"
+            if [[ "${run_status}" == "completed" ]]; then
+              if [[ -z "${run_conclusion}" ]]; then
+                run_conclusion="unknown"
+              fi
+              echo "::error::Cross-profile locked KMS probe run ${cross_profile_kms_run_id} completed (conclusion=${run_conclusion}) before probe artifacts became available."
+              echo "::error::Run URL: ${cross_profile_kms_run_url}"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [[ "${cross_profile_artifact_downloaded}" != "true" ]]; then
+            echo "::error::Timed out waiting (60m) for cross-profile locked KMS probe artifacts from run ${cross_profile_kms_run_id}."
+            echo "::error::Run URL: ${cross_profile_kms_run_url}"
+            exit 1
+          fi
+
+          cross_profile_kms_context_file="$(python3 - "${cross_profile_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("attestation-context.json"))
+          print(matches[0] if matches else "")
+          PY
+          )"
+          if [[ -z "${cross_profile_kms_context_file}" ]]; then
+            echo "::error::Could not locate attestation-context.json for cross-profile locked KMS probe."
+            exit 1
+          fi
+          cross_profile_locked_kms_base_url="$(jq -r '.base_url // empty' "${cross_profile_kms_context_file}")"
+          if [[ -z "${cross_profile_locked_kms_base_url}" ]]; then
+            echo "::error::Cross-profile locked KMS probe context is missing base_url."
             exit 1
           fi
 
@@ -647,17 +787,28 @@ jobs:
             node_deployment_name="tdx-e2e-${version_slug}-${profile}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             node_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+            node_dispatch_args=(
+              -f probe_label="${node_probe_label}"
+              -f deployment_name="${node_deployment_name}"
+              -f profile="${profile}"
+              -f image_name="${node_image_name}"
+              -f image_project="${node_image_project}"
+              -f vm_project="${node_image_project}"
+              -f vm_zone="${node_zone}"
+              -f admin_api_port="${node_admin_port}"
+            )
+            if [[ "${profile}" == "debug" ]]; then
+              node_dispatch_args+=(
+                -f kms_probe_url="${cross_profile_locked_kms_base_url}"
+                -f kms_probe_expected_outcome="failure"
+                -f kms_probe_expected_codes="KMS_PROFILE_POLICY_REJECTED,KMS_GET_KEY_REJECTED"
+              )
+            fi
+
             gh workflow run "node-image-gcp-staging-probe.yaml" \
               --repo "${GITHUB_REPOSITORY}" \
-              --ref master \
-              -f probe_label="${node_probe_label}" \
-              -f deployment_name="${node_deployment_name}" \
-              -f profile="${profile}" \
-              -f image_name="${node_image_name}" \
-              -f image_project="${node_image_project}" \
-              -f vm_project="${node_image_project}" \
-              -f vm_zone="${node_zone}" \
-              -f admin_api_port="${node_admin_port}"
+              --ref "${PROBE_WORKFLOW_REF}" \
+              "${node_dispatch_args[@]}"
 
             node_probe_run_id=""
             for attempt in $(seq 1 90); do
@@ -665,7 +816,6 @@ jobs:
                 --repo "${GITHUB_REPOSITORY}" \
                 --workflow "node-image-gcp-staging-probe.yaml" \
                 --event workflow_dispatch \
-                --branch master \
                 --limit 10 \
                 --json databaseId,createdAt,displayTitle \
                 --jq '[.[] | select(.createdAt >= "'"${node_dispatch_started_at}"'" and .displayTitle == "'"${expected_node_title}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
@@ -674,7 +824,6 @@ jobs:
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "node-image-gcp-staging-probe.yaml" \
                   --event workflow_dispatch \
-                  --branch master \
                   --limit 10 \
                   --json databaseId,createdAt \
                   --jq '[.[] | select(.createdAt >= "'"${node_dispatch_started_at}"'")] | sort_by(.createdAt) | reverse | .[0].databaseId // empty' 2>/dev/null || true)"
@@ -687,6 +836,16 @@ jobs:
 
             if [[ -z "${node_probe_run_id}" ]]; then
               echo "::error::Could not resolve node-image-gcp-staging-probe workflow run ID for profile '${profile}'"
+              exit 1
+            fi
+            node_probe_run_head_sha="$(gh run view "${node_probe_run_id}" --repo "${GITHUB_REPOSITORY}" --json headSha --jq '.headSha // empty')"
+            if [[ -z "${node_probe_run_head_sha}" ]]; then
+              echo "::error::Could not read head SHA for node probe run ${node_probe_run_id}"
+              exit 1
+            fi
+            if [[ "${node_probe_run_head_sha}" != "${PROBE_EXPECTED_SHA}" ]]; then
+              echo "::error::Node probe run ${node_probe_run_id} used unexpected head SHA ${node_probe_run_head_sha}; expected ${PROBE_EXPECTED_SHA}."
+              echo "::error::Refusing to validate release with probe artifacts from a different revision."
               exit 1
             fi
 
@@ -724,6 +883,20 @@ jobs:
             fi
 
             cp "${node_probe_candidates_file}" "e2e/node/measurement-policy-candidates-${profile}.json"
+
+            node_client_verification_file="$(python3 - "${node_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("node-client-verification.json"))
+          print(matches[0] if matches else "")
+          PY
+            )"
+            if [[ -z "${node_client_verification_file}" ]]; then
+              echo "::error::Could not locate node-client-verification.json for node profile '${profile}'"
+              exit 1
+            fi
+            cp "${node_client_verification_file}" "e2e/node/node-client-verification-${profile}.json"
 
             python3 - "${profile}" "${node_probe_candidates_file}" "${node_published_policy}" <<'PY'
           import json
@@ -770,7 +943,95 @@ jobs:
                   )
           print(f"[post-release-e2e] OK: probed node measurements match published policy for profile={profile}")
           PY
+
+            python3 - "${profile}" "${node_client_verification_file}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          profile = sys.argv[1]
+          verification_file = pathlib.Path(sys.argv[2])
+          payload = json.loads(verification_file.read_text(encoding="utf-8"))
+          checks = payload.get("checks", {})
+
+          def assert_true(path: str, value):
+              if value is not True:
+                  raise SystemExit(
+                      f"[post-release-e2e] ERROR: node client verification check failed for profile={profile}: {path} expected true, got {value!r}"
+                  )
+
+          assert_true("checks.positive.passed", checks.get("positive", {}).get("passed"))
+          assert_true("checks.wrong_nonce.rejected", checks.get("wrong_nonce", {}).get("rejected"))
+          assert_true("checks.tampered_quote.rejected", checks.get("tampered_quote", {}).get("rejected"))
+          assert_true(
+              "checks.wrong_expected_application_hash.rejected",
+              checks.get("wrong_expected_application_hash", {}).get("rejected"),
+          )
+          print(
+              "[post-release-e2e] OK: node client-side anti-fake verification checks passed "
+              f"for profile={profile}"
+          )
+          PY
+
+            if [[ "${profile}" == "debug" ]]; then
+              node_kms_probe_result_file="$(python3 - "${node_probe_dir}" <<'PY'
+          import pathlib
+          import sys
+          base = pathlib.Path(sys.argv[1])
+          matches = sorted(base.rglob("node-kms-probe-result.json"))
+          print(matches[0] if matches else "")
+          PY
+              )"
+              if [[ -z "${node_kms_probe_result_file}" ]]; then
+                echo "::error::Could not locate node-kms-probe-result.json for debug profile"
+                exit 1
+              fi
+              cp "${node_kms_probe_result_file}" "e2e/node/node-kms-probe-debug-to-locked.json"
+
+              python3 - "${node_kms_probe_result_file}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          probe_file = pathlib.Path(sys.argv[1])
+          payload = json.loads(probe_file.read_text(encoding="utf-8"))
+          expected_outcome = payload.get("expected_outcome")
+          probe = payload.get("probe", {})
+          checks = payload.get("checks", {})
+          expected_codes = payload.get("expected_codes") or []
+          code = probe.get("code")
+          ok = probe.get("ok")
+
+          if expected_outcome != "failure":
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: expected_outcome must be 'failure' for debug->locked probe, got {expected_outcome!r}"
+              )
+          if ok is not False:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: debug node unexpectedly succeeded against locked KMS (probe.ok={ok!r})"
+              )
+          if checks.get("outcome_matches") is not True:
+              raise SystemExit(
+                  "[post-release-e2e] ERROR: debug->locked probe outcome did not match expected failure"
+              )
+          if checks.get("expected_code_matches") is not True:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: debug->locked probe code {code!r} not in expected set {expected_codes!r}"
+              )
+          print(
+              "[post-release-e2e] OK: debug node->locked KMS runtime probe failed as expected "
+              f"(code={code})"
+          )
+          PY
+            fi
           done
+
+          if [[ -n "${cross_profile_kms_run_id}" ]]; then
+            if ! timeout 3600s gh run watch "${cross_profile_kms_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+              echo "::error::Timed out or failed while waiting for cross-profile KMS probe run ${cross_profile_kms_run_id}"
+              exit 1
+            fi
+          fi
 
           bash scripts/release/e2e-verify-kms-node-compatibility.sh \
             e2e/node \
@@ -790,7 +1051,11 @@ jobs:
             echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
             echo "- KMS profile probe runs:"
             echo "${probe_urls_markdown}"
+            echo "- Cross-profile locked KMS run (held alive for debug-node runtime probe):"
+            echo "- ${cross_profile_kms_run_url}"
             echo "- Node profile probe runs:"
             echo "${node_probe_urls_markdown}"
+            echo "- Node client-side anti-fake checks: passed (quote verification + nonce/hash/tamper rejection)."
+            echo "- Cross-profile runtime check: debug node -> locked-read-only KMS rejected as expected."
             echo "- Result: strict profile allow/deny matrix verified."
           } >> "${GITHUB_STEP_SUMMARY}"
