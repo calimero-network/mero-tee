@@ -285,6 +285,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           KMS_TAG: ${{ steps.resolve.outputs.kms_tag }}
+          KMS_TAG_SOURCE: ${{ steps.resolve.outputs.kms_tag_source }}
           TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
           STRICT_RELEASE_MODE: ${{ steps.resolve.outputs.strict_release_mode }}
@@ -331,9 +332,9 @@ jobs:
               echo ""
               echo "- Status: skipped"
               echo "- Reason: ${reason}"
-              echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+              echo "- Node release tag: ${TEE_TAG}"
               echo "- KMS release tag: ${KMS_TAG}"
-              echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+              echo "- KMS tag source: ${KMS_TAG_SOURCE}"
             } >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
@@ -392,9 +393,9 @@ jobs:
               echo ""
               echo "- Status: skipped"
               echo "- Reason: ${reason}"
-              echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+              echo "- Node release tag: ${TEE_TAG}"
               echo "- KMS release tag: ${KMS_TAG}"
-              echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+              echo "- KMS tag source: ${KMS_TAG_SOURCE}"
             } >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
@@ -596,9 +597,9 @@ jobs:
                 echo ""
                 echo "- Status: skipped"
                 echo "- Reason: ${reason}"
-                echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+                echo "- Node release tag: ${TEE_TAG}"
                 echo "- KMS release tag: ${KMS_TAG}"
-                echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+                echo "- KMS tag source: ${KMS_TAG_SOURCE}"
               } >> "${GITHUB_STEP_SUMMARY}"
               exit 0
             fi
@@ -1046,9 +1047,9 @@ jobs:
           {
             echo "## Post-release e2e compatibility matrix"
             echo ""
-            echo "- Node release tag: ${{ steps.resolve.outputs.tee_tag }}"
+            echo "- Node release tag: ${TEE_TAG}"
             echo "- KMS release tag: ${KMS_TAG}"
-            echo "- KMS tag source: ${{ steps.resolve.outputs.kms_tag_source }}"
+            echo "- KMS tag source: ${KMS_TAG_SOURCE}"
             echo "- KMS profile probe runs:"
             echo "${probe_urls_markdown}"
             echo "- Cross-profile locked KMS run (held alive for debug-node runtime probe):"
