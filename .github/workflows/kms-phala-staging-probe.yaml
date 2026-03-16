@@ -80,8 +80,9 @@ jobs:
     env:
       PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
-      # Pinned dstack cluster (matches MDMA prod: dstack-0.5.7)
-      DSTACK_VERSION: "0.5.7"
+      # Match MDMA prod deployment (same API, prefer_dev=false => dstack-0.5.7)
+      PHALA_API_BASE_URL: "https://cloud-api.phala.com/api/v1"
+      PHALA_API_VERSION: "2026-01-21"
       DSTACK_PREFER_DEV: "false"
     steps:
       - name: Checkout code
@@ -112,6 +113,7 @@ jobs:
       - name: Install probe dependencies
         run: |
           set -euo pipefail
+          pip install requests
           python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py scripts/phala/provision_prod.py
           npm install -g phala@latest
           phala --version
@@ -285,7 +287,7 @@ jobs:
             fi
           fi
 
-          echo "[deploy] Running provision_prod.py (dstack-0.5.7 prod only; no phala deploy fallback - that uses dstack-dev)"
+          echo "[deploy] Running provision_prod.py (same API flow as MDMA: provision+commit+poll+start, prefer_dev=false => dstack-0.5.7 prod)"
           python3 scripts/phala/provision_prod.py \
             --name "${deploy_name}" \
             --compose "${COMPOSE_FILE}" \
