@@ -4,13 +4,28 @@
  */
 
 import { useState, useCallback } from 'react';
-import { verifyKmsAttestation, fetchKmsReleases } from '../services/api.js';
+import { verifyKmsAttestation, fetchKmsReleases, fetchAttestationPolicy } from '../services/api.js';
 import { findMatchingRelease } from '../services/compat.js';
 import {
   extractComposeHashAndAppId,
   extractRTMRsFromClaims,
 } from '../utils/attestation.js';
 import { replayRTMR } from '../utils/crypto.js';
+
+const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
+
+async function fetchPoliciesForTag(tag) {
+  const results = {};
+  for (const profile of PROFILES) {
+    try {
+      const policy = await fetchAttestationPolicy(tag, profile);
+      results[profile] = policy;
+    } catch {
+      results[profile] = null;
+    }
+  }
+  return results;
+}
 
 export function useVerification() {
   const [state, setState] = useState({
@@ -49,11 +64,14 @@ export function useVerification() {
         }
       }
 
+      const policiesByProfile = await fetchPoliciesForTag(tagToUse);
+
       setState({
         status: 'success',
         error: null,
         result: {
           attestation,
+          ita_claims: ita_claims || null,
           ita_token_verified,
           composeHash,
           appId,
@@ -63,6 +81,7 @@ export function useVerification() {
           profiles: compatMap?.compatibility?.profiles || {},
           quoteRtmrs,
           replayedRtmrs,
+          policiesByProfile,
           eventCount: events.length,
         },
       });

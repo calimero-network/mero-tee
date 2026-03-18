@@ -2,6 +2,7 @@ import { QuoteAttestationCard } from './QuoteAttestationCard.jsx';
 import { RtmrCard } from './RtmrCard.jsx';
 import { ComposeHashCard } from './ComposeHashCard.jsx';
 import { EventLogCard } from './EventLogCard.jsx';
+import { QuoteJsonCard } from './QuoteJsonCard.jsx';
 
 /**
  * Shared verification results display.
@@ -20,7 +21,12 @@ export function VerificationResults({ result }) {
       <div className="results-grid">
         {hasQuoteData && <QuoteAttestationCard verified={result.ita_token_verified} />}
         {hasRtmrData && (
-          <RtmrCard quoteRtmrs={result.quoteRtmrs} replayedRtmrs={result.replayedRtmrs} />
+          <RtmrCard
+            quoteRtmrs={result.quoteRtmrs}
+            replayedRtmrs={result.replayedRtmrs}
+            policiesByProfile={result.policiesByProfile}
+            tagToUse={result.tagToUse}
+          />
         )}
         <ComposeHashCard
           composeHash={result.composeHash}
@@ -30,6 +36,9 @@ export function VerificationResults({ result }) {
           tagToUse={result.tagToUse}
         />
         <EventLogCard eventCount={result.eventCount} />
+        {hasQuoteData && (
+          <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} />
+        )}
       </div>
       {result.tagToUse && (
         <p className="results-footer">

@@ -47,3 +47,16 @@ export async function fetchCompatibilityMap(tag) {
   if (!res.ok) throw new Error(`Failed to fetch compatibility map: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Fetch attestation policy (allowed MRTD/RTMR) for a release tag and profile.
+ * Returns { policy: { allowed_mrtd, allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3 } }
+ */
+export async function fetchAttestationPolicy(tag, profile) {
+  const base = getApiBase();
+  const url = `${base}/api/policy?tag=${encodeURIComponent(tag)}&profile=${encodeURIComponent(profile)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch policy: ${res.status}`);
+  const data = await res.json();
+  return data?.policy || {};
+}

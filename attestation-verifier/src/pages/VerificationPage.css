@@ -195,6 +195,61 @@ form button:disabled {
   margin-right: 0.35rem;
 }
 
+.rtmr-expected {
+  margin-top: 0.35rem;
+  font-size: 0.9em;
+}
+
+.rtmr-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+  line-height: 1.5;
+}
+
+/* Quote JSON viewer */
+.json-viewer-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.json-viewer-tab {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.json-viewer-tab:hover {
+  color: var(--text);
+}
+
+.json-viewer-tab.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.json-viewer-content {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  max-height: 24rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .expected-section {
   margin-top: 0.5rem;
 }
