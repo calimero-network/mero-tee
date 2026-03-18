@@ -142,15 +142,17 @@ export function EventLogCard({
         {composeHashEvent && (
           <div className="event-highlight">
             <span className="label">compose-hash event payload:</span>{' '}
-            <code title={composeHashEvent.event_payload}>
-              {composeHashEvent.event_payload || '—'}
+            <code title={composeHashEvent.event_payload ?? composeHashEvent.eventPayload}>
+              {composeHashEvent.event_payload ?? composeHashEvent.eventPayload ?? '—'}
             </code>
           </div>
         )}
         {appIdEvent && (
           <div className="event-highlight">
             <span className="label">app-id event payload:</span>{' '}
-            <code title={appIdEvent.event_payload}>{appIdEvent.event_payload || '—'}</code>
+            <code title={appIdEvent.event_payload ?? appIdEvent.eventPayload}>
+              {appIdEvent.event_payload ?? appIdEvent.eventPayload ?? '—'}
+            </code>
           </div>
         )}
         {expectedComposeHashes && Object.keys(expectedComposeHashes).length > 0 && composeHash && (

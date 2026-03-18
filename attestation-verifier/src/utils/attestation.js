@@ -63,8 +63,18 @@ export function extractComposeHashAndAppId(eventLog) {
   for (const event of events) {
     if (event.imr !== 3) continue;
     const name = event.event || '';
-    let payload = event.event_payload;
+    // Match crypto.js buildEventDigestInput: use same payload source for consistency
+    const hasEventPayload = 'event_payload' in event;
+    const hasEventPayloadCamel = 'eventPayload' in event;
+    let payload = event.event_payload ?? event.eventPayload ?? '';
     if (typeof payload === 'string') payload = payload.trim();
+
+    if (name === 'compose-hash' || name === 'app-id') {
+      const source = hasEventPayload ? 'event_payload' : hasEventPayloadCamel ? 'eventPayload' : 'none';
+      const payloadPreview = typeof payload === 'string' ? payload.slice(0, 24) + (payload.length > 24 ? '...' : '') : payload;
+      console.log(`[attestation] ${name}: source=${source} event_payload=${JSON.stringify(event.event_payload)} eventPayload=${JSON.stringify(event.eventPayload)} -> payload=${JSON.stringify(payloadPreview)}`);
+    }
+
     if (name === 'compose-hash' && payload && COMPOSE_HASH_RE.test(payload)) {
       composeHash = payload.toLowerCase();
     } else if (name === 'app-id' && payload) {
