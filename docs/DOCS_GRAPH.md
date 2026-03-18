@@ -3,6 +3,7 @@
 Visual map of KMS, mero-tee, regular nodes, and how they interact.
 
 For the full diagram catalog, see [docs/diagrams/README.md](diagrams/README.md).
+Mermaid sources: [`docs/diagrams/src/system-overview.mmd`](diagrams/src/system-overview.mmd), [`docs/diagrams/src/phala-attestation-sequence.mmd`](diagrams/src/phala-attestation-sequence.mmd).
 
 ## System overview
 

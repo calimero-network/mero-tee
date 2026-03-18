@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant M as merod (in CVM)
+    participant K as mero-kms-phala
+    participant D as dstack
+
+    M->>K: POST /attest (nonce)
+    K->>M: quoteB64
+    Note over M: Verify KMS quote + policy
+    M->>K: POST /challenge (peerId)
+    K->>M: challengeId, nonce
+    M->>K: POST /get-key (quote, signature)
+    Note over K: Verify node quote + policy
+    K->>D: GetKey(path)
+    D->>K: key bytes
+    K->>M: storage key

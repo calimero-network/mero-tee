@@ -12,6 +12,7 @@ The key design rule is to separate:
 ## Repository boundaries
 
 `mero-tee` and `core` are separate repositories with different responsibilities.
+Within this repository, top-level folders are also treated as separate project areas; see [docs/projects/README.md](../projects/README.md).
 
 | Repository | Owns | Does not own |
 |---|---|---|

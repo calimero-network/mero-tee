@@ -1,0 +1,19 @@
+sequenceDiagram
+  autonumber
+  participant Maintainer
+  participant GitHubActions
+  participant GHCR
+  participant GitHubRelease
+  participant Sigstore
+  participant Rekor
+
+  Maintainer->>GitHubActions: Push release tag (X.Y.Z)
+  GitHubActions->>GitHubActions: Build platform binaries
+  GitHubActions->>GHCR: Build + push container image
+  GitHubActions->>GitHubActions: Generate checksums + manifest + policy + compatibility map + SBOMs
+  GitHubActions->>Sigstore: keyless sign blobs (cosign sign-blob)
+  Sigstore->>Rekor: transparency log entries
+  GitHubActions->>GitHubActions: Build Rekor index + trust bundle
+  GitHubActions->>GitHubActions: Verify generated signatures
+  GitHubActions->>GitHubRelease: Upload signed assets + release notes
+  GitHubActions->>GitHubActions: Smoke-test with verify script

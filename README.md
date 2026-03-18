@@ -18,6 +18,8 @@ Start from the [Documentation Portal](docs/README.md), then follow the role-base
 
 **Get started**
 
+- [Docs portal](docs/README.md)
+- [Getting started guide](docs/getting-started/README.md)
 - [Platform runbooks](docs/runbooks/platforms/README.md)
 - [Phala KMS lane](docs/runbooks/platforms/phala-kms.md)
 - [GCP node lane](docs/runbooks/platforms/gcp-merod.md)
@@ -30,6 +32,7 @@ Start from the [Documentation Portal](docs/README.md), then follow the role-base
 
 **Operate and verify**
 
+- [Operations index](docs/operations/README.md)
 - [Trust, verification, and measurements](docs/release/trust-and-verification.md)
 - [Verification examples](docs/release/verification-examples.md)
 - [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
@@ -43,10 +46,11 @@ Start from the [Documentation Portal](docs/README.md), then follow the role-base
 
 **Maintainer references**
 
-- [Documentation source index](docs/DOCS_INDEX.md)
-- [Docs navigation map](docs/DOCS_NAVIGATION_MAP.md)
+- [Canonical docs source map](docs/reference/source-map.md)
+- [Reference index](docs/reference/README.md)
 - [Terminology glossary](docs/GLOSSARY.md)
 - [Architecture decision records (ADRs)](docs/adr/README.md)
+- [Project boundaries](docs/projects/README.md)
 - [Repo restructure proposal](docs/REPO_RESTRUCTURE_PROPOSAL.md)
 
 ### Project docs

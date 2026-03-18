@@ -1,0 +1,19 @@
+sequenceDiagram
+  autonumber
+  participant Scheduler
+  participant AuditorWorkflow
+  participant GitHubReleases
+  participant VerifierScripts
+
+  Scheduler->>AuditorWorkflow: Weekly cron / manual dispatch
+  AuditorWorkflow->>GitHubReleases: List recent releases
+  loop each tag
+    AuditorWorkflow->>GitHubReleases: Inspect asset set
+    alt KMS assets present
+      AuditorWorkflow->>VerifierScripts: verify-kms-phala-release-assets.sh
+    end
+    alt node-image-gcp assets present
+      AuditorWorkflow->>VerifierScripts: verify-node-image-gcp-release-assets.sh
+    end
+  end
+  AuditorWorkflow->>AuditorWorkflow: Publish summary + fail on mismatches

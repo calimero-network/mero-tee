@@ -1,0 +1,19 @@
+flowchart TD
+  A[Start rollout for tag X.Y.Z] --> B{Release assets verified?}
+  B -- No --> B1[Stop rollout and fix release inputs]
+  B -- Yes --> C{Policy entry promoted?}
+  C -- No --> C1[Run probe and promotion workflow]
+  C1 --> C
+  C -- Yes --> D[Deploy green KMS endpoint]
+  D --> E{Green KMS health and attest OK?}
+  E -- No --> E1[Rollback or repair green KMS]
+  E -- Yes --> F[Generate/apply pinned merod config]
+  F --> G[Deploy green canary cohort]
+  G --> H{Attest and key flow pass?}
+  H -- No --> H1[Rollback canary to blue]
+  H -- Yes --> I{SLOs pass during soak?}
+  I -- No --> I1[Rollback traffic to blue]
+  I -- Yes --> J[Cut over traffic to green]
+  J --> K{Rollback window expired?}
+  K -- No --> J
+  K -- Yes --> L[Decommission blue cohort]

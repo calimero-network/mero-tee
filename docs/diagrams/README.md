@@ -1,27 +1,37 @@
 # Diagrams Hub
 
-Central index for visual documentation (system context, sequence diagrams, and operational flows).
+Central index for architecture, sequence, and operational decision diagrams.
 
-## Diagram index
+## Coverage matrix
 
-| Diagram | Type | Primary page |
-|---|---|---|
-| System overview (KMS, mero-tee, nodes) | Context/flowchart | [docs/DOCS_GRAPH.md#system-overview](../DOCS_GRAPH.md#system-overview) |
-| Attestation flow (Phala KMS lane) | Sequence | [docs/DOCS_GRAPH.md#attestation-flow-phala-kms-lane](../DOCS_GRAPH.md#attestation-flow-phala-kms-lane) |
-| KMS release workflow | Sequence | [docs/release/pipeline-sequence-diagrams.md#1-release-kms-phalayaml](../release/pipeline-sequence-diagrams.md#1-release-kms-phalayaml) |
-| node-image-gcp release workflow | Sequence | [docs/release/pipeline-sequence-diagrams.md#2-release-node-image-gcpyaml](../release/pipeline-sequence-diagrams.md#2-release-node-image-gcpyaml) |
-| Scheduled release audit loop | Sequence | [docs/release/pipeline-sequence-diagrams.md#3-scheduled-release-audit-release-auditoryaml](../release/pipeline-sequence-diagrams.md#3-scheduled-release-audit-release-auditoryaml) |
+Each critical area should expose all three diagram types:
 
-## Required coverage
+| Area | Context diagram | Sequence diagram | Operational/decision flow |
+|---|---|---|---|
+| Phala KMS lane | [System overview](../DOCS_GRAPH.md#system-overview) | [Attestation flow](../DOCS_GRAPH.md#attestation-flow-phala-kms-lane) | [KMS blue/green decision tree](../runbooks/operations/kms-blue-green-rollout.md#decision-tree) |
+| GCP node-image lane | [System overview](../DOCS_GRAPH.md#system-overview) | [node-image release sequence](../release/pipeline-sequence-diagrams.md#2-release-node-image-gcpyaml) | [GCP rollout flow](operational-flows.md#gcp-node-image-verification-and-rollout) |
+| Release governance | [Architecture graph](../DOCS_GRAPH.md) | [Release pipeline sequences](../release/pipeline-sequence-diagrams.md) | [Release verification triage](operational-flows.md#release-asset-verification-triage) |
 
-For each critical subsystem or workflow, maintain:
+## Diagram pages
 
-1. One context diagram (components + trust boundaries)
-2. One sequence diagram (happy path)
-3. One operational/decision flow (rollout or failure handling)
+- [Architecture graph](../DOCS_GRAPH.md)
+- [Release pipeline sequence diagrams](../release/pipeline-sequence-diagrams.md)
+- [Operational decision flows](operational-flows.md)
 
-## Diagram authoring guidance
+## Mermaid source files
+
+All source snippets live in [`docs/diagrams/src/`](src/):
+
+- [system-overview.mmd](src/system-overview.mmd)
+- [phala-attestation-sequence.mmd](src/phala-attestation-sequence.mmd)
+- [release-kms-sequence.mmd](src/release-kms-sequence.mmd)
+- [release-node-image-sequence.mmd](src/release-node-image-sequence.mmd)
+- [release-audit-sequence.mmd](src/release-audit-sequence.mmd)
+- [kms-blue-green-decision-flow.mmd](src/kms-blue-green-decision-flow.mmd)
+
+## Authoring guidance
 
 - Prefer Mermaid in Markdown for versioned reviewability.
-- Keep diagram naming stable to avoid broken deep links.
+- Keep diagram names stable to avoid broken deep links.
+- Update source files in `src/` when changing rendered diagrams.
 - When diagram semantics change, update linked runbooks/release docs in the same PR.

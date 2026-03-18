@@ -1,6 +1,7 @@
 # Release Pipeline Sequence Diagrams
 
 This document visualizes the main release paths and verification loops.
+Mermaid sources live in [`docs/diagrams/src/`](../diagrams/src/).
 
 ## 1) `release-kms-phala.yaml`
 

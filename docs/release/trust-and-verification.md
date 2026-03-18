@@ -143,4 +143,4 @@ OIDC issuer:
 - [Platform runbooks](../runbooks/platforms/README.md)
 - [Release verification examples](verification-examples.md)
 - [Architecture boundaries](../architecture/trust-boundaries.md)
-- [Documentation source index](../DOCS_INDEX.md)
+- [Canonical docs source map](../reference/source-map.md)
