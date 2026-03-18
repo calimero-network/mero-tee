@@ -48,7 +48,7 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl, onVerifyByPaste }) 
         <textarea
           value={jsonInput}
           onChange={(e) => setJsonInput(e.target.value)}
-          placeholder='Paste attestation JSON from: curl -X POST -d \'{"nonceB64":"..."}\' https://your-kms/attest'
+          placeholder={`Paste attestation JSON from: curl -X POST -d '{"nonceB64":"..."}' https://your-kms/attest`}
           rows={6}
           disabled={status === 'loading'}
         />
