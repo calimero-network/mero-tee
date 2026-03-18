@@ -93,34 +93,9 @@ async function verifyKms() {
       return;
     }
   } else if (urlInput) {
-    showResults('<span class="result-warn">Fetching attestation...</span>');
-    try {
-      const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
-      const nonce = btoa(String.fromCharCode.apply(null, nonceBytes));
-      const res = await fetch(`${urlInput.replace(/\/$/, '')}/attest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nonceB64: nonce }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`/attest failed: ${res.status}. ${text.slice(0, 200)}`);
-      }
-      const data = await res.json();
-      const eventLog = data.event_log ?? data.eventLog;
-      if (!eventLog) throw new Error('Response missing event_log');
-      attestation = {
-        data,
-        eventLog: Array.isArray(eventLog) ? eventLog : JSON.parse(eventLog),
-      };
-    } catch (e) {
-      if (e.name === 'TypeError' && e.message.includes('fetch')) {
-        showError('Fetch failed (CORS or network). Try pasting attestation JSON instead. Get it with: curl -X POST -H "Content-Type: application/json" -d \'{"nonceB64":"..."}\' YOUR_KMS_URL/attest');
-      } else {
-        showError(e.message);
-      }
-      return;
-    }
+    // Route via backend to avoid CORS (Phala KMS does not send CORS headers)
+    await loadByKmsUrl(urlInput);
+    return;
   } else {
     showError('Enter a KMS URL or paste attestation JSON');
     return;
