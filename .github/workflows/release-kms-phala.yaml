@@ -66,6 +66,7 @@ jobs:
           bash -n scripts/release/kms-phala/sign-release-assets.sh
           bash -n scripts/release/kms-phala/verify-generated-signatures.sh
           bash -n scripts/release/kms-phala/upsert-umbrella-release-links.sh
+          python3 -m py_compile scripts/attestation/verify_dstack_compose_hash.py
 
       - name: Get version info
         id: version_info
@@ -599,6 +600,9 @@ jobs:
           candidates_file_debug="probe-artifacts/kms-probe-${version}-debug/kms-policy-candidates.json"
           candidates_file_debug_ro="probe-artifacts/kms-probe-${version}-debug-read-only/kms-policy-candidates.json"
           candidates_file_locked="probe-artifacts/kms-probe-${version}-locked-read-only/kms-policy-candidates.json"
+          app_identity_debug="probe-artifacts/kms-probe-${version}-debug/kms-app-identity.json"
+          app_identity_debug_ro="probe-artifacts/kms-probe-${version}-debug-read-only/kms-app-identity.json"
+          app_identity_locked="probe-artifacts/kms-probe-${version}-locked-read-only/kms-app-identity.json"
           node_policy_file="node-policy/published-mrtds.json"
           for candidates_file in "${candidates_file_debug}" "${candidates_file_debug_ro}" "${candidates_file_locked}"; do
             if [[ ! -f "${candidates_file}" ]]; then
@@ -606,6 +610,30 @@ jobs:
               exit 1
             fi
           done
+          for app_identity in "${app_identity_debug}" "${app_identity_debug_ro}" "${app_identity_locked}"; do
+            if [[ ! -f "${app_identity}" ]]; then
+              echo "::error::Probe app identity (compose_hash) not found at ${app_identity}"
+              exit 1
+            fi
+          done
+
+          compose_hash_debug="$(jq -r '.compose_hash // ""' "${app_identity_debug}")"
+          compose_hash_debug_ro="$(jq -r '.compose_hash // ""' "${app_identity_debug_ro}")"
+          compose_hash_locked="$(jq -r '.compose_hash // ""' "${app_identity_locked}")"
+          if [[ -n "${compose_hash_debug}" && -n "${compose_hash_debug_ro}" && -n "${compose_hash_locked}" ]]; then
+            for h in compose_hash_debug compose_hash_debug_ro compose_hash_locked; do
+              val="${!h}"
+              if [[ ! "${val}" =~ ^[a-f0-9]{64}$ ]]; then
+                echo "::error::Invalid compose_hash for ${h}: ${val}"
+                exit 1
+              fi
+            done
+          else
+            echo "::warning::compose_hash not available from probe (compose_hash_skipped); omitting from release assets"
+            compose_hash_debug=""
+            compose_hash_debug_ro=""
+            compose_hash_locked=""
+          fi
           if [[ ! -f "${node_policy_file}" ]]; then
             echo "::error::Node policy not found at ${node_policy_file}"
             exit 1
@@ -669,6 +697,9 @@ jobs:
             --arg kms_debug_digest "${RELEASE_DEBUG_IMAGE_DIGEST}" \
             --arg kms_debug_ro_digest "${RELEASE_DEBUG_RO_IMAGE_DIGEST}" \
             --arg kms_locked_digest "${RELEASE_LOCKED_IMAGE_DIGEST}" \
+            --arg compose_hash_debug "${compose_hash_debug}" \
+            --arg compose_hash_debug_ro "${compose_hash_debug_ro}" \
+            --arg compose_hash_locked "${compose_hash_locked}" \
             --arg kms_policy_debug_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug.json" \
             --arg kms_policy_debug_ro_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.debug-read-only.json" \
             --arg kms_policy_locked_url "https://github.com/${GH_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.locked-read-only.json" \
@@ -692,6 +723,7 @@ jobs:
                   debug: {
                     kms_image_tag: ($version + "-debug"),
                     kms_image_digest: $kms_debug_digest,
+                    kms_compose_hash: $compose_hash_debug,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug.json",
                     kms_policy_url: $kms_policy_debug_url,
@@ -702,6 +734,7 @@ jobs:
                   "debug-read-only": {
                     kms_image_tag: ($version + "-debug-read-only"),
                     kms_image_digest: $kms_debug_ro_digest,
+                    kms_compose_hash: $compose_hash_debug_ro,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug-read-only.json",
                     kms_policy_url: $kms_policy_debug_ro_url,
@@ -712,6 +745,7 @@ jobs:
                   "locked-read-only": {
                     kms_image_tag: ($version + "-locked-read-only"),
                     kms_image_digest: $kms_locked_digest,
+                    kms_compose_hash: $compose_hash_locked,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.locked-read-only.json",
                     kms_policy_url: $kms_policy_locked_url,
@@ -974,7 +1008,8 @@ jobs:
             local node_rtmr1="${11}"
             local node_rtmr2="${12}"
             local node_rtmr3="${13}"
-            local output_file="${14}"
+            local kms_compose_hash="${14}"
+            local output_file="${15}"
 
             jq -n \
               --arg profile "${profile}" \
@@ -1000,6 +1035,7 @@ jobs:
               --argjson node_allowed_rtmr1 "${node_rtmr1}" \
               --argjson node_allowed_rtmr2 "${node_rtmr2}" \
               --argjson node_allowed_rtmr3 "${node_rtmr3}" \
+              --arg kms_compose_hash "${kms_compose_hash}" \
               '{
                 schema_version: 1,
                 role: "kms",
@@ -1038,6 +1074,7 @@ jobs:
                   kms_allowed_rtmr1: $kms_allowed_rtmr1,
                   kms_allowed_rtmr2: $kms_allowed_rtmr2,
                   kms_allowed_rtmr3: $kms_allowed_rtmr3,
+                  kms_allowed_compose_hash: (if ($kms_compose_hash | length) > 0 then [$kms_compose_hash] else [] end),
                   node_allowed_tcb_statuses: $node_allowed_tcb,
                   node_allowed_mrtd: $node_allowed_mrtd,
                   node_allowed_rtmr0: $node_allowed_rtmr0,
@@ -1062,6 +1099,7 @@ jobs:
             "${node_allowed_rtmr1_debug_json}" \
             "${node_allowed_rtmr2_debug_json}" \
             "${node_allowed_rtmr3_debug_json}" \
+            "${compose_hash_debug}" \
             "release-assets/kms-phala-attestation-policy.debug.json"
 
           write_policy_file "debug-read-only" \
@@ -1077,6 +1115,7 @@ jobs:
             "${node_allowed_rtmr1_debug_ro_json}" \
             "${node_allowed_rtmr2_debug_ro_json}" \
             "${node_allowed_rtmr3_debug_ro_json}" \
+            "${compose_hash_debug_ro}" \
             "release-assets/kms-phala-attestation-policy.debug-read-only.json"
 
           write_policy_file "locked-read-only" \
@@ -1092,6 +1131,7 @@ jobs:
             "${node_allowed_rtmr1_locked_json}" \
             "${node_allowed_rtmr2_locked_json}" \
             "${node_allowed_rtmr3_locked_json}" \
+            "${compose_hash_locked}" \
             "release-assets/kms-phala-attestation-policy.locked-read-only.json"
 
           cp release-assets/kms-phala-attestation-policy.locked-read-only.json \
