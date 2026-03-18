@@ -47,14 +47,19 @@ function extractComposeHashAndAppId(eventLog) {
   return { composeHash, appId };
 }
 
-async function fetchLatestKmsTag() {
+async function fetchKmsReleases(limit = 10) {
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`);
   if (!res.ok) throw new Error('Failed to fetch releases');
   const releases = await res.json();
   const kmsReleases = releases.filter(r => r.tag_name && r.tag_name.startsWith('mero-kms-v'));
   if (kmsReleases.length === 0) throw new Error('No mero-kms releases found');
   kmsReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-  return kmsReleases[0].tag_name;
+  return kmsReleases.slice(0, limit).map(r => r.tag_name);
+}
+
+async function fetchLatestKmsTag() {
+  const tags = await fetchKmsReleases(1);
+  return tags[0];
 }
 
 async function fetchCompatibilityMap(tag) {
@@ -62,6 +67,29 @@ async function fetchCompatibilityMap(tag) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch compatibility map: ${res.status}`);
   return res.json();
+}
+
+/** Find a release whose compatibility map contains composeHash. Tries primaryTag first, then recent releases. */
+async function findMatchingRelease(composeHash, primaryTag = null) {
+  const recent = await fetchKmsReleases(5);
+  const tagsToTry = primaryTag ? [primaryTag, ...recent.filter(t => t !== primaryTag)] : recent;
+  let fallbackCompat = null;
+  for (const tag of tagsToTry) {
+    try {
+      const compatMap = await fetchCompatibilityMap(tag);
+      if (!fallbackCompat) fallbackCompat = { tag, compatMap };
+      const profiles = compatMap?.compatibility?.profiles || {};
+      const matches = [];
+      for (const [profile, p] of Object.entries(profiles)) {
+        const expected = (p.kms_compose_hash || '').toLowerCase();
+        if (expected && expected === composeHash) matches.push(profile);
+      }
+      if (matches.length > 0) return { tag, compatMap, matches };
+    } catch {
+      continue;
+    }
+  }
+  return { tag: fallbackCompat?.tag || recent[0], compatMap: fallbackCompat?.compatMap || null, matches: [] };
 }
 
 function parseAttestation(input) {
@@ -184,21 +212,10 @@ async function loadByKmsUrl(kmsUrl, releaseTag = null) {
     const eventLog = attestation.event_log ?? attestation.eventLog;
     const events = Array.isArray(eventLog) ? eventLog : (eventLog ? JSON.parse(eventLog) : []);
     const { composeHash, appId } = extractComposeHashAndAppId(events);
-    let compatMap;
-    const tagToUse = releaseTag || (await fetchLatestKmsTag());
-    try {
-      compatMap = await fetchCompatibilityMap(tagToUse);
-    } catch (e) {
-      compatMap = null;
-    }
+    const { tag: tagToUse, compatMap, matches } = composeHash
+      ? await findMatchingRelease(composeHash, releaseTag || undefined)
+      : { tag: releaseTag || (await fetchLatestKmsTag()), compatMap: null, matches: [] };
     const profiles = compatMap?.compatibility?.profiles || {};
-    const matches = [];
-    if (composeHash) {
-      for (const [profile, p] of Object.entries(profiles)) {
-        const expected = (p.kms_compose_hash || '').toLowerCase();
-        if (expected && expected === composeHash) matches.push(profile);
-      }
-    }
     let html = '<span class="result-ok">ITA verified</span> — Quote verified by Intel Trust Authority.\n\n';
     if (ita_token_verified) {
       html += '<span class="result-ok">✓ Token signature verified</span> — JWT signed by Intel (JWKS).\n\n';
@@ -208,13 +225,21 @@ async function loadByKmsUrl(kmsUrl, releaseTag = null) {
     html += 'compose_hash: ' + (composeHash || 'n/a') + '\n';
     html += 'app_id: ' + (appId || 'n/a') + '\n\n';
     if (composeHash && matches.length > 0) {
-      html += '<span class="result-ok">✓ MATCH</span> — compose_hash matches release policy for: ' + matches.join(', ') + '\n\n';
+      html += '<span class="result-ok">✓ MATCH</span> — compose_hash matches release policy for: ' + matches.join(', ') + ' (' + escapeHtml(tagToUse) + ')\n\n';
     } else if (composeHash) {
-      html += '<span class="result-err">✗ NO MATCH</span> — compose_hash does not match release policy.\n\n';
+      html += '<span class="result-err">✗ NO MATCH</span> — compose_hash not found in primary or last 5 releases.\n';
+      if (compatMap) {
+        html += 'Expected (from ' + escapeHtml(tagToUse) + '):\n';
+        for (const [profile, p] of Object.entries(profiles)) {
+          const h = (p.kms_compose_hash || '').toLowerCase();
+          html += '  ' + profile + ': ' + (h || '(empty)') + '\n';
+        }
+      }
+      html += '\n';
     }
     html += '<span class="result-ok">ITA attestation token:</span>\n';
     html += '<pre class="text-xs break-all mt-1" style="word-break:break-all;font-size:0.75rem;">' + escapeHtml((ita_token || '').slice(0, 200) + '...') + '</pre>\n';
-    if (tagToUse) html += '<p class="text-slate-400 text-xs mt-2">Compose hash checked against release: ' + escapeHtml(tagToUse) + '</p>';
+    if (tagToUse) html += '<p class="text-slate-400 text-xs mt-2">Checked against: ' + escapeHtml(tagToUse) + (matches.length > 0 ? ' (matched)' : '') + '</p>';
     showResults(html);
   } catch (e) {
     showError(e.message);
