@@ -12,6 +12,11 @@ import {
   extractMeasurementsFromQuoteB64,
 } from '../utils/attestation.js';
 import { replayRTMR, replayRTMRWithSteps } from '../utils/crypto.js';
+import {
+  buildPolicyComposeHashesByProfile,
+  findPolicyComposeMatches,
+  analyzeReleaseComposePublishing,
+} from '../utils/composeHashPolicy.js';
 
 const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
 
@@ -91,6 +96,14 @@ export function useVerification() {
       }
 
       const policiesByProfile = await fetchPoliciesForTag(tagToUse);
+      const policyComposeHashesByProfile = buildPolicyComposeHashesByProfile(policiesByProfile);
+      const policyMatches = composeHash
+        ? findPolicyComposeMatches(composeHash, policyComposeHashesByProfile)
+        : [];
+      const releaseComposePublishing = analyzeReleaseComposePublishing(
+        compatMap?.compatibility?.profiles || {},
+        policyComposeHashesByProfile
+      );
 
       setState({
         status: 'success',
@@ -105,6 +118,9 @@ export function useVerification() {
           compatMap,
           matches,
           profiles: compatMap?.compatibility?.profiles || {},
+          policyMatches,
+          policyComposeHashesByProfile,
+          releaseComposePublishing,
           quoteRtmrs,
           measurementSources,
           replayedRtmrs,

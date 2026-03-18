@@ -92,6 +92,7 @@ export function EventLogCard({
   composeHash,
   appId,
   expectedComposeHashes,
+  expectedPolicyComposeHashes,
   rtmr3ReplaySteps,
   quoteRtmr3,
 }) {
@@ -176,6 +177,28 @@ export function EventLogCard({
             })}
           </div>
         )}
+        {expectedPolicyComposeHashes &&
+          Object.keys(expectedPolicyComposeHashes).length > 0 &&
+          composeHash && (
+            <div className="expected-compose-section">
+              <span className="label">Compare to profile policy allowlist:</span>
+              {Object.entries(expectedPolicyComposeHashes).map(([profile, hashes]) => {
+                const values = Array.isArray(hashes) ? hashes.filter(Boolean) : [];
+                const match = values.includes(composeHash);
+                return (
+                  <div key={profile} className="hash-row">
+                    <span className="label">{profile}:</span> <code>{values.join(', ') || '—'}</code>
+                    {values.length > 0 && (
+                      <span className={match ? 'result-ok' : 'result-err'}>
+                        {' '}
+                        {match ? '✓ Match' : '✗ Mismatch'}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
       </div>
       <div className="event-log-section">
         <button
