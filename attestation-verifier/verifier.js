@@ -63,7 +63,9 @@ async function fetchLatestKmsTag() {
 }
 
 async function fetchCompatibilityMap(tag) {
-  const url = `https://github.com/${REPO}/releases/download/${tag}/kms-phala-compatibility-map.json`;
+  const url = API_BASE
+    ? `${API_BASE}/api/compat-map?tag=${encodeURIComponent(tag)}`
+    : `https://github.com/${REPO}/releases/download/${tag}/kms-phala-compatibility-map.json`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch compatibility map: ${res.status}`);
   return res.json();
