@@ -195,7 +195,8 @@ form button:disabled {
   margin-right: 0.35rem;
 }
 
-.rtmr-expected {
+.rtmr-expected,
+.rtmr-replay {
   margin-top: 0.35rem;
   font-size: 0.9em;
 }

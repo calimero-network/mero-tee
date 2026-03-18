@@ -26,6 +26,7 @@ export function VerificationResults({ result }) {
             replayedRtmrs={result.replayedRtmrs}
             policiesByProfile={result.policiesByProfile}
             tagToUse={result.tagToUse}
+            profileFromComposeHash={result.matches?.[0]}
           />
         )}
         <ComposeHashCard
