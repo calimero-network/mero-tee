@@ -66,8 +66,8 @@ def _walk_json(value: Any, path: str = "$"):
             yield from _walk_json(v, f"{path}[{i}]")
 
 
-def validate_event_digest(event: Dict[str, Any]) -> bool:
-    """Validate event digest per dstack: sha384(event_type:event:payload)."""
+def _event_digest_input(event: Dict[str, Any]) -> bytes:
+    """Build digest input per dstack: event_type:event:payload."""
     event_type = event.get("event_type", 0)
     if not isinstance(event_type, int):
         event_type = int(event_type) if event_type else 0
@@ -81,18 +81,39 @@ def validate_event_digest(event: Dict[str, Any]) -> bool:
             payload_bytes = event_payload.encode("utf-8")
     else:
         payload_bytes = b""
-    digest_input = (
+    return (
         event_type.to_bytes(4, "little")
         + b":"
         + event_name.encode("utf-8")
         + b":"
         + payload_bytes
     )
-    calculated = hashlib.sha384(digest_input).hexdigest()
+
+
+def compute_event_digest(event: Dict[str, Any]) -> str:
+    """Compute digest per dstack: sha384(event_type:event:payload) → 96-char hex."""
+    return hashlib.sha384(_event_digest_input(event)).hexdigest()
+
+
+def validate_event_digest(event: Dict[str, Any]) -> bool:
+    """Validate event digest per dstack: sha384(event_type:event:payload)."""
+    calculated = compute_event_digest(event)
     expected = event.get("digest", "")
     if isinstance(expected, str) and len(expected) == 96:
         return calculated == expected.lower()
     return False
+
+
+def _digest_for_replay(event: Dict[str, Any]) -> str:
+    """Get digest for RTMR extend: use event digest if present and valid, else compute.
+    Phala imr==3 events often have empty digest; we compute from event_type:event:payload."""
+    expected = event.get("digest", "")
+    if isinstance(expected, str) and len(expected) == 96:
+        calculated = compute_event_digest(event)
+        if calculated == expected.lower():
+            return expected.lower()
+        raise ValueError(f"Digest mismatch for event {event.get('event')}")
+    return compute_event_digest(event)
 
 
 def replay_rtmr(events: List[Dict], imr: int) -> str:
@@ -101,16 +122,11 @@ def replay_rtmr(events: List[Dict], imr: int) -> str:
     for event in events:
         if event.get("imr") != imr:
             continue
-        if not validate_event_digest(event):
-            raise ValueError(f"Invalid event digest for imr={imr} event={event.get('event')}")
-        content = event.get("digest", "")
-        if isinstance(content, str):
-            try:
-                content_bytes = bytes.fromhex(content)
-            except ValueError:
-                raise ValueError(f"Invalid digest hex for event {event.get('event')}")
-        else:
-            content_bytes = b""
+        digest_hex = _digest_for_replay(event)
+        try:
+            content_bytes = bytes.fromhex(digest_hex)
+        except ValueError:
+            raise ValueError(f"Invalid digest hex for event {event.get('event')}")
         if len(content_bytes) < 48:
             content_bytes = content_bytes.ljust(48, b"\0")
         mr = hashlib.sha384(mr + content_bytes).digest()
