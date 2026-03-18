@@ -2,6 +2,8 @@
 
 Visual map of KMS, mero-tee, regular nodes, and how they interact.
 
+For the full diagram catalog, see [docs/diagrams/README.md](diagrams/README.md).
+
 ## System overview
 
 ```mermaid
