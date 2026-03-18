@@ -119,6 +119,13 @@ release events:
   - wrong nonce is rejected,
   - tampered quote is rejected,
   - wrong expected application hash is rejected.
+- Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
+  compose mode used during release probe publication:
+  - when available, `kms_policy_version` is resolved to the previous
+    `mero-kms-v*` tag (same behavior as `release-kms-phala.yaml`),
+  - historical exceptions (`2.1.61`, `2.1.63`, `2.1.65`, `2.1.66`) keep
+    `kms_policy_version` unset.
+  This prevents compose-hash drift caused by probe-mode differences.
 - Post-release e2e also runs an explicit cross-profile runtime negative probe:
   a `debug` node executes `merod kms probe` against a live
   `locked-read-only` KMS endpoint (kept alive briefly before cleanup), and the
