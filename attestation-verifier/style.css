@@ -52,6 +52,46 @@ header p {
   text-decoration: underline;
 }
 
+.intro-section {
+  max-width: 640px;
+  margin: 0 auto 2rem;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.intro-section h2 {
+  font-size: 1.1rem;
+  margin: 0 0 1rem;
+}
+
+.intro-section ul {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.intro-section li {
+  margin-bottom: 0.5rem;
+}
+
+.intro-section code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  background: var(--bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.intro-note {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.intro-note a {
+  color: var(--accent);
+}
+
 main {
   max-width: 640px;
   margin: 0 auto;
@@ -190,4 +230,98 @@ textarea {
 
 .disclaimer a {
   color: var(--accent);
+}
+
+/* Results grid and cards */
+.results-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.result-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.result-card.card-ok {
+  border-left: 4px solid var(--success);
+}
+
+.result-card.card-err {
+  border-left: 4px solid var(--error);
+}
+
+.result-card.card-warn {
+  border-left: 4px solid var(--warning);
+}
+
+.card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.card-body {
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.hash-row {
+  margin-bottom: 0.5rem;
+}
+
+.hash-row .label {
+  color: var(--text-muted);
+  margin-right: 0.5rem;
+}
+
+.hash-row code,
+.rtmr-row code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+.rtmr-row {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.rtmr-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.rtmr-label {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.rtmr-values {
+  font-size: 0.85rem;
+}
+
+.rtmr-values .label {
+  color: var(--text-muted);
+  margin-right: 0.35rem;
+}
+
+.expected-section {
+  margin-top: 0.5rem;
+}
+
+.event-count {
+  color: var(--text-muted);
+}
+
+.results-footer {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 1rem;
 }

@@ -181,6 +181,7 @@ export default async function handler(req, res) {
   }
 
   let itaTokenVerified = false;
+  let itaClaims = null;
   if (itaToken) {
     try {
       const JWKS = jose.createRemoteJWKSet(new URL(ITA_JWKS_URL));
@@ -191,6 +192,12 @@ export default async function handler(req, res) {
     } catch {
       /* signature verification failed */
     }
+    try {
+      const payload = jose.decodeJwt(itaToken.replace(/^Bearer\s+/i, '').trim());
+      if (payload && typeof payload === 'object') itaClaims = payload;
+    } catch {
+      /* decode failed */
+    }
   }
 
   return res.status(200).json({
@@ -198,5 +205,6 @@ export default async function handler(req, res) {
     ita_response: itaBody,
     ita_token: itaToken,
     ita_token_verified: itaTokenVerified,
+    ita_claims: itaClaims,
   });
 }

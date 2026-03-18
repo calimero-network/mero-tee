@@ -1,0 +1,38 @@
+.intro-section {
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 2rem;
+}
+
+.intro-section h2 {
+  font-size: 1.1rem;
+  margin: 0 0 1rem;
+}
+
+.intro-section ul {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.intro-section li {
+  margin-bottom: 0.5rem;
+}
+
+.intro-section code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  background: var(--bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.intro-note {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.intro-note a {
+  color: var(--accent);
+}
