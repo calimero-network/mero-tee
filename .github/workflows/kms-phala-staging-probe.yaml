@@ -74,8 +74,11 @@ jobs:
     name: Deploy + attest + extract policy candidates
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Per-profile concurrency: release triggers 3 probes (debug, debug-read-only, locked-read-only)
+    # in parallel. A single shared group allows only 1 running + 1 pending, so the 3rd dispatch
+    # cancels the 2nd (pending) run. Use deployment_name so each profile has its own queue.
     concurrency:
-      group: kms-phala-staging-probe-${{ github.repository }}
+      group: kms-phala-staging-probe-${{ github.repository }}-${{ inputs.deployment_name || format('run-{0}', github.run_id) }}
       cancel-in-progress: false
     env:
       PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
