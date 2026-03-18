@@ -401,24 +401,19 @@ jobs:
           fi
 
           # Keep compose-hash probe mode aligned with release publication.
-          # release-kms-phala probes set kms_policy_version to previous KMS release,
-          # except historical tags where old policy source was incompatible.
+          # release-kms-phala probes set kms_policy_version to previous KMS release.
           probe_kms_policy_version=""
-          if [[ "${RELEASE_VERSION}" == "2.1.61" || "${RELEASE_VERSION}" == "2.1.63" || "${RELEASE_VERSION}" == "2.1.65" || "${RELEASE_VERSION}" == "2.1.66" ]]; then
-            echo "Compose mode alignment: no kms_policy_version for ${RELEASE_VERSION}."
+          previous_kms_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName -q '.[].tagName' 2>/dev/null \
+            | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | awk -v current="${KMS_TAG}" '
+                $0 == current { found = 1; next }
+                found { print; exit }
+              ' || true)"
+          if [[ -n "${previous_kms_tag}" ]]; then
+            probe_kms_policy_version="${previous_kms_tag#mero-kms-v}"
+            echo "Compose mode alignment: kms_policy_version=${probe_kms_policy_version} (from ${previous_kms_tag})."
           else
-            previous_kms_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName -q '.[].tagName' 2>/dev/null \
-              | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | awk -v current="${KMS_TAG}" '
-                  $0 == current { found = 1; next }
-                  found { print; exit }
-                ' || true)"
-            if [[ -n "${previous_kms_tag}" ]]; then
-              probe_kms_policy_version="${previous_kms_tag#mero-kms-v}"
-              echo "Compose mode alignment: kms_policy_version=${probe_kms_policy_version} (from ${previous_kms_tag})."
-            else
-              echo "::warning::Compose mode alignment: could not resolve previous KMS release for ${KMS_TAG}; using default probe compose mode."
-            fi
+            echo "::warning::Compose mode alignment: could not resolve previous KMS release for ${KMS_TAG}; using default probe compose mode."
           fi
 
           probe_run_urls=()
