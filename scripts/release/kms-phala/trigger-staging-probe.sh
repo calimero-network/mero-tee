@@ -16,8 +16,8 @@ if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
   exit 1
 fi
 
-version_slug="${RELEASE_VERSION//./-}"
-deployment_name="kms-profile-${version_slug}-${PROFILE}"
+# Use canonical names matching MDMA/production for compose_hash consistency
+deployment_name="calimero-kms-${PROFILE}"
 max_probe_attempts=2
 run_id=""
 

@@ -14,11 +14,11 @@ function isInAllowlist(value, allowlist) {
 }
 
 // Policy uses kms_allowed_rtmr0 / kms_allowed_mrtd (release) or allowed_rtmr0 / allowed_mrtd (legacy)
+// RTMR3 omitted: we only verify event log replay matches quote, not policy (RTMR3 always differs per deployment)
 const POLICY_KEYS = {
   rtmr0: ['kms_allowed_rtmr0', 'allowed_rtmr0'],
   rtmr1: ['kms_allowed_rtmr1', 'allowed_rtmr1'],
   rtmr2: ['kms_allowed_rtmr2', 'allowed_rtmr2'],
-  rtmr3: ['kms_allowed_rtmr3', 'allowed_rtmr3'],
   mrtd: ['kms_allowed_mrtd', 'allowed_mrtd'],
 };
 
@@ -54,14 +54,14 @@ function hasAnyPolicy(policiesByProfile) {
   return policiesByProfile && Object.values(policiesByProfile).some(Boolean);
 }
 
-/** Infer profile: MRTD match (like MDMA), then RTMR match, then compose_hash match. */
+/** Infer profile: MRTD match (like MDMA), then RTMR0-2 match, then compose_hash. RTMR3 excluded (always differs). */
 function inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash) {
   if (!policiesByProfile) return profileFromComposeHash || null;
   if (quoteRtmrs?.mrtd) {
     const mrtdProfiles = getProfilesWithValue(quoteRtmrs.mrtd, policiesByProfile, 'mrtd');
     if (mrtdProfiles.length > 0) return mrtdProfiles[0];
   }
-  for (let i = 0; i <= 3; i++) {
+  for (let i = 0; i <= 2; i++) {
     const val = quoteRtmrs?.[`rtmr${i}`];
     const profiles = getProfilesWithValue(val, policiesByProfile, `rtmr${i}`);
     if (profiles.length > 0) return profiles[0];
@@ -85,11 +85,11 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
     const replayed = replayedRtmrs?.[i] ?? null;
     const replayMatch = val && replayed && val === replayed;
     const rtmrKey = `rtmr${i}`;
-    const inReleaseProfiles = policiesByProfile
+    const inReleaseProfiles = policiesByProfile && i !== 3
       ? getProfilesWithValue(val, policiesByProfile, rtmrKey)
       : [];
     const profileForExpected = inferredProfile || DEFAULT_PROFILE;
-    const expectedVal = getExpectedValue(policiesByProfile, profileForExpected, rtmrKey);
+    const expectedVal = i !== 3 ? getExpectedValue(policiesByProfile, profileForExpected, rtmrKey) : null;
     const policyMatch = expectedVal && val && normalizeHex(val) === normalizeHex(expectedVal);
 
     rows.push(
@@ -100,7 +100,7 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
             <span className="label">Observed ({sourceLabel || '—'}):</span>{' '}
             <code>{truncateHex(val, 12)}</code>
           </div>
-          {showExpected && (
+          {showExpected && i !== 3 && (
             <div>
               <span className="label">Expected ({tagToUse} · {profileForExpected}):</span>{' '}
               <code>{truncateHex(expectedVal, 12)}</code>
@@ -122,7 +122,7 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
               </span>
             </div>
           )}
-          {showExpected && val && !inferredProfile && (
+          {showExpected && val && !inferredProfile && i !== 3 && (
             <div className="rtmr-expected">
               <span className="label">In release allowlist:</span>{' '}
               {inReleaseProfiles.length > 0 ? (

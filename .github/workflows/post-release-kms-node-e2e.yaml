@@ -422,12 +422,10 @@ jobs:
               exit 1
             fi
 
-            deployment_name_candidates=("kms-profile-${version_slug}-${profile}")
+            deployment_name_candidates=("calimero-kms-${profile}")
             if [[ -n "${release_probe_run_id}" && -n "${release_probe_run_attempt}" ]]; then
               legacy_deployment_name="kms-profile-${version_slug}-${profile}-${release_probe_run_id}-${release_probe_run_attempt}"
-              if [[ "${legacy_deployment_name}" != "${deployment_name_candidates[0]}" ]]; then
-                deployment_name_candidates+=("${legacy_deployment_name}")
-              fi
+              deployment_name_candidates+=("${legacy_deployment_name}")
             fi
 
             probe_validated="false"

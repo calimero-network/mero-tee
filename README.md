@@ -12,6 +12,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 ## Quick Links
 
+- [**Attestation Verifier**](attestation-verifier/) – public web tool to verify KMS instances against release policy ([GitHub Pages](https://calimero-network.github.io/mero-tee/attestation-verifier/))
 - [Platform runbooks](docs/runbooks/platforms/README.md) – deployment lanes by responsibility
 - [Phala KMS lane](docs/runbooks/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` (KMS plane)
 - [GCP node lane](docs/runbooks/platforms/gcp-merod.md) – deploy locked `merod` images (node plane)
