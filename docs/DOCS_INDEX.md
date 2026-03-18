@@ -24,7 +24,9 @@ When changing release automation, policy workflows, or verification scripts:
 | `docs/runbooks/platforms/gcp-merod.md` | GCP node-image-gcp deployment/verification runbook | `mero-tee/*`, `release-node-image-gcp.yaml`, `scripts/release/verify-node-image-gcp-release-assets.sh` | Operators |
 | `docs/REPO_RESTRUCTURE_PROPOSAL.md` | Proposed naming and repository-structure cleanup plan | workflows/scripts/policies/docs naming surface | Maintainers |
 | `docs/release/minimal-download-sets.md` | Minimal asset sets for quick verify vs full audit | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/release/verify-node-image-gcp-release-assets.sh`, `scripts/release/verify-release-assets.sh` | Operators, auditors |
+| `docs/README.md` | Canonical documentation portal and audience-based navigation | `README.md`, all major docs entry points | Operators, release engineers, auditors, maintainers |
 | `docs/DOCS_NAVIGATION_MAP.md` | Maintainer deep-link and anchor map for docs | `README.md`, `docs/DOCS_INDEX.md` | Maintainers |
+| `docs/diagrams/README.md` | Central index for UML/flow/sequence diagrams | `docs/DOCS_GRAPH.md`, `docs/release/pipeline-sequence-diagrams.md`, runbooks | Maintainers, operators |
 | `docs/DOCS_GRAPH.md` | Architecture diagram: KMS, mero-tee, regular nodes, attestation flow | `README.md`, `docs/architecture/trust-boundaries.md` | Operators, maintainers |
 | `docs/runbooks/operations/kms-blue-green-rollout.md` | Decision-tree rollout and rollback procedure | `scripts/release/verify-kms-phala-release-assets.sh`, `scripts/policy/generate-merod-kms-phala-attestation-config.sh` | Operators |
 | `docs/policies/kms-phala-staging-probe.md` | Staging probe process for KMS policy candidates | `kms-phala-staging-probe.yaml`, `scripts/attestation/extract_tdx_policy_candidates.py` | Release engineers |

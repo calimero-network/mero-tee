@@ -10,34 +10,54 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 | **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
 | **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
 
-## Quick Links
+## Documentation
 
-- [**Attestation Verifier**](attestation-verifier/) – public web tool to verify KMS instances against release policy ([GitHub Pages](https://calimero-network.github.io/mero-tee/attestation-verifier/))
-- [Platform runbooks](docs/runbooks/platforms/README.md) – deployment lanes by responsibility
-- [Phala KMS lane](docs/runbooks/platforms/phala-kms.md) – deploy/operate `mero-kms-phala` (KMS plane)
-- [GCP node lane](docs/runbooks/platforms/gcp-merod.md) – deploy locked `merod` images (node plane)
-- [Phala KMS hardening proposal](docs/architecture/phala-kms-key-protection-proposal.md)
-- [Direct Phala KMS design](docs/architecture/phala-direct-kms-design.md)
-- [Phala KMS attestation task list (mero-tee)](docs/policies/kms-phala-attestation-task-list.md)
+Start from the [Documentation Portal](docs/README.md), then follow the role-based path.
+
+### Quick links by task
+
+**Get started**
+
+- [Platform runbooks](docs/runbooks/platforms/README.md)
+- [Phala KMS lane](docs/runbooks/platforms/phala-kms.md)
+- [GCP node lane](docs/runbooks/platforms/gcp-merod.md)
+
+**Understand architecture**
+
+- [Architecture graph](docs/DOCS_GRAPH.md)
+- [Diagram index](docs/diagrams/README.md)
+- [Trust boundaries](docs/architecture/trust-boundaries.md)
+
+**Operate and verify**
+
+- [Trust, verification, and measurements](docs/release/trust-and-verification.md)
+- [Verification examples](docs/release/verification-examples.md)
 - [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
-- [KMS staging probe workflow (Phala)](docs/policies/kms-phala-staging-probe.md)
-- [Trust, verification, and measurements](docs/release/trust-and-verification.md) – Canonical operator/client guide
-- [Release verification output examples](docs/release/verification-examples.md)
-- [Migration & Implementation Plan](docs/architecture/migration-plan.md)
-- [Architecture & verification boundaries](docs/architecture/trust-boundaries.md)
+
+**Release and policy**
+
+- [Release workflow setup](docs/release/workflow-setup.md)
+- [Release sequence diagrams](docs/release/pipeline-sequence-diagrams.md)
+- [Release taxonomy](docs/release/taxonomy.md)
+- [KMS staging probe workflow](docs/policies/kms-phala-staging-probe.md)
+
+**Maintainer references**
+
+- [Documentation source index](docs/DOCS_INDEX.md)
+- [Docs navigation map](docs/DOCS_NAVIGATION_MAP.md)
 - [Terminology glossary](docs/GLOSSARY.md)
 - [Architecture decision records (ADRs)](docs/adr/README.md)
-- [Documentation source index](docs/DOCS_INDEX.md)
-- [Architecture graph](docs/DOCS_GRAPH.md) – KMS, mero-tee, regular nodes, and attestation flow
-- [Docs navigation/anchor map (maintainers)](docs/DOCS_NAVIGATION_MAP.md)
-- [Release pipeline sequence diagrams](docs/release/pipeline-sequence-diagrams.md)
-- [Release taxonomy](docs/release/taxonomy.md)
 - [Repo restructure proposal](docs/REPO_RESTRUCTURE_PROPOSAL.md)
+
+### Project docs
+
+- [Attestation Verifier](attestation-verifier/) ([GitHub Pages](https://calimero-network.github.io/mero-tee/attestation-verifier/))
+- [mero-kms-phala README](mero-kms/README.md)
+- [mero-tee image build README](mero-tee/README.md)
 - [Security policy](SECURITY.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Changelog](CHANGELOG.md)
-- [mero-kms-phala README](mero-kms/README.md)
 
 ## Building mero-kms-phala
 
