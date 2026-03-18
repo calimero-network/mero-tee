@@ -400,6 +400,22 @@ jobs:
             exit 0
           fi
 
+          # Keep compose-hash probe mode aligned with release publication.
+          # release-kms-phala probes set kms_policy_version to previous KMS release.
+          probe_kms_policy_version=""
+          previous_kms_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName -q '.[].tagName' 2>/dev/null \
+            | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | awk -v current="${KMS_TAG}" '
+                $0 == current { found = 1; next }
+                found { print; exit }
+              ' || true)"
+          if [[ -n "${previous_kms_tag}" ]]; then
+            probe_kms_policy_version="${previous_kms_tag#mero-kms-v}"
+            echo "Compose mode alignment: kms_policy_version=${probe_kms_policy_version} (from ${previous_kms_tag})."
+          else
+            echo "::warning::Compose mode alignment: could not resolve previous KMS release for ${KMS_TAG}; using default probe compose mode."
+          fi
+
           probe_run_urls=()
           locked_probe_candidates_file=""
           cross_profile_locked_kms_base_url=""
@@ -438,13 +454,19 @@ jobs:
               probe_label="post-release-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${profile}-dn${candidate_index}"
               expected_display_title="KMS staging probe (${probe_label})"
               dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+              probe_dispatch_args=(
+                -f kms_image="${image_ref}"
+                -f kms_tag="pinned"
+                -f probe_label="${probe_label}"
+                -f deployment_name="${deployment_name}"
+              )
+              if [[ -n "${probe_kms_policy_version}" ]]; then
+                probe_dispatch_args+=(-f kms_policy_version="${probe_kms_policy_version}")
+              fi
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --ref "${PROBE_WORKFLOW_REF}" \
-                -f kms_image="${image_ref}" \
-                -f kms_tag="pinned" \
-                -f probe_label="${probe_label}" \
-                -f deployment_name="${deployment_name}"
+                "${probe_dispatch_args[@]}"
 
               probe_run_id=""
               for attempt in $(seq 1 90); do
@@ -670,14 +692,20 @@ jobs:
           cross_profile_deployment_name="kms-cross-profile-${version_slug}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cross_profile_dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+          cross_profile_dispatch_args=(
+            -f kms_image="${cross_profile_locked_image_ref}"
+            -f kms_tag="pinned"
+            -f probe_label="${cross_profile_probe_label}"
+            -f deployment_name="${cross_profile_deployment_name}"
+            -f hold_after_upload_seconds="2400"
+          )
+          if [[ -n "${probe_kms_policy_version}" ]]; then
+            cross_profile_dispatch_args+=(-f kms_policy_version="${probe_kms_policy_version}")
+          fi
           gh workflow run "kms-phala-staging-probe.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref "${PROBE_WORKFLOW_REF}" \
-            -f kms_image="${cross_profile_locked_image_ref}" \
-            -f kms_tag="pinned" \
-            -f probe_label="${cross_profile_probe_label}" \
-            -f deployment_name="${cross_profile_deployment_name}" \
-            -f hold_after_upload_seconds="2400"
+            "${cross_profile_dispatch_args[@]}"
 
           for attempt in $(seq 1 90); do
             cross_profile_kms_run_id="$(gh run list \

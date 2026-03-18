@@ -4,7 +4,28 @@ import { VerificationResults } from '../components/verification/VerificationResu
 import { MeroTeeVerifierForm } from '../components/forms/MeroTeeVerifierForm.jsx';
 import { parseAttestation, extractComposeHashAndAppId } from '../utils/attestation.js';
 import { findMatchingRelease } from '../services/compat.js';
+import { fetchAttestationPolicy } from '../services/api.js';
+import {
+  buildPolicyComposeHashesByProfile,
+  findPolicyComposeMatches,
+  analyzeReleaseComposePublishing,
+} from '../utils/composeHashPolicy.js';
 import './VerificationPage.css';
+
+const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
+
+async function fetchPoliciesForTag(tag) {
+  const results = {};
+  for (const profile of PROFILES) {
+    try {
+      const policy = await fetchAttestationPolicy(tag, profile);
+      results[profile] = policy;
+    } catch {
+      results[profile] = null;
+    }
+  }
+  return results;
+}
 
 export function MeroTeeVerificationPage() {
   const [pasteResult, setPasteResult] = useState(null);
@@ -28,12 +49,22 @@ export function MeroTeeVerificationPage() {
         composeHash,
         releaseTag?.trim() || undefined
       );
+      const policiesByProfile = await fetchPoliciesForTag(tag);
+      const policyComposeHashesByProfile = buildPolicyComposeHashesByProfile(policiesByProfile);
+      const policyMatches = findPolicyComposeMatches(composeHash, policyComposeHashesByProfile);
+      const releaseComposePublishing = analyzeReleaseComposePublishing(
+        compatMap?.compatibility?.profiles || {},
+        policyComposeHashesByProfile
+      );
       setPasteResult({
         composeHash,
         appId,
         tagToUse: tag,
         matches,
         profiles: compatMap?.compatibility?.profiles || {},
+        policyMatches,
+        policyComposeHashesByProfile,
+        releaseComposePublishing,
         eventCount: eventLog.length,
         ita_token_verified: null,
         quoteRtmrs: null,

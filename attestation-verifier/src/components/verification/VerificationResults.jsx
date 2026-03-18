@@ -34,7 +34,10 @@ export function VerificationResults({ result }) {
           composeHash={result.composeHash}
           appId={result.appId}
           matches={result.matches}
+          policyMatches={result.policyMatches}
           profiles={result.profiles}
+          policyComposeHashesByProfile={result.policyComposeHashesByProfile}
+          releaseComposePublishing={result.releaseComposePublishing}
           tagToUse={result.tagToUse}
         />
         <EventLogCard
@@ -43,6 +46,7 @@ export function VerificationResults({ result }) {
           composeHash={result.composeHash}
           appId={result.appId}
           expectedComposeHashes={result.profiles}
+          expectedPolicyComposeHashes={result.policyComposeHashesByProfile}
           rtmr3ReplaySteps={result.rtmr3ReplaySteps}
           quoteRtmr3={result.quoteRtmrs?.rtmr3}
         />
