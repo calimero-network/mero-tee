@@ -1,0 +1,8 @@
+{
+  "name": "calimero-attestation-verifier",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Public attestation verifier for Phala KMS and mero-tee instances",
+  "type": "module",
+  "dependencies": {}
+}

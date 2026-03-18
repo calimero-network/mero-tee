@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calimero Attestation Verifier</title>
+  <link rel="stylesheet" href="style.css">
+  <script>
+    window.VERIFIER_API_BASE = window.location.origin;
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Calimero Attestation Verifier</h1>
+    <p>Verify Phala KMS and mero-tee instances against official release policy</p>
+    <a href="https://github.com/calimero-network/mero-tee" class="github-link">View on GitHub</a>
+  </header>
+
+  <main>
+    <section class="input-section">
+      <h2>KMS Instance (Phala)</h2>
+      <div class="input-row">
+        <input type="url" id="kms-url" placeholder="https://your-kms.phala.network" />
+        <button id="fetch-kms" type="button">Fetch attestation</button>
+      </div>
+      <p class="hint">Or paste attestation JSON below (from <code>POST /attest</code>)</p>
+      <textarea id="attest-json" placeholder='Paste attestation response JSON (from: curl -X POST -H "Content-Type: application/json" -d ''{"nonceB64":"BASE64_32_BYTES"}'' https://your-kms/attest)' rows="6"></textarea>
+      <button id="verify-kms" type="button">Verify KMS</button>
+    </section>
+
+    <section class="input-section">
+      <h2>Node Instance (mero-tee GCP)</h2>
+      <p class="hint">Node verification coming soon. For now, use <code>scripts/release/verify-node-image-gcp-release-assets.sh</code></p>
+    </section>
+
+    <section id="results" class="results-section hidden">
+      <h2>Results</h2>
+      <div id="results-content"></div>
+    </section>
+
+    <section class="disclaimer">
+      <h3>Disclaimer</h3>
+      <p>This tool extracts compose_hash from the attestation response and compares it with official release policy. For full verification (quote + event log integrity via Intel Trust Authority), use the <a href="https://github.com/calimero-network/mero-tee/tree/master/scripts/attestation">official verification scripts</a>.</p>
+    </section>
+  </main>
+
+  <script src="verifier.js" type="module"></script>
+</body>
+</html>
