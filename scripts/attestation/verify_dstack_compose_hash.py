@@ -67,12 +67,13 @@ def _walk_json(value: Any, path: str = "$"):
 
 
 def _event_digest_input(event: Dict[str, Any]) -> bytes:
-    """Build digest input per dstack: event_type:event:payload."""
-    event_type = event.get("event_type", 0)
+    """Build digest input per dstack: event_type:event:payload.
+    Supports event_type/eventType and event_payload/eventPayload (matches attestation verifier)."""
+    event_type = event.get("event_type") or event.get("eventType") or 0
     if not isinstance(event_type, int):
         event_type = int(event_type) if event_type else 0
     event_name = event.get("event", "")
-    event_payload = event.get("event_payload", "")
+    event_payload = event.get("event_payload") or event.get("eventPayload") or ""
     if isinstance(event_payload, str):
         payload_str = event_payload.strip()
         try:
@@ -107,7 +108,7 @@ def validate_event_digest(event: Dict[str, Any]) -> bool:
 def _digest_for_replay(event: Dict[str, Any]) -> str:
     """Get digest for RTMR extend: use event digest if present and valid, else compute.
     Phala imr==3 events often have empty digest; we compute from event_type:event:payload."""
-    expected = event.get("digest", "")
+    expected = event.get("digest") or ""
     if isinstance(expected, str) and len(expected) == 96:
         calculated = compute_event_digest(event)
         if calculated == expected.lower():
@@ -141,7 +142,7 @@ def extract_compose_hash_and_app_id(events: List[Dict]) -> tuple[Optional[str], 
         if event.get("imr") != 3:
             continue
         name = event.get("event", "")
-        payload = event.get("event_payload", "")
+        payload = event.get("event_payload") or event.get("eventPayload") or ""
         if isinstance(payload, str):
             payload = payload.strip()
         if name == "compose-hash" and payload and COMPOSE_HASH_RE.match(payload):

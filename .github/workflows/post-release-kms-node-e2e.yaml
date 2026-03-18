@@ -566,6 +566,33 @@ jobs:
           PY
               )"; then
                 echo "${probe_validation_output}"
+                # Same verification as attestation verifier: compose_hash must match compatibility map
+                python3 - "${profile}" "${profile_probe_dir}" "${compatibility_map}" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          profile = sys.argv[1]
+          probe_dir = pathlib.Path(sys.argv[2])
+          compat_file = pathlib.Path(sys.argv[3])
+
+          matches = sorted(probe_dir.rglob("kms-app-identity.json"))
+          if not matches:
+              raise SystemExit(f"[post-release-e2e] ERROR: kms-app-identity.json not found for profile={profile}")
+          app_identity = json.loads(matches[0].read_text(encoding="utf-8"))
+          probe_compose = (app_identity.get("compose_hash") or "").strip().lower()
+          compat = json.loads(compat_file.read_text(encoding="utf-8"))
+          expected = (compat.get("compatibility", {}).get("profiles", {}).get(profile, {}).get("kms_compose_hash") or "").strip().lower()
+          if not expected:
+              print(f"[post-release-e2e] OK: skipping compose_hash check for profile={profile} (not in compatibility map)")
+          elif probe_compose != expected:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: compose_hash mismatch for profile={profile} "
+                  f"(probe={probe_compose[:16]}... expected={expected[:16]}...)"
+              )
+          else:
+              print(f"[post-release-e2e] OK: compose_hash matches compatibility map for profile={profile}")
+          PY
                 probe_validated="true"
                 selected_probe_candidates_file="${kms_probe_candidates_file}"
                 break
