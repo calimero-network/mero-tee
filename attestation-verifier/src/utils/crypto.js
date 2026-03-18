@@ -45,22 +45,54 @@ export async function computeEventDigestHex(event) {
 
 /** Replay RTMR from event log. Returns 96-char hex. */
 export async function replayRTMR(events, imr) {
+  const { finalRtmr } = await replayRTMRWithSteps(events, imr);
+  return finalRtmr;
+}
+
+/**
+ * Replay RTMR with step-by-step verification.
+ * Formula: RTMR_new = SHA384(RTMR_old || SHA384(event_type:event:payload))
+ * Returns { finalRtmr, steps } for UI verification.
+ */
+export async function replayRTMRWithSteps(events, imr) {
+  const steps = [];
   let mr = hexToBytes(INIT_MR);
-  for (const event of events) {
-    if (event.imr !== imr) continue;
-    const digestHex = await computeEventDigestHex(event);
-    let content = hexToBytes(digestHex);
+  const imrEvents = events.filter((e) => e.imr === imr);
+  for (const event of imrEvents) {
+    const digestComputed = await computeEventDigestHex(event);
+    const digestStored = (event.digest || '').trim().toLowerCase();
+    const digestMatch =
+      digestStored && digestComputed
+        ? digestComputed.toLowerCase() === digestStored
+        : null;
+    let content = hexToBytes(digestComputed);
     if (content.length < 48) {
       const padded = new Uint8Array(48);
       padded.set(content);
       content = padded;
     }
+    const rtmrBefore = Array.from(mr)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
     const combined = new Uint8Array(mr.length + content.length);
     combined.set(mr);
     combined.set(content, mr.length);
     mr = new Uint8Array(await crypto.subtle.digest('SHA-384', combined));
+    const rtmrAfter = Array.from(mr)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    steps.push({
+      event: event.event || event.event_type,
+      payload: event.event_payload ?? event.eventPayload,
+      digestComputed,
+      digestStored: digestStored || null,
+      digestMatch,
+      rtmrBefore,
+      rtmrAfter,
+    });
   }
-  return Array.from(mr)
+  const finalRtmr = Array.from(mr)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+  return { finalRtmr, steps };
 }

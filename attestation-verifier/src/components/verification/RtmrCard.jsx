@@ -72,37 +72,39 @@ function inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash) {
 /** When no profile inferred, use debug for expected display (common case). */
 const DEFAULT_PROFILE = 'debug';
 
-export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUse, profileFromComposeHash }) {
+export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, policiesByProfile, tagToUse, profileFromComposeHash }) {
   const showExpected = hasAnyPolicy(policiesByProfile);
   const inferredProfile = showExpected
     ? inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash)
     : null;
   const rows = [];
   for (let i = 0; i <= 3; i++) {
-    const fromQuote = quoteRtmrs?.[`rtmr${i}`] || null;
+    const val = quoteRtmrs?.[`rtmr${i}`] || null;
+    const src = measurementSources?.[`rtmr${i}`];
+    const sourceLabel = src === 'ita' ? 'ITA' : src === 'quote' ? 'quote' : null;
     const replayed = replayedRtmrs?.[i] ?? null;
-    const replayMatch = fromQuote && replayed && fromQuote === replayed;
+    const replayMatch = val && replayed && val === replayed;
     const rtmrKey = `rtmr${i}`;
     const inReleaseProfiles = policiesByProfile
-      ? getProfilesWithValue(fromQuote, policiesByProfile, rtmrKey)
+      ? getProfilesWithValue(val, policiesByProfile, rtmrKey)
       : [];
     const profileForExpected = inferredProfile || DEFAULT_PROFILE;
     const expectedVal = getExpectedValue(policiesByProfile, profileForExpected, rtmrKey);
-    const policyMatch = expectedVal && fromQuote && normalizeHex(fromQuote) === normalizeHex(expectedVal);
+    const policyMatch = expectedVal && val && normalizeHex(val) === normalizeHex(expectedVal);
 
     rows.push(
       <div key={i} className="rtmr-row">
         <span className="rtmr-label">RTMR{i}</span>
         <div className="rtmr-values">
           <div>
-            <span className="label">Observed (quote):</span>{' '}
-            <code>{truncateHex(fromQuote, 12)}</code>
+            <span className="label">Observed ({sourceLabel || '—'}):</span>{' '}
+            <code>{truncateHex(val, 12)}</code>
           </div>
           {showExpected && (
             <div>
               <span className="label">Expected ({tagToUse} · {profileForExpected}):</span>{' '}
               <code>{truncateHex(expectedVal, 12)}</code>
-              {fromQuote && expectedVal && (
+              {val && expectedVal && (
                 <span className={policyMatch ? 'result-ok' : 'result-err'}>
                   {' '}
                   {policyMatch ? '✓ Match' : '✗ Mismatch'}
@@ -110,7 +112,7 @@ export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUs
               )}
             </div>
           )}
-          {i === 3 && fromQuote && replayed && (
+          {i === 3 && val && replayed && (
             <div className="rtmr-replay">
               <span className="label">Event log replay:</span>{' '}
               <code>{truncateHex(replayed, 12)}</code>
@@ -120,7 +122,7 @@ export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUs
               </span>
             </div>
           )}
-          {showExpected && fromQuote && !inferredProfile && (
+          {showExpected && val && !inferredProfile && (
             <div className="rtmr-expected">
               <span className="label">In release allowlist:</span>{' '}
               {inReleaseProfiles.length > 0 ? (
@@ -135,6 +137,8 @@ export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUs
     );
   }
   if (quoteRtmrs?.mrtd) {
+    const mrtdSrc = measurementSources?.mrtd;
+    const mrtdSourceLabel = mrtdSrc === 'ita' ? 'ITA' : mrtdSrc === 'quote' ? 'quote' : null;
     const mrtdInProfiles = policiesByProfile
       ? getProfilesWithValue(quoteRtmrs.mrtd, policiesByProfile, 'mrtd')
       : [];
@@ -149,7 +153,7 @@ export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUs
         <span className="rtmr-label">MRTD</span>
         <div className="rtmr-values">
           <div>
-            <span className="label">Observed:</span>{' '}
+            <span className="label">Observed ({mrtdSourceLabel || '—'}):</span>{' '}
             <code>{truncateHex(quoteRtmrs.mrtd, 12)}</code>
           </div>
           {showExpected && (
@@ -189,8 +193,8 @@ export function RtmrCard({ quoteRtmrs, replayedRtmrs, policiesByProfile, tagToUs
   return (
     <Card title="RTMR / MRTD measurements">
       <p className="rtmr-hint">
-        Observed vs Expected (from release policy), aligned with MDMA. Profile inferred from MRTD match.
-        RTMR3 event log replay verifies event log integrity.
+        MRTD, RTMR0–2 from ITA verification; RTMR3 and compose hash from quote/event log.
+        Event log replay verifies RTMR3 integrity.
       </p>
       {rows}
     </Card>

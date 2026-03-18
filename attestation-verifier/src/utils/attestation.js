@@ -1,9 +1,45 @@
 /**
  * Attestation parsing and extraction utilities.
- * Single responsibility: parse attestation payloads, extract compose_hash, RTMRs.
+ * Single responsibility: parse attestation payloads, extract compose_hash, RTMRs, MRTD from quote.
  */
 
 import { RTMR_HEX_RE, COMPOSE_HASH_RE } from './hex.js';
+
+// TDX quote binary layout (Intel TDX DCAP)
+const QUOTE_HEADER_LEN = 48;
+const MRTD_LEN = 48;
+const MRTD_OFFSET_V4 = 184;
+const MRTD_OFFSET_V5 = 190;
+const RTMR0_OFFSET_FROM_MRTD = 192;
+
+/** Extract MRTD and RTMR0-3 (48-byte hex each) from raw TDX quote base64. */
+export function extractMeasurementsFromQuoteB64(quoteB64) {
+  const out = { mrtd: null, rtmr0: null, rtmr1: null, rtmr2: null, rtmr3: null };
+  if (!quoteB64 || typeof quoteB64 !== 'string') return out;
+  const b64 = quoteB64.trim();
+  let bytes;
+  try {
+    bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  } catch {
+    return out;
+  }
+  if (bytes.length < QUOTE_HEADER_LEN + MRTD_LEN) return out;
+  const version = bytes[0] | (bytes[1] << 8);
+  const mrtdOffset = version === 4 ? MRTD_OFFSET_V4 : version === 5 ? MRTD_OFFSET_V5 : null;
+  if (mrtdOffset == null || mrtdOffset + MRTD_LEN > bytes.length) return out;
+  out.mrtd = Array.from(bytes.slice(mrtdOffset, mrtdOffset + MRTD_LEN))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  const rtmr0Offset = mrtdOffset + RTMR0_OFFSET_FROM_MRTD;
+  if (rtmr0Offset + MRTD_LEN * 4 > bytes.length) return out;
+  for (let i = 0; i < 4; i++) {
+    const off = rtmr0Offset + i * MRTD_LEN;
+    out[`rtmr${i}`] = Array.from(bytes.slice(off, off + MRTD_LEN))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  return out;
+}
 
 export function parseAttestation(input) {
   let data;
@@ -65,8 +101,8 @@ export function extractRTMRsFromClaims(claims) {
           else if (key.includes('rtmr2') || key.includes('rt_mr2')) result.rtmr2 = norm;
           else if (key.includes('rtmr1') || key.includes('rt_mr1')) result.rtmr1 = norm;
           else if (key.includes('rtmr0') || key.includes('rt_mr0')) result.rtmr0 = norm;
-        } else if (key.includes('mrtd') && /^[a-f0-9]{64}$/.test(norm)) {
-          result.mrtd = norm;
+        } else if (key.includes('mrtd') && (/^[a-f0-9]{96}$/.test(norm) || /^[a-f0-9]{64}$/.test(norm))) {
+          result.mrtd = norm; // TDX MRTD is 48 bytes (96 hex); some sources use 64
         }
       } else if (key === 'attester_tcb_status' && typeof v === 'string') {
         result.tcb_status = v;

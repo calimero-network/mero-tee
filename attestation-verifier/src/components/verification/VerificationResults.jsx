@@ -23,6 +23,7 @@ export function VerificationResults({ result }) {
         {hasRtmrData && (
           <RtmrCard
             quoteRtmrs={result.quoteRtmrs}
+            measurementSources={result.measurementSources}
             replayedRtmrs={result.replayedRtmrs}
             policiesByProfile={result.policiesByProfile}
             tagToUse={result.tagToUse}
@@ -36,7 +37,15 @@ export function VerificationResults({ result }) {
           profiles={result.profiles}
           tagToUse={result.tagToUse}
         />
-        <EventLogCard eventCount={result.eventCount} />
+        <EventLogCard
+          eventCount={result.eventCount}
+          eventLog={result.eventLog}
+          composeHash={result.composeHash}
+          appId={result.appId}
+          expectedComposeHashes={result.profiles}
+          rtmr3ReplaySteps={result.rtmr3ReplaySteps}
+          quoteRtmr3={result.quoteRtmrs?.rtmr3}
+        />
         {hasQuoteData && (
           <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} />
         )}
