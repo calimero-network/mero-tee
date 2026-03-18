@@ -522,6 +522,27 @@ jobs:
             --ita-api-key "${ITA_API_KEY}" \
             "${policy_flags[@]}"
 
+      - name: Verify dstack event log and extract compose hash
+        id: verify_compose_hash
+        if: ${{ success() }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/attestation/verify_dstack_compose_hash.py
+          python3 scripts/attestation/verify_dstack_compose_hash.py \
+            --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
+            --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
+            --output-json "${ARTIFACTS_DIR}/kms-app-identity.json"
+
+          if ! jq -e '.compose_hash | type == "string" and (length == 64) and test("^[a-f0-9]+$")' \
+            "${ARTIFACTS_DIR}/kms-app-identity.json" >/dev/null 2>&1; then
+            echo "::error::compose_hash missing or invalid (must be 64-char hex)"
+            cat "${ARTIFACTS_DIR}/kms-app-identity.json"
+            exit 1
+          fi
+          echo "[verify_compose_hash] Extracted compose_hash from verified attestation path"
+
       - name: Derive candidate policy values
         id: derive_candidates
         if: ${{ success() }}

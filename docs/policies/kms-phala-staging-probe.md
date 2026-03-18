@@ -12,11 +12,15 @@ Workflow file:
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
 4. Verifies the quote via Intel Trust Authority (`scripts/attestation/verify_tdx_quote_ita.py`).
-5. Extracts candidate policy values (`scripts/attestation/extract_tdx_policy_candidates.py`) and writes:
+5. Verifies dstack event log and extracts compose hash (`scripts/attestation/verify_dstack_compose_hash.py`):
+   - Replays RTMR3 from event log and verifies it matches the quote.
+   - Extracts `compose_hash` (64-char hex) from the verified path.
+   - Writes `kms-app-identity.json` (compose_hash, app_id).
+6. Extracts candidate policy values (`scripts/attestation/extract_tdx_policy_candidates.py`) and writes:
    - `kms-policy-candidates.json` (canonical candidate policy payload),
    - `kms-policy-candidates.env` (compatibility/env export form).
-6. Uploads full probe artifacts.
-7. Always deletes the ephemeral CVM during cleanup (on both success and failure paths).
+7. Uploads full probe artifacts.
+8. Always deletes the ephemeral CVM during cleanup (on both success and failure paths).
 
 When resolving from a release tag, the workflow first validates that the release
 manifest declares `verification.kms_attest_endpoint == "/attest"`.
@@ -53,6 +57,8 @@ The workflow uploads an artifact bundle `kms-staging-probe-<run_id>-<attempt>` c
 - generated policy candidates:
   - `kms-policy-candidates.json`
   - `kms-policy-candidates.env`
+- app identity (verified compose hash):
+  - `kms-app-identity.json` (compose_hash, app_id)
 - run summary metadata, including candidate values and probe context
 
 ## Promotion to governed policy PR
