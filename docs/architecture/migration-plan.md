@@ -1,6 +1,6 @@
 # Migration and Implementation Plan
 
-Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
+Step-by-step plan to migrate `mero-kms-phala` and Mero Node TEE image build into `mero-tee`.
 
 ## Phase 1: Repo Setup (Done)
 
@@ -24,19 +24,19 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 - Adjust playbook paths for ansible roles
 - Copy verify_tdx_quote_ita.py and verify-node-image-gcp-release-assets.sh
 - Add .github/workflows/release-node-image-gcp.yaml
-- Use GitHub vars/secrets for GCP config (no values in repo)
+- Use GitHub vars/secrets for cloud image-build config (no values in repo)
 
 ## Phase 4: Release and Signing
 
 - Single release per version (X.Y.Z): mero-kms-phala binaries + MRTDs + attestation artifacts
 - Publish mrtd-*.json, published-mrtds.json, attestation-artifacts, provenance
-- Add GPG or Sigstore signing for published-mrtds.json
+- Add Sigstore signing for published-mrtds.json
 - Document verification steps for operators
 
 ## Phase 5: Downstream Updates
 
 - Operators: Point published MRTDs URL to mero-tee releases
-- Core: Update phala-tee-deployment.md, merod README
+- Core: Update TEE deployment docs and merod README
 - Docs: Update operator-track index
 
 ## Phase 6: Cleanup
@@ -47,6 +47,6 @@ Step-by-step plan to migrate mero-kms-phala and GCP image build into mero-tee.
 ## Security Checklist (Before Each Commit)
 
 - No .env, *.pem, *-key.json, *.key in repo
-- No hardcoded GCP project IDs, tokens, or credentials
+- No hardcoded cloud project IDs, tokens, or credentials
 - .gitignore covers secrets
 - Workflow uses vars. and secrets. only

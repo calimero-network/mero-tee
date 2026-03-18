@@ -6,13 +6,13 @@ Start here if you are deploying, operating, or verifying `mero-tee` assets.
 
 `mero-tee` has two non-symmetric operational lanes:
 
-1. **Phala lane (KMS plane)**: operate `mero-kms-phala`
-2. **GCP lane (node image plane)**: deploy locked `node-image-gcp` artifacts
+1. **Mero KMS TEE lane**: operate `mero-kms-phala`
+2. **Mero Node TEE lane**: deploy locked `node-image-gcp` artifacts
 
 Use the lane-specific runbooks:
 
-- [Phala KMS lane](../runbooks/platforms/phala-kms.md)
-- [GCP node lane](../runbooks/platforms/gcp-merod.md)
+- [Mero KMS TEE lane](../runbooks/platforms/phala-kms.md)
+- [Mero Node TEE lane](../runbooks/platforms/gcp-merod.md)
 
 ## First-time operator checklist
 

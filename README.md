@@ -1,13 +1,13 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP node-image build** (Packer-based merod node images with TDX attestation).
+TEE infrastructure for Calimero: **Mero KMS TEE** (`mero-kms-phala`) and **Mero Node TEE** (`node-image-gcp`, Packer-based merod images with TDX attestation).
 
 ## Contents
 
 | Component | Description |
 |-----------|-------------|
-| **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVM |
-| **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
+| **Mero KMS TEE (`mero-kms-phala`)** | KMS that validates TDX attestations and releases storage encryption keys to merod TEE nodes |
+| **Mero Node TEE (`node-image-gcp`)** | Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
 | **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
 
 ## Documentation
@@ -21,8 +21,8 @@ Start from the [Documentation Portal](docs/README.md), then follow the role-base
 - [Docs portal](docs/README.md)
 - [Getting started guide](docs/getting-started/README.md)
 - [Platform runbooks](docs/runbooks/platforms/README.md)
-- [Phala KMS lane](docs/runbooks/platforms/phala-kms.md)
-- [GCP node lane](docs/runbooks/platforms/gcp-merod.md)
+- [Mero KMS TEE lane](docs/runbooks/platforms/phala-kms.md)
+- [Mero Node TEE lane](docs/runbooks/platforms/gcp-merod.md)
 
 **Understand architecture**
 
@@ -71,9 +71,9 @@ cargo build --release
 
 Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` are satisfied via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
 
-## Building GCP Images
+## Building Mero Node TEE Images
 
-See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP credentials.
+See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and cloud credentials.
 
 ## Releases
 
@@ -98,7 +98,7 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 - **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy. The build injects `calimero.role=node`, `calimero.profile`, and `calimero.root_hash` into the kernel cmdline (RTMR[2]). At boot, calimero-init extends RTMR[3] with role+profile+root_hash (kernel 6.16+). Each image produces unique measurements; cannot be forged without an identical image. Still does not cover every environment/control-plane risk outside the attested boundary.
 - **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
 
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Trust, verification, and measurements](docs/release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr) for the concrete workflow.
+Operators use `published-mrtds.json` to verify that deployed Mero Node TEE instances match the expected image. See [Trust, verification, and measurements](docs/release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr) for the concrete workflow.
 
 For a consolidated trust model and verification entry point, see [Trust & Verification](docs/release/trust-and-verification.md).
 
@@ -139,7 +139,7 @@ Node release flow:
 
 - On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
 - KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
-- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images, probes all three released GCP node images, validates full MRTD/RTMR allowlists for every profile, and then checks the strict node↔KMS allow/deny matrix.
+- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images, probes all three released Mero Node TEE images, validates full MRTD/RTMR allowlists for every profile, and then checks the strict node↔KMS allow/deny matrix.
 - A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 - Released KMS images are profile-pinned: startup reads the image profile marker and rejects `KMS_POLICY_PROFILE` env overrides, preventing deploy-time profile switching.
 - KMS startup attempts to emit `calimero.kms.profile=<profile>` as an RTMR3 runtime event (outside mock mode) so profile cohorts get attestation-visible separation; if runtime extension is unavailable, startup continues with a warning.

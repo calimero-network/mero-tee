@@ -1,4 +1,4 @@
-# Direct Phala KMS Integration Design (No `mero-kms-phala` Intermediary)
+# Direct Mero KMS TEE Integration Design (No `mero-kms-phala` Intermediary)
 
 Status: Draft  
 Authors: Calimero engineering (proposed)  
@@ -6,8 +6,8 @@ Last updated: 2026-03-03
 
 ## 1. Purpose
 
-This document explains how Calimero could run `merod` on Phala by requesting
-storage keys directly from the dstack/Phala key system, without the
+This document explains how Calimero could run `merod` in the Mero KMS TEE lane by requesting
+storage keys directly from the dstack key system, without the
 `mero-kms-phala` HTTP intermediary.
 
 Goals:
@@ -32,14 +32,14 @@ merod -> mero-kms-phala (/challenge,/get-key) -> dstack socket (/GetKey)
 
 ```text
 merod -> dstack socket (/GetKey)
-           \-> dstack/Phala KMS authorization backend (Cloud or Onchain)
+           \-> dstack authorization backend (Cloud or Onchain)
 ```
 
 - `merod` calls dstack client directly.
-- Policy authorization is handled by Phala KMS governance model.
+- Policy authorization is handled by the underlying KMS governance model.
 - No custom key-release HTTP service in the middle.
 
-## 3. How Phala KMS Works
+## 3. How the underlying KMS works
 
 At runtime, an app inside a CVM uses the local dstack socket
 (`/var/run/dstack.sock`) to request deterministic keys by path.
@@ -50,7 +50,7 @@ Key points:
 - App identity and measurements are validated via attestation and policy.
 - Governance model determines who can approve code/measurement changes.
 
-Phala offers two governance modes:
+The platform offers two governance modes:
 
 1. **Cloud KMS** (centralized governance by platform operator)
 2. **Onchain KMS** (smart-contract governance, distributed enforcement)

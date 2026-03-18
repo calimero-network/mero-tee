@@ -6,7 +6,7 @@ Single entry point for operators, release engineers, auditors, and maintainers.
 
 | Audience | Start here | Then go to |
 |---|---|---|
-| Operators | [Getting started](getting-started/README.md) | [Phala KMS lane](runbooks/platforms/phala-kms.md), [GCP node lane](runbooks/platforms/gcp-merod.md) |
+| Operators | [Getting started](getting-started/README.md) | [Mero KMS TEE lane](runbooks/platforms/phala-kms.md), [Mero Node TEE lane](runbooks/platforms/gcp-merod.md) |
 | Release engineers | [Release workflow setup](release/workflow-setup.md) | [Release taxonomy](release/taxonomy.md), [Release pipeline diagrams](release/pipeline-sequence-diagrams.md) |
 | Auditors | [Trust and verification](release/trust-and-verification.md) | [Verification examples](release/verification-examples.md), [Trust boundaries](architecture/trust-boundaries.md) |
 | Maintainers | [Canonical source map](reference/source-map.md) | [Reference index](reference/README.md), [ADRs](adr/README.md), [Glossary](GLOSSARY.md) |
@@ -28,19 +28,19 @@ Single entry point for operators, release engineers, auditors, and maintainers.
 
 ```mermaid
 flowchart LR
-    subgraph PHALA["Phala lane (KMS plane)"]
-        MEROD_PHALA[merod]
+    subgraph KMS_TEE["Mero KMS TEE lane"]
+        MEROD_KMS_TEE[merod]
         KMS[mero-kms-phala]
         DSTACK[(dstack)]
-        MEROD_PHALA -->|attest/challenge/get-key| KMS
+        MEROD_KMS_TEE -->|attest/challenge/get-key| KMS
         KMS -->|GetKey(path)| DSTACK
     end
 
-    subgraph GCP["GCP lane (node image plane)"]
+    subgraph NODE_TEE["Mero Node TEE lane"]
         PACKER[Packer build]
         IMAGE[node-image-gcp]
-        MEROD_GCP[merod on TDX]
-        PACKER --> IMAGE --> MEROD_GCP
+        MEROD_NODE_TEE[merod on TDX]
+        PACKER --> IMAGE --> MEROD_NODE_TEE
     end
 ```
 

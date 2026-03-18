@@ -3,18 +3,18 @@ flowchart TB
         MEROD_REG[merod]
     end
 
-    subgraph phala["Phala lane (KMS plane)"]
-        subgraph cvm["Phala CVM"]
-            MEROD_PHALA[merod]
+    subgraph kms_tee["Mero KMS TEE lane"]
+        subgraph cvm["KMS TEE environment"]
+            MEROD_KMS_TEE[merod]
             KMS[mero-kms-phala]
             DSTACK[(dstack socket)]
         end
     end
 
-    subgraph gcp["GCP lane (node image plane)"]
+    subgraph node_tee["Mero Node TEE lane"]
         PACKER[Packer build]
         NODE_IMG[node-image-gcp]
-        MEROD_GCP[merod on TDX instance]
+        MEROD_NODE_TEE[merod on TDX instance]
     end
 
     subgraph core["calimero-network/core"]
@@ -23,13 +23,13 @@ flowchart TB
 
     MEROD_REG -->|"no key fetch"| MEROD_RUNTIME
 
-    MEROD_PHALA -->|"1. POST /attest"| KMS
-    MEROD_PHALA -->|"2. POST /challenge"| KMS
-    MEROD_PHALA -->|"3. POST /get-key"| KMS
+    MEROD_KMS_TEE -->|"1. POST /attest"| KMS
+    MEROD_KMS_TEE -->|"2. POST /challenge"| KMS
+    MEROD_KMS_TEE -->|"3. POST /get-key"| KMS
     KMS -->|"GetKey(path)"| DSTACK
     DSTACK -->|"key bytes"| KMS
-    KMS -->|"storage key"| MEROD_PHALA
+    KMS -->|"storage key"| MEROD_KMS_TEE
 
     PACKER -->|"locked image"| NODE_IMG
-    NODE_IMG -->|"deploy"| MEROD_GCP
-    MEROD_GCP -.->|"verify MRTD"| NODE_IMG
+    NODE_IMG -->|"deploy"| MEROD_NODE_TEE
+    MEROD_NODE_TEE -.->|"verify MRTD"| NODE_IMG

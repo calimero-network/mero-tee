@@ -1,6 +1,6 @@
-# KMS staging probe workflow (Phala)
+# KMS staging probe workflow (Mero KMS TEE lane)
 
-This workflow automates collection of candidate KMS attestation policy values from a temporary Phala CVM.
+This workflow automates collection of candidate KMS attestation policy values from a temporary Mero KMS TEE environment.
 
 Workflow file:
 
@@ -8,7 +8,7 @@ Workflow file:
 
 ## What it does
 
-1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image via the Phala REST API with pinned dstack version 0.5.7 (`prefer_dev=false`, `DSTACK_VERSION=0.5.7`), matching MDMA prod.
+1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image via the platform REST API with pinned dstack version 0.5.7 (`prefer_dev=false`, `DSTACK_VERSION=0.5.7`), matching MDMA prod.
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
 4. Verifies the quote via Intel Trust Authority (`scripts/attestation/verify_tdx_quote_ita.py`).
@@ -27,7 +27,7 @@ manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
 ## Required GitHub secrets
 
-- `PHALA_CLOUD_API_KEY` – API key for Phala Cloud CLI auth.
+- `PHALA_CLOUD_API_KEY` – API key for the current KMS TEE cloud provider CLI auth.
 - `ITA_API_KEY` – Intel Trust Authority API key.
 
 ## Running it

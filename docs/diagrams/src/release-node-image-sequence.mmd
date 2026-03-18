@@ -2,12 +2,12 @@ sequenceDiagram
   autonumber
   participant Maintainer
   participant GitHubActions
-  participant GCP
+  participant NodeTEEInfra
   participant GitHubRelease
   participant Sigstore
 
   Maintainer->>GitHubActions: Trigger workflow for tag (X.Y.Z)
-  GitHubActions->>GCP: Build profile images (debug/debug-ro/locked-ro)
+  GitHubActions->>NodeTEEInfra: Build profile images (debug/debug-ro/locked-ro)
   GitHubActions->>GitHubActions: Extract MRTDs + build policy/provenance
   GitHubActions->>GitHubActions: Generate checksums + attestation bundle + SBOM
   GitHubActions->>Sigstore: keyless sign all release assets

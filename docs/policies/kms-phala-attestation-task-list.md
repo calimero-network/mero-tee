@@ -1,4 +1,4 @@
-# Phala KMS Attestation Migration Tasks (mero-tee)
+# Mero KMS TEE Attestation Migration Tasks (mero-tee)
 
 Status: In progress  
 Owner: mero-tee team  

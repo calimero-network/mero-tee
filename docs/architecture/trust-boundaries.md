@@ -16,7 +16,7 @@ Within this repository, top-level folders are also treated as separate project a
 
 | Repository | Owns | Does not own |
 |---|---|---|
-| `calimero-network/mero-tee` | KMS implementation (`mero-kms-phala`), GCP node-image-gcp build/release assets, policy registry + release verification scripts | `merod` runtime logic |
+| `calimero-network/mero-tee` | KMS implementation (`mero-kms-phala`), Mero Node TEE image build/release assets (`node-image-gcp`), policy registry + release verification scripts | `merod` runtime logic |
 | `calimero-network/core` | `merod` runtime behavior, KMS client flow, node-side attestation configuration handling | KMS release packaging and node-image-gcp release assets from `mero-tee` |
 
 Implementation references:
@@ -30,15 +30,15 @@ Implementation references:
 
 The repo contains two lanes that are related but different:
 
-1. **Phala lane (KMS plane)**  
+1. **Mero KMS TEE lane**  
    Deploy and operate `mero-kms-phala`; `merod` talks to KMS for key release.
-2. **GCP lane (node image plane)**  
+2. **Mero Node TEE lane**  
    Build/verify/deploy locked `merod` images and validate measurements.
 
 Runbooks:
 
-- [Phala KMS lane](../runbooks/platforms/phala-kms.md)
-- [GCP node-image-gcp lane](../runbooks/platforms/gcp-merod.md)
+- [Mero KMS TEE lane](../runbooks/platforms/phala-kms.md)
+- [Mero Node TEE lane](../runbooks/platforms/gcp-merod.md)
 
 ---
 

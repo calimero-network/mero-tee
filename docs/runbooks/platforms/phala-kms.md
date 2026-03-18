@@ -1,15 +1,15 @@
-# Phala platform: deploy and operate `mero-kms-phala` (KMS plane)
+# Mero KMS TEE lane: deploy and operate `mero-kms-phala`
 
-This runbook is for operating the **KMS plane** on Phala CVMs.
+This runbook is for operating the **Mero KMS TEE lane**.
 
-It is **not** the GCP node-image-gcp deployment path.  
-For GCP node-plane deployment, use [gcp-merod.md](gcp-merod.md).
+It is **not** the Mero Node TEE deployment path.  
+For Mero Node TEE deployment, use [gcp-merod.md](gcp-merod.md).
 
 ---
 
 ## 1) Scope and responsibility
 
-In the Phala lane:
+In the Mero KMS TEE lane:
 
 - `mero-kms-phala` is the trust decision point for key release.
 - `merod` (from `calimero-network/core`) proves node identity + attestation to KMS.
@@ -30,7 +30,7 @@ Implementation references:
 
 ## 2) Prerequisites
 
-- Phala Cloud CVM environment with dstack socket available to KMS
+- TEE runtime environment with dstack socket available to KMS
 - Docker/Compose deployment method for your CVM
 - Signed release tag to pin (for example `2.1.10`)
 - Tools for release verification: `bash`, `jq`, `curl`, `cosign` (and optional `gh`)
@@ -148,7 +148,7 @@ Operational note for HA/LB deployments:
 
 ## 8) Common mistakes to avoid
 
-- Treating this as a generic "Phala deployment" guide.
+- Treating this as a generic cloud-provider deployment guide.
 - Reusing unpinned or unsigned policy inputs.
 - Enabling mock attestation in production.
 - Sharing one KMS across unrelated release cohorts without explicit policy governance.

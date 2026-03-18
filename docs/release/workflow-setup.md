@@ -1,6 +1,8 @@
 # Workflow Setup
 
-The GCP node-image build workflow requires GitHub repo configuration. **No secrets or credentials should be committed to the repo.**
+The Mero Node TEE image build workflow requires GitHub repo configuration. **No secrets or credentials should be committed to the repo.**
+
+Note: several variable names keep the legacy `GCP_*` prefix for workflow compatibility.
 
 ## Required GitHub Repo Variables
 
@@ -8,7 +10,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 | Variable | Description |
 |----------|-------------|
-| `GCP_PACKER_PROJECT_ID` | GCP project for Packer |
+| `GCP_PACKER_PROJECT_ID` | Cloud project for Packer |
 | `PACKER_GCP_SOURCE_IMAGE` | Base image (e.g. ubuntu-2510) |
 | `GCP_PACKER_REGION` | Region |
 | `GCP_PACKER_ZONE` | Zone |
@@ -35,7 +37,7 @@ Current builds use Ubuntu 25.10 (Questing Quokka) for kernel 6.17+ (RTMR3 sysfs 
 
 | Secret | Description |
 |--------|-------------|
-| `GCP_SERVICE_ACCOUNT_KEY` | JSON key for GCP (if not using WIF) |
+| `GCP_SERVICE_ACCOUNT_KEY` | JSON key for cloud provider (if not using WIF) |
 | OR `GCP_WORKLOAD_IDENTITY_PROVIDER` + `GCP_PACKER_SERVICE_ACCOUNT_EMAIL` | For Workload Identity Federation |
 | `ITA_API_KEY` | Intel Trust Authority API key (required for quote verification and MRTD publishing) |
 | `GHCR_PUSH_TOKEN` (optional) | PAT for policy promotion PR creation when `github.token` PR creation is restricted |

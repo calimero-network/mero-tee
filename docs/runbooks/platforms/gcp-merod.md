@@ -1,18 +1,18 @@
-# GCP platform: deploy `merod` node-image-gcp images (node plane)
+# Mero Node TEE lane: deploy `merod` node-image-gcp images
 
-This runbook is for operating the **GCP node image plane**.
+This runbook is for operating the **Mero Node TEE lane**.
 
-It is **not** the KMS-plane deployment guide.  
-For KMS on Phala, use [phala-kms.md](phala-kms.md).
+It is **not** the KMS deployment guide.  
+For Mero KMS TEE deployment, use [phala-kms.md](phala-kms.md).
 
 ---
 
 ## 1) Scope and responsibility
 
-In the GCP lane:
+In the Mero Node TEE lane:
 
 - `mero-tee` builds and signs `node-image-gcp` artifacts and publishes MRTD policy data.
-- Operators deploy those images on GCP TDX-capable instances.
+- Operators deploy those images on TDX-capable instances.
 - Operators verify deployed measurements against signed release assets.
 
 This lane focuses on **node image trust and measurement verification**.
@@ -42,7 +42,7 @@ The verifier resolves `mero-tee-v${TAG}` automatically when needed.
 
 ---
 
-## 4) Deploy a pinned node-image-gcp image on GCP
+## 4) Deploy a pinned node-image-gcp image on Mero Node TEE hosts
 
 Choose the profile that matches your risk/operability requirements:
 
@@ -113,7 +113,7 @@ Check that `node_image_tag` matches the node release you deployed and that polic
 ## 6) Interaction with `core` attestation paths
 
 `core` contains generic attestation tooling and TEE-mode configuration docs, but
-this GCP lane in `mero-tee` is specifically about signed node-image-gcp artifacts
+this Mero Node TEE lane in `mero-tee` is specifically about signed node-image-gcp artifacts
 and operator-side measurement validation.
 
 Reference:
@@ -124,7 +124,7 @@ Reference:
 
 ## 7) Common mistakes to avoid
 
-- Treating this lane as equivalent to the Phala KMS lane.
+- Treating this lane as equivalent to the Mero KMS TEE lane.
 - Skipping release signature verification before image rollout.
 - Mixing profile measurements across releases.
 - Assuming artifact signatures alone prove runtime state without quote/MRTD checks.

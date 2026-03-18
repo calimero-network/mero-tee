@@ -9,7 +9,7 @@ How `compose_hash` flows from release to attestation verifier, and when mismatch
 │ Release process (release-kms-phala.yaml)                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 1. Trigger staging probe per profile (debug, debug-read-only, locked)        │
-│ 2. Probe deploys KMS on Phala → /attest → attest-response.json               │
+│ 2. Probe deploys KMS in the Mero KMS TEE environment → /attest → attest-response.json │
 │ 3. verify_dstack_compose_hash.py:                                            │
 │    - Replays RTMR3 from event_log, verifies vs quote                          │
 │    - Extracts compose_hash from imr=3 "compose-hash" event payload           │
@@ -41,19 +41,19 @@ Both Python (`verify_dstack_compose_hash.py`) and JS (`attestation.js`) use iden
 
 ## When compose_hash can differ
 
-The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Docker Compose + metadata). Per [Phala docs](https://docs.phala.com/phala-cloud/attestation/attestation-fields), RTMR3 includes `compose-hash` and `instance-id` as separate events.
+The compose_hash is **computed by the KMS TEE platform/dstack** from the `app-compose.json` (Docker Compose + metadata). Per platform docs, RTMR3 includes `compose-hash` and `instance-id` as separate events.
 
 **Why the same release (e.g. mero-kms-v2.1.73) produces different compose_hash when deployed:**
 
 1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe uses canonical names (`calimero-kms-debug`, `calimero-kms-debug-read-only`, `calimero-kms-locked-read-only`). **MDMA and production should use the same names** for compose_hash to match.
 
-2. **Different compose rendering** — Phala may substitute instance-specific values (region, VM UUID, etc.) into the compose before hashing. Same image, different runtime context → different hash.
+2. **Different compose rendering** — the platform may substitute instance-specific values (region, VM UUID, etc.) into the compose before hashing. Same image, different runtime context -> different hash.
 
 3. **Different KMS build** — Custom or non-release image produces different hash.
 
-4. **Phala/dstack version** — Changes to how compose is hashed will change results.
+4. **Platform/dstack version** — changes to how compose is hashed will change results.
 
-**Bottom line:** If compose_hash includes deployment-specific data (which Phala has not fully documented), the release's compose_hash will **never** match a user's deployment. Compose hash would then prove "this exact deployment config" rather than "this release image". Confirm with Phala what exactly is hashed.
+**Bottom line:** If compose_hash includes deployment-specific data (not fully documented), the release compose_hash may never match a user's deployment. Compose hash would then prove "this exact deployment config" rather than "this release image". Confirm with the platform vendor what exactly is hashed.
 
 ## Recommended deployment names (probe + MDMA)
 

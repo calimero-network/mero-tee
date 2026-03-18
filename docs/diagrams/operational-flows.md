@@ -2,7 +2,7 @@
 
 Operational flowcharts for rollout and verification decisions.
 
-## GCP node-image verification and rollout
+## Mero Node TEE verification and rollout
 
 ```mermaid
 flowchart TD

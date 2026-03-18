@@ -1,4 +1,4 @@
-# Phala KMS Key Protection and Upgrade Continuity Proposal
+# Mero KMS TEE Key Protection and Upgrade Continuity Proposal
 
 Status: Draft  
 Authors: Calimero engineering (proposed)  
@@ -6,7 +6,7 @@ Last updated: 2026-03-03
 
 ## 1. Executive Summary
 
-This document proposes a hardened key-management model for `merod` on Phala that addresses two requirements:
+This document proposes a hardened key-management model for `merod` in the Mero KMS TEE lane that addresses two requirements:
 
 1. Prevent key extraction even when operators can redeploy services.
 2. Preserve storage-key continuity across service upgrades.

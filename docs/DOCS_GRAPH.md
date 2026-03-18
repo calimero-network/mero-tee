@@ -3,7 +3,7 @@
 Visual map of KMS, mero-tee, regular nodes, and how they interact.
 
 For the full diagram catalog, see [docs/diagrams/README.md](diagrams/README.md).
-Mermaid sources: [`docs/diagrams/src/system-overview.mmd`](diagrams/src/system-overview.mmd), [`docs/diagrams/src/phala-attestation-sequence.mmd`](diagrams/src/phala-attestation-sequence.mmd).
+Mermaid sources: [`docs/diagrams/src/system-overview.mmd`](diagrams/src/system-overview.mmd), [`docs/diagrams/src/mero-kms-tee-attestation-sequence.mmd`](diagrams/src/mero-kms-tee-attestation-sequence.mmd).
 
 ## System overview
 
@@ -13,18 +13,18 @@ flowchart TB
         MEROD_REG[merod]
     end
 
-    subgraph phala["Phala lane (KMS plane)"]
-        subgraph cvm["Phala CVM"]
-            MEROD_PHALA[merod]
+    subgraph kms_tee["Mero KMS TEE lane"]
+        subgraph cvm["KMS TEE environment"]
+            MEROD_KMS_TEE[merod]
             KMS[mero-kms-phala]
             DSTACK[(dstack socket)]
         end
     end
 
-    subgraph gcp["GCP lane (node image plane)"]
+    subgraph node_tee["Mero Node TEE lane"]
         PACKER[Packer build]
         NODE_IMG[node-image-gcp]
-        MEROD_GCP[merod on TDX instance]
+        MEROD_NODE_TEE[merod on TDX instance]
     end
 
     subgraph core["calimero-network/core"]
@@ -34,21 +34,21 @@ flowchart TB
     %% Regular nodes: no KMS
     MEROD_REG -->|"no key fetch"| MEROD_RUNTIME
 
-    %% Phala flow: merod -> KMS -> dstack
-    MEROD_PHALA -->|"1. POST /attest"| KMS
-    MEROD_PHALA -->|"2. POST /challenge"| KMS
-    MEROD_PHALA -->|"3. POST /get-key"| KMS
+    %% Mero KMS TEE flow: merod -> KMS -> dstack
+    MEROD_KMS_TEE -->|"1. POST /attest"| KMS
+    MEROD_KMS_TEE -->|"2. POST /challenge"| KMS
+    MEROD_KMS_TEE -->|"3. POST /get-key"| KMS
     KMS -->|"GetKey(path)"| DSTACK
     DSTACK -->|"key bytes"| KMS
-    KMS -->|"storage key"| MEROD_PHALA
+    KMS -->|"storage key"| MEROD_KMS_TEE
 
-    %% GCP flow: build -> deploy -> verify
+    %% Mero Node TEE flow: build -> deploy -> verify
     PACKER -->|"locked image"| NODE_IMG
-    NODE_IMG -->|"deploy"| MEROD_GCP
-    MEROD_GCP -.->|"verify MRTD"| NODE_IMG
+    NODE_IMG -->|"deploy"| MEROD_NODE_TEE
+    MEROD_NODE_TEE -.->|"verify MRTD"| NODE_IMG
 ```
 
-## Attestation flow (Phala KMS lane)
+## Attestation flow (Mero KMS TEE lane)
 
 ```mermaid
 sequenceDiagram
@@ -73,16 +73,16 @@ sequenceDiagram
 | Component | Role |
 |-----------|------|
 | **merod (regular)** | Node runtime; no TEE, no storage key fetch from KMS |
-| **merod (Phala CVM)** | Node in TEE; fetches storage keys from KMS after mutual attestation |
+| **merod (KMS TEE environment)** | Node in TEE; fetches storage keys from KMS after mutual attestation |
 | **mero-kms-phala** | Validates merod attestation, enforces policy, releases keys from dstack |
-| **dstack** | Phala key system; deterministic key derivation by path |
-| **node-image-gcp** | Locked merod images (Packer) for GCP TDX instances; MRTD/measurement verification |
+| **dstack** | Key system used by the KMS TEE lane; deterministic key derivation by path |
+| **node-image-gcp** | Locked merod images (Packer) for Node TEE instances; MRTD/measurement verification |
 
 ## Platform lanes
 
 | Lane | Responsibility |
 |------|----------------|
-| **Phala (KMS plane)** | Deploy mero-kms-phala; merod talks to KMS for key release |
-| **GCP (node plane)** | Build/verify/deploy locked merod images; validate measurements |
+| **Mero KMS TEE** | Deploy mero-kms-phala; merod talks to KMS for key release |
+| **Mero Node TEE** | Build/verify/deploy locked merod images; validate measurements |
 
 See [trust-boundaries.md](architecture/trust-boundaries.md) for enforcement points and repository boundaries.

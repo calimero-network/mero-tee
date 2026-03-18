@@ -4,8 +4,8 @@ Operational playbooks and lane-specific procedures.
 
 ## Runbooks by scope
 
-- [Phala KMS lane](../runbooks/platforms/phala-kms.md)
-- [GCP node lane](../runbooks/platforms/gcp-merod.md)
+- [Mero KMS TEE lane](../runbooks/platforms/phala-kms.md)
+- [Mero Node TEE lane](../runbooks/platforms/gcp-merod.md)
 - [KMS blue/green rollout](../runbooks/operations/kms-blue-green-rollout.md)
 
 ## Operational flow diagrams

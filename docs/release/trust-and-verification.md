@@ -95,7 +95,7 @@ scripts/policy/apply-merod-kms-phala-attestation-config.sh \
 
 ## Compose hash (KMS app identity)
 
-For Phala KMS deployments, **compose_hash** proves which exact Docker Compose configuration is running. It is trustworthy only when extracted from a **verified attestation path** (quote verified + event log verified).
+For Mero KMS TEE deployments, **compose_hash** proves which exact Docker Compose configuration is running. It is trustworthy only when extracted from a **verified attestation path** (quote verified + event log verified).
 
 - **Do not** trust compose_hash from provisioning metadata or control-plane API alone.
 - **Do** use compose_hash from signed release assets (`kms-phala-attestation-policy.<profile>.json` or `kms-phala-compatibility-map.json`), which is captured during staging probe from a quote-verified attestation.
