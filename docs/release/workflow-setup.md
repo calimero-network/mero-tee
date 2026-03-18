@@ -109,6 +109,10 @@ release events:
   for release validation.
 - KMS and node staging probes are dispatched on the resolved workflow ref and
   validated against an expected `headSha` before artifacts are accepted.
+  - Dispatch must pass a named ref (branch/tag) via `PROBE_WORKFLOW_REF`.
+    `gh workflow run --ref` does not accept a raw commit SHA; the expected SHA
+    is tracked separately (`PROBE_EXPECTED_SHA`) and verified after run
+    resolution.
 - Node staging probes must also produce `node-client-verification.json`, which
   proves client-visible anti-fake checks succeeded:
   - positive quote verification passes,
