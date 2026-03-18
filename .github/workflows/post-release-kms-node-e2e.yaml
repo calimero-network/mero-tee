@@ -542,6 +542,20 @@ jobs:
           release_payload = json.loads(policy_file.read_text(encoding="utf-8"))
           release_policy = release_payload.get("policy", {})
 
+          # Compose hash / event_payload: probe has kms-app-identity.compose_hash, release policy has kms_allowed_event_payload
+          app_identity_file = probe_file.parent / "kms-app-identity.json"
+          if app_identity_file.exists():
+              app_identity = json.loads(app_identity_file.read_text(encoding="utf-8"))
+              probe_compose = (app_identity.get("compose_hash") or "").strip().lower()
+              if probe_compose:
+                  allowed = release_policy.get("kms_allowed_event_payload") or []
+                  allowed_norm = normalize(allowed)
+                  if allowed_norm and probe_compose not in allowed_norm:
+                      raise SystemExit(
+                          f"[post-release-e2e] ERROR: probe compose_hash not in release policy kms_allowed_event_payload "
+                          f"for profile={profile}"
+                      )
+
           keys = [
               "allowed_tcb_statuses",
               "allowed_mrtd",
@@ -582,7 +596,8 @@ jobs:
           app_identity = json.loads(matches[0].read_text(encoding="utf-8"))
           probe_compose = (app_identity.get("compose_hash") or "").strip().lower()
           compat = json.loads(compat_file.read_text(encoding="utf-8"))
-          expected = (compat.get("compatibility", {}).get("profiles", {}).get(profile, {}).get("kms_compose_hash") or "").strip().lower()
+          profile_data = compat.get("compatibility", {}).get("profiles", {}).get(profile, {})
+          expected = (profile_data.get("event_payload") or "").strip().lower()
           if not expected:
               print(f"[post-release-e2e] OK: skipping compose_hash check for profile={profile} (not in compatibility map)")
           elif probe_compose != expected:

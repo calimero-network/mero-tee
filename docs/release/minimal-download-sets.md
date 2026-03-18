@@ -16,7 +16,7 @@ Use these sets when you cannot (or do not want to) download all release assets.
 - `kms-phala-checksums.txt` + `.sig` + `.pem`
 - `kms-phala-release-manifest.json` + `.sig` + `.pem`
 - `kms-phala-attestation-policy.json` + `.sig` + `.pem`
-- `kms-phala-compatibility-map.json` + `.sig` + `.pem` (includes `kms_compose_hash` per profile for attestation verification)
+- `kms-phala-compatibility-map.json` + `.sig` + `.pem` (includes `event_payload` per profile for attestation verification)
 - Binary archive(s) for your platform from `kms-phala-checksums.txt` + matching `.sig` + `.pem`
 
 ### Full audit (auditor)

@@ -27,7 +27,7 @@ export function ComposeHashCard({ composeHash, appId, matches, profiles, tagToUs
               {Object.entries(profiles).map(([profile, p]) => (
                 <div key={profile} className="hash-row">
                   <span className="label">{profile}:</span>
-                  <code>{(p.kms_compose_hash || '').toLowerCase() || '(empty)'}</code>
+                  <code>{(p.event_payload ?? '').toLowerCase() || '(empty)'}</code>
                 </div>
               ))}
             </div>

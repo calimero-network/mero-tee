@@ -197,7 +197,7 @@ async function findMatchingRelease(composeHash, primaryTag = null) {
       const profiles = compatMap?.compatibility?.profiles || {};
       const matches = [];
       for (const [profile, p] of Object.entries(profiles)) {
-        const expected = (p.kms_compose_hash || '').toLowerCase();
+        const expected = (p.event_payload || '').toLowerCase();
         if (expected && expected === composeHash) matches.push(profile);
       }
       if (matches.length > 0) return { tag, compatMap, matches };
@@ -281,7 +281,7 @@ async function verifyKms() {
   const profiles = compatMap?.compatibility?.profiles || {};
   const matches = [];
   for (const [profile, p] of Object.entries(profiles)) {
-    const expected = (p.kms_compose_hash || '').toLowerCase();
+    const expected = (p.event_payload || '').toLowerCase();
     if (expected && expected === composeHash) matches.push(profile);
   }
 
@@ -292,7 +292,7 @@ async function verifyKms() {
   } else {
     composeContent += '<span class="result-err">✗ NO MATCH</span><br>Expected (from ' + (compatMap?.compatibility?.version || 'release') + '):<br>';
     for (const [profile, p] of Object.entries(profiles)) {
-      const h = (p.kms_compose_hash || '').toLowerCase();
+      const h = (p.event_payload || '').toLowerCase();
       composeContent += '<div class="hash-row"><span class="label">' + profile + ':</span><code>' + (h || '(empty)') + '</code></div>';
     }
   }
@@ -388,7 +388,7 @@ async function loadByKmsUrl(kmsUrl, releaseTag = null) {
       if (compatMap) {
         composeContent.push('<div class="expected-section"><span class="label">Expected (from ' + escapeHtml(tagToUse) + '):</span></div>');
         for (const [profile, p] of Object.entries(profiles)) {
-          const h = (p.kms_compose_hash || '').toLowerCase();
+          const h = (p.event_payload || '').toLowerCase();
           composeContent.push('<div class="hash-row"><span class="label">' + profile + ':</span><code>' + (h || '(empty)') + '</code></div>');
         }
       }

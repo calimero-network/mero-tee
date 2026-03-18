@@ -18,7 +18,7 @@ export async function findMatchingRelease(composeHash, primaryTag = null) {
       const profiles = compatMap?.compatibility?.profiles || {};
       const matches = [];
       for (const [profile, p] of Object.entries(profiles)) {
-        const expected = (p.kms_compose_hash || '').toLowerCase();
+        const expected = (p.event_payload ?? '').toLowerCase();
         if (expected && expected === composeHash) matches.push(profile);
       }
       if (matches.length > 0) return { tag, compatMap, matches };

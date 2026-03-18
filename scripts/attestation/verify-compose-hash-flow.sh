@@ -32,7 +32,7 @@ fi
 
 echo "Fetched $(echo "${compat_json}" | wc -c) bytes"
 for profile in debug "debug-read-only" "locked-read-only"; do
-  val="$(echo "${compat_json}" | jq -r --arg p "${profile}" '.compatibility.profiles[$p].kms_compose_hash // ""')"
+  val="$(echo "${compat_json}" | jq -r --arg p "${profile}" '.compatibility.profiles[$p].event_payload // ""')"
   if [[ -z "${val}" ]]; then
     echo "  ${profile}: (empty or missing)"
   elif [[ "${val}" =~ ^[a-f0-9]{64}$ ]]; then
@@ -46,7 +46,7 @@ echo ""
 # 2. Verify attestation verifier expects same structure
 echo "--- 2. Verifier expectations ---"
 echo "Verifier fetches: ${COMPAT_URL}"
-echo "Verifier reads: compatibility.profiles.<profile>.kms_compose_hash"
+echo "Verifier reads: compatibility.profiles.<profile>.event_payload"
 echo "Extraction: imr=3 event with event=='compose-hash', payload=64 hex"
 echo ""
 

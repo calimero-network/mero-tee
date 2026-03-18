@@ -159,7 +159,7 @@ export function EventLogCard({
           <div className="expected-compose-section">
             <span className="label">Compare to release:</span>
             {Object.entries(expectedComposeHashes).map(([profile, p]) => {
-              const expected = (p.kms_compose_hash || '').toLowerCase();
+              const expected = (p.event_payload ?? '').toLowerCase();
               const match = expected && composeHash === expected;
               return (
                 <div key={profile} className="hash-row">

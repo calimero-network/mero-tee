@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.79] - 2026-03-18
+
+### Changed
+
+- Release assets now publish `event_payload` (compose-hash event payload) instead of `kms_compose_hash` in compatibility map and `kms_allowed_event_payload` instead of `kms_allowed_compose_hash` in policy files.
+- Removed backwards compatibility for legacy `kms_compose_hash` / `kms_allowed_compose_hash` fields.
+- Synchronized release version to `2.1.79` across:
+  - `mero-kms/Cargo.toml`,
+  - `Cargo.lock` (`mero-kms-phala` package),
+  - `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.1.51] - 2026-03-15
 
 ### Fixed

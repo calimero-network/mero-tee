@@ -14,8 +14,8 @@ How `compose_hash` flows from release to attestation verifier, and when mismatch
 │    - Replays RTMR3 from event_log, verifies vs quote                          │
 │    - Extracts compose_hash from imr=3 "compose-hash" event payload           │
 │    - Writes kms-app-identity.json                                             │
-│ 4. Release embeds compose_hash in kms-phala-compatibility-map.json           │
-│    compatibility.profiles.<profile>.kms_compose_hash                          │
+│ 4. Release embeds event_payload in kms-phala-compatibility-map.json          │
+│    compatibility.profiles.<profile>.event_payload                              │
 └─────────────────────────────────────────────────────────────────────────────┘
                                         │
                                         ▼
@@ -26,7 +26,7 @@ How `compose_hash` flows from release to attestation verifier, and when mismatch
 │    https://github.com/calimero-network/mero-tee/releases/download/           │
 │    <tag>/kms-phala-compatibility-map.json                                    │
 │ 2. Extracts compose_hash from user's attestation event_log (same logic)      │
-│ 3. Compares received vs compatibility.profiles.<profile>.kms_compose_hash     │
+│ 3. Compares received vs compatibility.profiles.<profile>.event_payload        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,5 +82,5 @@ Run to verify the flow and check extraction parity:
 ## Debugging a mismatch
 
 1. **Confirm extraction** — Run the verification script with your attest-response. Python and JS should produce the same compose_hash.
-2. **Check release asset** — Fetch the compatibility map and verify `kms_compose_hash` values match what the verifier shows as "Expected".
+2. **Check release asset** — Fetch the compatibility map and verify `event_payload` values match what the verifier shows as "Expected".
 3. **Compare event logs** — If your event log has a different `compose-hash` event payload than the probe's, the hashes will differ. This usually means different compose/config at runtime.

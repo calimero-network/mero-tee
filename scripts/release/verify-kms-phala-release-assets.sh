@@ -296,9 +296,9 @@ jq -e --arg tag "${logical_tag}" '
   ((.compatibility.roles.node // "node") == "node") and
   (.compatibility.kms_tag == ("mero-kms-v" + $tag)) and
   (.compatibility.node_image_tag == ("mero-tee-v" + $tag)) and
-  ((.compatibility.profiles.debug.kms_compose_hash // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
-  ((.compatibility.profiles["debug-read-only"].kms_compose_hash // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
-  ((.compatibility.profiles["locked-read-only"].kms_compose_hash // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
+  ((.compatibility.profiles.debug.event_payload // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
+  ((.compatibility.profiles["debug-read-only"].event_payload // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
+  ((.compatibility.profiles["locked-read-only"].event_payload // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
   (.compatibility.profiles.debug.kms_policy_asset | type == "string" and length > 0) and
   (.compatibility.profiles["debug-read-only"].kms_policy_asset | type == "string" and length > 0) and
   (.compatibility.profiles["locked-read-only"].kms_policy_asset | type == "string" and length > 0) and
@@ -384,7 +384,7 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
       (.kms.attest_endpoint == "/attest") and
       (.kms.default_binding_hex | type == "string" and test("^[A-Fa-f0-9]{64}$")) and
       (.kms.default_binding_b64 | type == "string" and length > 0) and
-      (((.policy.kms_allowed_compose_hash // []) | length == 0) or ((.policy.kms_allowed_compose_hash[0] // "") | type == "string" and (length == 64) and test("^[a-f0-9]+$"))) and
+      (((.policy.kms_allowed_event_payload // []) | length == 0) or (((.policy.kms_allowed_event_payload)[0] // "") | type == "string" and (length == 64) and test("^[a-f0-9]+$"))) and
       ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0) and
       (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0)) and
       (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0)) and

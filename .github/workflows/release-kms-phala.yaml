@@ -723,7 +723,7 @@ jobs:
                   debug: {
                     kms_image_tag: ($version + "-debug"),
                     kms_image_digest: $kms_debug_digest,
-                    kms_compose_hash: $compose_hash_debug,
+                    event_payload: $compose_hash_debug,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug.json",
                     kms_policy_url: $kms_policy_debug_url,
@@ -734,7 +734,7 @@ jobs:
                   "debug-read-only": {
                     kms_image_tag: ($version + "-debug-read-only"),
                     kms_image_digest: $kms_debug_ro_digest,
-                    kms_compose_hash: $compose_hash_debug_ro,
+                    event_payload: $compose_hash_debug_ro,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.debug-read-only.json",
                     kms_policy_url: $kms_policy_debug_ro_url,
@@ -745,7 +745,7 @@ jobs:
                   "locked-read-only": {
                     kms_image_tag: ($version + "-locked-read-only"),
                     kms_image_digest: $kms_locked_digest,
-                    kms_compose_hash: $compose_hash_locked,
+                    event_payload: $compose_hash_locked,
                     kms_role: "kms",
                     kms_policy_asset: "kms-phala-attestation-policy.locked-read-only.json",
                     kms_policy_url: $kms_policy_locked_url,
@@ -1008,7 +1008,7 @@ jobs:
             local node_rtmr1="${11}"
             local node_rtmr2="${12}"
             local node_rtmr3="${13}"
-            local kms_compose_hash="${14}"
+            local event_payload="${14}"
             local output_file="${15}"
 
             jq -n \
@@ -1035,7 +1035,7 @@ jobs:
               --argjson node_allowed_rtmr1 "${node_rtmr1}" \
               --argjson node_allowed_rtmr2 "${node_rtmr2}" \
               --argjson node_allowed_rtmr3 "${node_rtmr3}" \
-              --arg kms_compose_hash "${kms_compose_hash}" \
+              --arg event_payload "${event_payload}" \
               '{
                 schema_version: 1,
                 role: "kms",
@@ -1074,7 +1074,7 @@ jobs:
                   kms_allowed_rtmr1: $kms_allowed_rtmr1,
                   kms_allowed_rtmr2: $kms_allowed_rtmr2,
                   kms_allowed_rtmr3: $kms_allowed_rtmr3,
-                  kms_allowed_compose_hash: (if ($kms_compose_hash | length) > 0 then [$kms_compose_hash] else [] end),
+                  kms_allowed_event_payload: (if ($event_payload | length) > 0 then [$event_payload] else [] end),
                   node_allowed_tcb_statuses: $node_allowed_tcb,
                   node_allowed_mrtd: $node_allowed_mrtd,
                   node_allowed_rtmr0: $node_allowed_rtmr0,
@@ -1186,9 +1186,9 @@ jobs:
           compatibility_kms_image_debug_digest="$(jq -r '.compatibility.profiles.debug.kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_image_debug_ro_digest="$(jq -r '.compatibility.profiles["debug-read-only"].kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
           compatibility_kms_image_locked_digest="$(jq -r '.compatibility.profiles["locked-read-only"].kms_image_digest // empty' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_kms_compose_hash_debug="$(jq -r '.compatibility.profiles.debug.kms_compose_hash // ""' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_kms_compose_hash_debug_ro="$(jq -r '.compatibility.profiles["debug-read-only"].kms_compose_hash // ""' release-assets/kms-phala-compatibility-map.json)"
-          compatibility_kms_compose_hash_locked="$(jq -r '.compatibility.profiles["locked-read-only"].kms_compose_hash // ""' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_compose_hash_debug="$(jq -r '.compatibility.profiles.debug.event_payload // ""' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_compose_hash_debug_ro="$(jq -r '.compatibility.profiles["debug-read-only"].event_payload // ""' release-assets/kms-phala-compatibility-map.json)"
+          compatibility_kms_compose_hash_locked="$(jq -r '.compatibility.profiles["locked-read-only"].event_payload // ""' release-assets/kms-phala-compatibility-map.json)"
 
           profile_image_ref() {
             local tag="$1"
@@ -1297,9 +1297,9 @@ jobs:
             echo "| debug-read-only | \`${compatibility_kms_image_debug_ro_tag}\` | \`${compatibility_kms_image_debug_ro_digest:-n/a}\` | \`${kms_image_debug_ro_ref}\` |"
             echo "| locked-read-only | \`${compatibility_kms_image_locked_tag}\` | \`${compatibility_kms_image_locked_digest:-n/a}\` | \`${kms_image_locked_ref}\` |"
             echo ""
-            echo "### KMS compose hash (per profile, from verified attestation)"
+            echo "### KMS compose-hash event_payload (per profile, from verified attestation)"
             echo ""
-            echo "| Profile | compose_hash |"
+            echo "| Profile | event_payload |"
             echo "|---|---|"
             echo "| debug | \`${compatibility_kms_compose_hash_debug:-n/a}\` |"
             echo "| debug-read-only | \`${compatibility_kms_compose_hash_debug_ro:-n/a}\` |"
@@ -1344,7 +1344,7 @@ jobs:
               kms_allowed_rtmr1,
               kms_allowed_rtmr2,
               kms_allowed_rtmr3,
-              kms_allowed_compose_hash,
+              kms_allowed_event_payload,
               node_allowed_tcb_statuses,
               node_allowed_mrtd,
               node_allowed_rtmr0,
@@ -1363,7 +1363,7 @@ jobs:
               kms_allowed_rtmr1,
               kms_allowed_rtmr2,
               kms_allowed_rtmr3,
-              kms_allowed_compose_hash,
+              kms_allowed_event_payload,
               node_allowed_tcb_statuses,
               node_allowed_mrtd,
               node_allowed_rtmr0,
@@ -1382,7 +1382,7 @@ jobs:
               kms_allowed_rtmr1,
               kms_allowed_rtmr2,
               kms_allowed_rtmr3,
-              kms_allowed_compose_hash,
+              kms_allowed_event_payload,
               node_allowed_tcb_statuses,
               node_allowed_mrtd,
               node_allowed_rtmr0,
@@ -1423,7 +1423,7 @@ jobs:
             echo "| \`kms-phala-attestation-policy.debug.json\` | Full debug profile policy (KMS+node allowlists) | Debug cohort deployments only |"
             echo "| \`kms-phala-attestation-policy.debug-read-only.json\` | Full debug-read-only profile policy | Pre-production hardening cohort |"
             echo "| \`kms-phala-attestation-policy.locked-read-only.json\` | Full production profile policy | Production deployment baseline |"
-            echo "| \`kms-phala-compatibility-map.json\` | KMS↔mero-tee mapping + per-profile policy URLs, hashes, compose_hash | Prevents profile/version mismatch rollout |"
+            echo "| \`kms-phala-compatibility-map.json\` | KMS↔mero-tee mapping + per-profile policy URLs, hashes, event_payload | Prevents profile/version mismatch rollout |"
             echo "| \`kms-phala-container-metadata.json\` | Container image digest/tags and linkage to release | Digest-pinned deployment verification |"
             echo "| \`kms-phala-rekor-index.json\` | Transparency log lookup data for signed assets | Independent signature transparency audit |"
             echo "| \`kms-phala-container-sbom.spdx.json\` | SBOM for released container image | Supply-chain review/compliance |"

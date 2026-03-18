@@ -36,7 +36,7 @@ Release X.Y.Z checksums, manifest, attestation policy, container metadata, archi
 
 ### Compose hash verification
 
-Profile policy assets (`kms-phala-attestation-policy.<profile>.json`) and the compatibility map include `kms_allowed_compose_hash` / `kms_compose_hash` (64-char hex). These values are captured from a quote-verified attestation path during the staging probe. Operators must verify compose_hash from these signed assets when validating KMS attestation; do not rely on compose_hash from provisioning metadata alone.
+Profile policy assets (`kms-phala-attestation-policy.<profile>.json`) and the compatibility map include `kms_allowed_event_payload` / `event_payload` (64-char hex). These values are captured from the compose-hash event's event_payload during the staging probe. Operators must verify compose_hash from these signed assets when validating KMS attestation; do not rely on compose_hash from provisioning metadata alone.
 
 ### Common failure patterns
 
