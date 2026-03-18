@@ -6,6 +6,21 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.1.80] - 2026-03-18
+
+### Fixed
+
+- `post-release-kms-node-e2e` workflow now dispatches probe workflows using
+  `${PROBE_WORKFLOW_REF}` (branch ref) instead of a raw commit SHA, fixing
+  `HTTP 422: No ref found` dispatch failures.
+
+### Changed
+
+- Synchronized release version to `2.1.80` across:
+  - `mero-kms/Cargo.toml`,
+  - `Cargo.lock` (`mero-kms-phala` package),
+  - `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.1.79] - 2026-03-18
 
 ### Changed
