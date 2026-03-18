@@ -23,6 +23,10 @@
         <input type="url" id="kms-url" placeholder="https://your-kms.phala.network" />
         <button id="fetch-kms" type="button">Fetch attestation</button>
       </div>
+      <p class="hint">Release tag for compose_hash check (optional, e.g. mero-kms-v1.2.3; default: latest)</p>
+      <div class="input-row">
+        <input type="text" id="release-tag" placeholder="mero-kms-v1.2.3" />
+      </div>
       <p class="hint">Or paste attestation JSON below (from <code>POST /attest</code>)</p>
       <textarea id="attest-json" placeholder='Paste attestation response JSON (from: curl -X POST -H "Content-Type: application/json" -d ''{"nonceB64":"BASE64_32_BYTES"}'' https://your-kms/attest)' rows="6"></textarea>
       <button id="verify-kms" type="button">Verify KMS</button>
@@ -44,6 +48,6 @@
     </section>
   </main>
 
-  <script src="verifier.js?v=2" type="module"></script>
+  <script src="verifier.js?v=3" type="module"></script>
 </body>
 </html>

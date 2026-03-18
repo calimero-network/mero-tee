@@ -5,8 +5,10 @@
  *   - { attestation } — attestation JSON (for direct paste/script use)
  */
 import crypto from 'node:crypto';
+import * as jose from 'jose';
 
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
+const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
 
 // SSRF protection: allowed host patterns (regex). Default: phala.network, localhost.
 const KMS_ALLOWED_HOSTS = (process.env.KMS_ALLOWED_HOSTS || 'phala\\.network$|^localhost$|^127\\.0\\.0\\.1$')
@@ -178,9 +180,23 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: 'ITA verification failed: ' + (e.message || 'unknown') });
   }
 
+  let itaTokenVerified = false;
+  if (itaToken) {
+    try {
+      const JWKS = jose.createRemoteJWKSet(new URL(ITA_JWKS_URL));
+      await jose.jwtVerify(itaToken.replace(/^Bearer\s+/i, '').trim(), JWKS, {
+        issuer: 'https://portal.trustauthority.intel.com',
+      });
+      itaTokenVerified = true;
+    } catch {
+      /* signature verification failed */
+    }
+  }
+
   return res.status(200).json({
     attestation,
     ita_response: itaBody,
     ita_token: itaToken,
+    ita_token_verified: itaTokenVerified,
   });
 }

@@ -2,13 +2,10 @@
  * Calimero Attestation Verifier
  * Extracts compose_hash from KMS attestation response and compares with release policy.
  * Supports: paste/fetch mode, or load by KMS URL (backend fetches + ITA).
- * ITA verification runs server-side; token signature verified client-side via Intel JWKS.
+ * ITA token signature verified server-side (Intel JWKS); no CORS in browser.
  */
 
-import * as jose from 'https://esm.sh/jose@5';
-
 const COMPOSE_HASH_RE = /^[a-fA-F0-9]{64}$/;
-const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
 const REPO = 'calimero-network/mero-tee';
 const API_BASE = (typeof window !== 'undefined' && window.VERIFIER_API_BASE) || '';
 
@@ -94,7 +91,8 @@ async function verifyKms() {
     }
   } else if (urlInput) {
     // Route via backend to avoid CORS (Phala KMS does not send CORS headers)
-    await loadByKmsUrl(urlInput);
+    const releaseTag = $('#release-tag')?.value?.trim() || new URLSearchParams(location.search).get('release_tag') || undefined;
+    await loadByKmsUrl(urlInput, releaseTag);
     return;
   } else {
     showError('Enter a KMS URL or paste attestation JSON');
@@ -169,24 +167,8 @@ $('#fetch-kms').addEventListener('click', async () => {
   await verifyKms();
 });
 
-/** Verify ITA JWT signature against Intel JWKS. */
-async function verifyitaToken(token) {
-  if (!token || typeof token !== 'string') return { verified: false, error: 'No token' };
-  const trimmed = token.replace(/^Bearer\s+/i, '').trim();
-  if (trimmed.split('.').length !== 3) return { verified: false, error: 'Invalid JWT format' };
-  try {
-    const JWKS = jose.createRemoteJWKSet(new URL(ITA_JWKS_URL));
-    await jose.jwtVerify(trimmed, JWKS, {
-      issuer: 'https://portal.trustauthority.intel.com',
-    });
-    return { verified: true };
-  } catch (e) {
-    return { verified: false, error: e.message || 'Signature verification failed' };
-  }
-}
-
-/** Load verification by KMS URL. Backend fetches attestation, calls ITA, returns result. */
-async function loadByKmsUrl(kmsUrl) {
+/** Load verification by KMS URL. Backend fetches attestation, calls ITA, verifies token, returns result. */
+async function loadByKmsUrl(kmsUrl, releaseTag = null) {
   if (!API_BASE || !kmsUrl) return;
   showResults('<span class="result-warn">Verifying (backend fetches attestation from KMS)...</span>');
   try {
@@ -197,15 +179,15 @@ async function loadByKmsUrl(kmsUrl) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    const { attestation, ita_token, ita_response } = data;
+    const { attestation, ita_token, ita_response, ita_token_verified } = data;
     if (!attestation) throw new Error('No attestation in response');
     const eventLog = attestation.event_log ?? attestation.eventLog;
     const events = Array.isArray(eventLog) ? eventLog : (eventLog ? JSON.parse(eventLog) : []);
     const { composeHash, appId } = extractComposeHashAndAppId(events);
     let compatMap;
+    const tagToUse = releaseTag || (await fetchLatestKmsTag());
     try {
-      const tag = await fetchLatestKmsTag();
-      compatMap = await fetchCompatibilityMap(tag);
+      compatMap = await fetchCompatibilityMap(tagToUse);
     } catch (e) {
       compatMap = null;
     }
@@ -217,12 +199,11 @@ async function loadByKmsUrl(kmsUrl) {
         if (expected && expected === composeHash) matches.push(profile);
       }
     }
-    const tokenVerify = await verifyitaToken(ita_token);
     let html = '<span class="result-ok">ITA verified</span> — Quote verified by Intel Trust Authority.\n\n';
-    if (tokenVerify.verified) {
+    if (ita_token_verified) {
       html += '<span class="result-ok">✓ Token signature verified</span> — JWT signed by Intel (JWKS).\n\n';
     } else {
-      html += '<span class="result-err">✗ Token verification failed</span> — ' + escapeHtml(tokenVerify.error || 'unknown') + '\n\n';
+      html += '<span class="result-err">✗ Token verification failed</span> — Could not verify JWT signature.\n\n';
     }
     html += 'compose_hash: ' + (composeHash || 'n/a') + '\n';
     html += 'app_id: ' + (appId || 'n/a') + '\n\n';
@@ -232,7 +213,8 @@ async function loadByKmsUrl(kmsUrl) {
       html += '<span class="result-err">✗ NO MATCH</span> — compose_hash does not match release policy.\n\n';
     }
     html += '<span class="result-ok">ITA attestation token:</span>\n';
-    html += '<pre class="text-xs break-all mt-1" style="word-break:break-all;font-size:0.75rem;">' + escapeHtml((ita_token || '').slice(0, 200) + '...') + '</pre>';
+    html += '<pre class="text-xs break-all mt-1" style="word-break:break-all;font-size:0.75rem;">' + escapeHtml((ita_token || '').slice(0, 200) + '...') + '</pre>\n';
+    if (tagToUse) html += '<p class="text-slate-400 text-xs mt-2">Compose hash checked against release: ' + escapeHtml(tagToUse) + '</p>';
     showResults(html);
   } catch (e) {
     showError(e.message);
@@ -242,8 +224,10 @@ async function loadByKmsUrl(kmsUrl) {
 (function init() {
   const params = new URLSearchParams(location.search);
   const kmsUrl = params.get('kms_url');
+  const releaseTag = params.get('release_tag');
   if (kmsUrl) {
     $('#kms-url').value = kmsUrl;
-    loadByKmsUrl(kmsUrl);
+    if (releaseTag && $('#release-tag')) $('#release-tag').value = releaseTag;
+    loadByKmsUrl(kmsUrl, releaseTag || undefined);
   }
 })();

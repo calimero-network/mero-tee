@@ -4,5 +4,7 @@
   "private": true,
   "description": "Public attestation verifier for Phala KMS and mero-tee instances",
   "type": "module",
-  "dependencies": {}
+  "dependencies": {
+    "jose": "^5.9.6"
+  }
 }
