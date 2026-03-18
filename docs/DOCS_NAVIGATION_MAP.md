@@ -8,10 +8,12 @@ Use these links in PR descriptions, release notes, and issue comments to avoid a
 
 | Page | Purpose | Key anchors |
 |---|---|---|
-| [README.md](../README.md) | Operator-facing repository entry point | [`#quick-links`](../README.md#quick-links), [`#releases`](../README.md#releases), [`#what-signatures-prove-and-do-not-prove`](../README.md#what-signatures-prove-and-do-not-prove) |
+| [README.md](../README.md) | Operator-facing repository entry point | [`#documentation`](../README.md#documentation), [`#releases`](../README.md#releases), [`#what-signatures-prove-and-do-not-prove`](../README.md#what-signatures-prove-and-do-not-prove) |
+| [docs/README.md](README.md) | Canonical docs portal (audience-based start paths) | [`#start-paths-by-audience`](README.md#start-paths-by-audience), [`#documentation-map`](README.md#documentation-map), [`#architecture-at-a-glance`](README.md#architecture-at-a-glance) |
 | [docs/DOCS_INDEX.md](DOCS_INDEX.md) | Source-of-truth mapping between docs and automation | [`#source-mapping`](DOCS_INDEX.md#source-mapping), [`#release-trust-artifact-references`](DOCS_INDEX.md#release-trust-artifact-references) |
 | [docs/GLOSSARY.md](GLOSSARY.md) | Canonical terminology and naming conventions | [`#lanes`](GLOSSARY.md#lanes), [`#profiles`](GLOSSARY.md#profiles), [`#naming-guidance`](GLOSSARY.md#naming-guidance) |
 | [docs/adr/README.md](adr/README.md) | Architecture decision records (security/process) | [`#index`](adr/README.md#index), [`#adr-format`](adr/README.md#adr-format) |
+| [docs/diagrams/README.md](diagrams/README.md) | Index of architecture/release diagrams and required coverage | [`#diagram-index`](diagrams/README.md#diagram-index), [`#required-coverage`](diagrams/README.md#required-coverage), [`#diagram-authoring-guidance`](diagrams/README.md#diagram-authoring-guidance) |
 | [docs/DOCS_GRAPH.md](DOCS_GRAPH.md) | Architecture diagram: KMS, mero-tee, nodes, attestation | [`#system-overview`](DOCS_GRAPH.md#system-overview), [`#attestation-flow-phala-kms-lane`](DOCS_GRAPH.md#attestation-flow-phala-kms-lane) |
 | [docs/architecture/trust-boundaries.md](architecture/trust-boundaries.md) | Trust boundaries and attestation enforcement points | [`#repository-boundaries`](architecture/trust-boundaries.md#repository-boundaries), [`#platform-lanes-not-symmetric-deployments`](architecture/trust-boundaries.md#platform-lanes-not-symmetric-deployments), [`#attestation-enforcement-points`](architecture/trust-boundaries.md#attestation-enforcement-points) |
 | [docs/runbooks/platforms/README.md](runbooks/platforms/README.md) | Platform-specific navigation entrypoint | [`#runbooks`](runbooks/platforms/README.md#runbooks) |
