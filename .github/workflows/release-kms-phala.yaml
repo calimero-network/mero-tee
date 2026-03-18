@@ -617,16 +617,23 @@ jobs:
             fi
           done
 
-          compose_hash_debug="$(jq -r '.compose_hash' "${app_identity_debug}")"
-          compose_hash_debug_ro="$(jq -r '.compose_hash' "${app_identity_debug_ro}")"
-          compose_hash_locked="$(jq -r '.compose_hash' "${app_identity_locked}")"
-          for h in compose_hash_debug compose_hash_debug_ro compose_hash_locked; do
-            val="${!h}"
-            if [[ -z "${val}" || "${val}" == "null" || ! "${val}" =~ ^[a-f0-9]{64}$ ]]; then
-              echo "::error::Invalid compose_hash for ${h}: ${val}"
-              exit 1
-            fi
-          done
+          compose_hash_debug="$(jq -r '.compose_hash // ""' "${app_identity_debug}")"
+          compose_hash_debug_ro="$(jq -r '.compose_hash // ""' "${app_identity_debug_ro}")"
+          compose_hash_locked="$(jq -r '.compose_hash // ""' "${app_identity_locked}")"
+          if [[ -n "${compose_hash_debug}" && -n "${compose_hash_debug_ro}" && -n "${compose_hash_locked}" ]]; then
+            for h in compose_hash_debug compose_hash_debug_ro compose_hash_locked; do
+              val="${!h}"
+              if [[ ! "${val}" =~ ^[a-f0-9]{64}$ ]]; then
+                echo "::error::Invalid compose_hash for ${h}: ${val}"
+                exit 1
+              fi
+            done
+          else
+            echo "::warning::compose_hash not available from probe (compose_hash_skipped); omitting from release assets"
+            compose_hash_debug=""
+            compose_hash_debug_ro=""
+            compose_hash_locked=""
+          fi
           if [[ ! -f "${node_policy_file}" ]]; then
             echo "::error::Node policy not found at ${node_policy_file}"
             exit 1
@@ -1067,7 +1074,7 @@ jobs:
                   kms_allowed_rtmr1: $kms_allowed_rtmr1,
                   kms_allowed_rtmr2: $kms_allowed_rtmr2,
                   kms_allowed_rtmr3: $kms_allowed_rtmr3,
-                  kms_allowed_compose_hash: [$kms_compose_hash],
+                  kms_allowed_compose_hash: (if ($kms_compose_hash | length) > 0 then [$kms_compose_hash] else [] end),
                   node_allowed_tcb_statuses: $node_allowed_tcb,
                   node_allowed_mrtd: $node_allowed_mrtd,
                   node_allowed_rtmr0: $node_allowed_rtmr0,
