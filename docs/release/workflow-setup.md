@@ -222,3 +222,25 @@ step (`actions/checkout`) before invoking `bash scripts/...`.
 
 In particular, the node-image `cleanup_attestation_resources` job must checkout
 the repo before invoking `scripts/release/node-image-gcp/sweep-attestation-resources.sh`.
+
+## Logging signal and run summary conventions
+
+Workflow logging should prioritize fast diagnosis while avoiding repeated noise:
+
+- Polling loops should log state/code transitions and periodic checkpoints, not
+  every single attempt.
+- Failure-path dumps should be bounded (for example last ~120 log lines or
+  compact JSON excerpts) while preserving full artifacts for deep debugging.
+- For probe/release workflows, prefer compact structured snippets in console
+  output and keep full payloads in artifact files.
+
+Current workflows following this pattern include:
+
+- `.github/workflows/kms-phala-staging-probe.yaml`
+- `.github/workflows/node-image-gcp-staging-probe.yaml`
+- `.github/workflows/release-node-image-gcp.yaml`
+- `.github/workflows/release-kms-phala.yaml`
+
+Low-signal CI/guard workflows also emit final `GITHUB_STEP_SUMMARY` rows with
+key step outcomes so operators can triage pass/fail state without scanning full
+raw logs.
