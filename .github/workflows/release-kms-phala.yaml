@@ -405,6 +405,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
           PROFILE: ${{ matrix.profile }}
+          KMS_VERSION_OVERRIDE: "2.1.85"
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash scripts/release/kms-phala/trigger-staging-probe.sh

@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Dispatch and wait for the KMS staging probe workflow.
 # Inputs: IMAGE_REF, PROFILE, RELEASE_VERSION, PROBE_LABEL, GH_TOKEN context.
+# Optional: KMS_VERSION_OVERRIDE (maps to workflow input kms_version_override).
 # Output (GITHUB_OUTPUT): run_id of the completed probe run.
 
 if [[ -z "${IMAGE_REF:-}" || -z "${PROFILE:-}" || -z "${RELEASE_VERSION:-}" || -z "${PROBE_LABEL:-}" ]]; then
@@ -64,13 +65,19 @@ for probe_attempt in $(seq 1 "${max_probe_attempts}"); do
   dispatch_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   expected_display_title="KMS staging probe (${probe_label})"
 
-  gh workflow run "kms-phala-staging-probe.yaml" \
-    --repo "${GITHUB_REPOSITORY}" \
-    --ref master \
-    -f kms_image="${IMAGE_REF}" \
-    -f kms_tag="pinned" \
-    -f probe_label="${probe_label}" \
-    -f deployment_name="${deployment_name}"
+  run_args=(
+    workflow run "kms-phala-staging-probe.yaml"
+    --repo "${GITHUB_REPOSITORY}"
+    --ref master
+    -f "kms_image=${IMAGE_REF}"
+    -f "kms_tag=pinned"
+    -f "probe_label=${probe_label}"
+    -f "deployment_name=${deployment_name}"
+  )
+  if [[ -n "${KMS_VERSION_OVERRIDE:-}" ]]; then
+    run_args+=(-f "kms_version_override=${KMS_VERSION_OVERRIDE}")
+  fi
+  gh "${run_args[@]}"
 
   if [[ -z "${run_id}" ]]; then
     run_id=""

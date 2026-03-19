@@ -153,8 +153,15 @@ impl Config {
     }
 
     fn release_version_from_env() -> Option<String> {
-        // Always use build-time version. Compose omits MERO_KMS_VERSION for hash parity.
-        // Rebuilds without version bump are caught: different image digest → different compose_hash.
+        // Optional override for probe/bootstrap workflows that need policy from a
+        // known-good release tag while validating a newer image.
+        if let Ok(raw) = std::env::var("MERO_KMS_VERSION") {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        // Default to build-time version for release-candidate identity.
         Some(env!("CARGO_PKG_VERSION").to_string())
     }
 
@@ -631,6 +638,22 @@ mod tests {
         let selected =
             resolve_kms_profile(Some("debug-read-only"), None).expect("profile resolves");
         assert_eq!(selected, "debug-read-only");
+    }
+
+    #[test]
+    fn release_version_uses_override_when_set() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _guard = apply_string_overrides(vec![("MERO_KMS_VERSION", "2.1.85".to_string())]);
+        let version = Config::release_version_from_env().expect("release version");
+        assert_eq!(version, "2.1.85");
+    }
+
+    #[test]
+    fn release_version_defaults_to_build_time_when_override_unset() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _guard = apply_string_overrides(vec![("MERO_KMS_VERSION", "".to_string())]);
+        let version = Config::release_version_from_env().expect("release version");
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
