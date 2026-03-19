@@ -502,10 +502,8 @@ jobs:
 
             if [[ "${EVENT_NAME}" == "push" ]]; then
               refresh_node_release_workflow_state
-              if [[ "${node_release_workflow_state}" != "${last_logged_node_release_workflow_state}" || "${attempt}" -eq 1 || $(( attempt % 5 )) -eq 0 ]]; then
-                ci_log_transition "Release mero-tee workflow state" "${node_release_workflow_state}" "${last_logged_node_release_workflow_state}" "${attempt}" 5
-                last_logged_node_release_workflow_state="${node_release_workflow_state}"
-              fi
+              ci_log_transition "Release mero-tee workflow state" "${node_release_workflow_state}" "${last_logged_node_release_workflow_state}" "${attempt}" 5
+              last_logged_node_release_workflow_state="${node_release_workflow_state}"
               case "${node_release_workflow_state}" in
                 completed:failure|completed:cancelled|completed:timed_out|completed:action_required|completed:startup_failure|completed:stale)
                   ci_fail "NODE_RELEASE_FAILED" "Same-commit 'Release mero-tee' run ended as ${node_release_workflow_state} before publishing ${NODE_TAG}."

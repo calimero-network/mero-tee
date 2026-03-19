@@ -32,7 +32,7 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
-    lines.append(f"# artifacts index generated at {dt.datetime.utcnow().isoformat()}Z")
+    lines.append(f"# artifacts index generated at {dt.datetime.now(dt.timezone.utc).isoformat()}")
     lines.append("# format: path|present|description")
 
     for raw_entry in args.entry:
