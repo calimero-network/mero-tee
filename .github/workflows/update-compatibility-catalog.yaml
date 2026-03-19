@@ -61,6 +61,7 @@ jobs:
           fi
 
       - name: Commit and push
+        id: commit_push
         if: steps.diff.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -70,3 +71,14 @@ jobs:
           git commit -m "chore: update compatibility catalog (${{ steps.catalog.outputs.catalog_count }} releases)"
           # Release-triggered checkouts can be detached; always push explicitly to master.
           git push origin HEAD:master
+
+      - name: Summarize compatibility catalog update
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Compatibility catalog update"
+            echo ""
+            echo "- Catalog release count: ${{ steps.catalog.outputs.catalog_count || '0' }}"
+            echo "- File changed: ${{ steps.diff.outputs.changed || 'false' }}"
+            echo "- Commit/push outcome: ${{ steps.commit_push.outcome || 'skipped' }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
