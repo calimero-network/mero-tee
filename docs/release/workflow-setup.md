@@ -126,6 +126,14 @@ release events:
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
   Release publishes a minimal draft before the probe so KMS fetches policy at boot.
+  - Temporary bootstrap pin: `release-kms-phala.yaml` sets
+    `BOOTSTRAP_POLICY_SOURCE_TAG=mero-kms-v2.1.85` for
+    `scripts/release/kms-phala/publish-minimal-release.sh`.
+  - This pin affects only the source release used to copy bootstrap policy assets
+    into the minimal draft release. It does not change runtime KMS versioning
+    (`CARGO_PKG_VERSION` remains the runtime release identity).
+  - Remove the pin after upstream release assets are repaired and newer tags can
+    safely provide bootstrap policy JSON files.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
