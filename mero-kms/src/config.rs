@@ -8,6 +8,7 @@ use sha2::Digest;
 use crate::policy::{validate_policy_requirements, AttestationPolicy};
 
 const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
+const POLICY_RELEASE_VERSION_HARDCODED: &str = "2.1.85";
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
 const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
 
@@ -153,9 +154,9 @@ impl Config {
     }
 
     fn release_version_from_env() -> Option<String> {
-        // Always use build-time version. Compose omits MERO_KMS_VERSION for hash parity.
-        // Rebuilds without version bump are caught: different image digest → different compose_hash.
-        Some(env!("CARGO_PKG_VERSION").to_string())
+        // Temporary release-policy pin while mero-kms-v2.1.85 remains the known-good policy source.
+        // TODO: remove this hardcode and switch back to CARGO_PKG_VERSION after policy assets are fixed.
+        Some(POLICY_RELEASE_VERSION_HARDCODED.to_string())
     }
 
     async fn fetch_policy_from_release_async(
@@ -765,7 +766,7 @@ mod tests {
     #[test]
     fn from_env_accepts_release_version_without_policy_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
-        // Uses CARGO_PKG_VERSION (no env override)
+        // Uses temporary hardcoded release version (no env override)
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
