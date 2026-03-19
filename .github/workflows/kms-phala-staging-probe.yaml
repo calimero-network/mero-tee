@@ -429,7 +429,7 @@ jobs:
           mapfile -t candidate_urls < <(jq -r '.urls[]' "${ARTIFACTS_DIR}/candidate-urls.json")
           if [[ "${#candidate_urls[@]}" -eq 0 ]]; then
             echo "::error::No candidate KMS URLs available"
-            echo "[probe] candidate-urls.json: $(cat "${ARTIFACTS_DIR}/candidate-urls.json" 2>/dev/null || echo "empty")"
+            echo "[probe] Candidate URL preview: $(jq -c '.urls[:10]' "${ARTIFACTS_DIR}/candidate-urls.json" 2>/dev/null || echo "[]")"
             exit 1
           fi
           echo "[probe] Candidate URLs (${#candidate_urls[@]}):"
@@ -439,12 +439,16 @@ jobs:
           deadline=$(( $(date +%s) + timeout_seconds ))
           base_url=""
           attempt=0
+          last_health_code=""
 
           while [[ "$(date +%s)" -lt "${deadline}" ]]; do
             for candidate in "${candidate_urls[@]}"; do
               attempt=$((attempt + 1))
               health_code="$(curl -k -sS --max-time 8 -o "${ARTIFACTS_DIR}/health.json" -w "%{http_code}" "${candidate}/health" || true)"
-              echo "Probe attempt ${attempt}: ${candidate}/health -> HTTP ${health_code}"
+              if [[ "${health_code}" != "${last_health_code}" || "${attempt}" -eq 1 || $(( attempt % 10 )) -eq 0 ]]; then
+                echo "[probe] attempt ${attempt}: ${candidate}/health -> HTTP ${health_code:-error}"
+              fi
+              last_health_code="${health_code}"
               if [[ "${health_code}" == "200" ]]; then
                 if jq -e '.status == "alive"' "${ARTIFACTS_DIR}/health.json" >/dev/null 2>&1; then
                   base_url="${candidate}"
@@ -460,7 +464,20 @@ jobs:
 
           if [[ -z "${base_url}" ]]; then
             echo "::error::Timed out waiting for KMS /health on candidate URLs after ${attempt} attempts"
-            echo "[probe] Last health.json: $(cat "${ARTIFACTS_DIR}/health.json" 2>/dev/null | head -c 500 || echo "empty")"
+            if [[ -s "${ARTIFACTS_DIR}/health.json" ]]; then
+              health_preview="$(python3 - "${ARTIFACTS_DIR}/health.json" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          text = text.replace("\n", " ")
+          print(text[:500])
+          PY
+              )"
+              echo "[probe] Last health.json preview (first 500 chars): ${health_preview}"
+            else
+              echo "[probe] Last health.json preview: empty"
+            fi
             phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-late.json" 2>&1 || true
             phala logs --cvm-id "${VM_UUID}" --serial --tail 400 > "${ARTIFACTS_DIR}/cvm-serial.log" || true
             phala logs --cvm-id "${VM_UUID}" --tail 400 > "${ARTIFACTS_DIR}/cvm-container.log" || true
@@ -550,7 +567,7 @@ jobs:
           if ! jq -e '.compose_hash | type == "string" and (length == 64) and test("^[a-f0-9]+$")' \
             "${ARTIFACTS_DIR}/kms-app-identity.json" >/dev/null 2>&1; then
             echo "::error::compose_hash missing or invalid in output (required for attestation verifier parity)"
-            jq . "${ARTIFACTS_DIR}/kms-app-identity.json" 2>/dev/null || true
+            jq -c '{compose_hash, app_id, deployment_name}' "${ARTIFACTS_DIR}/kms-app-identity.json" 2>/dev/null || true
             exit 1
           fi
           echo "[verify_compose_hash] Extracted compose_hash from verified attestation path (RTMR replay + ITA parity)"

@@ -445,6 +445,7 @@ jobs:
           mkdir -p node-policy
 
           node_release_workflow_state="unknown"
+          last_logged_node_release_workflow_state=""
           refresh_node_release_workflow_state() {
             local state
             state="$(gh run list \
@@ -485,6 +486,22 @@ jobs:
                 break
               fi
             fi
+
+            if [[ "${EVENT_NAME}" == "push" ]]; then
+              refresh_node_release_workflow_state
+              if [[ "${node_release_workflow_state}" != "${last_logged_node_release_workflow_state}" || "${attempt}" -eq 1 || $(( attempt % 5 )) -eq 0 ]]; then
+                echo "Release mero-tee workflow state (attempt ${attempt}/60): ${node_release_workflow_state}"
+                last_logged_node_release_workflow_state="${node_release_workflow_state}"
+              fi
+              case "${node_release_workflow_state}" in
+                completed:failure|completed:cancelled|completed:timed_out|completed:action_required|completed:startup_failure|completed:stale)
+                  echo "::error::Same-commit 'Release mero-tee' run ended as ${node_release_workflow_state} before publishing ${NODE_TAG}."
+                  echo "::error::Fix/re-run node release first, then rerun this workflow."
+                  exit 1
+                  ;;
+              esac
+            fi
+
             if [[ "${attempt}" -eq 1 && "${versions_manifest_changed}" == "false" ]]; then
               case "${node_release_workflow_state}" in
                 queued:*|in_progress:*|pending:*|requested:*|waiting:*)
@@ -499,22 +516,13 @@ jobs:
                   ;;
               esac
             fi
-            if [[ "${EVENT_NAME}" == "push" && $(( attempt % 5 )) -eq 0 ]]; then
-              refresh_node_release_workflow_state
-              echo "Release mero-tee workflow state (attempt ${attempt}/60): ${node_release_workflow_state}"
-              case "${node_release_workflow_state}" in
-                completed:failure|completed:cancelled|completed:timed_out|completed:action_required|completed:startup_failure|completed:stale)
-                  echo "::error::Same-commit 'Release mero-tee' run ended as ${node_release_workflow_state} before publishing ${NODE_TAG}."
-                  echo "::error::Fix/re-run node release first, then rerun this workflow."
-                  exit 1
-                  ;;
-              esac
-            fi
             if [[ "${attempt}" -eq 60 ]]; then
               echo "::error::Timed out waiting for node release ${NODE_TAG} with published-mrtds.json"
               exit 1
             fi
-            echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
+            if [[ "${attempt}" -eq 1 || $(( attempt % 5 )) -eq 0 ]]; then
+              echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
+            fi
             sleep 30
           done
 

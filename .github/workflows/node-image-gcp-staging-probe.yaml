@@ -381,11 +381,17 @@ jobs:
             > "${artifacts_dir}/attestation-context.json"
 
       - name: Verify client-side node quote checks (anti-fake)
+        id: verify_anti_fake
         run: |
           set -euo pipefail
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           base_url="${{ steps.endpoint.outputs.base_url }}"
           verify_endpoint="${base_url}/admin-api/tee/verify-quote"
+          summarize_verify_quote_response() {
+            local response_file="$1"
+            jq -c '{ok, code, error, data: {quoteVerified, nonceVerified, applicationHashVerified}}' \
+              "${response_file}" 2>/dev/null || true
+          }
 
           quote_b64="$(jq -r '.data.quoteB64 // empty' "${artifacts_dir}/tee-attest-response.json")"
           nonce_hex="$(jq -r '.nonce // empty' "${artifacts_dir}/tee-attest-request.json")"
@@ -412,7 +418,7 @@ jobs:
           if ! jq -e '.data.quoteVerified == true and .data.nonceVerified == true' \
             "${artifacts_dir}/tee-verify-quote-positive-response.json" >/dev/null 2>&1; then
             echo "::error::Positive /verify-quote check did not return quoteVerified=true and nonceVerified=true."
-            jq . "${artifacts_dir}/tee-verify-quote-positive-response.json" || true
+            summarize_verify_quote_response "${artifacts_dir}/tee-verify-quote-positive-response.json"
             exit 1
           fi
           positive_passed="true"
@@ -438,7 +444,7 @@ jobs:
           fi
           if [[ "${wrong_nonce_rejected}" != "true" ]]; then
             echo "::error::Wrong nonce was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" || true
+            summarize_verify_quote_response "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json"
             exit 1
           fi
 
@@ -463,7 +469,7 @@ jobs:
           fi
           if [[ "${tampered_quote_rejected}" != "true" ]]; then
             echo "::error::Tampered quote was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" || true
+            summarize_verify_quote_response "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json"
             exit 1
           fi
 
@@ -489,7 +495,7 @@ jobs:
           fi
           if [[ "${wrong_app_hash_rejected}" != "true" ]]; then
             echo "::error::Wrong expected application hash was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" || true
+            summarize_verify_quote_response "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json"
             exit 1
           fi
 
@@ -515,6 +521,7 @@ jobs:
             }' > "${artifacts_dir}/node-client-verification.json"
 
       - name: Probe node-to-KMS runtime flow (optional)
+        id: runtime_probe
         if: ${{ inputs.kms_probe_expected_outcome != 'skip' }}
         env:
           KMS_PROBE_URL: ${{ inputs.kms_probe_url }}
@@ -598,11 +605,11 @@ jobs:
           if [[ "${parsed_json}" != "true" ]]; then
             if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" != "failure" ]]; then
               echo "::error::Unable to parse node KMS probe JSON output."
-              echo "::group::node-kms-probe-ssh-stdout"
-              cat "${probe_stdout}" || true
+              echo "::group::node-kms-probe-ssh-stdout (last 120 lines)"
+              tail -120 "${probe_stdout}" || true
               echo "::endgroup::"
-              echo "::group::node-kms-probe-ssh-stderr"
-              cat "${probe_stderr}" || true
+              echo "::group::node-kms-probe-ssh-stderr (last 120 lines)"
+              tail -120 "${probe_stderr}" || true
               echo "::endgroup::"
               exit 1
             fi
@@ -695,17 +702,25 @@ jobs:
 
           if [[ "${outcome_matches}" != "true" || "${expected_code_matches}" != "true" ]]; then
             echo "::error::Node->KMS probe expectation mismatch."
-            jq . "${artifacts_dir}/node-kms-probe-result.json" || true
-            echo "::group::node-kms-probe-ssh-stdout"
-            cat "${probe_stdout}" || true
+            jq -c '{
+              kms_url,
+              expected_outcome,
+              expected_codes,
+              ssh_exit_code,
+              probe: (.probe | {ok, code, error}),
+              checks
+            }' "${artifacts_dir}/node-kms-probe-result.json" || true
+            echo "::group::node-kms-probe-ssh-stdout (last 120 lines)"
+            tail -120 "${probe_stdout}" || true
             echo "::endgroup::"
-            echo "::group::node-kms-probe-ssh-stderr"
-            cat "${probe_stderr}" || true
+            echo "::group::node-kms-probe-ssh-stderr (last 120 lines)"
+            tail -120 "${probe_stderr}" || true
             echo "::endgroup::"
             exit 1
           fi
 
       - name: Verify quote externally and derive policy candidates
+        id: verify_external
         run: |
           set -euo pipefail
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
@@ -740,6 +755,7 @@ jobs:
             "${artifacts_dir}/measurement-policy-candidates-${{ steps.params.outputs.profile }}.json"
 
       - name: Upload node probe artifacts
+        id: upload_artifacts
         uses: actions/upload-artifact@v7
         with:
           name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
@@ -757,3 +773,19 @@ jobs:
           gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --quiet || true
+
+      - name: Summarize node probe run
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Node image GCP staging probe"
+            echo ""
+            echo "- Profile: ${{ steps.params.outputs.profile }}"
+            echo "- Instance: ${{ steps.params.outputs.instance_name }}"
+            echo "- Image: ${{ steps.params.outputs.image_name }}"
+            echo "- Base URL: ${{ steps.endpoint.outputs.base_url || 'n/a' }}"
+            echo "- Anti-fake checks outcome: ${{ steps.verify_anti_fake.outcome || 'skipped' }}"
+            echo "- External verification outcome: ${{ steps.verify_external.outcome || 'skipped' }}"
+            echo "- Runtime node->KMS probe outcome: ${{ steps.runtime_probe.outcome || 'skipped' }}"
+            echo "- Artifact name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
