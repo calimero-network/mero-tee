@@ -17,18 +17,31 @@ if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
   exit 1
 fi
 
-prev_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 30 --json tagName -q '.[].tagName' 2>/dev/null \
-  | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
-  | grep -v "^${KMS_TAG}$" \
-  | head -1 || true)"
-
-if [[ -z "${prev_tag}" ]]; then
-  echo "::warning::No previous mero-kms release found; skipping minimal release (probe will use previous-version policy)"
-  exit 0
-fi
-
+# Find the latest release (excluding current) that has policy assets.
+# Iterate newest-first; use first one we can successfully download from.
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
+
+candidate_tags="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 30 --json tagName -q '.[].tagName' 2>/dev/null \
+  | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
+  | grep -v "^${KMS_TAG}$" || true)"
+
+prev_tag=""
+for tag in ${candidate_tags}; do
+  echo "Trying ${tag}..."
+  rm -rf "${workdir}"/* 2>/dev/null || true
+  if gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
+    --pattern "kms-phala-attestation-policy.json" --dir "${workdir}" 2>/dev/null; then
+    prev_tag="${tag}"
+    echo "Found policy in ${tag}"
+    break
+  fi
+done
+
+if [[ -z "${prev_tag}" ]]; then
+  echo "::error::No mero-kms release with kms-phala-attestation-policy.json found. Cannot bootstrap minimal release."
+  exit 1
+fi
 
 echo "Downloading policy from ${prev_tag} for bootstrap..."
 for asset in kms-phala-attestation-policy.json \
@@ -38,12 +51,6 @@ for asset in kms-phala-attestation-policy.json \
   gh release download "${prev_tag}" --repo "${GITHUB_REPOSITORY}" \
     --pattern "${asset}" --dir "${workdir}" 2>/dev/null || true
 done
-
-# Need at least the main policy; KMS fetches by profile
-if [[ ! -f "${workdir}/kms-phala-attestation-policy.json" ]]; then
-  echo "::warning::Previous release ${prev_tag} has no kms-phala-attestation-policy.json; skipping minimal release"
-  exit 0
-fi
 
 # Ensure all profile policies exist (copy main if missing)
 for profile in locked-read-only debug debug-read-only; do
@@ -57,12 +64,19 @@ notes_file="${workdir}/notes.md"
 echo "Minimal bootstrap release for compose_hash alignment. Full assets will be published by release-metadata." > "${notes_file}"
 
 echo "Creating minimal release ${KMS_TAG} (draft)..."
-gh release create "${KMS_TAG}" \
+if ! gh release create "${KMS_TAG}" \
   --repo "${GITHUB_REPOSITORY}" \
   --title "${KMS_TAG}" \
   --notes-file "${notes_file}" \
   --target "${TARGET_COMMIT}" \
-  --draft
+  --draft; then
+  if gh release view "${KMS_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+    echo "Release ${KMS_TAG} already exists; will upload/overwrite policy assets."
+  else
+    echo "::error::Failed to create release ${KMS_TAG}"
+    exit 1
+  fi
+fi
 
 echo "Uploading bootstrap policy assets..."
 gh release upload "${KMS_TAG}" \
