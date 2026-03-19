@@ -21,7 +21,24 @@ notes_file="$(mktemp)"
 } > "${notes_file}"
 
 if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-  gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${VERSION}" --draft
+  release_is_draft="$(gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")"
+  if [[ "${release_is_draft}" == "true" ]]; then
+    # Publish the umbrella release once links are finalized so it becomes immutable.
+    gh release edit "${VERSION}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --notes-file "${notes_file}" \
+      --title "${VERSION}" \
+      --draft=false \
+      --latest=false
+  else
+    echo "Umbrella release ${VERSION} is already published; leaving it unchanged."
+  fi
 else
-  gh release create "${VERSION}" --repo "${GITHUB_REPOSITORY}" --title "${VERSION}" --notes-file "${notes_file}" --target "${TARGET_COMMIT}" --draft
+  # Create directly as published/non-latest so the release is immutable at finish.
+  gh release create "${VERSION}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --title "${VERSION}" \
+    --notes-file "${notes_file}" \
+    --target "${TARGET_COMMIT}" \
+    --latest=false
 fi
