@@ -336,6 +336,23 @@ jobs:
             exit 1
           fi
 
+          kms_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+            [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
+            | sort_by(.publishedAt)
+            | reverse
+            | .[0].tagName // empty
+          ')"
+          if [[ -z "${kms_policy_source_tag}" ]]; then
+            echo "::error::Could not resolve a published prior KMS release tag for probe policy source."
+            exit 1
+          fi
+          KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
+          if [[ -z "${KMS_VERSION_OVERRIDE}" || "${KMS_VERSION_OVERRIDE}" == "${kms_policy_source_tag}" ]]; then
+            echo "::error::Resolved probe policy source tag has unexpected format: ${kms_policy_source_tag}"
+            exit 1
+          fi
+          echo "[post-release-e2e] probe policy source tag=${kms_policy_source_tag} version=${KMS_VERSION_OVERRIDE}"
+
           wait_for_workflow_run() {
             local run_id="$1"
             local timeout_secs="$2"
@@ -450,6 +467,7 @@ jobs:
                 -f kms_tag="pinned"
                 -f probe_label="${probe_label}"
                 -f deployment_name="${deployment_name}"
+                -f kms_version_override="${KMS_VERSION_OVERRIDE}"
               )
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
@@ -679,6 +697,7 @@ jobs:
             -f kms_tag="pinned"
             -f probe_label="${cross_profile_probe_label}"
             -f deployment_name="${cross_profile_deployment_name}"
+            -f kms_version_override="${KMS_VERSION_OVERRIDE}"
             # Keep the locked KMS alive just long enough for debug-node runtime probe.
             -f hold_after_upload_seconds="900"
           )
