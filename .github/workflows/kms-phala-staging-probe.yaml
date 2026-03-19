@@ -20,6 +20,10 @@ on:
         description: "Release tag to deploy when kms_image is empty. Use 'latest' to auto-pick the latest GitHub release tag."
         required: true
         default: "latest"
+      kms_version_override:
+        description: "Optional MERO_KMS_VERSION override passed to the probe compose environment."
+        required: false
+        default: ""
       instance_type:
         description: "Phala instance type (for example tdx.small)"
         required: true
@@ -139,6 +143,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KMS_IMAGE_INPUT: ${{ inputs.kms_image }}
           KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_tag }}
+          KMS_VERSION_OVERRIDE_INPUT: ${{ inputs.kms_version_override }}
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
           set -euo pipefail
@@ -213,6 +218,12 @@ jobs:
           sed -e "s|__IMAGE_REF__|${resolved_kms_image}|g" \
               -e "s|__SERVICE_PORT__|${SERVICE_PORT}|g" \
               scripts/phala/kms-compose-template.yaml > "${compose_file}"
+
+          if [[ -n "${KMS_VERSION_OVERRIDE_INPUT}" ]]; then
+            # Use a known-good release policy tag for probes when current release policy
+            # assets are not yet published.
+            sed -i '/ENFORCE_MEASUREMENT_POLICY:/a\      MERO_KMS_VERSION: "'"${KMS_VERSION_OVERRIDE_INPUT}"'"' "${compose_file}"
+          fi
 
           compose_sha256="$(sha256sum "${compose_file}" | awk '{print $1}')"
           echo "[compose] sha256=${compose_sha256} image=${resolved_kms_image} service_port=${SERVICE_PORT}"
