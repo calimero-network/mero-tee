@@ -53,7 +53,7 @@ pub fn validate_policy_requirements(
         (
             "ALLOWED_MRTD",
             &policy.allowed_mrtd,
-            "Set MERO_KMS_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped.",
+            "KMS uses CARGO_PKG_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped.",
         ),
         (
             "ALLOWED_RTMR0",

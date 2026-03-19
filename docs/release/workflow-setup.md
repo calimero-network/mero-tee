@@ -124,10 +124,8 @@ release events:
   - tampered quote is rejected,
   - wrong expected application hash is rejected.
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
-  compose mode used during release probe publication:
-  - when available, `kms_policy_version` is resolved to the previous
-    `mero-kms-v*` tag (same behavior as `release-kms-phala.yaml`).
-  This prevents compose-hash drift caused by probe-mode differences.
+  compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
+  Release publishes a minimal draft before the probe so KMS fetches policy at boot.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
