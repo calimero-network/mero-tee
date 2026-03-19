@@ -125,7 +125,10 @@ release events:
   - wrong expected application hash is rejected.
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
-  Release publishes a minimal draft before the probe so KMS fetches policy at boot.
+  Release publishes a minimal bootstrap release before the probe so KMS fetches
+  policy at boot.
+  - Bootstrap release visibility must be non-draft. KMS resolves policy via
+    anonymous GitHub release URLs, and draft releases return `404`.
   - Temporary bootstrap pin: `release-kms-phala.yaml` sets
     `BOOTSTRAP_POLICY_SOURCE_TAG=mero-kms-v2.1.85` for
     `scripts/release/kms-phala/publish-minimal-release.sh`.

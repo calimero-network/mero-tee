@@ -58,19 +58,30 @@ done
 notes_file="${workdir}/notes.md"
 echo "Minimal bootstrap release for compose_hash alignment. Full assets will be published by release-metadata." > "${notes_file}"
 
-echo "Creating minimal release ${KMS_TAG} (draft)..."
+echo "Creating minimal release ${KMS_TAG} (published, non-latest)..."
 if ! gh release create "${KMS_TAG}" \
   --repo "${GITHUB_REPOSITORY}" \
   --title "${KMS_TAG}" \
   --notes-file "${notes_file}" \
   --target "${TARGET_COMMIT}" \
-  --draft; then
+  --latest=false; then
   if gh release view "${KMS_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
     echo "Release ${KMS_TAG} already exists; will upload/overwrite policy assets."
   else
     echo "::error::Failed to create release ${KMS_TAG}"
     exit 1
   fi
+fi
+
+# KMS fetches policy anonymously from GitHub release URLs at boot.
+# Draft releases return 404 for anonymous callers, so ensure non-draft visibility.
+release_is_draft="$(gh release view "${KMS_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")"
+if [[ "${release_is_draft}" == "true" ]]; then
+  echo "Publishing existing draft release ${KMS_TAG} for bootstrap policy availability..."
+  gh release edit "${KMS_TAG}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --draft=false \
+    --latest=false >/dev/null
 fi
 
 echo "Uploading bootstrap policy assets..."
