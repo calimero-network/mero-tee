@@ -187,6 +187,18 @@ jobs:
             skip_reason="Node release tag '${tee_tag}' is not published yet."
           fi
 
+          # In strict release mode, use immutable release tag ref for downstream
+          # probe dispatches so head SHA checks stay stable even if master moves.
+          if [[ "${should_run}" == "true" && "${strict_release_mode}" == "true" ]]; then
+            probe_workflow_ref="${tee_tag}"
+            resolved_probe_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tee_tag}" --jq '.sha' 2>/dev/null || true)"
+            if [[ -z "${resolved_probe_sha}" ]]; then
+              echo "::error::Could not resolve commit SHA for strict probe ref '${tee_tag}'."
+              exit 1
+            fi
+            probe_expected_sha="${resolved_probe_sha}"
+          fi
+
           kms_tag=""
           kms_tag_source=""
           if [[ "${should_run}" == "true" && -n "${INPUT_KMS_TAG}" ]]; then
