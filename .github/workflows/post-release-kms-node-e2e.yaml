@@ -336,22 +336,31 @@ jobs:
             exit 1
           fi
 
-          kms_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
-            [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
-            | sort_by(.publishedAt)
-            | reverse
-            | .[0].tagName // empty
-          ')"
-          if [[ -z "${kms_policy_source_tag}" ]]; then
-            echo "::error::Could not resolve a published prior KMS release tag for probe policy source."
-            exit 1
+          kms_policy_source_tag="$(jq -r '.compatibility.kms_probe_policy_source_tag // empty' "${compatibility_map}")"
+          KMS_VERSION_OVERRIDE="$(jq -r '.compatibility.kms_probe_policy_source_version // empty' "${compatibility_map}")"
+          if [[ -n "${kms_policy_source_tag}" && -z "${KMS_VERSION_OVERRIDE}" ]]; then
+            KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
           fi
-          KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
+
+          if [[ -z "${KMS_VERSION_OVERRIDE}" ]]; then
+            kms_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+              [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
+              | sort_by(.publishedAt)
+              | reverse
+              | .[0].tagName // empty
+            ')"
+            if [[ -z "${kms_policy_source_tag}" ]]; then
+              echo "::error::Could not resolve a published prior KMS release tag for probe policy source."
+              exit 1
+            fi
+            KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
+          fi
+
           if [[ -z "${KMS_VERSION_OVERRIDE}" || "${KMS_VERSION_OVERRIDE}" == "${kms_policy_source_tag}" ]]; then
-            echo "::error::Resolved probe policy source tag has unexpected format: ${kms_policy_source_tag}"
+            echo "::error::Resolved probe policy source has unexpected format: tag='${kms_policy_source_tag}' version='${KMS_VERSION_OVERRIDE}'."
             exit 1
           fi
-          echo "[post-release-e2e] probe policy source tag=${kms_policy_source_tag} version=${KMS_VERSION_OVERRIDE}"
+          echo "[post-release-e2e] probe policy source tag=${kms_policy_source_tag:-unknown} version=${KMS_VERSION_OVERRIDE}"
 
           wait_for_workflow_run() {
             local run_id="$1"

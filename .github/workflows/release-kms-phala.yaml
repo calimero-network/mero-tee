@@ -55,6 +55,8 @@ jobs:
     outputs:
       version: ${{ steps.version_info.outputs.version }}
       kms_release_tag: ${{ steps.version_info.outputs.kms_release_tag }}
+      probe_policy_source_tag: ${{ steps.probe_policy_source.outputs.source_tag }}
+      probe_policy_source_version: ${{ steps.probe_policy_source.outputs.source_version }}
       binary_release: ${{ steps.version_info.outputs.binary_release }}
       docker_release: ${{ steps.version_info.outputs.docker_release }}
       docker_push: ${{ github.event_name != 'pull_request' || (github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork) }}
@@ -88,6 +90,36 @@ jobs:
           TARGET_COMMIT: ${{ github.sha }}
           GH_REF: ${{ github.ref }}
         run: bash scripts/release/kms-phala/get-version-info.sh
+
+      - name: Resolve probe policy source release
+        id: probe_policy_source
+        if: ${{ steps.version_info.outputs.binary_release == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KMS_TAG: ${{ steps.version_info.outputs.kms_release_tag }}
+        run: |
+          set -euo pipefail
+
+          source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+            [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
+            | sort_by(.publishedAt)
+            | reverse
+            | .[0].tagName // empty
+          ')"
+          if [[ -z "${source_tag}" ]]; then
+            echo "::error::Could not resolve a published probe policy source release tag."
+            exit 1
+          fi
+
+          source_version="${source_tag#mero-kms-v}"
+          if [[ -z "${source_version}" || "${source_version}" == "${source_tag}" ]]; then
+            echo "::error::Resolved probe policy source tag has unexpected format: ${source_tag}"
+            exit 1
+          fi
+
+          echo "Resolved probe policy source: ${source_tag} (version ${source_version})"
+          echo "source_tag=${source_tag}" >> "${GITHUB_OUTPUT}"
+          echo "source_version=${source_version}" >> "${GITHUB_OUTPUT}"
 
   build-binaries:
     name: Build Binaries (${{ matrix.name }})
@@ -366,35 +398,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Resolve probe policy source release
-        id: probe_policy_source
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
-        run: |
-          set -euo pipefail
-
-          source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
-            [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
-            | sort_by(.publishedAt)
-            | reverse
-            | .[0].tagName // empty
-          ')"
-          if [[ -z "${source_tag}" ]]; then
-            echo "::error::Could not resolve a published probe policy source release tag."
-            exit 1
-          fi
-
-          source_version="${source_tag#mero-kms-v}"
-          if [[ -z "${source_version}" || "${source_version}" == "${source_tag}" ]]; then
-            echo "::error::Resolved probe policy source tag has unexpected format: ${source_tag}"
-            exit 1
-          fi
-
-          echo "Resolved probe policy source: ${source_tag} (version ${source_version})"
-          echo "source_tag=${source_tag}" >> "${GITHUB_OUTPUT}"
-          echo "source_version=${source_version}" >> "${GITHUB_OUTPUT}"
-
       - name: Resolve profile image ref
         id: profile_image
         env:
@@ -434,7 +437,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
           PROFILE: ${{ matrix.profile }}
-          KMS_VERSION_OVERRIDE: ${{ steps.probe_policy_source.outputs.source_version }}
+          KMS_VERSION_OVERRIDE: ${{ needs.prepare.outputs.probe_policy_source_version }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash scripts/release/kms-phala/trigger-staging-probe.sh
@@ -599,6 +602,8 @@ jobs:
           GH_REF_NAME: ${{ github.ref }}
           PREP_VERSION: ${{ needs.prepare.outputs.version }}
           PREP_KMS_RELEASE_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
+          PREP_PROBE_POLICY_SOURCE_TAG: ${{ needs.prepare.outputs.probe_policy_source_tag }}
+          PREP_PROBE_POLICY_SOURCE_VERSION: ${{ needs.prepare.outputs.probe_policy_source_version }}
           PREP_TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
           RELEASE_LOCKED_IMAGE_DIGEST: ${{ needs.release-container.outputs.locked_image_digest }}
           RELEASE_DEBUG_IMAGE_DIGEST: ${{ needs.release-container.outputs.debug_image_digest }}
@@ -746,6 +751,8 @@ jobs:
             --arg run_attempt "${GH_RUN_ATTEMPT}" \
             --arg version "${version}" \
             --arg kms_tag "${kms_tag}" \
+            --arg kms_probe_policy_source_tag "${PREP_PROBE_POLICY_SOURCE_TAG}" \
+            --arg kms_probe_policy_source_version "${PREP_PROBE_POLICY_SOURCE_VERSION}" \
             --arg node_image_tag "${node_image_tag}" \
             --arg kms_policy_url "${kms_policy_url}" \
             --arg node_policy_url "${node_policy_url}" \
@@ -771,6 +778,8 @@ jobs:
                   node: "node"
                 },
                 kms_tag: $kms_tag,
+                kms_probe_policy_source_tag: $kms_probe_policy_source_tag,
+                kms_probe_policy_source_version: $kms_probe_policy_source_version,
                 node_image_tag: $node_image_tag,
                 kms_policy_url: $kms_policy_url,
                 node_policy_url: $node_policy_url,

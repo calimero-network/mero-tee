@@ -138,10 +138,11 @@ release events:
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Release and post-release probes pass `kms_version_override` set to the
-    latest published prior `mero-kms-v*` version. This avoids draft-release 404s
-    during probe bootstrap while keeping release-time and post-release compose
-    inputs aligned for compose-hash validation.
+  - Release resolves probe policy source once (latest published prior
+    `mero-kms-v*`) and passes it as `kms_version_override`.
+  - That resolved source tag/version is written into
+    `kms-phala-compatibility-map.json`; post-release e2e reuses it so probe
+    compose inputs stay aligned with release-time compose-hash generation.
   - `kms-phala-staging-probe.yaml` also includes a compatibility fallback: when
     dispatched with `kms_tag=pinned` and no explicit `kms_version_override`, it
     auto-resolves the latest published `mero-kms-v*` policy source.
