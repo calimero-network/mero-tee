@@ -344,7 +344,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
           KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
-          BOOTSTRAP_POLICY_SOURCE_TAG: mero-kms-v2.1.85
           TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
         run: bash scripts/release/kms-phala/publish-minimal-release.sh
 
@@ -372,31 +371,26 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
-          DEBUG_DIGEST: ${{ needs.release-container.outputs.debug_image_digest }}
-          DEBUG_RO_DIGEST: ${{ needs.release-container.outputs.debug_ro_image_digest }}
-          LOCKED_DIGEST: ${{ needs.release-container.outputs.locked_image_digest }}
         run: |
           set -euo pipefail
+          probe_kms_version_pin="2.1.85"
           case "${PROFILE}" in
             debug)
-              digest="${DEBUG_DIGEST}"
+              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}-debug"
               ;;
             debug-read-only)
-              digest="${DEBUG_RO_DIGEST}"
+              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}-debug-read-only"
               ;;
             locked-read-only)
-              digest="${LOCKED_DIGEST}"
+              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}"
               ;;
             *)
               echo "::error::Unsupported profile '${PROFILE}'"
               exit 1
               ;;
           esac
-          if [[ -z "${digest}" ]]; then
-            echo "::error::Missing container digest for profile ${PROFILE}"
-            exit 1
-          fi
-          echo "image_ref=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+          echo "Pinned probe image for ${PROFILE}: ${image_ref}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Trigger staging probe and wait
         id: trigger

@@ -10,7 +10,6 @@ set -euo pipefail
 # produces stable measurements across minor releases.
 #
 # Inputs: VERSION, KMS_TAG, TARGET_COMMIT, GITHUB_REPOSITORY.
-# Optional: BOOTSTRAP_POLICY_SOURCE_TAG (defaults to mero-kms-v2.1.85).
 # Requires: GH_TOKEN.
 
 if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
@@ -21,11 +20,7 @@ fi
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
-bootstrap_policy_source_tag="${BOOTSTRAP_POLICY_SOURCE_TAG:-mero-kms-v2.1.85}"
-if [[ "${bootstrap_policy_source_tag}" == "${KMS_TAG}" ]]; then
-  echo "::error::BOOTSTRAP_POLICY_SOURCE_TAG must differ from KMS_TAG for minimal bootstrap policy copy."
-  exit 1
-fi
+bootstrap_policy_source_tag="mero-kms-v2.1.85"
 
 if ! gh release view "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
   echo "::error::Bootstrap policy source release ${bootstrap_policy_source_tag} was not found."
