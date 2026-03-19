@@ -10,6 +10,7 @@ set -euo pipefail
 # produces stable measurements across minor releases.
 #
 # Inputs: VERSION, KMS_TAG, TARGET_COMMIT, GITHUB_REPOSITORY.
+# Optional: BOOTSTRAP_POLICY_SOURCE_TAG (defaults to mero-kms-v2.1.85).
 # Requires: GH_TOKEN.
 
 if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
@@ -17,38 +18,32 @@ if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
   exit 1
 fi
 
-# Find the latest release (excluding current) that has policy assets.
-# Iterate newest-first; use first one we can successfully download from.
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
-candidate_tags="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 30 --json tagName -q '.[].tagName' 2>/dev/null \
-  | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
-  | grep -v "^${KMS_TAG}$" || true)"
-
-prev_tag=""
-for tag in ${candidate_tags}; do
-  echo "Trying ${tag}..."
-  rm -rf "${workdir:?}"/* 2>/dev/null || true
-  if gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
-    --pattern "kms-phala-attestation-policy.json" --dir "${workdir}" 2>/dev/null; then
-    prev_tag="${tag}"
-    echo "Found policy in ${tag}"
-    break
-  fi
-done
-
-if [[ -z "${prev_tag}" ]]; then
-  echo "::error::No mero-kms release with kms-phala-attestation-policy.json found. Cannot bootstrap minimal release."
+bootstrap_policy_source_tag="${BOOTSTRAP_POLICY_SOURCE_TAG:-mero-kms-v2.1.85}"
+if [[ "${bootstrap_policy_source_tag}" == "${KMS_TAG}" ]]; then
+  echo "::error::BOOTSTRAP_POLICY_SOURCE_TAG must differ from KMS_TAG for minimal bootstrap policy copy."
   exit 1
 fi
 
-echo "Downloading policy from ${prev_tag} for bootstrap..."
+if ! gh release view "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+  echo "::error::Bootstrap policy source release ${bootstrap_policy_source_tag} was not found."
+  exit 1
+fi
+
+echo "Downloading bootstrap policy from ${bootstrap_policy_source_tag}..."
+if ! gh release download "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" \
+  --pattern "kms-phala-attestation-policy.json" --dir "${workdir}" 2>/dev/null; then
+  echo "::error::Bootstrap policy source ${bootstrap_policy_source_tag} is missing kms-phala-attestation-policy.json."
+  exit 1
+fi
+
 for asset in kms-phala-attestation-policy.json \
   kms-phala-attestation-policy.debug.json \
   kms-phala-attestation-policy.debug-read-only.json \
   kms-phala-attestation-policy.locked-read-only.json; do
-  gh release download "${prev_tag}" --repo "${GITHUB_REPOSITORY}" \
+  gh release download "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" \
     --pattern "${asset}" --dir "${workdir}" 2>/dev/null || true
 done
 
