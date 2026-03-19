@@ -127,8 +127,8 @@ release events:
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
   Release publishes a minimal bootstrap release before the probe so KMS fetches
   policy at boot.
-  - Bootstrap release visibility must be non-draft. KMS resolves policy via
-    anonymous GitHub release URLs, and draft releases return `404`.
+  - Bootstrap release remains **draft** (mutable) until `release-metadata` uploads
+    all release assets and publishes the final release.
   - Bootstrap policy source defaults to `mero-kms-v2.1.85` in
     `scripts/release/kms-phala/publish-minimal-release.sh`.
   - Bootstrap policy payloads copied from that source tag are normalized to the
@@ -137,6 +137,10 @@ release events:
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
+  - Probes pass `kms_version_override=2.1.85` (mapped to
+    `MERO_KMS_VERSION` in probe compose) so current release-candidate images can
+    fetch policy from the known-good `mero-kms-v2.1.85` policy release during
+    the probe stage.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
