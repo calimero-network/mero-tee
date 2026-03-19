@@ -463,6 +463,7 @@ jobs:
             --timeout-seconds "${timeout_seconds}" \
             --interval-seconds 5 \
             --max-time-per-request 8 \
+            --insecure \
             --expected-status 200 \
             --expect-json-key status \
             --expect-json-value alive \

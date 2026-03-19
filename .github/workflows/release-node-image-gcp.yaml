@@ -419,7 +419,8 @@ jobs:
             --heartbeat-interval 12 \
             --label "/admin-api/health" \
             --verbosity "${CI_LOG_VERBOSITY}"; then
-            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health after ${max_attempts} attempts (~$((max_attempts * 5 / 60)) min)"
+            observed_attempts="$(jq -r '.attempts // "unknown"' "${artifacts_dir}/health-wait.json" 2>/dev/null || echo "unknown")"
+            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health after ${observed_attempts} attempts (timeout ${timeout_seconds}s)"
             ci_group_start "Failure diagnostics (bounded)"
             ci_info "Capturing serial console logs for diagnostics..."
             for serial_port in 1 2 3 4; do

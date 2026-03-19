@@ -462,7 +462,7 @@ jobs:
 
       - name: Build node probe artifact index
         id: artifact_index
-        if: ${{ always() }}
+        if: ${{ always() && steps.params.outcome == 'success' }}
         run: |
           set -euo pipefail
           source scripts/ci/logging.sh

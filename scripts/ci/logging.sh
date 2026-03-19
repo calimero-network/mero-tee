@@ -22,7 +22,6 @@ ci_log() {
 
 ci_start() { ci_log "START" "$*"; }
 ci_info() { ci_log "INFO" "$*"; }
-ci_check() { ci_log "CHECK" "$*"; }
 ci_ok() { ci_log "OK" "$*"; }
 ci_next() { ci_log "NEXT" "$*"; }
 ci_artifact() { ci_log "ARTIFACT" "$*"; }
@@ -71,17 +70,6 @@ ci_tail_bounded() {
   else
     echo "(missing: ${file})"
   fi
-}
-
-ci_write_artifact_index() {
-  local output_file="$1"
-  shift
-  : > "${output_file}"
-  while (($#)); do
-    printf "%s\n" "$1" >> "${output_file}"
-    shift
-  done
-  ci_artifact "saved artifact index to ${output_file}"
 }
 
 ci_result() {

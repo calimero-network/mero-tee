@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +27,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default="")
     parser.add_argument("--heartbeat-interval", type=int, default=10)
     parser.add_argument("--verbosity", default="compact", choices=["compact", "debug"])
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (curl -k equivalent).",
+    )
     return parser.parse_args()
 
 
@@ -66,6 +72,10 @@ def main() -> int:
     selected_url = ""
     last_status = ""
 
+    ssl_context = None
+    if args.insecure:
+        ssl_context = ssl._create_unverified_context()
+
     while time.time() < deadline:
         for candidate in candidates:
             attempt += 1
@@ -75,7 +85,7 @@ def main() -> int:
             detail = ""
             try:
                 req = urllib.request.Request(target_url, method="GET")
-                with urllib.request.urlopen(req, timeout=args.max_time_per_request) as resp:
+                with urllib.request.urlopen(req, timeout=args.max_time_per_request, context=ssl_context) as resp:
                     status = str(resp.getcode())
                     body_text = resp.read().decode("utf-8", errors="replace")
             except urllib.error.HTTPError as err:
