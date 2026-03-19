@@ -1570,6 +1570,16 @@ jobs:
             release-assets/kms-phala-checksums.txt.bundle.json
             release-assets/*.tar.gz.bundle.json
 
+      - name: Enforce release notes body update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ needs.prepare.outputs.kms_release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --notes-file release-assets/release-notes.md \
+            --draft=false
+
       - name: Smoke test published mero-kms release assets
         env:
           GH_TOKEN: ${{ github.token }}

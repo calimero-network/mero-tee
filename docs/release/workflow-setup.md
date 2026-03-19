@@ -208,6 +208,11 @@ with the existing release checksums/manifest artifacts.
 Release workflows generate release notes from workflow metadata and publish them
 as the GitHub Release body (`body_path`).
 
+For `release-kms-phala.yaml`, the pipeline also performs an explicit
+`gh release edit --notes-file release-assets/release-notes.md` after asset
+upload to guarantee the final published release body is updated, even when
+GitHub release de-duplication selects a pre-existing release record for the tag.
+
 - `release-kms-phala.yaml` includes:
   - tag and commit SHA
   - workflow run reference
