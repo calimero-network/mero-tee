@@ -135,13 +135,11 @@ release events:
   - Bootstrap policy payloads copied from that source tag are normalized to the
     current release metadata (`tag`, `role`, `profile`) before upload so KMS
     startup validation for the current version can succeed.
-  - Release probes use per-profile image digests built in the current
-    `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
-    so attestation is validated against the exact release candidate images.
-  - Probes pass `kms_version_override=2.1.85` (mapped to
-    `MERO_KMS_VERSION` in probe compose) so current release-candidate images can
-    fetch policy from the known-good `mero-kms-v2.1.85` policy release during
-    the probe stage.
+  - This pin affects only the source release used to copy bootstrap policy assets
+    into the minimal bootstrap release. It does not change runtime KMS versioning
+    (`CARGO_PKG_VERSION` remains the runtime release identity).
+  - Remove the pin after upstream release assets are repaired and newer tags can
+    safely provide bootstrap policy JSON files.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
