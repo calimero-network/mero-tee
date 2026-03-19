@@ -79,6 +79,14 @@ on:
         description: "Optional comma-separated acceptable probe result codes"
         required: false
         default: ""
+      log_verbosity:
+        description: "Logging verbosity: compact (default) or debug"
+        required: false
+        type: choice
+        options:
+          - compact
+          - debug
+        default: compact
 
 permissions:
   contents: read
@@ -96,6 +104,7 @@ jobs:
       GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
       GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+      CI_LOG_VERBOSITY: ${{ inputs.log_verbosity }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -303,44 +312,57 @@ jobs:
           WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 30); do
-            status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
-              --project "${{ steps.params.outputs.vm_project }}" \
-              --zone "${{ steps.params.outputs.vm_zone }}" \
-              --format='value(status)' || true)"
-            if [[ "${status}" == "RUNNING" ]]; then
-              break
-            fi
-            if [[ "${attempt}" -eq 30 ]]; then
-              echo "::error::Instance did not reach RUNNING in time."
-              exit 1
-            fi
-            sleep 10
-          done
+          source scripts/ci/logging.sh
+          ci_group_start "VM status transitions"
+          set +e
+          python3 scripts/ci/polling/wait_for_gcp_instance_status.py \
+            --instance "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --target-status "RUNNING" \
+            --attempts 30 \
+            --sleep-seconds 10 \
+            --heartbeat-interval 5 \
+            --verbosity "${CI_LOG_VERBOSITY}" \
+            --output-json "${{ steps.params.outputs.artifacts_dir }}/vm-running-wait.json"
+          vm_wait_exit=$?
+          set -e
+          ci_group_end
+          if [[ "${vm_wait_exit}" -ne 0 ]]; then
+            ci_fail "VM_RUNNING_TIMEOUT" "Instance did not reach RUNNING in time."
+            exit 1
+          fi
 
           nat_ip="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --zone "${{ steps.params.outputs.vm_zone }}" \
             --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
           if [[ -z "${nat_ip}" ]]; then
-            echo "::error::No external IP found on probe VM."
+            ci_fail "MISSING_NAT_IP" "No external IP found on probe VM."
             exit 1
           fi
 
           base_url="http://${nat_ip}:${{ steps.params.outputs.admin_api_port }}"
+          ci_notice "Resolved base URL: ${base_url}"
           timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
-          deadline=$(( $(date +%s) + timeout_seconds ))
-          ready="false"
-          while (( $(date +%s) < deadline )); do
-            http_code="$(curl -sS --max-time 8 -o "${{ steps.params.outputs.artifacts_dir }}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
-            if [[ "${http_code}" == "200" ]]; then
-              ready="true"
-              break
-            fi
-            sleep 5
-          done
-          if [[ "${ready}" != "true" ]]; then
-            echo "::error::Timed out waiting for ${base_url}/admin-api/health"
+          ci_group_start "Health probe transitions"
+          set +e
+          python3 scripts/ci/polling/wait_for_http.py \
+            --url "${base_url}/admin-api/health" \
+            --timeout-seconds "${timeout_seconds}" \
+            --interval-seconds 5 \
+            --request-timeout-seconds 8 \
+            --expected-status 200 \
+            --output-body "${{ steps.params.outputs.artifacts_dir }}/health.json" \
+            --output-json "${{ steps.params.outputs.artifacts_dir }}/health-wait.json" \
+            --heartbeat-interval 10 \
+            --label "/admin-api/health" \
+            --verbosity "${CI_LOG_VERBOSITY}"
+          health_wait_exit=$?
+          set -e
+          ci_group_end
+          if [[ "${health_wait_exit}" -ne 0 ]]; then
+            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health"
             exit 1
           fi
 
@@ -349,12 +371,13 @@ jobs:
       - name: Collect attestation artifacts
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           base_url="${{ steps.endpoint.outputs.base_url }}"
 
           tee_info_code="$(curl -sS --max-time 15 -o "${artifacts_dir}/tee-info.json" -w "%{http_code}" "${base_url}/admin-api/tee/info" || true)"
           if [[ "${tee_info_code}" != "200" ]]; then
-            echo "::error::Failed to fetch ${base_url}/admin-api/tee/info (HTTP ${tee_info_code:-error})"
+            ci_fail "TEE_INFO_HTTP_FAILURE" "Failed to fetch ${base_url}/admin-api/tee/info (HTTP ${tee_info_code:-error})"
             exit 1
           fi
 
@@ -365,7 +388,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d @"${artifacts_dir}/tee-attest-request.json" || true)"
           if [[ "${attest_code}" != "200" ]]; then
-            echo "::error::Failed to fetch ${base_url}/admin-api/tee/attest (HTTP ${attest_code:-error})"
+            ci_fail "TEE_ATTEST_HTTP_FAILURE" "Failed to fetch ${base_url}/admin-api/tee/attest (HTTP ${attest_code:-error})"
             exit 1
           fi
 
@@ -381,331 +404,29 @@ jobs:
             > "${artifacts_dir}/attestation-context.json"
 
       - name: Verify client-side node quote checks (anti-fake)
+        id: verify_anti_fake
+        env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          BASE_URL: ${{ steps.endpoint.outputs.base_url }}
         run: |
-          set -euo pipefail
-          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
-          base_url="${{ steps.endpoint.outputs.base_url }}"
-          verify_endpoint="${base_url}/admin-api/tee/verify-quote"
-
-          quote_b64="$(jq -r '.data.quoteB64 // empty' "${artifacts_dir}/tee-attest-response.json")"
-          nonce_hex="$(jq -r '.nonce // empty' "${artifacts_dir}/tee-attest-request.json")"
-          if [[ -z "${quote_b64}" || -z "${nonce_hex}" ]]; then
-            echo "::error::Missing quote or nonce in collected node attestation artifacts."
-            exit 1
-          fi
-
-          jq -n \
-            --arg quoteB64 "${quote_b64}" \
-            --arg nonce "${nonce_hex}" \
-            '{quoteB64: $quoteB64, nonce: $nonce}' \
-            > "${artifacts_dir}/tee-verify-quote-positive-request.json"
-          positive_status="$(curl -sS --max-time 20 \
-            -o "${artifacts_dir}/tee-verify-quote-positive-response.json" \
-            -w "%{http_code}" \
-            -X POST "${verify_endpoint}" \
-            -H "Content-Type: application/json" \
-            -d @"${artifacts_dir}/tee-verify-quote-positive-request.json" || true)"
-          if [[ "${positive_status}" != "200" ]]; then
-            echo "::error::Positive /verify-quote check failed (HTTP ${positive_status})."
-            exit 1
-          fi
-          if ! jq -e '.data.quoteVerified == true and .data.nonceVerified == true' \
-            "${artifacts_dir}/tee-verify-quote-positive-response.json" >/dev/null 2>&1; then
-            echo "::error::Positive /verify-quote check did not return quoteVerified=true and nonceVerified=true."
-            jq . "${artifacts_dir}/tee-verify-quote-positive-response.json" || true
-            exit 1
-          fi
-          positive_passed="true"
-
-          wrong_nonce_hex="$(python3 -c 'import sys; n=sys.argv[1].strip().lower(); assert len(n)==64, "nonce must be 64 hex chars"; flip=("0" if n[0]!="0" else "1"); print(flip + n[1:])' "${nonce_hex}")"
-          jq -n \
-            --arg quoteB64 "${quote_b64}" \
-            --arg nonce "${wrong_nonce_hex}" \
-            '{quoteB64: $quoteB64, nonce: $nonce}' \
-            > "${artifacts_dir}/tee-verify-quote-wrong-nonce-request.json"
-          wrong_nonce_status="$(curl -sS --max-time 20 \
-            -o "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" \
-            -w "%{http_code}" \
-            -X POST "${verify_endpoint}" \
-            -H "Content-Type: application/json" \
-            -d @"${artifacts_dir}/tee-verify-quote-wrong-nonce-request.json" || true)"
-          wrong_nonce_rejected="false"
-          if [[ "${wrong_nonce_status}" != "200" ]]; then
-            wrong_nonce_rejected="true"
-          elif jq -e '.data.nonceVerified == false or .data.quoteVerified == false' \
-            "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" >/dev/null 2>&1; then
-            wrong_nonce_rejected="true"
-          fi
-          if [[ "${wrong_nonce_rejected}" != "true" ]]; then
-            echo "::error::Wrong nonce was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-wrong-nonce-response.json" || true
-            exit 1
-          fi
-
-          tampered_quote_b64="$(python3 -c 'import base64,sys; raw=base64.b64decode(sys.argv[1], validate=False); assert len(raw)>0, "empty quote bytes"; b=bytearray(raw); b[0]^=0x01; print(base64.b64encode(bytes(b)).decode("ascii"))' "${quote_b64}")"
-          jq -n \
-            --arg quoteB64 "${tampered_quote_b64}" \
-            --arg nonce "${nonce_hex}" \
-            '{quoteB64: $quoteB64, nonce: $nonce}' \
-            > "${artifacts_dir}/tee-verify-quote-tampered-quote-request.json"
-          tampered_quote_status="$(curl -sS --max-time 20 \
-            -o "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" \
-            -w "%{http_code}" \
-            -X POST "${verify_endpoint}" \
-            -H "Content-Type: application/json" \
-            -d @"${artifacts_dir}/tee-verify-quote-tampered-quote-request.json" || true)"
-          tampered_quote_rejected="false"
-          if [[ "${tampered_quote_status}" != "200" ]]; then
-            tampered_quote_rejected="true"
-          elif jq -e '.data.quoteVerified == false' \
-            "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" >/dev/null 2>&1; then
-            tampered_quote_rejected="true"
-          fi
-          if [[ "${tampered_quote_rejected}" != "true" ]]; then
-            echo "::error::Tampered quote was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-tampered-quote-response.json" || true
-            exit 1
-          fi
-
-          wrong_app_hash_hex="$(openssl rand -hex 32)"
-          jq -n \
-            --arg quoteB64 "${quote_b64}" \
-            --arg nonce "${nonce_hex}" \
-            --arg expectedApplicationHash "${wrong_app_hash_hex}" \
-            '{quoteB64: $quoteB64, nonce: $nonce, expectedApplicationHash: $expectedApplicationHash}' \
-            > "${artifacts_dir}/tee-verify-quote-wrong-app-hash-request.json"
-          wrong_app_hash_status="$(curl -sS --max-time 20 \
-            -o "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" \
-            -w "%{http_code}" \
-            -X POST "${verify_endpoint}" \
-            -H "Content-Type: application/json" \
-            -d @"${artifacts_dir}/tee-verify-quote-wrong-app-hash-request.json" || true)"
-          wrong_app_hash_rejected="false"
-          if [[ "${wrong_app_hash_status}" != "200" ]]; then
-            wrong_app_hash_rejected="true"
-          elif jq -e '.data.applicationHashVerified == false or .data.quoteVerified == false' \
-            "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" >/dev/null 2>&1; then
-            wrong_app_hash_rejected="true"
-          fi
-          if [[ "${wrong_app_hash_rejected}" != "true" ]]; then
-            echo "::error::Wrong expected application hash was not rejected by /verify-quote."
-            jq . "${artifacts_dir}/tee-verify-quote-wrong-app-hash-response.json" || true
-            exit 1
-          fi
-
-          jq -n \
-            --arg endpoint "${verify_endpoint}" \
-            --arg positive_status "${positive_status}" \
-            --arg wrong_nonce_status "${wrong_nonce_status}" \
-            --arg tampered_quote_status "${tampered_quote_status}" \
-            --arg wrong_app_hash_status "${wrong_app_hash_status}" \
-            --argjson positive_passed "${positive_passed}" \
-            --argjson wrong_nonce_rejected "${wrong_nonce_rejected}" \
-            --argjson tampered_quote_rejected "${tampered_quote_rejected}" \
-            --argjson wrong_app_hash_rejected "${wrong_app_hash_rejected}" \
-            '{
-              schema_version: 1,
-              verify_quote_endpoint: $endpoint,
-              checks: {
-                positive: {http_status: $positive_status, passed: $positive_passed},
-                wrong_nonce: {http_status: $wrong_nonce_status, rejected: $wrong_nonce_rejected},
-                tampered_quote: {http_status: $tampered_quote_status, rejected: $tampered_quote_rejected},
-                wrong_expected_application_hash: {http_status: $wrong_app_hash_status, rejected: $wrong_app_hash_rejected}
-              }
-            }' > "${artifacts_dir}/node-client-verification.json"
+          bash scripts/ci/probes/node_verify_anti_fake.sh
 
       - name: Probe node-to-KMS runtime flow (optional)
+        id: runtime_probe
         if: ${{ inputs.kms_probe_expected_outcome != 'skip' }}
         env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          INSTANCE_NAME: ${{ steps.params.outputs.instance_name }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
           KMS_PROBE_URL: ${{ inputs.kms_probe_url }}
           KMS_PROBE_EXPECTED_OUTCOME: ${{ inputs.kms_probe_expected_outcome }}
           KMS_PROBE_EXPECTED_CODES: ${{ inputs.kms_probe_expected_codes }}
         run: |
-          set -euo pipefail
-          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
-          if [[ -z "${KMS_PROBE_URL}" ]]; then
-            echo "::error::kms_probe_url must be set when kms_probe_expected_outcome is not 'skip'."
-            exit 1
-          fi
-          case "${KMS_PROBE_EXPECTED_OUTCOME}" in
-            success|failure) ;;
-            *)
-              echo "::error::kms_probe_expected_outcome must be one of: skip, success, failure."
-              exit 1
-              ;;
-          esac
-
-          probe_stdout="${artifacts_dir}/node-kms-probe-ssh-stdout.log"
-          probe_stderr="${artifacts_dir}/node-kms-probe-ssh-stderr.log"
-          probe_json="${artifacts_dir}/node-kms-probe-raw.json"
-          parsed_json="false"
-          ssh_exit_code=255
-
-          for attempt in $(seq 1 12); do
-            set +e
-            gcloud compute ssh "${{ steps.params.outputs.instance_name }}" \
-              --project "${{ steps.params.outputs.vm_project }}" \
-              --zone "${{ steps.params.outputs.vm_zone }}" \
-              --quiet \
-              --ssh-flag="-o ConnectTimeout=10" \
-              --ssh-flag="-o ServerAliveInterval=30" \
-              --command "set -euo pipefail; /usr/local/bin/merod --home /mnt/data/calimero --node default kms probe --kms-url '${KMS_PROBE_URL}' --json" \
-              > "${probe_stdout}" \
-              2> "${probe_stderr}"
-            ssh_exit_code=$?
-            set -e
-
-            if python3 - "${probe_stdout}" "${probe_json}" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
-          end = text.rfind("}")
-          if end == -1:
-              raise SystemExit(1)
-
-          depth = 0
-          start = None
-          for idx in range(end, -1, -1):
-              ch = text[idx]
-              if ch == "}":
-                  depth += 1
-              elif ch == "{":
-                  depth -= 1
-                  if depth == 0:
-                      start = idx
-                      break
-
-          if start is None:
-              raise SystemExit(1)
-
-          payload = json.loads(text[start : end + 1])
-          pathlib.Path(sys.argv[2]).write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-            then
-              parsed_json="true"
-              break
-            fi
-            if [[ "${attempt}" -lt 12 ]]; then
-              sleep 10
-            fi
-          done
-
-          if [[ "${parsed_json}" != "true" ]]; then
-            if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" != "failure" ]]; then
-              echo "::error::Unable to parse node KMS probe JSON output."
-              echo "::group::node-kms-probe-ssh-stdout"
-              cat "${probe_stdout}" || true
-              echo "::endgroup::"
-              echo "::group::node-kms-probe-ssh-stderr"
-              cat "${probe_stderr}" || true
-              echo "::endgroup::"
-              exit 1
-            fi
-
-            # merod can emit non-JSON terminal errors for rejection paths.
-            # Preserve strict failure semantics by converting known errors into a structured fallback.
-            fallback_code="MEROD_KMS_PROBE_NO_JSON"
-            if [[ -f "${probe_stderr}" ]] && grep -qi "TEE is not configured in this node" "${probe_stderr}"; then
-              fallback_code="MEROD_TEE_NOT_CONFIGURED"
-            fi
-            fallback_error="$(python3 - "${probe_stderr}" "${probe_stdout}" <<'PY'
-          import pathlib
-          import sys
-
-          for candidate in sys.argv[1:]:
-              path = pathlib.Path(candidate)
-              if not path.exists():
-                  continue
-              text = path.read_text(encoding="utf-8", errors="replace")
-              for line in text.splitlines():
-                  line = line.strip()
-                  if line:
-                      print(line[:512])
-                      raise SystemExit(0)
-          print("Node->KMS probe did not return JSON output")
-          PY
-            )"
-            jq -n \
-              --arg code "${fallback_code}" \
-              --arg error "${fallback_error}" \
-              '{
-                ok: false,
-                code: $code,
-                error: $error
-              }' > "${probe_json}"
-            echo "::warning::Node->KMS probe did not return JSON; using fallback code ${fallback_code}."
-          fi
-
-          probe_ok="$(jq -r '.ok' "${probe_json}")"
-          probe_code="$(jq -r '.code // ""' "${probe_json}")"
-          outcome_matches="false"
-          if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" == "success" ]]; then
-            if [[ "${probe_ok}" == "true" ]]; then
-              outcome_matches="true"
-            fi
-          else
-            if [[ "${probe_ok}" == "false" ]]; then
-              outcome_matches="true"
-            fi
-          fi
-
-          expected_code_matches="true"
-          if [[ -n "${KMS_PROBE_EXPECTED_CODES}" ]]; then
-            expected_code_matches="false"
-            IFS=',' read -r -a expected_codes <<< "${KMS_PROBE_EXPECTED_CODES}"
-            for expected_code in "${expected_codes[@]}"; do
-              normalized_expected_code="${expected_code//[[:space:]]/}"
-              if [[ -n "${normalized_expected_code}" && "${probe_code}" == "${normalized_expected_code}" ]]; then
-                expected_code_matches="true"
-                break
-              fi
-            done
-          fi
-
-          jq -n \
-            --arg kms_url "${KMS_PROBE_URL}" \
-            --arg expected_outcome "${KMS_PROBE_EXPECTED_OUTCOME}" \
-            --arg expected_codes "${KMS_PROBE_EXPECTED_CODES}" \
-            --argjson ssh_exit_code "${ssh_exit_code}" \
-            --argjson outcome_matches "${outcome_matches}" \
-            --argjson expected_code_matches "${expected_code_matches}" \
-            --slurpfile probe "${probe_json}" \
-            '{
-              schema_version: 1,
-              kms_url: $kms_url,
-              expected_outcome: $expected_outcome,
-              expected_codes: (
-                $expected_codes
-                | split(",")
-                | map(gsub("^\\s+|\\s+$"; ""))
-                | map(select(length > 0))
-              ),
-              ssh_exit_code: $ssh_exit_code,
-              probe: $probe[0],
-              checks: {
-                outcome_matches: $outcome_matches,
-                expected_code_matches: $expected_code_matches
-              }
-            }' > "${artifacts_dir}/node-kms-probe-result.json"
-
-          if [[ "${outcome_matches}" != "true" || "${expected_code_matches}" != "true" ]]; then
-            echo "::error::Node->KMS probe expectation mismatch."
-            jq . "${artifacts_dir}/node-kms-probe-result.json" || true
-            echo "::group::node-kms-probe-ssh-stdout"
-            cat "${probe_stdout}" || true
-            echo "::endgroup::"
-            echo "::group::node-kms-probe-ssh-stderr"
-            cat "${probe_stderr}" || true
-            echo "::endgroup::"
-            exit 1
-          fi
+          bash scripts/ci/probes/node_runtime_kms_probe.sh
 
       - name: Verify quote externally and derive policy candidates
+        id: verify_external
         run: |
           set -euo pipefail
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
@@ -739,7 +460,31 @@ jobs:
           cp "${artifacts_dir}/measurement-policy-candidates.json" \
             "${artifacts_dir}/measurement-policy-candidates-${{ steps.params.outputs.profile }}.json"
 
+      - name: Build node probe artifact index
+        id: artifact_index
+        if: ${{ always() && steps.params.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          index_file="${artifacts_dir}/artifacts-index.txt"
+          python3 scripts/ci/artifacts/build_artifact_index.py \
+            --base-dir "${artifacts_dir}" \
+            --output "${index_file}" \
+            --entry "health.json|Latest /admin-api/health response" \
+            --entry "tee-info.json|/admin-api/tee/info payload" \
+            --entry "tee-attest-request.json|TEE attest request" \
+            --entry "tee-attest-response.json|TEE attest response" \
+            --entry "attestation-context.json|Probe context metadata" \
+            --entry "node-client-verification.json|Anti-fake verification outcomes" \
+            --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
+            --entry "measurement-policy-candidates.json|Derived policy candidates" \
+            --entry "node-kms-probe-ssh-stdout.log|Runtime probe stdout log" \
+            --entry "node-kms-probe-ssh-stderr.log|Runtime probe stderr log"
+          ci_artifact "artifact index saved to ${index_file}"
+
       - name: Upload node probe artifacts
+        id: upload_artifacts
         uses: actions/upload-artifact@v7
         with:
           name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
@@ -757,3 +502,87 @@ jobs:
           gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --quiet || true
+
+      - name: Summarize node probe run
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_reason="SUCCESS"
+          if [[ "${{ job.status }}" != "success" ]]; then
+            if [[ "${{ steps.endpoint.outcome }}" == "failure" ]]; then
+              result_reason="HEALTH_TIMEOUT"
+            elif [[ "${{ steps.verify_anti_fake.outcome }}" == "failure" ]]; then
+              result_reason="ANTI_FAKE_CHECK_FAILED"
+            elif [[ "${{ steps.runtime_probe.outcome }}" == "failure" ]]; then
+              result_reason="KMS_PROBE_EXPECTATION_MISMATCH"
+            elif [[ "${{ steps.verify_external.outcome }}" == "failure" ]]; then
+              result_reason="ITA_VERIFICATION_FAILURE"
+            else
+              result_reason="WORKFLOW_FAILURE"
+            fi
+          fi
+          result_line="$(ci_result "node-image-gcp-staging-probe" "${{ job.status }}" "${result_reason}" "artifact=node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}" "profile=${{ steps.params.outputs.profile }}")"
+          ci_info "${result_line}"
+          summary_json="${RUNNER_TEMP}/node-image-gcp-staging-probe-summary.json"
+          jq -n \
+            --arg profile "${{ steps.params.outputs.profile }}" \
+            --arg instance "${{ steps.params.outputs.instance_name }}" \
+            --arg image "${{ steps.params.outputs.image_name }}" \
+            --arg base_url "${{ steps.endpoint.outputs.base_url || 'n/a' }}" \
+            --arg endpoint_outcome "${{ steps.endpoint.outcome || 'skipped' }}" \
+            --arg anti_fake_outcome "${{ steps.verify_anti_fake.outcome || 'skipped' }}" \
+            --arg runtime_outcome "${{ steps.runtime_probe.outcome || 'skipped' }}" \
+            --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
+            --arg job_status "${{ job.status }}" \
+            --arg reason "${result_reason}" \
+            --arg result_line "${result_line}" \
+            --arg artifact_name "node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}" \
+            '{
+              title: "Workflow Summary",
+              sections: [
+                {
+                  name: "Inputs / Targets",
+                  lines: [
+                    ("- Profile: " + $profile),
+                    ("- Instance: " + $instance),
+                    ("- Image: " + $image),
+                    ("- Base URL: " + $base_url)
+                  ]
+                },
+                {
+                  name: "Check Outcomes",
+                  lines: [
+                    ("- Endpoint readiness: " + $endpoint_outcome),
+                    ("- Anti-fake checks: " + $anti_fake_outcome),
+                    ("- Runtime node->KMS probe: " + $runtime_outcome),
+                    ("- External verification: " + $external_outcome)
+                  ]
+                },
+                {
+                  name: "Result",
+                  lines: [
+                    ("- Job status: " + $job_status),
+                    ("- Reason code: " + $reason),
+                    ("- " + $result_line)
+                  ]
+                },
+                {
+                  name: "Artifacts",
+                  lines: [
+                    ("- Artifact name: " + $artifact_name),
+                    "- Artifact index: artifacts-index.txt"
+                  ]
+                },
+                {
+                  name: "Next",
+                  lines: [
+                    "- Use node-client-verification.json and node-kms-probe-result.json first for triage.",
+                    "- Use artifacts-index.txt to jump to raw diagnostics quickly."
+                  ]
+                }
+              ]
+            }' > "${summary_json}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --input-json "${summary_json}" \
+            --output "${GITHUB_STEP_SUMMARY}"

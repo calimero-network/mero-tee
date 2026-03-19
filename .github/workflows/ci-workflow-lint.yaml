@@ -7,6 +7,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
   workflow_dispatch:
 
@@ -35,6 +37,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Run actionlint
+        id: actionlint
         uses: docker://rhysd/actionlint:latest
         with:
           args: -shellcheck=
@@ -45,14 +48,32 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Run shellcheck
+        id: shellcheck
         shell: bash
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0
           fi
 
           shellcheck "${shell_files[@]}"
+
+      - name: Summarize lint outcomes
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "ci-workflow-lint" "${{ job.status }}" "ACTIONLINT_SHELLCHECK" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
+            --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Fix first failing lint stage and rerun."

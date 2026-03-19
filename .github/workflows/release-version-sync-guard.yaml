@@ -33,7 +33,26 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate sync script syntax
+        id: syntax_check
         run: bash -n scripts/policy/check_release_version_sync.sh
 
       - name: Run release version sync guard
+        id: sync_guard
         run: scripts/policy/check_release_version_sync.sh
+
+      - name: Summarize sync guard outcomes
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "release-version-sync-guard" "${{ job.status }}" "VERSION_SYNC" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- Syntax check: ${{ steps.syntax_check.outcome }}" \
+            --checks-line "- Sync guard: ${{ steps.sync_guard.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Align Cargo, versions.json, and policy files when this guard fails."

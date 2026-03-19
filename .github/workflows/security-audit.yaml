@@ -35,4 +35,21 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
+        id: cargo_audit
         run: cargo audit
+
+      - name: Summarize security audit outcome
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "security-audit" "${{ job.status }}" "CARGO_AUDIT" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- cargo-audit: ${{ steps.cargo_audit.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Review advisories and update dependencies."

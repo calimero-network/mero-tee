@@ -65,6 +65,14 @@ on:
         description: "Optional. When set, run KMS with MERO_KMS_VERSION and ENFORCE_MEASUREMENT_POLICY=true to test policy fetch from release (e.g. 2.1.55). Use previous release version when testing a new release."
         required: false
         default: ""
+      log_verbosity:
+        description: "Logging verbosity: compact (default) or debug"
+        required: false
+        type: choice
+        options:
+          - compact
+          - debug
+        default: compact
 
 permissions:
   contents: read
@@ -87,6 +95,7 @@ jobs:
       PHALA_API_BASE_URL: "https://cloud-api.phala.com/api/v1"
       PHALA_API_VERSION: "2026-01-21"
       DSTACK_PREFER_DEV: "false"
+      CI_LOG_VERBOSITY: ${{ inputs.log_verbosity }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -264,9 +273,10 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
           deploy_name="${DEPLOY_NAME_INPUT:-kms-staging-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
           if [[ ! "${deploy_name}" =~ ^[a-zA-Z0-9._-]{3,100}$ ]]; then
-            echo "::error::deployment_name must match ^[a-zA-Z0-9._-]{3,100}$"
+            ci_fail "INVALID_DEPLOYMENT_NAME" "deployment_name must match ^[a-zA-Z0-9._-]{3,100}$"
             exit 1
           fi
           deploy_json="${ARTIFACTS_DIR}/phala-deploy.json"
@@ -289,15 +299,15 @@ jobs:
           }
 
           if phala cvms get "${deploy_name}" --json >/dev/null 2>&1; then
-            echo "::warning::Existing CVM named '${deploy_name}' found before deploy; deleting stale instance first."
+            ci_warn "Existing CVM named '${deploy_name}' found before deploy; deleting stale instance first."
             phala cvms delete "${deploy_name}" --force --yes >/dev/null 2>&1 || true
             if ! wait_for_name_release "${deploy_name}"; then
-              echo "::error::Timed out waiting for stale CVM '${deploy_name}' to be removed before deploy."
+              ci_fail "STALE_CVM_CLEANUP_TIMEOUT" "Timed out waiting for stale CVM '${deploy_name}' to be removed before deploy."
               exit 1
             fi
           fi
 
-          echo "[deploy] Running provision_prod.py (same API flow as MDMA: provision+commit+poll+start, prefer_dev=false => dstack-0.5.7 prod)"
+          ci_start "Running provision_prod.py (same API flow as MDMA, dstack-0.5.7 prod)"
           python3 scripts/phala/provision_prod.py \
             --name "${deploy_name}" \
             --compose "${COMPOSE_FILE}" \
@@ -305,21 +315,22 @@ jobs:
             --region "${REGION}" \
             --output "${deploy_json}" 2>&1 | tee "${ARTIFACTS_DIR}/provision_prod.log"
 
-          echo "[deploy] Provision result summary:"
+          ci_info "Provision result summary:"
           jq -c '{app_id, vm_uuid, status}' "${deploy_json}" || true
-          echo "[deploy] Full provision payload saved to ${deploy_json}"
+          ci_artifact "full provision payload saved to ${deploy_json}"
           vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
           app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
           if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then
-            echo "::error::Missing vm_uuid/app_id in provision result"
-            echo "[deploy] provision_prod.log tail:"
-            tail -80 "${ARTIFACTS_DIR}/provision_prod.log" 2>/dev/null || true
+            ci_fail "MISSING_DEPLOY_IDENTIFIERS" "Missing vm_uuid/app_id in provision result"
+            ci_group_start "Provision log tail"
+            ci_tail_bounded "${ARTIFACTS_DIR}/provision_prod.log" 80
+            ci_group_end
             exit 1
           fi
 
           echo "vm_uuid=${vm_uuid}" >> "${GITHUB_OUTPUT}"
           echo "app_id=${app_id}" >> "${GITHUB_OUTPUT}"
-          echo "[deploy] vm_uuid=${vm_uuid} app_id=${app_id}"
+          ci_ok "vm_uuid=${vm_uuid} app_id=${app_id}"
 
       - name: Wait for CVM to boot (provision_prod polls+start like MDMA)
         if: ${{ success() }}
@@ -352,13 +363,16 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
 
           # Query live CVM metadata right before probing so endpoint discovery
           # follows the actual gateway domain assigned by Phala.
-          echo "[probe] Fetching live CVM metadata for URL discovery ..."
+          ci_group_start "Resolved inputs"
+          ci_start "Fetching live CVM metadata for URL discovery"
           phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-live.json" 2>&1 || true
           gateway_domain="$(jq -r '.gateway.base_domain // "n/a"' "${ARTIFACTS_DIR}/phala-cvm-live.json" 2>/dev/null || echo "n/a")"
-          echo "[probe] gateway.base_domain=${gateway_domain}"
+          ci_notice "gateway.base_domain=${gateway_domain}"
+          ci_group_end
 
           python3 - <<'PY' > "${ARTIFACTS_DIR}/candidate-urls.json"
           import json
@@ -428,42 +442,57 @@ jobs:
 
           mapfile -t candidate_urls < <(jq -r '.urls[]' "${ARTIFACTS_DIR}/candidate-urls.json")
           if [[ "${#candidate_urls[@]}" -eq 0 ]]; then
-            echo "::error::No candidate KMS URLs available"
-            echo "[probe] candidate-urls.json: $(cat "${ARTIFACTS_DIR}/candidate-urls.json" 2>/dev/null || echo "empty")"
+            ci_fail "NO_CANDIDATE_URLS" "No candidate KMS URLs available"
+            ci_info "Candidate URL preview: $(jq -c '.urls[:10]' "${ARTIFACTS_DIR}/candidate-urls.json" 2>/dev/null || echo "[]")"
             exit 1
           fi
-          echo "[probe] Candidate URLs (${#candidate_urls[@]}):"
+          ci_group_start "Candidate URLs"
+          ci_info "Candidate URLs (${#candidate_urls[@]})"
           printf "  - %s\n" "${candidate_urls[@]}"
+          ci_group_end
 
           timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
-          deadline=$(( $(date +%s) + timeout_seconds ))
           base_url=""
           attempt=0
+          probe_result_json="${ARTIFACTS_DIR}/health-probe-result.json"
+          ci_group_start "Health probe transitions"
+          set +e
+          python3 scripts/ci/polling/wait_for_candidate_health.py \
+            --candidates-json "${ARTIFACTS_DIR}/candidate-urls.json" \
+            --path "/health" \
+            --timeout-seconds "${timeout_seconds}" \
+            --interval-seconds 5 \
+            --max-time-per-request 8 \
+            --insecure \
+            --expected-status 200 \
+            --expect-json-key status \
+            --expect-json-value alive \
+            --output-body "${ARTIFACTS_DIR}/health.json" \
+            --output-json "${probe_result_json}" \
+            --heartbeat-interval 10 \
+            --verbosity "${CI_LOG_VERBOSITY}"
+          probe_exit=$?
+          set -e
+          ci_group_end
+          if [[ -f "${probe_result_json}" ]]; then
+            attempt="$(jq -r '.attempts // 0' "${probe_result_json}")"
+            base_url="$(jq -r '.selected_url // ""' "${probe_result_json}")"
+          fi
 
-          while [[ "$(date +%s)" -lt "${deadline}" ]]; do
-            for candidate in "${candidate_urls[@]}"; do
-              attempt=$((attempt + 1))
-              health_code="$(curl -k -sS --max-time 8 -o "${ARTIFACTS_DIR}/health.json" -w "%{http_code}" "${candidate}/health" || true)"
-              echo "Probe attempt ${attempt}: ${candidate}/health -> HTTP ${health_code}"
-              if [[ "${health_code}" == "200" ]]; then
-                if jq -e '.status == "alive"' "${ARTIFACTS_DIR}/health.json" >/dev/null 2>&1; then
-                  base_url="${candidate}"
-                  break
-                fi
-              fi
-            done
-            if [[ -n "${base_url}" ]]; then
-              break
+          if [[ "${probe_exit}" -ne 0 || -z "${base_url}" ]]; then
+            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for KMS /health on candidate URLs after ${attempt} attempts"
+            ci_group_start "Failure diagnostics (bounded)"
+            if [[ -s "${ARTIFACTS_DIR}/health.json" ]]; then
+              health_preview="$(python3 scripts/ci/diagnostics/preview_file.py --file "${ARTIFACTS_DIR}/health.json" --head-chars 500 --single-line)"
+              ci_info "Last health.json preview (first 500 chars): ${health_preview}"
+            else
+              ci_info "Last health.json preview: empty"
             fi
-            sleep 5
-          done
-
-          if [[ -z "${base_url}" ]]; then
-            echo "::error::Timed out waiting for KMS /health on candidate URLs after ${attempt} attempts"
-            echo "[probe] Last health.json: $(cat "${ARTIFACTS_DIR}/health.json" 2>/dev/null | head -c 500 || echo "empty")"
             phala cvms get "${VM_UUID}" --json > "${ARTIFACTS_DIR}/phala-cvm-late.json" 2>&1 || true
             phala logs --cvm-id "${VM_UUID}" --serial --tail 400 > "${ARTIFACTS_DIR}/cvm-serial.log" || true
             phala logs --cvm-id "${VM_UUID}" --tail 400 > "${ARTIFACTS_DIR}/cvm-container.log" || true
+            ci_artifact "full diagnostics captured in ${ARTIFACTS_DIR}"
+            ci_group_end
             exit 1
           fi
 
@@ -482,19 +511,19 @@ jobs:
 
           if [[ "${attest_code}" != "200" ]]; then
             if [[ "${attest_code}" == "404" ]]; then
-              echo "::error::KMS /attest returned HTTP 404."
-              echo "::error::The selected image likely does not expose /attest (older build)."
-              echo "::error::Use a pinned image tag/digest that includes /attest (for example ghcr.io/calimero-network/mero-kms-phala:pr-1)."
+              ci_fail "ATTEST_ENDPOINT_MISSING" "KMS /attest returned HTTP 404; selected image likely does not expose /attest."
+              ci_next "Use a pinned image tag/digest that includes /attest (for example ghcr.io/calimero-network/mero-kms-phala:pr-1)."
             fi
-            echo "::error::KMS /attest failed with HTTP ${attest_code}"
+            ci_fail "ATTEST_HTTP_FAILURE" "KMS /attest failed with HTTP ${attest_code}"
             if [[ -s "${ARTIFACTS_DIR}/attest-response.json" ]]; then
-              echo "attest-response body preview:"
+              ci_group_start "Attest response preview (first 40 lines)"
               sed -n '1,40p' "${ARTIFACTS_DIR}/attest-response.json"
+              ci_group_end
             fi
             exit 1
           fi
           if ! jq -e . "${ARTIFACTS_DIR}/attest-response.json" >/dev/null 2>&1; then
-            echo "::error::KMS /attest response was not JSON"
+            ci_fail "ATTEST_NON_JSON" "KMS /attest response was not JSON"
             exit 1
           fi
 
@@ -505,6 +534,8 @@ jobs:
             --arg app_id "${APP_ID}" \
             '{base_url: $base_url, nonce_b64: $nonce_b64, vm_uuid: $vm_uuid, app_id: $app_id}' \
             > "${ARTIFACTS_DIR}/attestation-context.json"
+          ci_ok "Selected base URL ${base_url}"
+          ci_result "kms-phala-staging-probe-probe-step" "success" "ATTEST_READY" "attempts=${attempt}" "base_url=${base_url}"
 
           echo "base_url=${base_url}" >> "${GITHUB_OUTPUT}"
 
@@ -542,6 +573,7 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
           python3 -m py_compile scripts/attestation/verify_dstack_compose_hash.py
           python3 scripts/attestation/verify_dstack_compose_hash.py \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
@@ -549,11 +581,11 @@ jobs:
             --output-json "${ARTIFACTS_DIR}/kms-app-identity.json" 2>&1 | tee "${ARTIFACTS_DIR}/verify-compose-hash.log"
           if ! jq -e '.compose_hash | type == "string" and (length == 64) and test("^[a-f0-9]+$")' \
             "${ARTIFACTS_DIR}/kms-app-identity.json" >/dev/null 2>&1; then
-            echo "::error::compose_hash missing or invalid in output (required for attestation verifier parity)"
-            jq . "${ARTIFACTS_DIR}/kms-app-identity.json" 2>/dev/null || true
+            ci_fail "COMPOSE_HASH_INVALID" "compose_hash missing or invalid in output (required for attestation verifier parity)"
+            jq -c '{compose_hash, app_id, deployment_name}' "${ARTIFACTS_DIR}/kms-app-identity.json" 2>/dev/null || true
             exit 1
           fi
-          echo "[verify_compose_hash] Extracted compose_hash from verified attestation path (RTMR replay + ITA parity)"
+          ci_ok "Extracted compose_hash from verified attestation path (RTMR replay + ITA parity)"
 
       - name: Derive candidate policy values
         id: derive_candidates
@@ -581,6 +613,31 @@ jobs:
                   output.write(f"{output_name}={value}\n")
           PY
 
+      - name: Build probe artifact index
+        id: artifact_index
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          index_file="${ARTIFACTS_DIR}/artifacts-index.txt"
+          python3 scripts/ci/artifacts/build_artifact_index.py \
+            --base-dir "${ARTIFACTS_DIR}" \
+            --output "${index_file}" \
+            --entry "phala-deploy.json|Provision API payload" \
+            --entry "candidate-urls.json|Candidate probe URLs" \
+            --entry "health.json|Last /health response" \
+            --entry "attest-request.json|/attest request payload" \
+            --entry "attest-response.json|/attest response payload" \
+            --entry "attestation-context.json|Probe context metadata" \
+            --entry "kms-app-identity.json|Verified compose hash identity" \
+            --entry "kms-policy-candidates.json|Derived candidate policy payload" \
+            --entry "kms-policy-candidates.env|Candidate policy env exports" \
+            --entry "provision_prod.log|Provisioning script output" \
+            --entry "verify-compose-hash.log|Compose hash verification trace"
+          ci_artifact "artifact index saved to ${index_file}"
+
       - name: Summarize probe outputs
         if: ${{ always() }}
         env:
@@ -590,18 +647,88 @@ jobs:
           APP_ID: ${{ steps.deploy.outputs.app_id }}
           RESOLVED_KMS_IMAGE: ${{ steps.prepare.outputs.kms_image }}
           RESOLVED_KMS_RELEASE_TAG: ${{ steps.prepare.outputs.kms_tag }}
+          ARTIFACT_NAME: kms-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          {
-            echo "## Phala KMS staging probe"
-            echo ""
-            echo "- VM UUID: ${VM_UUID:-n/a}"
-            echo "- App ID: ${APP_ID:-n/a}"
-            echo "- KMS image: ${RESOLVED_KMS_IMAGE:-n/a}"
-            echo "- KMS release tag: ${RESOLVED_KMS_RELEASE_TAG:-n/a}"
-            echo "- KMS URL: ${BASE_URL:-n/a}"
-            echo ""
-          } >> "${GITHUB_STEP_SUMMARY}"
+          source scripts/ci/logging.sh
+          result_reason="SUCCESS"
+          if [[ "${{ job.status }}" != "success" ]]; then
+            if [[ "${{ steps.probe.outcome }}" == "failure" ]]; then
+              result_reason="HEALTH_OR_ATTEST_FAILURE"
+            elif [[ "${{ steps.verify_external.outcome }}" == "failure" ]]; then
+              result_reason="ITA_VERIFICATION_FAILURE"
+            elif [[ "${{ steps.verify_compose_hash.outcome }}" == "failure" ]]; then
+              result_reason="COMPOSE_HASH_INVALID"
+            else
+              result_reason="WORKFLOW_FAILURE"
+            fi
+          fi
+          result_line="$(ci_result "kms-phala-staging-probe" "${{ job.status }}" "${result_reason}" "artifact=${ARTIFACT_NAME}" "base_url=${BASE_URL:-n/a}")"
+          ci_info "${result_line}"
+          summary_json="${RUNNER_TEMP}/kms-phala-staging-probe-summary.json"
+          jq -n \
+            --arg vm_uuid "${VM_UUID:-n/a}" \
+            --arg app_id "${APP_ID:-n/a}" \
+            --arg image "${RESOLVED_KMS_IMAGE:-n/a}" \
+            --arg tag "${RESOLVED_KMS_RELEASE_TAG:-n/a}" \
+            --arg base_url "${BASE_URL:-n/a}" \
+            --arg probe_outcome "${{ steps.probe.outcome || 'skipped' }}" \
+            --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
+            --arg compose_outcome "${{ steps.verify_compose_hash.outcome || 'skipped' }}" \
+            --arg candidate_outcome "${{ steps.derive_candidates.outcome || 'skipped' }}" \
+            --arg job_status "${{ job.status }}" \
+            --arg reason "${result_reason}" \
+            --arg result_line "${result_line}" \
+            --arg artifact "${ARTIFACT_NAME}" \
+            '{
+              title: "Workflow Summary",
+              sections: [
+                {
+                  name: "Inputs / Targets",
+                  lines: [
+                    ("- VM UUID: " + $vm_uuid),
+                    ("- App ID: " + $app_id),
+                    ("- KMS image: " + $image),
+                    ("- KMS release tag: " + $tag),
+                    ("- KMS URL: " + $base_url)
+                  ]
+                },
+                {
+                  name: "Check Outcomes",
+                  lines: [
+                    ("- Probe /health + /attest: " + $probe_outcome),
+                    ("- External quote verification: " + $external_outcome),
+                    ("- Compose hash verification: " + $compose_outcome),
+                    ("- Candidate extraction: " + $candidate_outcome)
+                  ]
+                },
+                {
+                  name: "Result",
+                  lines: [
+                    ("- Job status: " + $job_status),
+                    ("- Reason code: " + $reason),
+                    ("- " + $result_line)
+                  ]
+                },
+                {
+                  name: "Artifacts",
+                  lines: [
+                    ("- Artifact name: " + $artifact),
+                    "- Artifact index: artifacts-index.txt"
+                  ]
+                },
+                {
+                  name: "Next",
+                  lines: [
+                    "- Use kms-policy-candidates.json for policy review and promotion PRs.",
+                    "- Use artifacts-index.txt to quickly locate diagnostics files."
+                  ]
+                }
+              ]
+            }' > "${summary_json}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --input-json "${summary_json}" \
+            --output "${GITHUB_STEP_SUMMARY}"
 
           python3 - <<'PY'
           import json
@@ -630,6 +757,7 @@ jobs:
           PY
 
       - name: Upload probe artifacts
+        id: upload_artifacts
         if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:

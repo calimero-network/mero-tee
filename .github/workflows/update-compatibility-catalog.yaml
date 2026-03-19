@@ -61,6 +61,7 @@ jobs:
           fi
 
       - name: Commit and push
+        id: commit_push
         if: steps.diff.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -70,3 +71,31 @@ jobs:
           git commit -m "chore: update compatibility catalog (${{ steps.catalog.outputs.catalog_count }} releases)"
           # Release-triggered checkouts can be detached; always push explicitly to master.
           git push origin HEAD:master
+
+      - name: Summarize compatibility catalog update
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          commit_push_outcome="${{ steps.commit_push.outcome || 'skipped' }}"
+          result_reason="CATALOG_UNCHANGED"
+          if [[ "${{ steps.diff.outputs.changed || 'false' }}" == "true" ]]; then
+            if [[ "${commit_push_outcome}" == "success" ]]; then
+              result_reason="CATALOG_UPDATED"
+            else
+              result_reason="CATALOG_UPDATE_FAILED"
+            fi
+          fi
+          result_line="$(ci_result "update-compatibility-catalog" "${{ job.status }}" "${result_reason}" "catalog_count=${{ steps.catalog.outputs.catalog_count || '0' }}" "changed=${{ steps.diff.outputs.changed || 'false' }}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Branch: master" \
+            --checks-line "- Catalog release count: ${{ steps.catalog.outputs.catalog_count || '0' }}" \
+            --checks-line "- File changed: ${{ steps.diff.outputs.changed || 'false' }}" \
+            --checks-line "- Commit/push outcome: ${commit_push_outcome}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- Reason code: ${result_reason}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- compatibility-catalog.json" \
+            --next-line "- If changed=true and push failed, inspect git push logs and retry."

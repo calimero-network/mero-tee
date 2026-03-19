@@ -45,10 +45,31 @@ jobs:
           key: ci-mero-kms-phala
 
       - name: Format check
+        id: fmt
         run: cargo fmt --all --check
 
       - name: Clippy
+        id: clippy
         run: cargo clippy -p mero-kms-phala --all-targets -- -D warnings
 
       - name: Tests
+        id: tests
         run: cargo test -p mero-kms-phala
+
+      - name: Summarize CI outcomes
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "ci-kms-phala" "${{ job.status }}" "FMT_CLIPPY_TEST" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- fmt: ${{ steps.fmt.outcome }}" \
+            --checks-line "- clippy: ${{ steps.clippy.outcome }}" \
+            --checks-line "- tests: ${{ steps.tests.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Fix first failing check above and rerun workflow."

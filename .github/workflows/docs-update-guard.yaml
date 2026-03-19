@@ -7,6 +7,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
       - "docs/**"
       - "README.md"
@@ -25,16 +26,18 @@ jobs:
           fetch-depth: 0
 
       - name: Validate docs changes are included
+        id: validate_docs
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
 
           changed_files_output="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
           if [[ -z "${changed_files_output}" ]]; then
-            echo "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
+            ci_fail "NO_CHANGED_FILES" "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
             exit 1
           fi
           mapfile -t changed_files <<< "${changed_files_output}"
@@ -43,7 +46,7 @@ jobs:
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == mero-tee/* ]]; then
+            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 
@@ -53,9 +56,27 @@ jobs:
           done
 
           if [[ "${requires_docs_update}" == "true" && "${has_docs_update}" != "true" ]]; then
-            echo "This PR changes workflows/scripts/node-image-gcp but does not update docs."
-            echo "Please update at least one of: docs/** or README.md."
+            ci_fail "DOCS_UPDATE_REQUIRED" "This PR changes workflows/scripts/node-image-gcp but does not update docs."
+            ci_next "Please update at least one of: docs/** or README.md."
             exit 1
           fi
 
-          echo "Docs update guard passed."
+          ci_ok "Docs update guard passed."
+
+      - name: Summarize docs guard outcome
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "docs-update-guard" "${{ job.status }}" "DOCS_CONSISTENCY" "pr=${{ github.event.pull_request.number }}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- PR: #${{ github.event.pull_request.number }}" \
+            --inputs-line "- Base SHA: ${{ github.event.pull_request.base.sha }}" \
+            --inputs-line "- Head SHA: ${{ github.event.pull_request.head.sha }}" \
+            --checks-line "- Docs validation: ${{ steps.validate_docs.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Add docs/** or README.md updates when changing workflow/script behavior."

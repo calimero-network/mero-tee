@@ -53,6 +53,7 @@ documentation update in `docs/**` or `README.md`:
 - `scripts/release/**`
 - `scripts/policy/**`
 - `scripts/attestation/**`
+- `scripts/ci/**`
 - `mero-tee/**`
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
@@ -222,3 +223,40 @@ step (`actions/checkout`) before invoking `bash scripts/...`.
 
 In particular, the node-image `cleanup_attestation_resources` job must checkout
 the repo before invoking `scripts/release/node-image-gcp/sweep-attestation-resources.sh`.
+
+## Logging signal and run summary conventions
+
+Workflow logging should prioritize fast diagnosis while avoiding repeated noise:
+
+- Polling loops should log state/code transitions and periodic checkpoints, not
+  every single attempt.
+- Failure-path dumps should be bounded (for example last ~120 log lines or
+  compact JSON excerpts) while preserving full artifacts for deep debugging.
+- For probe/release workflows, prefer compact structured snippets in console
+  output and keep full payloads in artifact files.
+
+Current workflows following this pattern include:
+
+- `.github/workflows/kms-phala-staging-probe.yaml`
+- `.github/workflows/node-image-gcp-staging-probe.yaml`
+- `.github/workflows/release-node-image-gcp.yaml`
+- `.github/workflows/release-kms-phala.yaml`
+
+Shared helper functions for these conventions live in:
+
+- `scripts/ci/logging.sh`
+
+Phase B/C helper utilities used by probe/release workflows:
+
+- `scripts/ci/summary/write_workflow_summary.py` (standardized summary sections)
+- `scripts/ci/artifacts/build_artifact_index.py` (artifact inventory generation)
+- `scripts/ci/polling/wait_for_gcp_instance_status.py` (status polling with transition logs)
+- `scripts/ci/polling/wait_for_http.py` (HTTP readiness polling with bounded logging)
+- `scripts/ci/polling/wait_for_candidate_health.py` (candidate endpoint readiness selection)
+- `scripts/ci/diagnostics/preview_file.py` (bounded diagnostics previews)
+- `scripts/ci/probes/node_verify_anti_fake.sh` (node anti-fake verification sequence)
+- `scripts/ci/probes/node_runtime_kms_probe.sh` (runtime node->KMS probe sequence)
+
+Low-signal CI/guard workflows also emit final `GITHUB_STEP_SUMMARY` rows with
+key step outcomes so operators can triage pass/fail state without scanning full
+raw logs.
