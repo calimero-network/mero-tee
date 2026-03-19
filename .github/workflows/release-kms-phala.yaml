@@ -334,6 +334,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
       - name: Publish minimal release for compose hash alignment
         env:
           GH_TOKEN: ${{ github.token }}
