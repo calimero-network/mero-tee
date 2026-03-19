@@ -371,25 +371,32 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mero-kms-phala
+          DEBUG_DIGEST: ${{ needs.release-container.outputs.debug_image_digest }}
+          DEBUG_RO_DIGEST: ${{ needs.release-container.outputs.debug_ro_image_digest }}
+          LOCKED_DIGEST: ${{ needs.release-container.outputs.locked_image_digest }}
         run: |
           set -euo pipefail
-          probe_kms_version_pin="2.1.85"
           case "${PROFILE}" in
             debug)
-              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}-debug"
+              digest="${DEBUG_DIGEST}"
               ;;
             debug-read-only)
-              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}-debug-read-only"
+              digest="${DEBUG_RO_DIGEST}"
               ;;
             locked-read-only)
-              image_ref="${IMAGE_NAME}:${probe_kms_version_pin}"
+              digest="${LOCKED_DIGEST}"
               ;;
             *)
               echo "::error::Unsupported profile '${PROFILE}'"
               exit 1
               ;;
           esac
-          echo "Pinned probe image for ${PROFILE}: ${image_ref}"
+          if [[ -z "${digest}" ]]; then
+            echo "::error::Missing container digest for profile ${PROFILE}"
+            exit 1
+          fi
+          image_ref="${IMAGE_NAME}@${digest}"
+          echo "Resolved probe image for ${PROFILE}: ${image_ref}"
           echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Trigger staging probe and wait
