@@ -63,29 +63,13 @@ jobs:
           source scripts/ci/logging.sh
           result_line="$(ci_result "ci-kms-phala" "${{ job.status }}" "FMT_CLIPPY_TEST" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
           ci_info "${result_line}"
-          {
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- Ref: ${GITHUB_REF_NAME}"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- fmt: ${{ steps.fmt.outcome }}"
-            echo "- clippy: ${{ steps.clippy.outcome }}"
-            echo "- tests: ${{ steps.tests.outcome }}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- n/a"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- Fix first failing check above and rerun workflow."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- fmt: ${{ steps.fmt.outcome }}" \
+            --checks-line "- clippy: ${{ steps.clippy.outcome }}" \
+            --checks-line "- tests: ${{ steps.tests.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Fix first failing check above and rerun workflow."

@@ -88,30 +88,14 @@ jobs:
           fi
           result_line="$(ci_result "update-compatibility-catalog" "${{ job.status }}" "${result_reason}" "catalog_count=${{ steps.catalog.outputs.catalog_count || '0' }}" "changed=${{ steps.diff.outputs.changed || 'false' }}")"
           ci_info "${result_line}"
-          {
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- Branch: master"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- Catalog release count: ${{ steps.catalog.outputs.catalog_count || '0' }}"
-            echo "- File changed: ${{ steps.diff.outputs.changed || 'false' }}"
-            echo "- Commit/push outcome: ${commit_push_outcome}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- Reason code: ${result_reason}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- compatibility-catalog.json"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- If changed=true and push failed, inspect git push logs and retry."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Branch: master" \
+            --checks-line "- Catalog release count: ${{ steps.catalog.outputs.catalog_count || '0' }}" \
+            --checks-line "- File changed: ${{ steps.diff.outputs.changed || 'false' }}" \
+            --checks-line "- Commit/push outcome: ${commit_push_outcome}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- Reason code: ${result_reason}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- compatibility-catalog.json" \
+            --next-line "- If changed=true and push failed, inspect git push logs and retry."

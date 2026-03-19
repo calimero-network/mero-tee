@@ -1581,29 +1581,12 @@ jobs:
           source scripts/ci/logging.sh
           result_line="$(ci_result "release-kms-phala-release-metadata" "${{ job.status }}" "RELEASE_METADATA_PIPELINE" "kms_tag=${{ needs.prepare.outputs.kms_release_tag }}" "run_id=${GITHUB_RUN_ID}")"
           ci_info "${result_line}"
-          {
-            echo ""
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- KMS tag: ${{ needs.prepare.outputs.kms_release_tag }}"
-            echo "- Version: ${{ needs.prepare.outputs.version }}"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- Node policy wait: ${{ steps.node_policy.outcome || 'skipped' }}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- Release assets uploaded via GitHub Release job steps"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- Use release notes + generated policy assets for downstream verification."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- KMS tag: ${{ needs.prepare.outputs.kms_release_tag }}" \
+            --inputs-line "- Version: ${{ needs.prepare.outputs.version }}" \
+            --checks-line "- Node policy wait: ${{ steps.node_policy.outcome || 'skipped' }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- Release assets uploaded via GitHub Release job steps" \
+            --next-line "- Use release notes + generated policy assets for downstream verification."

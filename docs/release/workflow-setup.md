@@ -254,6 +254,8 @@ Phase B/C helper utilities used by probe/release workflows:
 - `scripts/ci/polling/wait_for_http.py` (HTTP readiness polling with bounded logging)
 - `scripts/ci/polling/wait_for_candidate_health.py` (candidate endpoint readiness selection)
 - `scripts/ci/diagnostics/preview_file.py` (bounded diagnostics previews)
+- `scripts/ci/probes/node_verify_anti_fake.sh` (node anti-fake verification sequence)
+- `scripts/ci/probes/node_runtime_kms_probe.sh` (runtime node->KMS probe sequence)
 
 Low-signal CI/guard workflows also emit final `GITHUB_STEP_SUMMARY` rows with
 key step outcomes so operators can triage pass/fail state without scanning full

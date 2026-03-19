@@ -68,28 +68,12 @@ jobs:
           source scripts/ci/logging.sh
           result_line="$(ci_result "ci-workflow-lint" "${{ job.status }}" "ACTIONLINT_SHELLCHECK" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
           ci_info "${result_line}"
-          {
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- Ref: ${GITHUB_REF_NAME}"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- actionlint: ${{ steps.actionlint.outcome }}"
-            echo "- shellcheck: ${{ steps.shellcheck.outcome }}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- n/a"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- Fix first failing lint stage and rerun."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
+            --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- n/a" \
+            --next-line "- Fix first failing lint stage and rerun."
