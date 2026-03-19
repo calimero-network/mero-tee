@@ -29,7 +29,7 @@ candidate_tags="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 30 --jso
 prev_tag=""
 for tag in ${candidate_tags}; do
   echo "Trying ${tag}..."
-  rm -rf "${workdir}"/* 2>/dev/null || true
+  rm -rf "${workdir:?}"/* 2>/dev/null || true
   if gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
     --pattern "kms-phala-attestation-policy.json" --dir "${workdir}" 2>/dev/null; then
     prev_tag="${tag}"
