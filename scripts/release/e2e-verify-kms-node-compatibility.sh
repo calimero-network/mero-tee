@@ -70,7 +70,6 @@ measurement_keys = [
     "allowed_rtmr0",
     "allowed_rtmr1",
     "allowed_rtmr2",
-    "allowed_rtmr3",
 ]
 
 node_candidates: Dict[str, dict] = {}

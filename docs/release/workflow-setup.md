@@ -125,6 +125,9 @@ release events:
   - when available, `kms_policy_version` is resolved to the previous
     `mero-kms-v*` tag (same behavior as `release-kms-phala.yaml`).
   This prevents compose-hash drift caused by probe-mode differences.
+- RTMR3 policy allowlists are not used as a strict subset gate in post-release
+  e2e checks. RTMR3 integrity is validated through verified attestation replay
+  (event log -> RTMR3) and quote parity, matching verifier semantics.
 - Post-release e2e also runs an explicit cross-profile runtime negative probe:
   a `debug` node executes `merod kms probe` against a live
   `locked-read-only` KMS endpoint (kept alive briefly before cleanup), and the

@@ -359,7 +359,8 @@ jobs:
 
           release_dir = pathlib.Path(sys.argv[1])
           profiles = ["debug", "debug-read-only", "locked-read-only"]
-          keys = ["kms_allowed_mrtd", "kms_allowed_rtmr0", "kms_allowed_rtmr1", "kms_allowed_rtmr2", "kms_allowed_rtmr3"]
+          # RTMR3 is validated via quote/event-log replay; do not enforce policy allowlist equality here.
+          keys = ["kms_allowed_mrtd", "kms_allowed_rtmr0", "kms_allowed_rtmr1", "kms_allowed_rtmr2"]
 
           def norm(values):
               normalized = []
@@ -590,13 +591,14 @@ jobs:
                           f"for profile={profile}"
                       )
 
+          # Keep policy subset checks aligned with attestation verifier semantics:
+          # RTMR3 is derived from replayed event log, not policy allowlist matching.
           keys = [
               "allowed_tcb_statuses",
               "allowed_mrtd",
               "allowed_rtmr0",
               "allowed_rtmr1",
               "allowed_rtmr2",
-              "allowed_rtmr3",
           ]
           for key in keys:
               probe_values = normalize(probe_policy.get(key, []))
@@ -1002,13 +1004,13 @@ jobs:
           published_payload = json.loads(published_file.read_text(encoding="utf-8"))
           published_profile = published_payload.get("profiles", {}).get(profile, {})
 
+          # Mirror verifier-style handling: do not gate on RTMR3 allowlist subset checks.
           keys = [
               "allowed_tcb_statuses",
               "allowed_mrtd",
               "allowed_rtmr0",
               "allowed_rtmr1",
               "allowed_rtmr2",
-              "allowed_rtmr3",
           ]
           for key in keys:
               probe_values = normalize(probe_policy.get(key, []))
