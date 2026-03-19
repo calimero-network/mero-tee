@@ -393,22 +393,6 @@ jobs:
             exit 0
           fi
 
-          # Keep compose-hash probe mode aligned with release publication.
-          # release-kms-phala probes set kms_policy_version to previous KMS release.
-          probe_kms_policy_version=""
-          previous_kms_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 --json tagName -q '.[].tagName' 2>/dev/null \
-            | grep -E '^mero-kms-v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | awk -v current="${KMS_TAG}" '
-                $0 == current { found = 1; next }
-                found { print; exit }
-              ' || true)"
-          if [[ -n "${previous_kms_tag}" ]]; then
-            probe_kms_policy_version="${previous_kms_tag#mero-kms-v}"
-            echo "Compose mode alignment: kms_policy_version=${probe_kms_policy_version} (from ${previous_kms_tag})."
-          else
-            echo "::warning::Compose mode alignment: could not resolve previous KMS release for ${KMS_TAG}; using default probe compose mode."
-          fi
-
           probe_run_urls=()
           locked_probe_candidates_file=""
           cross_profile_locked_kms_base_url=""
@@ -453,9 +437,6 @@ jobs:
                 -f probe_label="${probe_label}"
                 -f deployment_name="${deployment_name}"
               )
-              if [[ -n "${probe_kms_policy_version}" ]]; then
-                probe_dispatch_args+=(-f kms_policy_version="${probe_kms_policy_version}")
-              fi
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --ref "${PROBE_WORKFLOW_REF}" \
@@ -637,28 +618,20 @@ jobs:
 
             if [[ "${probe_validated}" != "true" ]]; then
               reason="Selected KMS release '${KMS_TAG}' produced probe measurements outside published profile policy for '${profile}' after ${#deployment_name_candidates[@]} deployment name attempt(s)."
-              if [[ "${EVENT_NAME}" == "workflow_dispatch" || "${STRICT_RELEASE_MODE}" == "true" ]]; then
-                echo "::error::${reason}"
-                if [[ -n "${last_probe_validation_error}" ]]; then
-                  echo "::error::${last_probe_validation_error}"
-                fi
-                exit 1
-              fi
-
-              echo "::warning::${reason} Skipping strict per-profile probe until a newer KMS release is published."
+              echo "::error::${reason}"
               if [[ -n "${last_probe_validation_error}" ]]; then
-                echo "::warning::${last_probe_validation_error}"
+                echo "::error::${last_probe_validation_error}"
               fi
               {
                 echo "## Post-release e2e compatibility matrix"
                 echo ""
-                echo "- Status: skipped"
+                echo "- Status: failed"
                 echo "- Reason: ${reason}"
                 echo "- Node release tag: ${TEE_TAG}"
                 echo "- KMS release tag: ${KMS_TAG}"
                 echo "- KMS tag source: ${KMS_TAG_SOURCE}"
               } >> "${GITHUB_STEP_SUMMARY}"
-              exit 0
+              exit 1
             fi
 
             if [[ "${profile}" == "locked-read-only" ]]; then
@@ -695,9 +668,6 @@ jobs:
             # Keep the locked KMS alive just long enough for debug-node runtime probe.
             -f hold_after_upload_seconds="900"
           )
-          if [[ -n "${probe_kms_policy_version}" ]]; then
-            cross_profile_dispatch_args+=(-f kms_policy_version="${probe_kms_policy_version}")
-          fi
           gh workflow run "kms-phala-staging-probe.yaml" \
             --repo "${GITHUB_REPOSITORY}" \
             --ref "${PROBE_WORKFLOW_REF}" \

@@ -1,0 +1,14 @@
+services:
+  mero-kms:
+    image: __IMAGE_REF__
+    restart: unless-stopped
+    ports:
+      - "__SERVICE_PORT__:8080"
+    environment:
+      LISTEN_ADDR: "0.0.0.0:8080"
+      DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
+      CHALLENGE_TTL_SECS: "60"
+      ACCEPT_MOCK_ATTESTATION: "false"
+      ENFORCE_MEASUREMENT_POLICY: "true"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock

@@ -134,7 +134,7 @@ KMS release flow (draft release + human approval):
 Node release flow:
 
 - On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
-- KMS and merod fetch policy from each other's releases at runtime (MERO_KMS_VERSION, MERO_TEE_VERSION).
+- KMS and merod fetch policy from each other's releases at runtime (KMS uses build version; merod uses MERO_TEE_VERSION).
 - `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images, probes all three released GCP node images, validates full MRTD/RTMR allowlists for every profile, and then checks the strict node↔KMS allow/deny matrix.
 - A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
 - Released KMS images are profile-pinned: startup reads the image profile marker and rejects `KMS_POLICY_PROFILE` env overrides, preventing deploy-time profile switching.
