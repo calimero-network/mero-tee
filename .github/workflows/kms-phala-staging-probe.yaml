@@ -242,6 +242,13 @@ jobs:
           EOF
           fi
 
+          compose_sha256="$(sha256sum "${compose_file}" | awk '{print $1}')"
+          enforce_measurement_policy="false"
+          if [[ -n "${KMS_POLICY_VERSION}" ]]; then
+            enforce_measurement_policy="true"
+          fi
+          echo "[compose] sha256=${compose_sha256} image=${resolved_kms_image} service_port=${SERVICE_PORT} enforce_measurement_policy=${enforce_measurement_policy} kms_policy_version=${KMS_POLICY_VERSION:-<unset>}"
+
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
           echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
@@ -298,8 +305,9 @@ jobs:
             --region "${REGION}" \
             --output "${deploy_json}" 2>&1 | tee "${ARTIFACTS_DIR}/provision_prod.log"
 
-          echo "[deploy] Provision result:"
-          cat "${deploy_json}"
+          echo "[deploy] Provision result summary:"
+          jq -c '{app_id, vm_uuid, status}' "${deploy_json}" || true
+          echo "[deploy] Full provision payload saved to ${deploy_json}"
           vm_uuid="$(jq -r '.vm_uuid // empty' "${deploy_json}")"
           app_id="$(jq -r '.app_id // empty' "${deploy_json}")"
           if [[ -z "${vm_uuid}" || -z "${app_id}" ]]; then

@@ -114,6 +114,8 @@ release events:
     commit.
   - `gh workflow run --ref` requires a named ref (branch/tag), not a raw commit
     SHA.
+  - Parent e2e logs now poll child runs with status-transition output
+    (queued/in_progress/completed) instead of `gh run watch` refresh spam.
 - Node staging probes must also produce `node-client-verification.json`, which
   proves client-visible anti-fake checks succeeded:
   - positive quote verification passes,

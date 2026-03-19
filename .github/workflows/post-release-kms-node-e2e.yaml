@@ -322,6 +322,47 @@ jobs:
             exit 1
           fi
 
+          wait_for_workflow_run() {
+            local run_id="$1"
+            local timeout_secs="$2"
+            local label="$3"
+            local repo="$4"
+            local deadline=$(( $(date +%s) + timeout_secs ))
+            local last_status=""
+            local last_conclusion=""
+
+            while (( $(date +%s) < deadline )); do
+              local state
+              state="$(gh run view "${run_id}" \
+                --repo "${repo}" \
+                --json status,conclusion,url \
+                --jq '[.status, (.conclusion // ""), .url] | @tsv' 2>/dev/null || true)"
+              if [[ -z "${state}" ]]; then
+                sleep 10
+                continue
+              fi
+
+              local status conclusion run_url
+              IFS=$'\t' read -r status conclusion run_url <<< "${state}"
+              if [[ "${status}" != "${last_status}" || "${conclusion}" != "${last_conclusion}" ]]; then
+                echo "[post-release-e2e] ${label}: status=${status:-unknown} conclusion=${conclusion:-n/a} run=${run_url}"
+                last_status="${status}"
+                last_conclusion="${conclusion}"
+              fi
+
+              if [[ "${status}" == "completed" ]]; then
+                [[ "${conclusion}" == "success" ]] && return 0
+                return 1
+              fi
+              sleep 10
+            done
+
+            echo "::error::Timed out after ${timeout_secs}s waiting for ${label} (run ${run_id})."
+            return 1
+          }
+
+          echo "[post-release-e2e] start: node_tag=${TEE_TAG} kms_tag=${KMS_TAG} strict=${STRICT_RELEASE_MODE} probe_ref=${PROBE_WORKFLOW_REF} expected_sha=${PROBE_EXPECTED_SHA:0:12}..."
+
           has_immutable_profile_digests="false"
           if jq -e '
             (.compatibility.profiles.debug.kms_image_digest | type == "string" and test("^sha256:[A-Fa-f0-9]{64}$")) and
@@ -459,11 +500,12 @@ jobs:
                 exit 1
               fi
 
-              if ! timeout 2700s gh run watch "${probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
-                echo "::error::Timed out or failed while waiting for probe run ${probe_run_id}"
+              probe_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}"
+              if ! wait_for_workflow_run "${probe_run_id}" 2700 "KMS probe profile=${profile} deployment=${deployment_name}" "${GITHUB_REPOSITORY}"; then
+                echo "::error::Timed out or failed while waiting for probe run ${probe_run_id} (${probe_run_url})"
                 exit 1
               fi
-              probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}")
+              probe_run_urls+=("${probe_run_url}")
 
               probe_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/artifacts" \
                 --jq '.artifacts | map(select(.expired == false and (.name | startswith("kms-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
@@ -874,11 +916,12 @@ jobs:
               exit 1
             fi
 
-            if ! timeout 2700s gh run watch "${node_probe_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
-              echo "::error::Timed out or failed while waiting for node probe run ${node_probe_run_id}"
+            node_probe_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${node_probe_run_id}"
+            if ! wait_for_workflow_run "${node_probe_run_id}" 2700 "Node probe profile=${profile}" "${GITHUB_REPOSITORY}"; then
+              echo "::error::Timed out or failed while waiting for node probe run ${node_probe_run_id} (${node_probe_run_url})"
               exit 1
             fi
-            node_probe_run_urls+=("https://github.com/${GITHUB_REPOSITORY}/actions/runs/${node_probe_run_id}")
+            node_probe_run_urls+=("${node_probe_run_url}")
 
             node_artifact_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${node_probe_run_id}/artifacts" \
               --jq '.artifacts | map(select(.expired == false and (.name | startswith("node-gcp-staging-probe-")))) | sort_by(.created_at) | reverse | .[0].name // ""')"
@@ -1052,8 +1095,8 @@ jobs:
           done
 
           if [[ -n "${cross_profile_kms_run_id}" ]]; then
-            if ! timeout 3600s gh run watch "${cross_profile_kms_run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
-              echo "::error::Timed out or failed while waiting for cross-profile KMS probe run ${cross_profile_kms_run_id}"
+            if ! wait_for_workflow_run "${cross_profile_kms_run_id}" 3600 "Cross-profile locked KMS probe" "${GITHUB_REPOSITORY}"; then
+              echo "::error::Timed out or failed while waiting for cross-profile KMS probe run ${cross_profile_kms_run_id} (${cross_profile_kms_run_url})"
               exit 1
             fi
           fi

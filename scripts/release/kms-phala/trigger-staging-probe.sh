@@ -16,6 +16,45 @@ if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
   exit 1
 fi
 
+wait_for_workflow_run() {
+  local run_id="$1"
+  local timeout_secs="$2"
+  local label="$3"
+  local repo="$4"
+  local deadline=$(( $(date +%s) + timeout_secs ))
+  local last_status=""
+  local last_conclusion=""
+
+  while (( $(date +%s) < deadline )); do
+    local state
+    state="$(gh run view "${run_id}" \
+      --repo "${repo}" \
+      --json status,conclusion,url \
+      --jq '[.status, (.conclusion // ""), .url] | @tsv' 2>/dev/null || true)"
+    if [[ -z "${state}" ]]; then
+      sleep 10
+      continue
+    fi
+
+    local status conclusion run_url
+    IFS=$'\t' read -r status conclusion run_url <<< "${state}"
+    if [[ "${status}" != "${last_status}" || "${conclusion}" != "${last_conclusion}" ]]; then
+      echo "[release-kms-probe] ${label}: status=${status:-unknown} conclusion=${conclusion:-n/a} run=${run_url}"
+      last_status="${status}"
+      last_conclusion="${conclusion}"
+    fi
+
+    if [[ "${status}" == "completed" ]]; then
+      [[ "${conclusion}" == "success" ]] && return 0
+      return 1
+    fi
+    sleep 10
+  done
+
+  echo "::error::Timed out after ${timeout_secs}s waiting for ${label} (run ${run_id})."
+  return 1
+}
+
 # Use canonical names matching MDMA/production for compose_hash consistency
 deployment_name="calimero-kms-${PROFILE}"
 max_probe_attempts=2
@@ -73,7 +112,7 @@ for probe_attempt in $(seq 1 "${max_probe_attempts}"); do
   fi
 
   echo "Waiting for probe run ${run_id} (attempt ${probe_attempt}/${max_probe_attempts})..."
-  if timeout 2700s gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --interval 20 --exit-status; then
+  if wait_for_workflow_run "${run_id}" 2700 "release profile=${PROFILE} attempt=${probe_attempt}" "${GITHUB_REPOSITORY}"; then
     echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
     break
   fi

@@ -22,6 +22,13 @@ Workflow file:
 7. Uploads full probe artifacts.
 8. Always deletes the ephemeral CVM during cleanup (on both success and failure paths).
 
+Logging notes:
+
+- The workflow logs a compact compose summary (`[compose] ...`) with compose file
+  SHA256 and key compose-mode inputs (image, port, policy mode/version).
+- Deploy output logs a compact provision summary (`app_id`, `vm_uuid`, `status`);
+  full raw deployment payload remains available in uploaded artifacts.
+
 When resolving from a release tag, the workflow first validates that the release
 manifest declares `verification.kms_attest_endpoint == "/attest"`.
 
