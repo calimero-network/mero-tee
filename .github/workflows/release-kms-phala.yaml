@@ -13,6 +13,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
+      - "scripts/phala/**"
       - "scripts/release/kms-phala/**"
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
+      - "scripts/phala/**"
       - "scripts/release/kms-phala/**"
   workflow_dispatch:
     inputs:
