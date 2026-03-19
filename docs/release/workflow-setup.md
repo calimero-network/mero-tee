@@ -132,8 +132,11 @@ release events:
   - Temporary bootstrap pin: `release-kms-phala.yaml` sets
     `BOOTSTRAP_POLICY_SOURCE_TAG=mero-kms-v2.1.85` for
     `scripts/release/kms-phala/publish-minimal-release.sh`.
+  - Bootstrap policy payloads copied from that source tag are normalized to the
+    current release metadata (`tag`, `role`, `profile`) before upload so KMS
+    startup validation for the current version can succeed.
   - This pin affects only the source release used to copy bootstrap policy assets
-    into the minimal draft release. It does not change runtime KMS versioning
+    into the minimal bootstrap release. It does not change runtime KMS versioning
     (`CARGO_PKG_VERSION` remains the runtime release identity).
   - Remove the pin after upstream release assets are repaired and newer tags can
     safely provide bootstrap policy JSON files.

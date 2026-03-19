@@ -55,6 +55,30 @@ for profile in locked-read-only debug debug-read-only; do
   fi
 done
 
+normalize_policy_file() {
+  local input_file="$1"
+  local profile="$2"
+  local output_file
+  output_file="$(mktemp)"
+  jq \
+    --arg tag "${VERSION}" \
+    --arg profile "${profile}" \
+    '
+    .tag = $tag
+    | .role = (.role // "kms")
+    | .profile = $profile
+    ' \
+    "${input_file}" > "${output_file}"
+  mv "${output_file}" "${input_file}"
+}
+
+# Bootstrap policy contents are sourced from ${bootstrap_policy_source_tag}, but
+# the fetched policy metadata must match the target KMS release version.
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.json" "locked-read-only"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.locked-read-only.json" "locked-read-only"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.debug.json" "debug"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.debug-read-only.json" "debug-read-only"
+
 notes_file="${workdir}/notes.md"
 echo "Minimal bootstrap release for compose_hash alignment. Full assets will be published by release-metadata." > "${notes_file}"
 
