@@ -138,9 +138,10 @@ release events:
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Release and post-release probes now rely on default KMS version resolution
-    (`CARGO_PKG_VERSION`) rather than forcing `kms_version_override`, so probe
-    compose inputs match the current release candidate by default.
+  - Release and post-release probes pass `kms_version_override` set to the
+    latest published prior `mero-kms-v*` version. This avoids draft-release 404s
+    during probe bootstrap while keeping release-time and post-release compose
+    inputs aligned for compose-hash validation.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
