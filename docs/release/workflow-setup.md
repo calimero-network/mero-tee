@@ -127,9 +127,10 @@ release events:
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
   Release publishes a minimal bootstrap release before the probe so KMS fetches
   policy at boot.
-  - Bootstrap release remains **draft** (mutable) until `release-metadata` uploads
-    all release assets and publishes the final release.
-  - Bootstrap policy source defaults to `mero-kms-v2.1.85` in
+  - Bootstrap release visibility must be non-draft. KMS resolves policy via
+    anonymous GitHub release URLs, and draft releases return `404`.
+  - Temporary bootstrap pin: `release-kms-phala.yaml` sets
+    `BOOTSTRAP_POLICY_SOURCE_TAG=mero-kms-v2.1.85` for
     `scripts/release/kms-phala/publish-minimal-release.sh`.
   - Bootstrap policy payloads copied from that source tag are normalized to the
     current release metadata (`tag`, `role`, `profile`) before upload so KMS
