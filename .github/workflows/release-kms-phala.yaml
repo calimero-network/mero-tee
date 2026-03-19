@@ -462,6 +462,7 @@ jobs:
           }
 
           versions_manifest_changed="unknown"
+          last_logged_node_release_state=""
           if [[ "${EVENT_NAME}" == "push" && -f "${GITHUB_EVENT_PATH:-}" ]]; then
             if jq -e '
               [ .commits[]? | (.added // []) + (.modified // []) + (.removed // []) ]
@@ -475,6 +476,7 @@ jobs:
             refresh_node_release_workflow_state
             echo "Detected versions manifest changed: ${versions_manifest_changed}"
             echo "Release mero-tee workflow state for commit ${GITHUB_SHA}: ${node_release_workflow_state}"
+            last_logged_node_release_state="${node_release_workflow_state}"
           fi
 
           for attempt in $(seq 1 60); do
@@ -501,7 +503,10 @@ jobs:
             fi
             if [[ "${EVENT_NAME}" == "push" && $(( attempt % 5 )) -eq 0 ]]; then
               refresh_node_release_workflow_state
-              echo "Release mero-tee workflow state (attempt ${attempt}/60): ${node_release_workflow_state}"
+              if [[ "${node_release_workflow_state}" != "${last_logged_node_release_state}" || $(( attempt % 15 )) -eq 0 ]]; then
+                echo "Release mero-tee workflow state (attempt ${attempt}/60): ${node_release_workflow_state}"
+                last_logged_node_release_state="${node_release_workflow_state}"
+              fi
               case "${node_release_workflow_state}" in
                 completed:failure|completed:cancelled|completed:timed_out|completed:action_required|completed:startup_failure|completed:stale)
                   echo "::error::Same-commit 'Release mero-tee' run ended as ${node_release_workflow_state} before publishing ${NODE_TAG}."
@@ -514,7 +519,9 @@ jobs:
               echo "::error::Timed out waiting for node release ${NODE_TAG} with published-mrtds.json"
               exit 1
             fi
-            echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
+            if [[ "${attempt}" -eq 1 || $(( attempt % 5 )) -eq 0 ]]; then
+              echo "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)..."
+            fi
             sleep 30
           done
 

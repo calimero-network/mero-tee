@@ -346,6 +346,7 @@ jobs:
       - name: Wait for VM to reach RUNNING
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
+          last_status=""
           for attempt in $(seq 1 30); do
             status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
               --project "${{ steps.params.outputs.vm_project }}" \
@@ -366,7 +367,10 @@ jobs:
               exit 1
             fi
 
-            echo "Current status: ${status:-unknown} (attempt ${attempt}/30)"
+            if [[ "${status}" != "${last_status}" || $((attempt % 5)) -eq 0 ]]; then
+              echo "Current status: ${status:-unknown} (attempt ${attempt}/30)"
+              last_status="${status}"
+            fi
             sleep 10
           done
 
@@ -402,6 +406,7 @@ jobs:
 
           ready="false"
           max_attempts=90
+          last_http_code=""
           for attempt in $(seq 1 ${max_attempts}); do
             http_code="$(curl -sS --max-time 5 -o "${artifacts_dir}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
             if [[ "${http_code}" == "200" ]]; then
@@ -410,7 +415,10 @@ jobs:
               break
             fi
 
-            echo "Health endpoint not ready (HTTP ${http_code:-error}) at attempt ${attempt}/${max_attempts}"
+            if [[ "${http_code}" != "${last_http_code}" || $((attempt % 10)) -eq 0 ]]; then
+              echo "Health endpoint not ready (HTTP ${http_code:-error}) at attempt ${attempt}/${max_attempts}"
+              last_http_code="${http_code}"
+            fi
             sleep 5
           done
 
@@ -424,15 +432,12 @@ jobs:
                 --port "${serial_port}" \
                 > "${artifacts_dir}/serial-port-${serial_port}.log" || true
             done
-            echo ""
-            echo "=== First 200 lines of serial-port-1 (boot + calimero-init) ==="
-            head -200 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
-            echo ""
+            echo "Serial console logs captured under ${artifacts_dir}/serial-port-*.log"
             echo "=== Lines matching calimero-init|merod|ERROR|failed|WARN from serial-port-1 ==="
             grep -E -i "calimero-init|merod|ERROR|failed|WARN" "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
             echo ""
-            echo "=== Last 150 lines of serial-port-1 (most recent) ==="
-            tail -150 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
+            echo "=== Last 120 lines of serial-port-1 (most recent) ==="
+            tail -120 "${artifacts_dir}/serial-port-1.log" 2>/dev/null || true
             exit 1
           fi
 
