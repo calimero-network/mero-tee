@@ -129,19 +129,18 @@ release events:
   policy at boot.
   - Bootstrap release remains **draft** (mutable) until `release-metadata` uploads
     all release assets and publishes the final release.
-  - Bootstrap policy source defaults to `mero-kms-v2.1.85` in
-    `scripts/release/kms-phala/publish-minimal-release.sh`.
+  - Bootstrap policy source defaults to the latest published prior
+    `mero-kms-v*` release in `scripts/release/kms-phala/publish-minimal-release.sh`
+    (or can be overridden with `BOOTSTRAP_POLICY_SOURCE_TAG` when needed).
   - Bootstrap policy payloads copied from that source tag are normalized to the
     current release metadata (`tag`, `role`, `profile`) before upload so KMS
     startup validation for the current version can succeed.
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Release and post-release probes pass `kms_version_override=2.1.85`
-    (mapped to `MERO_KMS_VERSION` in probe compose) so current
-    release-candidate images can fetch policy from the known-good
-    `mero-kms-v2.1.85` policy release during probe stages and keep
-    compose-hash verification aligned across release-time and post-release e2e.
+  - Release and post-release probes now rely on default KMS version resolution
+    (`CARGO_PKG_VERSION`) rather than forcing `kms_version_override`, so probe
+    compose inputs match the current release candidate by default.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.

@@ -317,7 +317,6 @@ jobs:
           STRICT_RELEASE_MODE: ${{ steps.resolve.outputs.strict_release_mode }}
           PROBE_WORKFLOW_REF: ${{ steps.resolve.outputs.probe_workflow_ref }}
           PROBE_EXPECTED_SHA: ${{ steps.resolve.outputs.probe_expected_sha }}
-          KMS_VERSION_OVERRIDE: "2.1.85"
           DEFAULT_NODE_VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
         run: |
           set -euo pipefail
@@ -451,7 +450,6 @@ jobs:
                 -f kms_tag="pinned"
                 -f probe_label="${probe_label}"
                 -f deployment_name="${deployment_name}"
-                -f kms_version_override="${KMS_VERSION_OVERRIDE}"
               )
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
@@ -681,7 +679,6 @@ jobs:
             -f kms_tag="pinned"
             -f probe_label="${cross_profile_probe_label}"
             -f deployment_name="${cross_profile_deployment_name}"
-            -f kms_version_override="${KMS_VERSION_OVERRIDE}"
             # Keep the locked KMS alive just long enough for debug-node runtime probe.
             -f hold_after_upload_seconds="900"
           )
