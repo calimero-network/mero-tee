@@ -9,7 +9,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+
+from _util import get_nested, should_log
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,26 +28,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label", default="HTTP poll")
     parser.add_argument("--verbosity", default="compact", choices=["compact", "debug"])
     return parser.parse_args()
-
-
-def get_nested(data: Any, dotted_key: str) -> Any:
-    cur = data
-    for chunk in dotted_key.split("."):
-        if isinstance(cur, dict) and chunk in cur:
-            cur = cur[chunk]
-            continue
-        return None
-    return cur
-
-
-def should_log(verbosity: str, current: str, previous: str, attempt: int, heartbeat: int) -> bool:
-    if verbosity == "debug":
-        return True
-    if attempt == 1:
-        return True
-    if heartbeat > 0 and attempt % heartbeat == 0:
-        return True
-    return current != previous
 
 
 def main() -> int:

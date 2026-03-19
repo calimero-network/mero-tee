@@ -9,6 +9,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from _util import should_log
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Wait for GCP instance status.")
@@ -22,16 +24,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbosity", default="compact", choices=["compact", "debug"])
     parser.add_argument("--output-json", default="")
     return parser.parse_args()
-
-
-def should_log(verbosity: str, current: str, previous: str, attempt: int, heartbeat: int) -> bool:
-    if verbosity == "debug":
-        return True
-    if attempt == 1:
-        return True
-    if heartbeat > 0 and attempt % heartbeat == 0:
-        return True
-    return current != previous
 
 
 def query_status(instance: str, project: str, zone: str) -> str:
