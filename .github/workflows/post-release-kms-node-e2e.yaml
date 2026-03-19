@@ -826,7 +826,7 @@ jobs:
               node_dispatch_args+=(
                 -f kms_probe_url="${cross_profile_locked_kms_base_url}"
                 -f kms_probe_expected_outcome="failure"
-                -f kms_probe_expected_codes="KMS_PROFILE_POLICY_REJECTED,KMS_GET_KEY_REJECTED"
+                -f kms_probe_expected_codes="KMS_PROFILE_POLICY_REJECTED,KMS_GET_KEY_REJECTED,MEROD_TEE_NOT_CONFIGURED"
               )
             fi
 

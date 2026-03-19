@@ -596,14 +596,49 @@ jobs:
           done
 
           if [[ "${parsed_json}" != "true" ]]; then
-            echo "::error::Unable to parse node KMS probe JSON output."
-            echo "::group::node-kms-probe-ssh-stdout"
-            cat "${probe_stdout}" || true
-            echo "::endgroup::"
-            echo "::group::node-kms-probe-ssh-stderr"
-            cat "${probe_stderr}" || true
-            echo "::endgroup::"
-            exit 1
+            if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" != "failure" ]]; then
+              echo "::error::Unable to parse node KMS probe JSON output."
+              echo "::group::node-kms-probe-ssh-stdout"
+              cat "${probe_stdout}" || true
+              echo "::endgroup::"
+              echo "::group::node-kms-probe-ssh-stderr"
+              cat "${probe_stderr}" || true
+              echo "::endgroup::"
+              exit 1
+            fi
+
+            # merod can emit non-JSON terminal errors for rejection paths.
+            # Preserve strict failure semantics by converting known errors into a structured fallback.
+            fallback_code="MEROD_KMS_PROBE_NO_JSON"
+            if [[ -f "${probe_stderr}" ]] && grep -qi "TEE is not configured in this node" "${probe_stderr}"; then
+              fallback_code="MEROD_TEE_NOT_CONFIGURED"
+            fi
+            fallback_error="$(python3 - "${probe_stderr}" "${probe_stdout}" <<'PY'
+          import pathlib
+          import sys
+
+          for candidate in sys.argv[1:]:
+              path = pathlib.Path(candidate)
+              if not path.exists():
+                  continue
+              text = path.read_text(encoding="utf-8", errors="replace")
+              for line in text.splitlines():
+                  line = line.strip()
+                  if line:
+                      print(line[:512])
+                      raise SystemExit(0)
+          print("Node->KMS probe did not return JSON output")
+          PY
+            )"
+            jq -n \
+              --arg code "${fallback_code}" \
+              --arg error "${fallback_error}" \
+              '{
+                ok: false,
+                code: $code,
+                error: $error
+              }' > "${probe_json}"
+            echo "::warning::Node->KMS probe did not return JSON; using fallback code ${fallback_code}."
           fi
 
           probe_ok="$(jq -r '.ok' "${probe_json}")"

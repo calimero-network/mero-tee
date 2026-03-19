@@ -136,6 +136,9 @@ release events:
   `locked-read-only` KMS endpoint (kept alive briefly before cleanup), and the
   run is accepted only if that probe is rejected (expected code set includes
   `KMS_PROFILE_POLICY_REJECTED`).
+  - If `merod kms probe --json` returns non-JSON terminal errors on the debug
+    node, the probe step emits a structured fallback failure code
+    (`MEROD_TEE_NOT_CONFIGURED` for known TEE-not-configured rejection text).
 - For node staging probe dispatches in post-release e2e, `vm_machine_type`
   falls back to `c3-standard-4` when `GCP_ATTESTATION_MACHINE_TYPE` is not
   set in repository variables.
