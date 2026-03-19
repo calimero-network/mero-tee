@@ -535,6 +535,7 @@ mod tests {
         "ACCEPT_MOCK_ATTESTATION",
         "REDIS_URL",
         "KMS_POLICY_PROFILE",
+        "MERO_KMS_VERSION",
         "KEY_NAMESPACE_PREFIX",
         "MERO_KMS_POLICY_SHA256",
         "CORS_ALLOWED_ORIGINS",
@@ -654,6 +655,27 @@ mod tests {
         let _guard = apply_string_overrides(vec![("MERO_KMS_VERSION", "".to_string())]);
         let version = Config::release_version_from_env().expect("release version");
         assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn env_guard_does_not_leak_mero_kms_version_override() {
+        let _lock = env_lock().lock().expect("env lock");
+        let original = std::env::var("MERO_KMS_VERSION").ok();
+        std::env::remove_var("MERO_KMS_VERSION");
+        {
+            let _guard = apply_string_overrides(vec![("MERO_KMS_VERSION", "2.1.85".to_string())]);
+            assert_eq!(
+                std::env::var("MERO_KMS_VERSION").as_deref(),
+                Ok("2.1.85")
+            );
+        }
+        assert!(
+            std::env::var("MERO_KMS_VERSION").is_err(),
+            "MERO_KMS_VERSION override leaked after EnvGuard drop"
+        );
+        if let Some(value) = original {
+            std::env::set_var("MERO_KMS_VERSION", value);
+        }
     }
 
     #[test]
