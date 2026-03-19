@@ -53,6 +53,7 @@ documentation update in `docs/**` or `README.md`:
 - `scripts/release/**`
 - `scripts/policy/**`
 - `scripts/attestation/**`
+- `scripts/ci/**`
 - `mero-tee/**`
 
 This policy is enforced by `.github/workflows/docs-update-guard.yaml`.
@@ -240,6 +241,10 @@ Current workflows following this pattern include:
 - `.github/workflows/node-image-gcp-staging-probe.yaml`
 - `.github/workflows/release-node-image-gcp.yaml`
 - `.github/workflows/release-kms-phala.yaml`
+
+Shared helper functions for these conventions live in:
+
+- `scripts/ci/logging.sh`
 
 Low-signal CI/guard workflows also emit final `GITHUB_STEP_SUMMARY` rows with
 key step outcomes so operators can triage pass/fail state without scanning full

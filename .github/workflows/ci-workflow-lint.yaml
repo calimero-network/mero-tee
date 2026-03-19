@@ -7,6 +7,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
   workflow_dispatch:
 
@@ -51,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0
@@ -62,9 +64,32 @@ jobs:
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "ci-workflow-lint" "${{ job.status }}" "ACTIONLINT_SHELLCHECK" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
           {
-            echo "## Workflow lint"
+            echo "## Workflow Summary"
+            echo ""
+            echo "### Inputs / Targets"
+            echo ""
+            echo "- Ref: ${GITHUB_REF_NAME}"
+            echo ""
+            echo "### Check Outcomes"
             echo ""
             echo "- actionlint: ${{ steps.actionlint.outcome }}"
             echo "- shellcheck: ${{ steps.shellcheck.outcome }}"
+            echo ""
+            echo "### Result"
+            echo ""
+            echo "- Job status: ${{ job.status }}"
+            echo "- ${result_line}"
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            echo "- n/a"
+            echo ""
+            echo "### Next"
+            echo ""
+            echo "- Fix first failing lint stage and rerun."
           } >> "${GITHUB_STEP_SUMMARY}"

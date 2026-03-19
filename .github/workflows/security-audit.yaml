@@ -41,8 +41,31 @@ jobs:
       - name: Summarize security audit outcome
         if: ${{ always() }}
         run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "security-audit" "${{ job.status }}" "CARGO_AUDIT" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
           {
-            echo "## Security audit"
+            echo "## Workflow Summary"
+            echo ""
+            echo "### Inputs / Targets"
+            echo ""
+            echo "- Ref: ${GITHUB_REF_NAME}"
+            echo ""
+            echo "### Check Outcomes"
             echo ""
             echo "- cargo-audit: ${{ steps.cargo_audit.outcome }}"
+            echo ""
+            echo "### Result"
+            echo ""
+            echo "- Job status: ${{ job.status }}"
+            echo "- ${result_line}"
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            echo "- n/a"
+            echo ""
+            echo "### Next"
+            echo ""
+            echo "- Review advisories and update dependencies."
           } >> "${GITHUB_STEP_SUMMARY}"

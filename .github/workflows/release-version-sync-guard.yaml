@@ -43,9 +43,32 @@ jobs:
       - name: Summarize sync guard outcomes
         if: ${{ always() }}
         run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "release-version-sync-guard" "${{ job.status }}" "VERSION_SYNC" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
           {
-            echo "## Release version sync guard"
+            echo "## Workflow Summary"
+            echo ""
+            echo "### Inputs / Targets"
+            echo ""
+            echo "- Ref: ${GITHUB_REF_NAME}"
+            echo ""
+            echo "### Check Outcomes"
             echo ""
             echo "- Syntax check: ${{ steps.syntax_check.outcome }}"
             echo "- Sync guard: ${{ steps.sync_guard.outcome }}"
+            echo ""
+            echo "### Result"
+            echo ""
+            echo "- Job status: ${{ job.status }}"
+            echo "- ${result_line}"
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            echo "- n/a"
+            echo ""
+            echo "### Next"
+            echo ""
+            echo "- Align Cargo, versions.json, and policy files when this guard fails."
           } >> "${GITHUB_STEP_SUMMARY}"

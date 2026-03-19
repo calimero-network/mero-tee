@@ -7,6 +7,7 @@ on:
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
+      - "scripts/ci/**"
       - "mero-tee/**"
       - "docs/**"
       - "README.md"
@@ -32,10 +33,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          source scripts/ci/logging.sh
 
           changed_files_output="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")"
           if [[ -z "${changed_files_output}" ]]; then
-            echo "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
+            ci_fail "NO_CHANGED_FILES" "No changed files detected between ${BASE_SHA} and ${HEAD_SHA}; this is unexpected for this workflow trigger."
             exit 1
           fi
           mapfile -t changed_files <<< "${changed_files_output}"
@@ -44,7 +46,7 @@ jobs:
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == mero-tee/* ]]; then
+            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 
@@ -54,21 +56,43 @@ jobs:
           done
 
           if [[ "${requires_docs_update}" == "true" && "${has_docs_update}" != "true" ]]; then
-            echo "This PR changes workflows/scripts/node-image-gcp but does not update docs."
-            echo "Please update at least one of: docs/** or README.md."
+            ci_fail "DOCS_UPDATE_REQUIRED" "This PR changes workflows/scripts/node-image-gcp but does not update docs."
+            ci_next "Please update at least one of: docs/** or README.md."
             exit 1
           fi
 
-          echo "Docs update guard passed."
+          ci_ok "Docs update guard passed."
 
       - name: Summarize docs guard outcome
         if: ${{ always() }}
         run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "docs-update-guard" "${{ job.status }}" "DOCS_CONSISTENCY" "pr=${{ github.event.pull_request.number }}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
           {
-            echo "## Docs update guard"
+            echo "## Workflow Summary"
+            echo ""
+            echo "### Inputs / Targets"
             echo ""
             echo "- PR: #${{ github.event.pull_request.number }}"
             echo "- Base SHA: ${{ github.event.pull_request.base.sha }}"
             echo "- Head SHA: ${{ github.event.pull_request.head.sha }}"
-            echo "- Validation outcome: ${{ steps.validate_docs.outcome }}"
+            echo ""
+            echo "### Check Outcomes"
+            echo ""
+            echo "- Docs validation: ${{ steps.validate_docs.outcome }}"
+            echo ""
+            echo "### Result"
+            echo ""
+            echo "- Job status: ${{ job.status }}"
+            echo "- ${result_line}"
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            echo "- n/a"
+            echo ""
+            echo "### Next"
+            echo ""
+            echo "- Add docs/** or README.md updates when changing workflow/script behavior."
           } >> "${GITHUB_STEP_SUMMARY}"
