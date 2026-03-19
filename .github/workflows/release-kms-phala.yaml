@@ -344,7 +344,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
           KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
-          BOOTSTRAP_POLICY_SOURCE_TAG: mero-kms-v2.1.85
           TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
         run: bash scripts/release/kms-phala/publish-minimal-release.sh
 
@@ -396,7 +395,9 @@ jobs:
             echo "::error::Missing container digest for profile ${PROFILE}"
             exit 1
           fi
-          echo "image_ref=${IMAGE_NAME}@${digest}" >> "${GITHUB_OUTPUT}"
+          image_ref="${IMAGE_NAME}@${digest}"
+          echo "Resolved probe image for ${PROFILE}: ${image_ref}"
+          echo "image_ref=${image_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Trigger staging probe and wait
         id: trigger

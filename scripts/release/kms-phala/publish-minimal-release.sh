@@ -10,7 +10,6 @@ set -euo pipefail
 # produces stable measurements across minor releases.
 #
 # Inputs: VERSION, KMS_TAG, TARGET_COMMIT, GITHUB_REPOSITORY.
-# Optional: BOOTSTRAP_POLICY_SOURCE_TAG (defaults to mero-kms-v2.1.85).
 # Requires: GH_TOKEN.
 
 if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
@@ -21,11 +20,7 @@ fi
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
-bootstrap_policy_source_tag="${BOOTSTRAP_POLICY_SOURCE_TAG:-mero-kms-v2.1.85}"
-if [[ "${bootstrap_policy_source_tag}" == "${KMS_TAG}" ]]; then
-  echo "::error::BOOTSTRAP_POLICY_SOURCE_TAG must differ from KMS_TAG for minimal bootstrap policy copy."
-  exit 1
-fi
+bootstrap_policy_source_tag="mero-kms-v2.1.85"
 
 if ! gh release view "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
   echo "::error::Bootstrap policy source release ${bootstrap_policy_source_tag} was not found."
@@ -55,22 +50,57 @@ for profile in locked-read-only debug debug-read-only; do
   fi
 done
 
+normalize_policy_file() {
+  local input_file="$1"
+  local profile="$2"
+  local output_file
+  output_file="$(mktemp)"
+  jq \
+    --arg tag "${VERSION}" \
+    --arg profile "${profile}" \
+    '
+    .tag = $tag
+    | .role = (.role // "kms")
+    | .profile = $profile
+    ' \
+    "${input_file}" > "${output_file}"
+  mv "${output_file}" "${input_file}"
+}
+
+# Bootstrap policy contents are sourced from ${bootstrap_policy_source_tag}, but
+# the fetched policy metadata must match the target KMS release version.
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.json" "locked-read-only"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.locked-read-only.json" "locked-read-only"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.debug.json" "debug"
+normalize_policy_file "${workdir}/kms-phala-attestation-policy.debug-read-only.json" "debug-read-only"
+
 notes_file="${workdir}/notes.md"
 echo "Minimal bootstrap release for compose_hash alignment. Full assets will be published by release-metadata." > "${notes_file}"
 
-echo "Creating minimal release ${KMS_TAG} (draft)..."
+echo "Creating minimal release ${KMS_TAG} (published, non-latest)..."
 if ! gh release create "${KMS_TAG}" \
   --repo "${GITHUB_REPOSITORY}" \
   --title "${KMS_TAG}" \
   --notes-file "${notes_file}" \
   --target "${TARGET_COMMIT}" \
-  --draft; then
+  --latest=false; then
   if gh release view "${KMS_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
     echo "Release ${KMS_TAG} already exists; will upload/overwrite policy assets."
   else
     echo "::error::Failed to create release ${KMS_TAG}"
     exit 1
   fi
+fi
+
+# KMS fetches policy anonymously from GitHub release URLs at boot.
+# Draft releases return 404 for anonymous callers, so ensure non-draft visibility.
+release_is_draft="$(gh release view "${KMS_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")"
+if [[ "${release_is_draft}" == "true" ]]; then
+  echo "Publishing existing draft release ${KMS_TAG} for bootstrap policy availability..."
+  gh release edit "${KMS_TAG}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --draft=false \
+    --latest=false >/dev/null
 fi
 
 echo "Uploading bootstrap policy assets..."

@@ -125,15 +125,18 @@ release events:
   - wrong expected application hash is rejected.
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
-  Release publishes a minimal draft before the probe so KMS fetches policy at boot.
-  - Temporary bootstrap pin: `release-kms-phala.yaml` sets
-    `BOOTSTRAP_POLICY_SOURCE_TAG=mero-kms-v2.1.85` for
+  Release publishes a minimal bootstrap release before the probe so KMS fetches
+  policy at boot.
+  - Bootstrap release visibility must be non-draft. KMS resolves policy via
+    anonymous GitHub release URLs, and draft releases return `404`.
+  - Bootstrap policy source defaults to `mero-kms-v2.1.85` in
     `scripts/release/kms-phala/publish-minimal-release.sh`.
-  - This pin affects only the source release used to copy bootstrap policy assets
-    into the minimal draft release. It does not change runtime KMS versioning
-    (`CARGO_PKG_VERSION` remains the runtime release identity).
-  - Remove the pin after upstream release assets are repaired and newer tags can
-    safely provide bootstrap policy JSON files.
+  - Bootstrap policy payloads copied from that source tag are normalized to the
+    current release metadata (`tag`, `role`, `profile`) before upload so KMS
+    startup validation for the current version can succeed.
+  - Release probes use per-profile image digests built in the current
+    `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
+    so attestation is validated against the exact release candidate images.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
