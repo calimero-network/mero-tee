@@ -219,10 +219,26 @@ jobs:
               -e "s|__SERVICE_PORT__|${SERVICE_PORT}|g" \
               scripts/phala/kms-compose-template.yaml > "${compose_file}"
 
-          if [[ -n "${KMS_VERSION_OVERRIDE_INPUT}" ]]; then
-            # Use a known-good release policy tag for probes when current release policy
+          effective_kms_version_override="${KMS_VERSION_OVERRIDE_INPUT}"
+          if [[ -z "${effective_kms_version_override}" && "${KMS_RELEASE_TAG_INPUT}" == "pinned" ]]; then
+            # Backward-compatible fallback for release workflows that dispatch probe by image
+            # digest and do not pass kms_version_override. This prevents draft-release 404s.
+            fallback_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+              [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")))]
+              | sort_by(.publishedAt)
+              | reverse
+              | .[0].tagName // empty
+            ')"
+            if [[ -n "${fallback_source_tag}" ]]; then
+              effective_kms_version_override="${fallback_source_tag#mero-kms-v}"
+              echo "Using fallback MERO_KMS_VERSION=${effective_kms_version_override} from ${fallback_source_tag}"
+            fi
+          fi
+
+          if [[ -n "${effective_kms_version_override}" ]]; then
+            # Use a known-good published release policy tag for probes when current release policy
             # assets are not yet published.
-            sed -i '/ENFORCE_MEASUREMENT_POLICY:/a\      MERO_KMS_VERSION: "'"${KMS_VERSION_OVERRIDE_INPUT}"'"' "${compose_file}"
+            sed -i '/ENFORCE_MEASUREMENT_POLICY:/a\      MERO_KMS_VERSION: "'"${effective_kms_version_override}"'"' "${compose_file}"
           fi
 
           compose_sha256="$(sha256sum "${compose_file}" | awk '{print $1}')"

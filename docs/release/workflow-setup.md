@@ -142,6 +142,9 @@ release events:
     latest published prior `mero-kms-v*` version. This avoids draft-release 404s
     during probe bootstrap while keeping release-time and post-release compose
     inputs aligned for compose-hash validation.
+  - `kms-phala-staging-probe.yaml` also includes a compatibility fallback: when
+    dispatched with `kms_tag=pinned` and no explicit `kms_version_override`, it
+    auto-resolves the latest published `mero-kms-v*` policy source.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
