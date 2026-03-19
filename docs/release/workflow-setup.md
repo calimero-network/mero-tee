@@ -134,12 +134,9 @@ release events:
   - Bootstrap policy payloads copied from that source tag are normalized to the
     current release metadata (`tag`, `role`, `profile`) before upload so KMS
     startup validation for the current version can succeed.
-  - For release probes, `release-kms-phala.yaml` currently pins probe KMS images
-    to the `2.1.85` profile tags (`2.1.85`, `2.1.85-debug`,
-    `2.1.85-debug-read-only`) to avoid missing-policy startup failures on tags
-    that do not yet have complete policy assets.
-  - Remove these temporary `2.1.85` pins after newer release tags are confirmed
-    to carry the required policy JSON assets.
+  - Release probes use per-profile image digests built in the current
+    `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
+    so attestation is validated against the exact release candidate images.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
