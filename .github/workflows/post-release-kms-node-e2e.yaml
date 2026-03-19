@@ -122,6 +122,20 @@ jobs:
                   and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
           }
 
+          wait_for_kms_release_with_assets() {
+            local tag="$1"
+            local attempts="${2:-90}"
+            local delay_secs="${3:-60}"
+            for attempt in $(seq 1 "${attempts}"); do
+              if [[ "$(kms_release_has_required_assets "${tag}")" == "true" ]]; then
+                return 0
+              fi
+              echo "Waiting for KMS release ${tag} assets (attempt ${attempt}/${attempts})..."
+              sleep "${delay_secs}"
+            done
+            return 1
+          }
+
           tee_tag=""
           version=""
           should_run="true"
@@ -214,7 +228,7 @@ jobs:
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            if wait_for_release_tag "${default_kms_tag}" 12 10 && [[ "$(kms_release_has_required_assets "${default_kms_tag}")" == "true" ]]; then
+            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
             else
