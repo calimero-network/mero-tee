@@ -649,7 +649,8 @@ jobs:
             -f kms_tag="pinned"
             -f probe_label="${cross_profile_probe_label}"
             -f deployment_name="${cross_profile_deployment_name}"
-            -f hold_after_upload_seconds="2400"
+            # Keep the locked KMS alive just long enough for debug-node runtime probe.
+            -f hold_after_upload_seconds="900"
           )
           if [[ -n "${probe_kms_policy_version}" ]]; then
             cross_profile_dispatch_args+=(-f kms_policy_version="${probe_kms_policy_version}")
