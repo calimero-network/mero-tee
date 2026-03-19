@@ -79,8 +79,6 @@ When creating a KMS deployment in MDMA, use the name that matches your image pro
 
 Both omit `MERO_KMS_VERSION`; the KMS falls back to its build-time version (`CARGO_PKG_VERSION`). The workflow publishes a minimal release before the probe so the KMS can fetch policy at boot.
 
-To verify probe and MDMA compose match for a given version: `./scripts/attestation/compare-compose-probe-vs-mdma.sh 2.1.85 8080`
-
 ## Verification script
 
 Run to verify the flow and check extraction parity:
