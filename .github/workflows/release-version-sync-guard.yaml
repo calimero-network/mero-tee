@@ -33,7 +33,21 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate sync script syntax
+        id: syntax
         run: bash -n scripts/policy/check_release_version_sync.sh
 
       - name: Run release version sync guard
+        id: sync_guard
         run: scripts/policy/check_release_version_sync.sh
+
+      - name: Summarize release version sync guard
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Release version sync guard"
+            echo ""
+            echo "- Ref: ${GITHUB_REF}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Script syntax: ${{ steps.syntax.outcome }}"
+            echo "- Sync check: ${{ steps.sync_guard.outcome }}"
+          } >> "${GITHUB_STEP_SUMMARY}"

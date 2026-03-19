@@ -25,6 +25,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate docs changes are included
+        id: validate_docs
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -59,3 +60,15 @@ jobs:
           fi
 
           echo "Docs update guard passed."
+
+      - name: Summarize docs guard result
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Docs update guard"
+            echo ""
+            echo "- PR: #${{ github.event.pull_request.number }}"
+            echo "- Base SHA: ${{ github.event.pull_request.base.sha }}"
+            echo "- Head SHA: ${{ github.event.pull_request.head.sha }}"
+            echo "- Validation step: ${{ steps.validate_docs.outcome }}"
+          } >> "${GITHUB_STEP_SUMMARY}"

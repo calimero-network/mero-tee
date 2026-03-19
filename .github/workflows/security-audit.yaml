@@ -35,4 +35,16 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
+        id: cargo_audit
         run: cargo audit
+
+      - name: Summarize security audit
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Security audit"
+            echo ""
+            echo "- Ref: ${GITHUB_REF}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- cargo-audit: ${{ steps.cargo_audit.outcome }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
