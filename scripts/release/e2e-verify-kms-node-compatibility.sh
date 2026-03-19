@@ -56,10 +56,6 @@ def normalize(values: List[str]) -> List[str]:
     return [value for value in normalized if value]
 
 
-def kms_measurement_values(policy: dict, key: str) -> List[str]:
-    return normalize(policy.get(f"kms_{key}", policy.get(key, [])))
-
-
 node_dir = pathlib.Path(sys.argv[1])
 kms_dir = pathlib.Path(sys.argv[2])
 kms_probe_path = pathlib.Path(sys.argv[3])
@@ -99,28 +95,7 @@ kms_probe_policy = kms_probe.get("policy")
 if not isinstance(kms_probe_policy, dict):
     fail(f"KMS probe policy missing in {kms_probe_path}")
 
-# 0) KMS profile policies must not collapse to identical KMS measurements.
-for left_profile, right_profile in [
-    ("debug", "debug-read-only"),
-    ("debug", "locked-read-only"),
-    ("debug-read-only", "locked-read-only"),
-]:
-    left_policy = kms_policies[left_profile]
-    right_policy = kms_policies[right_profile]
-    identical = True
-    for key in measurement_keys:
-        if kms_measurement_values(left_policy, key) != kms_measurement_values(right_policy, key):
-            identical = False
-            break
-    if identical:
-        fail(
-            "KMS profile policies have identical MRTD/RTMR allowlists, expected profile separation: "
-            f"{left_profile} vs {right_profile}"
-        )
-
-print("[e2e-kms-node] OK: KMS profile measurement allowlists are distinct")
-
-# 1) Deployed KMS measurement must match published release policy.
+# 0) Deployed KMS measurement must match published release policy.
 locked_policy = kms_policies["locked-read-only"]
 for key in ["allowed_tcb_statuses", *measurement_keys]:
     probe_values = normalize(kms_probe_policy.get(key, []))
@@ -161,7 +136,7 @@ def policy_allows_node(node_profile: str, kms_profile: str) -> bool:
     return True
 
 
-# 2) Compatibility matrix: only matching profile is allowed.
+# 1) Compatibility matrix: only matching profile is allowed.
 results: Dict[str, Dict[str, bool]] = {}
 for node_profile in profiles:
     row: Dict[str, bool] = {}

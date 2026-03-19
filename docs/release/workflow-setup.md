@@ -128,6 +128,9 @@ release events:
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
+- Post-release e2e no longer pre-fails when KMS profile policy allowlists are
+  identical. Profile enforcement is validated by probe/policy subset checks,
+  compose-hash parity, and runtime allow/deny behavior.
 - Post-release e2e also runs an explicit cross-profile runtime negative probe:
   a `debug` node executes `merod kms probe` against a live
   `locked-read-only` KMS endpoint (kept alive briefly before cleanup), and the
