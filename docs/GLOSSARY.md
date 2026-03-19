@@ -45,7 +45,7 @@ and release assets.
 |---|---|
 | **policy registry** | `policies/index.json` mapping versions to policy files and tags. |
 | **policy promotion** | PR-reviewed update of versioned policy files from staged candidates. |
-| **umbrella release** | Draft/index release linking component releases for the same version. |
+| **umbrella release** | Published non-latest index release linking component releases for the same version. |
 | **release-version-sync guard** | CI enforcement that KMS/node version bump files remain aligned. |
 
 ## Naming guidance

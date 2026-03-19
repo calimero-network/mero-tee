@@ -10,6 +10,7 @@ set -euo pipefail
 # produces stable measurements across minor releases.
 #
 # Inputs: VERSION, KMS_TAG, TARGET_COMMIT, GITHUB_REPOSITORY.
+# Optional: BOOTSTRAP_POLICY_SOURCE_TAG (explicit policy source tag override).
 # Requires: GH_TOKEN.
 
 if [[ -z "${VERSION:-}" || -z "${KMS_TAG:-}" || -z "${TARGET_COMMIT:-}" ]]; then
@@ -20,7 +21,21 @@ fi
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
-bootstrap_policy_source_tag="mero-kms-v2.1.85"
+bootstrap_policy_source_tag="${BOOTSTRAP_POLICY_SOURCE_TAG:-}"
+if [[ -z "${bootstrap_policy_source_tag}" ]]; then
+  bootstrap_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+    [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
+    | sort_by(.publishedAt)
+    | reverse
+    | .[0].tagName // empty
+  ')"
+fi
+
+if [[ -z "${bootstrap_policy_source_tag}" ]]; then
+  echo "::error::Could not resolve a published bootstrap policy source tag."
+  echo "::error::Set BOOTSTRAP_POLICY_SOURCE_TAG explicitly or publish a prior mero-kms-v* release first."
+  exit 1
+fi
 
 if ! gh release view "${bootstrap_policy_source_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
   echo "::error::Bootstrap policy source release ${bootstrap_policy_source_tag} was not found."

@@ -405,7 +405,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REF: ${{ steps.profile_image.outputs.image_ref }}
           PROFILE: ${{ matrix.profile }}
-          KMS_VERSION_OVERRIDE: "2.1.85"
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           PROBE_LABEL: release-kms-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash scripts/release/kms-phala/trigger-staging-probe.sh
@@ -1569,6 +1568,16 @@ jobs:
             release-assets/kms-phala-rekor-index.json.bundle.json
             release-assets/kms-phala-checksums.txt.bundle.json
             release-assets/*.tar.gz.bundle.json
+
+      - name: Enforce release notes body update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ needs.prepare.outputs.kms_release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --notes-file release-assets/release-notes.md \
+            --draft=false
 
       - name: Smoke test published mero-kms release assets
         env:

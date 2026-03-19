@@ -129,18 +129,18 @@ release events:
   policy at boot.
   - Bootstrap release remains **draft** (mutable) until `release-metadata` uploads
     all release assets and publishes the final release.
-  - Bootstrap policy source defaults to `mero-kms-v2.1.85` in
-    `scripts/release/kms-phala/publish-minimal-release.sh`.
+  - Bootstrap policy source defaults to the latest published prior
+    `mero-kms-v*` release in `scripts/release/kms-phala/publish-minimal-release.sh`
+    (or can be overridden with `BOOTSTRAP_POLICY_SOURCE_TAG` when needed).
   - Bootstrap policy payloads copied from that source tag are normalized to the
     current release metadata (`tag`, `role`, `profile`) before upload so KMS
     startup validation for the current version can succeed.
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Probes pass `kms_version_override=2.1.85` (mapped to
-    `MERO_KMS_VERSION` in probe compose) so current release-candidate images can
-    fetch policy from the known-good `mero-kms-v2.1.85` policy release during
-    the probe stage.
+  - Release and post-release probes now rely on default KMS version resolution
+    (`CARGO_PKG_VERSION`) rather than forcing `kms_version_override`, so probe
+    compose inputs match the current release candidate by default.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.
@@ -158,6 +158,9 @@ release events:
 - For node staging probe dispatches in post-release e2e, `vm_machine_type`
   falls back to `c3-standard-4` when `GCP_ATTESTATION_MACHINE_TYPE` is not
   set in repository variables.
+- The umbrella/index release links step publishes the `${VERSION}` release as
+  non-latest (`--latest=false`) at finish so it is no longer left as a mutable
+  draft.
 
 `push` on `master` can still skip when release assets are not yet published, but
 release-triggered validation is expected to fail explicitly on missing or
@@ -207,6 +210,11 @@ with the existing release checksums/manifest artifacts.
 
 Release workflows generate release notes from workflow metadata and publish them
 as the GitHub Release body (`body_path`).
+
+For `release-kms-phala.yaml`, the pipeline also performs an explicit
+`gh release edit --notes-file release-assets/release-notes.md` after asset
+upload to guarantee the final published release body is updated, even when
+GitHub release de-duplication selects a pre-existing release record for the tag.
 
 - `release-kms-phala.yaml` includes:
   - tag and commit SHA
