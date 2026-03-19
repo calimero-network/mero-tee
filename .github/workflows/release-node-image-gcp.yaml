@@ -274,7 +274,7 @@ jobs:
 
       - name: Upload packer build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: packer-build-log-${{ matrix.profile }}-${{ github.run_id }}
           path: /tmp/packer-build.log
