@@ -357,31 +357,23 @@ jobs:
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
           source scripts/ci/logging.sh
-          last_status=""
-          for attempt in $(seq 1 30); do
-            status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
+          if ! python3 scripts/ci/polling/wait_for_gcp_instance_status.py \
+            --instance "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --target-status "RUNNING" \
+            --attempts 30 \
+            --sleep-seconds 10 \
+            --heartbeat-interval 5 \
+            --verbosity "${CI_LOG_VERBOSITY}" \
+            --output-json "${{ steps.params.outputs.artifacts_dir }}/vm-running-wait.json"; then
+            ci_fail "VM_RUNNING_TIMEOUT" "Instance did not reach RUNNING in time."
+            gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
               --project "${{ steps.params.outputs.vm_project }}" \
               --zone "${{ steps.params.outputs.vm_zone }}" \
-              --format='value(status)' || true)"
-
-            if [[ "${status}" == "RUNNING" ]]; then
-              ci_ok "Instance reached RUNNING at attempt ${attempt}/30."
-              break
-            fi
-
-            if [[ "${attempt}" -eq 30 ]]; then
-              ci_fail "VM_RUNNING_TIMEOUT" "Instance did not reach RUNNING in time."
-              gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
-                --project "${{ steps.params.outputs.vm_project }}" \
-                --zone "${{ steps.params.outputs.vm_zone }}" \
-                --format='yaml(name,status,lastStartTimestamp)'
-              exit 1
-            fi
-
-            ci_log_transition "VM status" "${status:-unknown}" "${last_status}" "${attempt}" 5
-            last_status="${status}"
-            sleep 10
-          done
+              --format='yaml(name,status,lastStartTimestamp)'
+            exit 1
+          fi
 
       - name: Resolve attestation base URL
         id: endpoint
@@ -414,25 +406,19 @@ jobs:
             --format='json(name,status,networkInterfaces,tags,creationTimestamp,lastStartTimestamp)' \
             > "${artifacts_dir}/instance.json"
 
-          ready="false"
           max_attempts=90
-          last_http_code=""
-          for attempt in $(seq 1 ${max_attempts}); do
-            http_code="$(curl -sS --max-time 5 -o "${artifacts_dir}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
-            if [[ "${http_code}" == "200" ]]; then
-              ready="true"
-              echo "Health endpoint ready (HTTP 200) at attempt ${attempt}/${max_attempts}"
-              break
-            fi
-
-            if [[ "${http_code}" != "${last_http_code}" || "${attempt}" -eq 1 || $(( attempt % 12 )) -eq 0 ]]; then
-              echo "Health endpoint status: HTTP ${http_code:-error} (attempt ${attempt}/${max_attempts})"
-            fi
-            last_http_code="${http_code}"
-            sleep 5
-          done
-
-          if [[ "${ready}" != "true" ]]; then
+          timeout_seconds=$((max_attempts * 5))
+          if ! python3 scripts/ci/polling/wait_for_http.py \
+            --url "${base_url}/admin-api/health" \
+            --timeout-seconds "${timeout_seconds}" \
+            --interval-seconds 5 \
+            --request-timeout-seconds 5 \
+            --expected-status 200 \
+            --output-body "${artifacts_dir}/health.json" \
+            --output-json "${artifacts_dir}/health-wait.json" \
+            --heartbeat-interval 12 \
+            --label "/admin-api/health" \
+            --verbosity "${CI_LOG_VERBOSITY}"; then
             ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health after ${max_attempts} attempts (~$((max_attempts * 5 / 60)) min)"
             ci_group_start "Failure diagnostics (bounded)"
             ci_info "Capturing serial console logs for diagnostics..."
@@ -509,18 +495,19 @@ jobs:
           source scripts/ci/logging.sh
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           index_file="${artifacts_dir}/artifacts-index.txt"
-          {
-            echo "instance.json|VM metadata snapshot"
-            echo "health.json|Latest /admin-api/health response"
-            echo "tee-info.json|TEE info payload"
-            echo "tee-attest-request.json|TEE attest request"
-            echo "tee-attest-response.json|TEE attest response"
-            echo "attestation-context.json|Context and endpoint details"
-            echo "measurement-policy-candidates.json|Derived policy candidates"
-            echo "mrtd.json|MRTD from external verification"
-            echo "profile-provenance-${{ steps.params.outputs.profile }}.json|Per-profile provenance record"
-            echo "serial-port-1.log|Serial logs when health probe fails"
-          } > "${index_file}"
+          python3 scripts/ci/artifacts/build_artifact_index.py \
+            --base-dir "${artifacts_dir}" \
+            --output "${index_file}" \
+            --entry "instance.json|VM metadata snapshot" \
+            --entry "health.json|Latest /admin-api/health response" \
+            --entry "tee-info.json|TEE info payload" \
+            --entry "tee-attest-request.json|TEE attest request" \
+            --entry "tee-attest-response.json|TEE attest response" \
+            --entry "attestation-context.json|Context and endpoint details" \
+            --entry "measurement-policy-candidates.json|Derived policy candidates" \
+            --entry "mrtd.json|MRTD from external verification" \
+            --entry "profile-provenance-${{ steps.params.outputs.profile }}.json|Per-profile provenance record" \
+            --entry "serial-port-1.log|Serial logs when health probe fails"
           ci_artifact "artifact index saved to ${index_file}"
 
       - name: Require Intel Trust Authority API key
@@ -649,39 +636,69 @@ jobs:
           source scripts/ci/logging.sh
           result_line="$(ci_result "release-node-image-gcp-profile" "${{ job.status }}" "PROFILE_PIPELINE_STAGE" "profile=${{ steps.params.outputs.profile }}" "artifact=gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}")"
           ci_info "${result_line}"
-          {
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- Profile: ${{ steps.params.outputs.profile }}"
-            echo "- Project: ${{ steps.params.outputs.vm_project }}"
-            echo "- Zone: ${{ steps.params.outputs.vm_zone }}"
-            echo "- Instance: ${{ steps.params.outputs.instance_name }}"
-            echo "- CPU architecture: ${{ steps.params.outputs.cpu_architecture }}"
-            echo "- Image: ${{ steps.params.outputs.image_name }}"
-            echo "- Base URL: ${{ steps.endpoint.outputs.base_url }}"
-            echo "- Firewall source ranges: ${{ steps.params.outputs.attestation_source_ranges }}"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- Collect TEE artifacts: ${{ steps.collect_tee.outcome || 'skipped' }}"
-            echo "- External verification: ${{ steps.verify_external.outcome || 'skipped' }}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- Artifact name: gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}"
-            echo "- Artifact index: artifacts-index.txt"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- Use \`measurement-policy-candidates-${{ steps.params.outputs.profile }}.json\` for policy promotion."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          summary_json="${RUNNER_TEMP}/release-node-image-gcp-profile-summary-${{ steps.params.outputs.profile }}.json"
+          jq -n \
+            --arg profile "${{ steps.params.outputs.profile }}" \
+            --arg project "${{ steps.params.outputs.vm_project }}" \
+            --arg zone "${{ steps.params.outputs.vm_zone }}" \
+            --arg instance "${{ steps.params.outputs.instance_name }}" \
+            --arg arch "${{ steps.params.outputs.cpu_architecture }}" \
+            --arg image "${{ steps.params.outputs.image_name }}" \
+            --arg base_url "${{ steps.endpoint.outputs.base_url }}" \
+            --arg src_ranges "${{ steps.params.outputs.attestation_source_ranges }}" \
+            --arg collect_outcome "${{ steps.collect_tee.outcome || 'skipped' }}" \
+            --arg verify_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
+            --arg job_status "${{ job.status }}" \
+            --arg result_line "${result_line}" \
+            --arg artifact_name "gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}" \
+            '{
+              title: "Workflow Summary",
+              sections: [
+                {
+                  name: "Inputs / Targets",
+                  lines: [
+                    ("- Profile: " + $profile),
+                    ("- Project: " + $project),
+                    ("- Zone: " + $zone),
+                    ("- Instance: " + $instance),
+                    ("- CPU architecture: " + $arch),
+                    ("- Image: " + $image),
+                    ("- Base URL: " + $base_url),
+                    ("- Firewall source ranges: " + $src_ranges)
+                  ]
+                },
+                {
+                  name: "Check Outcomes",
+                  lines: [
+                    ("- Collect TEE artifacts: " + $collect_outcome),
+                    ("- External verification: " + $verify_outcome)
+                  ]
+                },
+                {
+                  name: "Result",
+                  lines: [
+                    ("- Job status: " + $job_status),
+                    ("- " + $result_line)
+                  ]
+                },
+                {
+                  name: "Artifacts",
+                  lines: [
+                    ("- Artifact name: " + $artifact_name),
+                    "- Artifact index: artifacts-index.txt"
+                  ]
+                },
+                {
+                  name: "Next",
+                  lines: [
+                    "- Use measurement-policy-candidates-profile.json files for policy promotion."
+                  ]
+                }
+              ]
+            }' > "${summary_json}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --input-json "${summary_json}" \
+            --output "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload attestation artifacts
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' && always() && steps.params.outcome == 'success' }}

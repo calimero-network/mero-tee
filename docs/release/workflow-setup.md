@@ -246,6 +246,15 @@ Shared helper functions for these conventions live in:
 
 - `scripts/ci/logging.sh`
 
+Phase B/C helper utilities used by probe/release workflows:
+
+- `scripts/ci/summary/write_workflow_summary.py` (standardized summary sections)
+- `scripts/ci/artifacts/build_artifact_index.py` (artifact inventory generation)
+- `scripts/ci/polling/wait_for_gcp_instance_status.py` (status polling with transition logs)
+- `scripts/ci/polling/wait_for_http.py` (HTTP readiness polling with bounded logging)
+- `scripts/ci/polling/wait_for_candidate_health.py` (candidate endpoint readiness selection)
+- `scripts/ci/diagnostics/preview_file.py` (bounded diagnostics previews)
+
 Low-signal CI/guard workflows also emit final `GITHUB_STEP_SUMMARY` rows with
 key step outcomes so operators can triage pass/fail state without scanning full
 raw logs.

@@ -314,25 +314,24 @@ jobs:
           set -euo pipefail
           source scripts/ci/logging.sh
           ci_group_start "VM status transitions"
-          last_vm_status=""
-          for attempt in $(seq 1 30); do
-            status="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
-              --project "${{ steps.params.outputs.vm_project }}" \
-              --zone "${{ steps.params.outputs.vm_zone }}" \
-              --format='value(status)' || true)"
-            if [[ "${status}" == "RUNNING" ]]; then
-              ci_ok "Instance reached RUNNING at attempt ${attempt}/30"
-              break
-            fi
-            if [[ "${attempt}" -eq 30 ]]; then
-              ci_fail "VM_RUNNING_TIMEOUT" "Instance did not reach RUNNING in time."
-              exit 1
-            fi
-            ci_log_transition "VM status" "${status:-unknown}" "${last_vm_status}" "${attempt}" 5
-            last_vm_status="${status:-unknown}"
-            sleep 10
-          done
+          set +e
+          python3 scripts/ci/polling/wait_for_gcp_instance_status.py \
+            --instance "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" \
+            --zone "${{ steps.params.outputs.vm_zone }}" \
+            --target-status "RUNNING" \
+            --attempts 30 \
+            --sleep-seconds 10 \
+            --heartbeat-interval 5 \
+            --verbosity "${CI_LOG_VERBOSITY}" \
+            --output-json "${{ steps.params.outputs.artifacts_dir }}/vm-running-wait.json"
+          vm_wait_exit=$?
+          set -e
           ci_group_end
+          if [[ "${vm_wait_exit}" -ne 0 ]]; then
+            ci_fail "VM_RUNNING_TIMEOUT" "Instance did not reach RUNNING in time."
+            exit 1
+          fi
 
           nat_ip="$(gcloud compute instances describe "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
@@ -346,25 +345,23 @@ jobs:
           base_url="http://${nat_ip}:${{ steps.params.outputs.admin_api_port }}"
           ci_notice "Resolved base URL: ${base_url}"
           timeout_seconds=$((WAIT_TIMEOUT_MINUTES * 60))
-          deadline=$(( $(date +%s) + timeout_seconds ))
-          ready="false"
-          attempt=0
-          last_http_code=""
           ci_group_start "Health probe transitions"
-          while (( $(date +%s) < deadline )); do
-            attempt=$((attempt + 1))
-            http_code="$(curl -sS --max-time 8 -o "${{ steps.params.outputs.artifacts_dir }}/health.json" -w "%{http_code}" "${base_url}/admin-api/health" || true)"
-            if [[ "${http_code}" == "200" ]]; then
-              ready="true"
-              ci_ok "/admin-api/health returned HTTP 200 at attempt ${attempt}"
-              break
-            fi
-            ci_log_transition "/admin-api/health" "${http_code:-error}" "${last_http_code}" "${attempt}" 10
-            last_http_code="${http_code:-error}"
-            sleep 5
-          done
+          set +e
+          python3 scripts/ci/polling/wait_for_http.py \
+            --url "${base_url}/admin-api/health" \
+            --timeout-seconds "${timeout_seconds}" \
+            --interval-seconds 5 \
+            --request-timeout-seconds 8 \
+            --expected-status 200 \
+            --output-body "${{ steps.params.outputs.artifacts_dir }}/health.json" \
+            --output-json "${{ steps.params.outputs.artifacts_dir }}/health-wait.json" \
+            --heartbeat-interval 10 \
+            --label "/admin-api/health" \
+            --verbosity "${CI_LOG_VERBOSITY}"
+          health_wait_exit=$?
+          set -e
           ci_group_end
-          if [[ "${ready}" != "true" ]]; then
+          if [[ "${health_wait_exit}" -ne 0 ]]; then
             ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health"
             exit 1
           fi
@@ -796,18 +793,19 @@ jobs:
           source scripts/ci/logging.sh
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           index_file="${artifacts_dir}/artifacts-index.txt"
-          {
-            echo "health.json|Latest /admin-api/health response"
-            echo "tee-info.json|/admin-api/tee/info payload"
-            echo "tee-attest-request.json|TEE attest request"
-            echo "tee-attest-response.json|TEE attest response"
-            echo "attestation-context.json|Probe context metadata"
-            echo "node-client-verification.json|Anti-fake verification outcomes"
-            echo "node-kms-probe-result.json|Runtime node->KMS probe outcome"
-            echo "measurement-policy-candidates.json|Derived policy candidates"
-            echo "node-kms-probe-ssh-stdout.log|Runtime probe stdout log"
-            echo "node-kms-probe-ssh-stderr.log|Runtime probe stderr log"
-          } > "${index_file}"
+          python3 scripts/ci/artifacts/build_artifact_index.py \
+            --base-dir "${artifacts_dir}" \
+            --output "${index_file}" \
+            --entry "health.json|Latest /admin-api/health response" \
+            --entry "tee-info.json|/admin-api/tee/info payload" \
+            --entry "tee-attest-request.json|TEE attest request" \
+            --entry "tee-attest-response.json|TEE attest response" \
+            --entry "attestation-context.json|Probe context metadata" \
+            --entry "node-client-verification.json|Anti-fake verification outcomes" \
+            --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
+            --entry "measurement-policy-candidates.json|Derived policy candidates" \
+            --entry "node-kms-probe-ssh-stdout.log|Runtime probe stdout log" \
+            --entry "node-kms-probe-ssh-stderr.log|Runtime probe stderr log"
           ci_artifact "artifact index saved to ${index_file}"
 
       - name: Upload node probe artifacts
@@ -851,36 +849,65 @@ jobs:
           fi
           result_line="$(ci_result "node-image-gcp-staging-probe" "${{ job.status }}" "${result_reason}" "artifact=node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}" "profile=${{ steps.params.outputs.profile }}")"
           ci_info "${result_line}"
-          {
-            echo "## Workflow Summary"
-            echo ""
-            echo "### Inputs / Targets"
-            echo ""
-            echo "- Profile: ${{ steps.params.outputs.profile }}"
-            echo "- Instance: ${{ steps.params.outputs.instance_name }}"
-            echo "- Image: ${{ steps.params.outputs.image_name }}"
-            echo "- Base URL: ${{ steps.endpoint.outputs.base_url || 'n/a' }}"
-            echo ""
-            echo "### Check Outcomes"
-            echo ""
-            echo "- Endpoint readiness: ${{ steps.endpoint.outcome || 'skipped' }}"
-            echo "- Anti-fake checks: ${{ steps.verify_anti_fake.outcome || 'skipped' }}"
-            echo "- Runtime node->KMS probe: ${{ steps.runtime_probe.outcome || 'skipped' }}"
-            echo "- External verification: ${{ steps.verify_external.outcome || 'skipped' }}"
-            echo ""
-            echo "### Result"
-            echo ""
-            echo "- Job status: ${{ job.status }}"
-            echo "- Reason code: ${result_reason}"
-            echo "- ${result_line}"
-            echo ""
-            echo "### Artifacts"
-            echo ""
-            echo "- Artifact name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}"
-            echo "- Artifact index: artifacts-index.txt"
-            echo ""
-            echo "### Next"
-            echo ""
-            echo "- Use \`node-client-verification.json\` and \`node-kms-probe-result.json\` first for triage."
-            echo "- Use \`artifacts-index.txt\` to jump to raw diagnostics quickly."
-          } >> "${GITHUB_STEP_SUMMARY}"
+          summary_json="${RUNNER_TEMP}/node-image-gcp-staging-probe-summary.json"
+          jq -n \
+            --arg profile "${{ steps.params.outputs.profile }}" \
+            --arg instance "${{ steps.params.outputs.instance_name }}" \
+            --arg image "${{ steps.params.outputs.image_name }}" \
+            --arg base_url "${{ steps.endpoint.outputs.base_url || 'n/a' }}" \
+            --arg endpoint_outcome "${{ steps.endpoint.outcome || 'skipped' }}" \
+            --arg anti_fake_outcome "${{ steps.verify_anti_fake.outcome || 'skipped' }}" \
+            --arg runtime_outcome "${{ steps.runtime_probe.outcome || 'skipped' }}" \
+            --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
+            --arg job_status "${{ job.status }}" \
+            --arg reason "${result_reason}" \
+            --arg result_line "${result_line}" \
+            --arg artifact_name "node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}" \
+            '{
+              title: "Workflow Summary",
+              sections: [
+                {
+                  name: "Inputs / Targets",
+                  lines: [
+                    ("- Profile: " + $profile),
+                    ("- Instance: " + $instance),
+                    ("- Image: " + $image),
+                    ("- Base URL: " + $base_url)
+                  ]
+                },
+                {
+                  name: "Check Outcomes",
+                  lines: [
+                    ("- Endpoint readiness: " + $endpoint_outcome),
+                    ("- Anti-fake checks: " + $anti_fake_outcome),
+                    ("- Runtime node->KMS probe: " + $runtime_outcome),
+                    ("- External verification: " + $external_outcome)
+                  ]
+                },
+                {
+                  name: "Result",
+                  lines: [
+                    ("- Job status: " + $job_status),
+                    ("- Reason code: " + $reason),
+                    ("- " + $result_line)
+                  ]
+                },
+                {
+                  name: "Artifacts",
+                  lines: [
+                    ("- Artifact name: " + $artifact_name),
+                    "- Artifact index: artifacts-index.txt"
+                  ]
+                },
+                {
+                  name: "Next",
+                  lines: [
+                    "- Use node-client-verification.json and node-kms-probe-result.json first for triage.",
+                    "- Use artifacts-index.txt to jump to raw diagnostics quickly."
+                  ]
+                }
+              ]
+            }' > "${summary_json}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --input-json "${summary_json}" \
+            --output "${GITHUB_STEP_SUMMARY}"
