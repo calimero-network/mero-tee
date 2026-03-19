@@ -664,10 +664,7 @@ mod tests {
         std::env::remove_var("MERO_KMS_VERSION");
         {
             let _guard = apply_string_overrides(vec![("MERO_KMS_VERSION", "2.1.85".to_string())]);
-            assert_eq!(
-                std::env::var("MERO_KMS_VERSION").as_deref(),
-                Ok("2.1.85")
-            );
+            assert_eq!(std::env::var("MERO_KMS_VERSION").as_deref(), Ok("2.1.85"));
         }
         assert!(
             std::env::var("MERO_KMS_VERSION").is_err(),
