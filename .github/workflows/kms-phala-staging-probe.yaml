@@ -61,10 +61,6 @@ on:
         description: "Optional hold window after artifact upload and before cleanup"
         required: false
         default: "0"
-      kms_policy_version:
-        description: "Optional. When set, run KMS with MERO_KMS_VERSION and ENFORCE_MEASUREMENT_POLICY=true to test policy fetch from release (e.g. 2.1.55). Use previous release version when testing a new release."
-        required: false
-        default: ""
       log_verbosity:
         description: "Logging verbosity: compact (default) or debug"
         required: false
@@ -143,7 +139,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KMS_IMAGE_INPUT: ${{ inputs.kms_image }}
           KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_tag }}
-          KMS_POLICY_VERSION: ${{ inputs.kms_policy_version }}
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
           set -euo pipefail
@@ -214,49 +209,13 @@ jobs:
           compose_file="${artifacts_dir}/docker-compose.kms-probe.yaml"
           mkdir -p "${artifacts_dir}"
 
-          if [[ -n "${KMS_POLICY_VERSION}" ]]; then
-            cat > "${compose_file}" <<EOF
-          services:
-            mero-kms:
-              image: ${resolved_kms_image}
-              restart: unless-stopped
-              ports:
-                - "${SERVICE_PORT}:8080"
-              environment:
-                LISTEN_ADDR: "0.0.0.0:8080"
-                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
-                CHALLENGE_TTL_SECS: "60"
-                ACCEPT_MOCK_ATTESTATION: "false"
-                ENFORCE_MEASUREMENT_POLICY: "true"
-                MERO_KMS_VERSION: "${KMS_POLICY_VERSION}"
-              volumes:
-                - /var/run/dstack.sock:/var/run/dstack.sock
-          EOF
-          else
-            cat > "${compose_file}" <<EOF
-          services:
-            mero-kms:
-              image: ${resolved_kms_image}
-              restart: unless-stopped
-              ports:
-                - "${SERVICE_PORT}:8080"
-              environment:
-                LISTEN_ADDR: "0.0.0.0:8080"
-                DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
-                CHALLENGE_TTL_SECS: "60"
-                ACCEPT_MOCK_ATTESTATION: "false"
-                ENFORCE_MEASUREMENT_POLICY: "false"
-              volumes:
-                - /var/run/dstack.sock:/var/run/dstack.sock
-          EOF
-          fi
+          # Use shared template from mero-tee (single source of truth for probe + MDMA compose_hash parity).
+          sed -e "s|__IMAGE_REF__|${resolved_kms_image}|g" \
+              -e "s|__SERVICE_PORT__|${SERVICE_PORT}|g" \
+              scripts/phala/kms-compose-template.yaml > "${compose_file}"
 
           compose_sha256="$(sha256sum "${compose_file}" | awk '{print $1}')"
-          enforce_measurement_policy="false"
-          if [[ -n "${KMS_POLICY_VERSION}" ]]; then
-            enforce_measurement_policy="true"
-          fi
-          echo "[compose] sha256=${compose_sha256} image=${resolved_kms_image} service_port=${SERVICE_PORT} enforce_measurement_policy=${enforce_measurement_policy} kms_policy_version=${KMS_POLICY_VERSION:-<unset>}"
+          echo "[compose] sha256=${compose_sha256} image=${resolved_kms_image} service_port=${SERVICE_PORT}"
 
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"

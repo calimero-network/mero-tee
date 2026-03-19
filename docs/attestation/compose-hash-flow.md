@@ -47,13 +47,19 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe uses canonical names (`calimero-kms-debug`, `calimero-kms-debug-read-only`, `calimero-kms-locked-read-only`). **MDMA and production should use the same names** for compose_hash to match.
 
-2. **Different compose rendering** — Phala may substitute instance-specific values (region, VM UUID, etc.) into the compose before hashing. Same image, different runtime context → different hash.
+2. **Different env vars** — KMS uses `CARGO_PKG_VERSION` (build-time) when `MERO_KMS_VERSION` is unset, so we omit it from the compose. Probe and MDMA emit identical compose. See [MDMA compose alignment](#mdma-compose-alignment) below.
 
-3. **Different KMS build** — Custom or non-release image produces different hash.
+3. **Different compose YAML structure** — Key order and formatting affect the hash. MDMA must emit identical YAML to the probe (same key order: image, restart, ports, environment, volumes; port mapping `host:8080`; `LISTEN_ADDR: "0.0.0.0:8080"`).
 
-4. **Phala/dstack version** — Changes to how compose is hashed will change results.
+4. **Different compose rendering** — Phala may substitute instance-specific values (region, VM UUID, etc.) into the compose before hashing. Same image, different runtime context → different hash.
+
+5. **Different KMS build** — Custom or non-release image produces different hash.
+
+6. **Phala/dstack version** — Changes to how compose is hashed will change results.
 
 **Bottom line:** If compose_hash includes deployment-specific data (which Phala has not fully documented), the release's compose_hash will **never** match a user's deployment. Compose hash would then prove "this exact deployment config" rather than "this release image". Confirm with Phala what exactly is hashed.
+
+**Rebuilds without version bump:** The compose includes the image digest. A rebuild with the same Cargo.toml version produces a different image digest → different compose → different compose_hash → attestation verifier fails. Policy measurements would also differ, so the KMS would fail to validate its own attestation. Both mechanisms catch unreleased rebuilds.
 
 ## Recommended deployment names (probe + MDMA)
 
@@ -66,6 +72,14 @@ For compose_hash to match between release and production, use the same deploymen
 | locked-read-only  | `calimero-kms-locked-read-only` |
 
 When creating a KMS deployment in MDMA, use the name that matches your image profile.
+
+## MDMA compose alignment
+
+**Single source of truth:** Both the probe and MDMA use `scripts/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__` and `__SERVICE_PORT__` at workflow time; MDMA fetches the template from `https://raw.githubusercontent.com/{phala_mero_tee_repo}/mero-kms-v{version}/scripts/phala/kms-compose-template.yaml` and substitutes the same placeholders. This eliminates version drift.
+
+Both omit `MERO_KMS_VERSION`; the KMS falls back to its build-time version (`CARGO_PKG_VERSION`). The workflow publishes a minimal release before the probe so the KMS can fetch policy at boot.
+
+To verify probe and MDMA compose match for a given version: `./scripts/attestation/compare-compose-probe-vs-mdma.sh 2.1.85 8080`
 
 ## Verification script
 

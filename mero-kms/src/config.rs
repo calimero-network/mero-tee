@@ -153,16 +153,9 @@ impl Config {
     }
 
     fn release_version_from_env() -> Option<String> {
-        let tag = std::env::var("MERO_KMS_RELEASE_TAG").ok();
-        let version = std::env::var("MERO_KMS_VERSION").ok();
-        tag.or(version).map(|s| {
-            let s = s.trim();
-            if s.starts_with("mero-kms-v") {
-                s.strip_prefix("mero-kms-v").unwrap_or(s).to_string()
-            } else {
-                s.to_string()
-            }
-        })
+        // Always use build-time version. Compose omits MERO_KMS_VERSION for hash parity.
+        // Rebuilds without version bump are caught: different image digest → different compose_hash.
+        Some(env!("CARGO_PKG_VERSION").to_string())
     }
 
     async fn fetch_policy_from_release_async(
@@ -540,8 +533,6 @@ mod tests {
         "CORS_ALLOWED_ORIGINS",
         "ENFORCE_MEASUREMENT_POLICY",
         "USE_ENV_POLICY",
-        "MERO_KMS_RELEASE_TAG",
-        "MERO_KMS_VERSION",
         "ALLOWED_TCB_STATUSES",
         "ALLOWED_MRTD",
         "ALLOWED_RTMR0",
@@ -756,8 +747,7 @@ mod tests {
     #[test]
     fn from_env_use_env_policy_ignores_release_version_without_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
-        let mut overrides = valid_env_policy_overrides();
-        overrides.push(("MERO_KMS_VERSION", "2.1.49".to_string()));
+        let overrides = valid_env_policy_overrides();
         let _guard = apply_string_overrides(overrides);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -775,7 +765,7 @@ mod tests {
     #[test]
     fn from_env_accepts_release_version_without_policy_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
-        let _guard = EnvGuard::apply(&[("MERO_KMS_VERSION", "2.1.49")]);
+        // Uses CARGO_PKG_VERSION (no env override)
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
