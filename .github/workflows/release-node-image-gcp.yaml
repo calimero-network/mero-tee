@@ -238,6 +238,23 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Packer source image
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
+            echo "PACKER_GCP_SOURCE_IMAGE is set; skipping family check."
+            exit 0
+          fi
+          echo "Checking source image family ubuntu-2510-amd64 in ubuntu-os-cloud..."
+          if ! gcloud compute images describe-from-family ubuntu-2510-amd64 --project ubuntu-os-cloud >/dev/null 2>&1; then
+            echo "::error::Source image family ubuntu-2510-amd64 not found in ubuntu-os-cloud."
+            echo "Set PACKER_GCP_SOURCE_IMAGE repo variable to pin a specific image (e.g. ubuntu-2510-amd64-v20251031)."
+            echo "List available: gcloud compute images list --project=ubuntu-os-cloud --filter='family:ubuntu-25'"
+            exit 1
+          fi
+          echo "Source image family ubuntu-2510-amd64 is available."
+
       - name: Show tool versions
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
