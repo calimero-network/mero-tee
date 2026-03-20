@@ -73,7 +73,7 @@ services:
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
       MAX_PENDING_CHALLENGES: "10000"
-      MERO_KMS_VERSION: "2.2.1"
+      MERO_KMS_VERSION: "2.2.2"
       MERO_KMS_PROFILE: "locked-read-only"
       KEY_NAMESPACE_PREFIX: "merod/storage"
       # Optional: MERO_KMS_POLICY_SHA256 to verify fetched policy matches compatibility map
