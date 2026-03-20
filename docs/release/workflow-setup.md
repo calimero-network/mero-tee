@@ -138,12 +138,10 @@ release events:
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Probes do not use runtime KMS version override flags. For pinned-image probe
-    dispatches, `kms-phala-staging-probe.yaml` seeds `USE_ENV_POLICY=true` plus
-    `ALLOWED_*` values from a published policy source tag.
-  - Release records that source as `.compatibility.kms_policy_source_tag` in
-    `kms-phala-compatibility-map.json`, and post-release e2e reuses it directly
-    for pinned probe parity.
+  - Probes now pass `MERO_KMS_VERSION` + `MERO_KMS_PROFILE` directly in compose,
+    including pinned-image dispatches.
+  - Probe compose rendering enforces that legacy `USE_ENV_POLICY` / `ALLOWED_*`
+    fields are absent.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.

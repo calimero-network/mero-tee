@@ -10,5 +10,7 @@ services:
       CHALLENGE_TTL_SECS: "60"
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
+      MERO_KMS_VERSION: "__MERO_KMS_VERSION__"
+      MERO_KMS_PROFILE: "__MERO_KMS_PROFILE__"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock

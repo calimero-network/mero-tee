@@ -51,6 +51,7 @@ pub(crate) async fn get_key_handler(
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
     validate_peer_id_shape(&request.peer_id)?;
     validate_challenge_id(&request.challenge_id)?;
+    ensure_policy_ready_for_key_release(&state.config)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
     let quote_bytes = base64::engine::general_purpose::STANDARD
@@ -267,6 +268,16 @@ pub(crate) fn enforce_attestation_policy(
     enforce_measurement_allowlist("RTMR2", &body.rtmr2, &policy.allowed_rtmr2)?;
     enforce_measurement_allowlist("RTMR3", &body.rtmr3, &policy.allowed_rtmr3)?;
     Ok(())
+}
+
+pub(crate) fn ensure_policy_ready_for_key_release(config: &Config) -> Result<(), ServiceError> {
+    if config.policy_ready {
+        return Ok(());
+    }
+    let details = config.policy_unavailable_reason.clone().unwrap_or_else(|| {
+        "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, or use explicit USE_ENV_POLICY mode.".to_string()
+    });
+    Err(ServiceError::PolicyNotReady(details))
 }
 
 fn require_non_empty_allowlist(

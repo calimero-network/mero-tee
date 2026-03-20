@@ -44,34 +44,34 @@ pub fn validate_policy_requirements(
     }
     if policy.allowed_tcb_statuses.is_empty() {
         bail!(
-            "Measurement policy is enforced, but ALLOWED_TCB_STATUSES is empty. \
+            "Measurement policy is enforced, but allowed_tcb_statuses is empty. \
              Configure at least one allowed status (recommended: UpToDate)."
         );
     }
 
     let checks: [(&str, &[String], &str); 5] = [
         (
-            "ALLOWED_MRTD",
+            "allowed_mrtd",
             &policy.allowed_mrtd,
-            "KMS uses CARGO_PKG_VERSION to fetch from release, or USE_ENV_POLICY=true with ALLOWED_MRTD for air-gapped.",
+            "Provide policy via MERO_KMS_VERSION + MERO_KMS_PROFILE, or use USE_ENV_POLICY=true for explicit air-gapped mode.",
         ),
         (
-            "ALLOWED_RTMR0",
+            "allowed_rtmr0",
             &policy.allowed_rtmr0,
             "Configure at least one trusted RTMR0 value.",
         ),
         (
-            "ALLOWED_RTMR1",
+            "allowed_rtmr1",
             &policy.allowed_rtmr1,
             "Configure at least one trusted RTMR1 value.",
         ),
         (
-            "ALLOWED_RTMR2",
+            "allowed_rtmr2",
             &policy.allowed_rtmr2,
             "Configure at least one trusted RTMR2 value.",
         ),
         (
-            "ALLOWED_RTMR3",
+            "allowed_rtmr3",
             &policy.allowed_rtmr3,
             "Configure at least one trusted RTMR3 value.",
         ),
@@ -111,7 +111,7 @@ mod tests {
         policy.allowed_rtmr3.clear();
         let err =
             validate_policy_requirements(&policy, false).expect_err("missing RTMR3 should fail");
-        assert!(err.to_string().contains("ALLOWED_RTMR3"));
+        assert!(err.to_string().contains("allowed_rtmr3"));
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
         policy.allowed_tcb_statuses.clear();
         let err = validate_policy_requirements(&policy, false)
             .expect_err("missing TCB status allowlist should fail");
-        assert!(err.to_string().contains("ALLOWED_TCB_STATUSES"));
+        assert!(err.to_string().contains("allowed_tcb_statuses"));
     }
 
     #[test]

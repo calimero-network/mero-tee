@@ -25,6 +25,9 @@ pub struct Config {
     pub policy_sha256: Option<String>,
     pub cors_allowed_origins: Vec<String>,
     pub attestation_policy: AttestationPolicy,
+    pub policy_ready: bool,
+    pub policy_unavailable_reason: Option<String>,
+    pub kms_version: Option<String>,
 }
 
 impl Default for Config {
@@ -41,6 +44,9 @@ impl Default for Config {
             policy_sha256: None,
             cors_allowed_origins: Vec::new(),
             attestation_policy: AttestationPolicy::default(),
+            policy_ready: true,
+            policy_unavailable_reason: None,
+            kms_version: None,
         }
     }
 }
@@ -81,13 +87,7 @@ impl Config {
             .filter(|v| !v.is_empty());
 
         let pinned_image_profile = read_image_profile_from_file(image_profile_path)?;
-        let env_profile_override = match std::env::var("KMS_POLICY_PROFILE") {
-            Ok(value) => Some(value),
-            Err(std::env::VarError::NotPresent) => None,
-            Err(std::env::VarError::NotUnicode(_)) => {
-                bail!("KMS_POLICY_PROFILE must be valid UTF-8")
-            }
-        };
+        let env_profile_override = profile_override_from_env()?;
         let kms_profile = resolve_kms_profile(
             pinned_image_profile.as_deref(),
             env_profile_override.as_deref(),
@@ -112,30 +112,47 @@ impl Config {
         let release_version = if use_env_policy {
             None
         } else {
-            Self::release_version_from_env()
+            Self::release_version_from_env()?
         };
         // MERO_KMS_POLICY_SHA256 is optional; when set, verifies the fetched policy matches.
 
-        let mut attestation_policy = if use_env_policy {
-            Self::load_policy_from_env()?
-        } else if let Some(version) = release_version {
-            let policy = Self::fetch_policy_from_release_async(
-                &version,
+        let (mut attestation_policy, policy_ready, policy_unavailable_reason) = if use_env_policy {
+            (Self::load_policy_from_env()?, true, None::<String>)
+        } else if let Some(version) = release_version.as_deref() {
+            match Self::fetch_policy_from_release_async(
+                version,
                 &kms_profile,
                 policy_sha256.as_deref(),
             )
-            .await?;
-            tracing::info!(
-                "Loaded attestation policy from release mero-kms-v{} profile {}",
-                version,
-                kms_profile
-            );
-            policy
+            .await
+            {
+                Ok(policy) => {
+                    tracing::info!(
+                        "Loaded attestation policy from release mero-kms-v{} profile {}",
+                        version,
+                        kms_profile
+                    );
+                    (policy, true, None::<String>)
+                }
+                Err(err) => {
+                    let reason = format!(
+                        "Failed to load release policy for version '{}' profile '{}': {}",
+                        version, kms_profile, err
+                    );
+                    tracing::warn!("{reason}");
+                    (AttestationPolicy::default(), false, Some(reason))
+                }
+            }
         } else {
-            Self::load_policy_from_env()?
+            let reason =
+                "MERO_KMS_VERSION is not set; release policy is not available yet".to_string();
+            tracing::warn!("{reason}");
+            (AttestationPolicy::default(), false, Some(reason))
         };
         attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
-        validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
+        if policy_ready {
+            validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
+        }
 
         Ok(Self {
             listen_addr,
@@ -149,11 +166,29 @@ impl Config {
             policy_sha256,
             cors_allowed_origins,
             attestation_policy,
+            policy_ready,
+            policy_unavailable_reason,
+            kms_version: release_version,
         })
     }
 
-    fn release_version_from_env() -> Option<String> {
-        Some(env!("CARGO_PKG_VERSION").to_string())
+    fn release_version_from_env() -> EyreResult<Option<String>> {
+        match std::env::var("MERO_KMS_VERSION") {
+            Ok(value) => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    bail!("MERO_KMS_VERSION cannot be empty");
+                }
+                Ok(Some(
+                    trimmed
+                        .strip_prefix("mero-kms-v")
+                        .unwrap_or(trimmed)
+                        .to_string(),
+                ))
+            }
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => bail!("MERO_KMS_VERSION must be valid UTF-8"),
+        }
     }
 
     async fn fetch_policy_from_release_async(
@@ -161,23 +196,7 @@ impl Config {
         profile: &str,
         expected_policy_sha256: Option<&str>,
     ) -> EyreResult<AttestationPolicy> {
-        let tag = format!("mero-kms-v{}", version.trim());
-        let mut urls = vec![(
-            format!(
-                "{}/{}/kms-phala-attestation-policy.{}.json",
-                POLICY_RELEASE_BASE, tag, profile
-            ),
-            false,
-        )];
-        if profile == "locked-read-only" {
-            urls.push((
-                format!(
-                    "{}/{}/kms-phala-attestation-policy.json",
-                    POLICY_RELEASE_BASE, tag
-                ),
-                true,
-            ));
-        }
+        let urls = policy_candidate_urls(version, profile);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("mero-kms-phala/1.0")
@@ -185,11 +204,13 @@ impl Config {
             .map_err(|e| eyre::eyre!("Failed to create HTTP client: {}", e))?;
         let mut last_error: Option<String> = None;
         for (url, legacy_fallback) in urls {
-            let resp = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| eyre::eyre!("Policy fetch failed: {}", e))?;
+            let resp = match client.get(&url).send().await {
+                Ok(resp) => resp,
+                Err(err) => {
+                    last_error = Some(format!("request error for {}: {}", url, err));
+                    continue;
+                }
+            };
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
                 last_error = Some(format!("not found: {}", url));
                 continue;
@@ -320,6 +341,64 @@ fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
     }
 }
 
+fn profile_override_from_env() -> EyreResult<Option<String>> {
+    let modern = match std::env::var("MERO_KMS_PROFILE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("MERO_KMS_PROFILE must be valid UTF-8")
+        }
+    };
+    let legacy = match std::env::var("KMS_POLICY_PROFILE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("KMS_POLICY_PROFILE must be valid UTF-8")
+        }
+    };
+
+    if let Some(modern_profile) = modern {
+        if let Some(legacy_profile) = legacy.as_deref() {
+            if !modern_profile
+                .trim()
+                .eq_ignore_ascii_case(legacy_profile.trim())
+            {
+                bail!(
+                    "MERO_KMS_PROFILE and legacy KMS_POLICY_PROFILE disagree; set only MERO_KMS_PROFILE"
+                );
+            }
+        }
+        return Ok(Some(modern_profile));
+    }
+
+    if legacy.is_some() {
+        tracing::warn!(
+            "KMS_POLICY_PROFILE is deprecated; use MERO_KMS_PROFILE for new deployments"
+        );
+    }
+    Ok(legacy)
+}
+
+pub(crate) fn policy_candidate_urls(version: &str, profile: &str) -> Vec<(String, bool)> {
+    let tag = format!("mero-kms-v{}", version.trim());
+    vec![
+        (
+            format!(
+                "{}/{}/kms-phala-attestation-policy.{}.json",
+                POLICY_RELEASE_BASE, tag, profile
+            ),
+            false,
+        ),
+        (
+            format!(
+                "{}/{}/kms-phala-attestation-policy.json",
+                POLICY_RELEASE_BASE, tag
+            ),
+            true,
+        ),
+    ]
+}
+
 fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     match std::env::var(name) {
         Ok(value) => parse_bool_flag(&value),
@@ -359,7 +438,7 @@ fn resolve_kms_profile(
     if let Some(pinned) = pinned_profile {
         if env_override.is_some() {
             bail!(
-                "KMS_POLICY_PROFILE override is not allowed for profile-pinned images. \
+                "MERO_KMS_PROFILE override is not allowed for profile-pinned images. \
                  Build/deploy the matching KMS image profile instead."
             );
         }
@@ -525,6 +604,8 @@ mod tests {
         "MAX_PENDING_CHALLENGES",
         "ACCEPT_MOCK_ATTESTATION",
         "REDIS_URL",
+        "MERO_KMS_VERSION",
+        "MERO_KMS_PROFILE",
         "KMS_POLICY_PROFILE",
         "KEY_NAMESPACE_PREFIX",
         "MERO_KMS_POLICY_SHA256",
@@ -632,11 +713,28 @@ mod tests {
     }
 
     #[test]
-    fn release_version_uses_build_time_version() {
+    fn release_version_reads_mero_kms_version_env() {
         let _lock = env_lock().lock().expect("env lock");
-        let _guard = apply_string_overrides(vec![]);
-        let version = Config::release_version_from_env().expect("release version");
-        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        let _guard =
+            apply_string_overrides(vec![("MERO_KMS_VERSION", "mero-kms-v2.3.4".to_string())]);
+        let version = Config::release_version_from_env()
+            .expect("release version")
+            .expect("version should be present");
+        assert_eq!(version, "2.3.4");
+    }
+
+    #[test]
+    fn policy_candidate_urls_include_profile_and_generic_fallback() {
+        let urls = policy_candidate_urls("2.3.4", "debug-read-only");
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0]
+            .0
+            .ends_with("/mero-kms-v2.3.4/kms-phala-attestation-policy.debug-read-only.json"));
+        assert!(!urls[0].1);
+        assert!(urls[1]
+            .0
+            .ends_with("/mero-kms-v2.3.4/kms-phala-attestation-policy.json"));
+        assert!(urls[1].1);
     }
 
     #[test]
@@ -645,7 +743,7 @@ mod tests {
             .expect_err("override should be rejected for pinned profile");
         assert!(err
             .to_string()
-            .contains("KMS_POLICY_PROFILE override is not allowed"));
+            .contains("MERO_KMS_PROFILE override is not allowed"));
     }
 
     #[test]
@@ -748,12 +846,14 @@ mod tests {
         assert_eq!(config.kms_profile, "locked-read-only");
         assert_eq!(config.attestation_policy.allowed_mrtd.len(), 1);
         assert_eq!(config.attestation_policy.allowed_rtmr3.len(), 1);
+        assert!(config.policy_ready);
     }
 
     #[test]
     fn from_env_use_env_policy_ignores_release_version_without_hash_pin() {
         let _lock = env_lock().lock().expect("env lock");
-        let overrides = valid_env_policy_overrides();
+        let mut overrides = valid_env_policy_overrides();
+        overrides.push(("MERO_KMS_VERSION", "2.9.9".to_string()));
         let _guard = apply_string_overrides(overrides);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -766,29 +866,30 @@ mod tests {
             ))
             .expect("env-policy mode should not require MERO_KMS_POLICY_SHA256");
         assert_eq!(config.kms_profile, "locked-read-only");
+        assert!(config.policy_ready);
     }
 
     #[test]
-    fn from_env_accepts_release_version_without_policy_hash_pin() {
+    fn from_env_without_release_version_marks_policy_unavailable() {
         let _lock = env_lock().lock().expect("env lock");
-        // Uses CARGO_PKG_VERSION (no env override)
+        let _guard = apply_string_overrides(vec![]);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
 
-        // MERO_KMS_POLICY_SHA256 is optional; config loads when it can fetch policy from release.
-        let result = runtime.block_on(Config::from_env_with_image_profile_path(
-            "/tmp/nonexistent-kms-profile",
-        ));
-        // May succeed (if network/release available) or fail for other reasons (e.g. fetch).
-        if let Err(e) = &result {
-            assert!(
-                !e.to_string().contains("MERO_KMS_POLICY_SHA256 is required"),
-                "policy hash pin should no longer be required: {}",
-                e
-            );
-        }
+        let config = runtime
+            .block_on(Config::from_env_with_image_profile_path(
+                "/tmp/nonexistent-kms-profile",
+            ))
+            .expect("missing version should not prevent startup");
+        assert!(!config.policy_ready);
+        assert_eq!(config.kms_version, None);
+        assert!(config
+            .policy_unavailable_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("MERO_KMS_VERSION"));
     }
 
     #[test]
@@ -818,7 +919,7 @@ mod tests {
     fn from_env_rejects_override_when_profile_is_pinned() {
         let _lock = env_lock().lock().expect("env lock");
         let mut overrides = valid_env_policy_overrides();
-        overrides.push(("KMS_POLICY_PROFILE", "debug".to_string()));
+        overrides.push(("MERO_KMS_PROFILE", "debug".to_string()));
         let _guard = apply_string_overrides(overrides);
         let profile_file = TempProfileFile::new("locked-read-only\n");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -830,9 +931,22 @@ mod tests {
             .block_on(Config::from_env_with_image_profile_path(
                 profile_file.as_str(),
             ))
-            .expect_err("pinned image should reject KMS_POLICY_PROFILE override");
+            .expect_err("pinned image should reject MERO_KMS_PROFILE override");
         assert!(err
             .to_string()
-            .contains("KMS_POLICY_PROFILE override is not allowed"));
+            .contains("MERO_KMS_PROFILE override is not allowed"));
+    }
+
+    #[test]
+    fn profile_override_prefers_modern_env_name() {
+        let _lock = env_lock().lock().expect("env lock");
+        let _guard = apply_string_overrides(vec![
+            ("MERO_KMS_PROFILE", "debug-read-only".to_string()),
+            ("KMS_POLICY_PROFILE", "debug-read-only".to_string()),
+        ]);
+        let selected = profile_override_from_env()
+            .expect("profile override should parse")
+            .expect("override should exist");
+        assert_eq!(selected, "debug-read-only");
     }
 }

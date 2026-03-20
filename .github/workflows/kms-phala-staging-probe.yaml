@@ -21,11 +21,11 @@ on:
         required: true
         default: "latest"
       kms_profile:
-        description: "KMS profile for probe policy material (debug, debug-read-only, locked-read-only)."
+        description: "KMS policy profile passed to runtime (debug, debug-read-only, locked-read-only)."
         required: false
         default: ""
-      kms_policy_source_tag:
-        description: "Optional published mero-kms-v* tag used to seed probe env policy values."
+      kms_version:
+        description: "KMS release version (for MERO_KMS_VERSION). Required for pinned image probes when kms_tag is 'pinned'."
         required: false
         default: ""
       instance_type:
@@ -148,7 +148,7 @@ jobs:
           KMS_IMAGE_INPUT: ${{ inputs.kms_image }}
           KMS_RELEASE_TAG_INPUT: ${{ inputs.kms_tag }}
           KMS_PROFILE_INPUT: ${{ inputs.kms_profile }}
-          KMS_POLICY_SOURCE_TAG_INPUT: ${{ inputs.kms_policy_source_tag }}
+          KMS_VERSION_INPUT: ${{ inputs.kms_version }}
           DEPLOYMENT_NAME_INPUT: ${{ inputs.deployment_name }}
           SERVICE_PORT: ${{ inputs.service_port }}
         run: |
@@ -180,6 +180,42 @@ jobs:
 
           if [[ -z "${resolved_kms_image}" ]]; then
             echo "::error::Failed to resolve KMS image."
+            exit 1
+          fi
+
+          selected_profile="${KMS_PROFILE_INPUT}"
+          if [[ -z "${selected_profile}" ]]; then
+            case "${DEPLOYMENT_NAME_INPUT}" in
+              *debug-read-only*) selected_profile="debug-read-only" ;;
+              *debug*) selected_profile="debug" ;;
+              *locked-read-only*) selected_profile="locked-read-only" ;;
+              *) selected_profile="locked-read-only" ;;
+            esac
+          fi
+          case "${selected_profile}" in
+            debug|debug-read-only|locked-read-only) ;;
+            *)
+              echo "::error::Unsupported kms_profile '${selected_profile}'."
+              echo "::error::Expected one of: debug, debug-read-only, locked-read-only."
+              exit 1
+              ;;
+          esac
+
+          resolved_kms_version="${KMS_VERSION_INPUT}"
+          if [[ "${resolved_kms_version}" =~ ^mero-kms-v(.+)$ ]]; then
+            resolved_kms_version="${BASH_REMATCH[1]}"
+          fi
+          if [[ -z "${resolved_kms_version}" && -n "${resolved_release_tag}" && "${resolved_release_tag}" =~ ^mero-kms-v(.+)$ ]]; then
+            resolved_kms_version="${BASH_REMATCH[1]}"
+          fi
+          if [[ -z "${resolved_kms_version}" && "${KMS_RELEASE_TAG_INPUT}" != "latest" && "${KMS_RELEASE_TAG_INPUT}" != "pinned" && "${KMS_RELEASE_TAG_INPUT}" =~ ^mero-kms-v(.+)$ ]]; then
+            resolved_kms_version="${BASH_REMATCH[1]}"
+          fi
+          if [[ -z "${resolved_kms_version}" ]]; then
+            echo "::error::Could not resolve MERO_KMS_VERSION for probe compose."
+            if [[ "${KMS_RELEASE_TAG_INPUT}" == "pinned" ]]; then
+              echo "::error::Provide inputs.kms_version when using kms_tag='pinned'."
+            fi
             exit 1
           fi
 
@@ -223,71 +259,16 @@ jobs:
           # Use shared template from mero-tee (single source of truth for probe + MDMA compose_hash parity).
           sed -e "s|__IMAGE_REF__|${resolved_kms_image}|g" \
               -e "s|__SERVICE_PORT__|${SERVICE_PORT}|g" \
+              -e "s|__MERO_KMS_VERSION__|${resolved_kms_version}|g" \
+              -e "s|__MERO_KMS_PROFILE__|${selected_profile}|g" \
               scripts/phala/kms-compose-template.yaml > "${compose_file}"
-
-          # Probe bootstrap path for pinned images: avoid release-fetch dependency on
-          # current draft tags by seeding policy allowlists from a published source tag.
-          if [[ "${KMS_RELEASE_TAG_INPUT}" == "pinned" ]]; then
-            selected_profile="${KMS_PROFILE_INPUT}"
-            if [[ -z "${selected_profile}" ]]; then
-              case "${DEPLOYMENT_NAME_INPUT}" in
-                *debug-read-only*) selected_profile="debug-read-only" ;;
-                *debug*) selected_profile="debug" ;;
-                *locked-read-only*) selected_profile="locked-read-only" ;;
-                *) selected_profile="" ;;
-              esac
-            fi
-            if [[ -z "${selected_profile}" ]]; then
-              echo "::error::Missing kms_profile for pinned KMS probe."
-              exit 1
-            fi
-
-            policy_source_tag="${KMS_POLICY_SOURCE_TAG_INPUT}"
-            if [[ -z "${policy_source_tag}" ]]; then
-              policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
-                [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")))]
-                | sort_by(.publishedAt)
-                | reverse
-                | .[0].tagName // empty
-              ')"
-            fi
-            if [[ -z "${policy_source_tag}" ]]; then
-              echo "::error::Could not resolve published mero-kms-v* policy source tag for pinned probe."
-              exit 1
-            fi
-
-            policy_tmp_dir="$(mktemp -d)"
-            policy_file="${policy_tmp_dir}/kms-phala-attestation-policy.${selected_profile}.json"
-            if ! gh release download "${policy_source_tag}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern "kms-phala-attestation-policy.${selected_profile}.json" \
-              --dir "${policy_tmp_dir}" >/dev/null 2>&1; then
-              policy_file="${policy_tmp_dir}/kms-phala-attestation-policy.json"
-              if ! gh release download "${policy_source_tag}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --pattern "kms-phala-attestation-policy.json" \
-                --dir "${policy_tmp_dir}" >/dev/null 2>&1; then
-                echo "::error::Could not download policy seed file from ${policy_source_tag}."
-                exit 1
-              fi
-            fi
-
-            allowed_tcb_statuses="$(jq -r '((.policy.node_allowed_tcb_statuses // .policy.allowed_tcb_statuses // ["uptodate"]) | map(tostring) | join(","))' "${policy_file}")"
-            allowed_mrtd="$(jq -r '((.policy.node_allowed_mrtd // .policy.allowed_mrtd // []) | map(tostring) | join(","))' "${policy_file}")"
-            allowed_rtmr0="$(jq -r '((.policy.node_allowed_rtmr0 // .policy.allowed_rtmr0 // []) | map(tostring) | join(","))' "${policy_file}")"
-            allowed_rtmr1="$(jq -r '((.policy.node_allowed_rtmr1 // .policy.allowed_rtmr1 // []) | map(tostring) | join(","))' "${policy_file}")"
-            allowed_rtmr2="$(jq -r '((.policy.node_allowed_rtmr2 // .policy.allowed_rtmr2 // []) | map(tostring) | join(","))' "${policy_file}")"
-            allowed_rtmr3="$(jq -r '((.policy.node_allowed_rtmr3 // .policy.allowed_rtmr3 // []) | map(tostring) | join(","))' "${policy_file}")"
-            rm -rf "${policy_tmp_dir}"
-
-            if [[ -z "${allowed_mrtd}" || -z "${allowed_rtmr0}" || -z "${allowed_rtmr1}" || -z "${allowed_rtmr2}" || -z "${allowed_rtmr3}" ]]; then
-              echo "::error::Policy seed from ${policy_source_tag} (${selected_profile}) is missing required allowlists."
-              exit 1
-            fi
-
-            sed -i '/ENFORCE_MEASUREMENT_POLICY:/a\      USE_ENV_POLICY: "true"\n      ALLOWED_TCB_STATUSES: "'"${allowed_tcb_statuses}"'"\n      ALLOWED_MRTD: "'"${allowed_mrtd}"'"\n      ALLOWED_RTMR0: "'"${allowed_rtmr0}"'"\n      ALLOWED_RTMR1: "'"${allowed_rtmr1}"'"\n      ALLOWED_RTMR2: "'"${allowed_rtmr2}"'"\n      ALLOWED_RTMR3: "'"${allowed_rtmr3}"'"' "${compose_file}"
-            echo "Seeded probe env policy from ${policy_source_tag} profile=${selected_profile}"
-            echo "kms_policy_source_tag=${policy_source_tag}" >> "${GITHUB_OUTPUT}"
+          if rg -q 'USE_ENV_POLICY|ALLOWED_TCB_STATUSES|ALLOWED_MRTD|ALLOWED_RTMR' "${compose_file}"; then
+            echo "::error::Rendered probe compose still contains legacy env-policy fields."
+            exit 1
+          fi
+          if ! rg -q 'MERO_KMS_VERSION:' "${compose_file}" || ! rg -q 'MERO_KMS_PROFILE:' "${compose_file}"; then
+            echo "::error::Rendered probe compose is missing MERO_KMS_VERSION/MERO_KMS_PROFILE."
+            exit 1
           fi
 
           compose_sha256="$(sha256sum "${compose_file}" | awk '{print $1}')"
@@ -297,6 +278,8 @@ jobs:
           echo "compose_file=${compose_file}" >> "${GITHUB_OUTPUT}"
           echo "kms_image=${resolved_kms_image}" >> "${GITHUB_OUTPUT}"
           echo "kms_tag=${resolved_release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "kms_profile=${selected_profile}" >> "${GITHUB_OUTPUT}"
+          echo "kms_version=${resolved_kms_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Deploy ephemeral CVM (prod cluster, dstack 0.5.7 pinned)
         id: deploy
