@@ -359,8 +359,9 @@ fn profile_override_from_env() -> EyreResult<Option<String>> {
 
     if let Some(modern_profile) = modern {
         if let Some(legacy_profile) = legacy.as_deref() {
-            if modern_profile.trim().to_ascii_lowercase()
-                != legacy_profile.trim().to_ascii_lowercase()
+            if !modern_profile
+                .trim()
+                .eq_ignore_ascii_case(legacy_profile.trim())
             {
                 bail!(
                     "MERO_KMS_PROFILE and legacy KMS_POLICY_PROFILE disagree; set only MERO_KMS_PROFILE"
