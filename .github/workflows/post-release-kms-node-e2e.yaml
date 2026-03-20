@@ -97,6 +97,14 @@ jobs:
             gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1
           }
 
+          release_target_commit() {
+            local tag="$1"
+            gh release view "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json targetCommitish \
+              --jq '.targetCommitish // empty' 2>/dev/null || true
+          }
+
           wait_for_release_tag() {
             local tag="$1"
             local attempts="${2:-24}"
@@ -151,9 +159,18 @@ jobs:
             local tag="$1"
             local attempts="${2:-90}"
             local delay_secs="${3:-60}"
+            local expected_commit="${4:-}"
             for attempt in $(seq 1 "${attempts}"); do
               if [[ "$(kms_release_has_required_assets "${tag}")" == "true" ]]; then
-                return 0
+                if [[ -z "${expected_commit}" ]]; then
+                  return 0
+                fi
+                local target_commit
+                target_commit="$(release_target_commit "${tag}")"
+                if [[ -n "${target_commit}" && "${target_commit}" == "${expected_commit}" ]]; then
+                  return 0
+                fi
+                echo "Waiting for KMS release ${tag} to target ${expected_commit} (current target=${target_commit:-unknown}; attempt ${attempt}/${attempts})..."
               fi
               echo "Waiting for KMS release ${tag} assets (attempt ${attempt}/${attempts})..."
               sleep "${delay_secs}"
@@ -253,9 +270,20 @@ jobs:
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60; then
+            expected_kms_commit=""
+            if [[ "${strict_release_mode}" == "true" ]]; then
+              expected_kms_commit="${probe_expected_sha}"
+            fi
+            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60 "${expected_kms_commit}"; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
+              if [[ "${strict_release_mode}" != "true" ]]; then
+                resolved_kms_target_commit="$(release_target_commit "${kms_tag}")"
+                if [[ -n "${resolved_kms_target_commit}" && "${resolved_kms_target_commit}" != "${probe_expected_sha}" ]]; then
+                  should_run="false"
+                  skip_reason="KMS release '${kms_tag}' targets ${resolved_kms_target_commit} (not current commit ${probe_expected_sha}); waiting for release update."
+                fi
+              fi
             else
               if [[ "${strict_release_mode}" == "true" ]]; then
                 echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets (compatibility map and profile policies)."

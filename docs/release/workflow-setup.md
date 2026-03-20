@@ -168,6 +168,9 @@ release events:
 `push` on `master` can still skip when release assets are not yet published, but
 release-triggered validation is expected to fail explicitly on missing or
 mismatched release inputs.
+Additionally, push-triggered post-release e2e skips when the selected KMS
+release tag exists but still targets an older commit; strict release-triggered
+runs continue waiting/failing until commit alignment is achieved.
 
 Workflow-level concurrency keys in this file must remain event-safe. When
 combining `push`/`workflow_run` triggers, guard `github.event.workflow_run.*`
