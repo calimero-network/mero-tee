@@ -17,15 +17,7 @@ export function ComposeHashCard({
   const publishingInconsistent =
     releaseComposePublishing && releaseComposePublishing.allConsistent === false;
   const inconsistentProfiles = releaseComposePublishing?.inconsistentProfiles || [];
-  const canonicalMismatchButConsistent =
-    composeHash && !hasAnyMatch && !publishingInconsistent;
-  const cardStatus = hasCompatMatch
-    ? 'ok'
-    : policyOnlyMatch || canonicalMismatchButConsistent
-      ? 'warn'
-      : composeHash
-        ? 'err'
-        : null;
+  const cardStatus = hasCompatMatch ? 'ok' : policyOnlyMatch ? 'warn' : composeHash ? 'err' : null;
 
   return (
     <Card title="Compose hash" status={cardStatus}>
@@ -51,11 +43,7 @@ export function ComposeHashCard({
       )}
       {composeHash && !hasAnyMatch && (
         <>
-          <span className={publishingInconsistent ? 'result-err' : 'result-warn'}>
-            {publishingInconsistent
-              ? '✗ NO MATCH — compose_hash not found in primary or last 5 releases.'
-              : '⚠ NO CANONICAL MATCH — compose_hash not found in primary or last 5 releases.'}
-          </span>
+          <span className="result-err">✗ NO MATCH — compose_hash not found in primary or last 5 releases.</span>
           {publishingInconsistent ? (
             <div className="result-warn">
               Release asset publishing inconsistency detected for profile(s):{' '}
