@@ -14,7 +14,17 @@ export function buildPolicyComposeHashesByProfile(
 ) {
   const out = {};
   for (const profile of profiles) {
-    const list = policiesByProfile?.[profile]?.policy?.kms_allowed_event_payload;
+    const profilePolicyEntry = policiesByProfile?.[profile];
+    // Accept both shapes:
+    // 1) full policy document: { ..., policy: { kms_allowed_event_payload: [...] } }
+    // 2) extracted policy object: { kms_allowed_event_payload: [...] }
+    const policy =
+      profilePolicyEntry && typeof profilePolicyEntry === 'object'
+        ? (profilePolicyEntry.policy && typeof profilePolicyEntry.policy === 'object'
+            ? profilePolicyEntry.policy
+            : profilePolicyEntry)
+        : null;
+    const list = policy?.kms_allowed_event_payload;
     const hashes = Array.isArray(list)
       ? list.map((v) => normalizeComposeHash(v)).filter(Boolean)
       : [];
