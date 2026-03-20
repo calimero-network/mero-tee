@@ -295,6 +295,7 @@ jq -e --arg tag "${logical_tag}" '
   ((.compatibility.roles.kms // "kms") == "kms") and
   ((.compatibility.roles.node // "node") == "node") and
   (.compatibility.kms_tag == ("mero-kms-v" + $tag)) and
+  (.compatibility.kms_policy_source_tag | type == "string" and test("^mero-kms-v")) and
   (.compatibility.node_image_tag == ("mero-tee-v" + $tag)) and
   ((.compatibility.profiles.debug.event_payload // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and
   ((.compatibility.profiles["debug-read-only"].event_payload // "") | if length > 0 then (type == "string" and (length == 64) and test("^[a-f0-9]+$")) else true end) and

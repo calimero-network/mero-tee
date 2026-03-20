@@ -112,14 +112,39 @@ jobs:
 
           kms_release_has_required_assets() {
             local tag="$1"
-            gh release view "${tag}" \
+            local has_assets
+            has_assets="$(gh release view "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json assets \
               --jq '([.assets[].name]
                 | index("kms-phala-compatibility-map.json") != null
                   and index("kms-phala-attestation-policy.debug.json") != null
                   and index("kms-phala-attestation-policy.debug-read-only.json") != null
-                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
+                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)')"
+            if [[ "${has_assets}" != "true" ]]; then
+              echo "false"
+              return
+            fi
+
+            local map_tmp_dir
+            map_tmp_dir="$(mktemp -d)"
+            if ! gh release download "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "kms-phala-compatibility-map.json" \
+              --dir "${map_tmp_dir}" >/dev/null 2>&1; then
+              rm -rf "${map_tmp_dir}"
+              echo "false"
+              return
+            fi
+
+            if jq -e '(.compatibility.kms_policy_source_tag | type == "string" and test("^mero-kms-v"))' \
+              "${map_tmp_dir}/kms-phala-compatibility-map.json" >/dev/null 2>&1; then
+              rm -rf "${map_tmp_dir}"
+              echo "true"
+            else
+              rm -rf "${map_tmp_dir}"
+              echo "false"
+            fi
           }
 
           wait_for_kms_release_with_assets() {
@@ -336,6 +361,12 @@ jobs:
             exit 1
           fi
 
+          kms_policy_source_tag="$(jq -r '.compatibility.kms_policy_source_tag // empty' "${compatibility_map}")"
+          if [[ -z "${kms_policy_source_tag}" || ! "${kms_policy_source_tag}" =~ ^mero-kms-v ]]; then
+            echo "::error::KMS compatibility map is missing valid .compatibility.kms_policy_source_tag."
+            exit 1
+          fi
+
           wait_for_workflow_run() {
             local run_id="$1"
             local timeout_secs="$2"
@@ -448,6 +479,8 @@ jobs:
               probe_dispatch_args=(
                 -f kms_image="${image_ref}"
                 -f kms_tag="pinned"
+                -f kms_profile="${profile}"
+                -f kms_policy_source_tag="${kms_policy_source_tag}"
                 -f probe_label="${probe_label}"
                 -f deployment_name="${deployment_name}"
               )
@@ -677,6 +710,8 @@ jobs:
           cross_profile_dispatch_args=(
             -f kms_image="${cross_profile_locked_image_ref}"
             -f kms_tag="pinned"
+            -f kms_profile="locked-read-only"
+            -f kms_policy_source_tag="${kms_policy_source_tag}"
             -f probe_label="${cross_profile_probe_label}"
             -f deployment_name="${cross_profile_deployment_name}"
             # Keep the locked KMS alive just long enough for debug-node runtime probe.
