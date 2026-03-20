@@ -90,6 +90,18 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_not_ready_blocks_key_release() {
+        let config = Config {
+            policy_ready: false,
+            policy_unavailable_reason: Some("policy is still syncing".to_string()),
+            ..Config::default()
+        };
+        let err = get_key::ensure_policy_ready_for_key_release(&config)
+            .expect_err("unready policy should block key release");
+        assert!(matches!(err, ServiceError::PolicyNotReady(_)));
+    }
+
+    #[test]
     fn test_policy_rejects_tcb_status() {
         let nonce = [0x11; 32];
         let mut mock_quote = b"MOCK_TDX_QUOTE_V1".to_vec();
@@ -333,6 +345,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let payload = read_json_body(response).await;
         assert_eq!(payload["error"], "invalid_attestation_request");
+    }
+
+    #[tokio::test]
+    async fn test_policy_not_ready_error_maps_to_service_unavailable() {
+        let response =
+            ServiceError::PolicyNotReady("policy fetch pending".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let payload = read_json_body(response).await;
+        assert_eq!(payload["error"], "policy_not_ready");
     }
 
     #[tokio::test]

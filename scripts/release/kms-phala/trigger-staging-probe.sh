@@ -3,7 +3,6 @@ set -euo pipefail
 
 # Dispatch and wait for the KMS staging probe workflow.
 # Inputs: IMAGE_REF, PROFILE, RELEASE_VERSION, PROBE_LABEL, GH_TOKEN context.
-# Optional: POLICY_SOURCE_TAG (published mero-kms-v* tag for probe env policy seed).
 # Output (GITHUB_OUTPUT): run_id of the completed probe run.
 
 if [[ -z "${IMAGE_REF:-}" || -z "${PROFILE:-}" || -z "${RELEASE_VERSION:-}" || -z "${PROBE_LABEL:-}" ]]; then
@@ -71,13 +70,11 @@ for probe_attempt in $(seq 1 "${max_probe_attempts}"); do
     --ref master
     -f "kms_image=${IMAGE_REF}"
     -f "kms_tag=pinned"
+    -f "kms_version=${RELEASE_VERSION}"
     -f "kms_profile=${PROFILE}"
     -f "probe_label=${probe_label}"
     -f "deployment_name=${deployment_name}"
   )
-  if [[ -n "${POLICY_SOURCE_TAG:-}" ]]; then
-    run_args+=(-f "kms_policy_source_tag=${POLICY_SOURCE_TAG}")
-  fi
   gh "${run_args[@]}"
 
   if [[ -z "${run_id}" ]]; then

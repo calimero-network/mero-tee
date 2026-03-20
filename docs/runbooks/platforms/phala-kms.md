@@ -73,10 +73,10 @@ services:
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
       MAX_PENDING_CHALLENGES: "10000"
-      KMS_POLICY_PROFILE: "locked-read-only"
+      MERO_KMS_VERSION: "2.2.0"
+      MERO_KMS_PROFILE: "locked-read-only"
       KEY_NAMESPACE_PREFIX: "merod/storage"
       # Optional: MERO_KMS_POLICY_SHA256 to verify fetched policy matches compatibility map
-      ALLOWED_TCB_STATUSES: "UpToDate"
       # Optional HA/shared challenge store
       # REDIS_URL: "redis://redis:6379/0"
     volumes:
@@ -86,9 +86,10 @@ services:
 Production guidance:
 
 - Keep `ACCEPT_MOCK_ATTESTATION=false`.
-- Pin MRTD (and preferably RTMR0-3) allowlists.
+- Set `MERO_KMS_VERSION` and `MERO_KMS_PROFILE` for each deployment.
+- Do not inject `USE_ENV_POLICY` or `ALLOWED_*` in standard release/probe flows.
 - Do not use mutable container tags (`:latest`).
-- Set `KMS_POLICY_PROFILE=locked-read-only` for production cohorts.
+- Set `MERO_KMS_PROFILE=locked-read-only` for production cohorts.
 - Keep KMS endpoints private to trusted network paths; do not expose key-release APIs publicly.
 - Use TLS (preferably mTLS) on any non-local network path between `merod` and KMS.
 

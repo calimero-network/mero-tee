@@ -53,6 +53,19 @@ async fn main() -> eyre::Result<()> {
     if let Some(policy_sha256) = config.policy_sha256.as_deref() {
         info!("Policy SHA-256 pin enabled: {}", policy_sha256);
     }
+    if let Some(kms_version) = config.kms_version.as_deref() {
+        info!("Policy release version: {}", kms_version);
+    }
+    info!("Policy ready for key issuance: {}", config.policy_ready);
+    if !config.policy_ready {
+        warn!(
+            "Policy unavailable; /attest remains available but /get-key is fail-closed: {}",
+            config
+                .policy_unavailable_reason
+                .as_deref()
+                .unwrap_or("unknown policy readiness error")
+        );
+    }
     info!(
         "Measurement policy enforced: {}",
         config.attestation_policy.enforce_measurement_policy
@@ -60,15 +73,17 @@ async fn main() -> eyre::Result<()> {
     if !config.attestation_policy.enforce_measurement_policy {
         warn!("Measurement policy enforcement is disabled; this is not safe for production");
     }
-    info!(
-        "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
-        config.attestation_policy.allowed_tcb_statuses.len(),
-        config.attestation_policy.allowed_mrtd.len(),
-        config.attestation_policy.allowed_rtmr0.len(),
-        config.attestation_policy.allowed_rtmr1.len(),
-        config.attestation_policy.allowed_rtmr2.len(),
-        config.attestation_policy.allowed_rtmr3.len()
-    );
+    if config.policy_ready {
+        info!(
+            "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
+            config.attestation_policy.allowed_tcb_statuses.len(),
+            config.attestation_policy.allowed_mrtd.len(),
+            config.attestation_policy.allowed_rtmr0.len(),
+            config.attestation_policy.allowed_rtmr1.len(),
+            config.attestation_policy.allowed_rtmr2.len(),
+            config.attestation_policy.allowed_rtmr3.len()
+        );
+    }
 
     if config.accept_mock_attestation {
         warn!(

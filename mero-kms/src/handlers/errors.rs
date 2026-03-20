@@ -30,6 +30,7 @@ pub enum ServiceError {
     PeerIdMismatch,
     TcbStatusRejected(String),
     MeasurementPolicyRejected(String),
+    PolicyNotReady(String),
     KeyDerivationFailed(String),
 }
 
@@ -132,6 +133,13 @@ impl IntoResponse for ServiceError {
                 StatusCode::FORBIDDEN,
                 ErrorResponse {
                     error: "measurement_policy_rejected".to_string(),
+                    details: Some(msg.clone()),
+                },
+            ),
+            ServiceError::PolicyNotReady(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorResponse {
+                    error: "policy_not_ready".to_string(),
                     details: Some(msg.clone()),
                 },
             ),

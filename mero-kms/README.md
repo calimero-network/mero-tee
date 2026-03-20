@@ -102,30 +102,30 @@ Recommended caller verification:
 ### Policy source: release fetch (recommended)
 
 The KMS fetches the attestation policy from the official release at boot using
-its build-time version (`CARGO_PKG_VERSION`). No env var required (profile-aware):
+`MERO_KMS_VERSION` + `MERO_KMS_PROFILE`:
 
 ```
 https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSION}/kms-phala-attestation-policy.{PROFILE}.json
 ```
 
-`PROFILE` is selected from the image-pinned profile marker (`/etc/mero-kms/image-profile`).
-For released profile images, deploy-time `KMS_POLICY_PROFILE` overrides are rejected.
-`KMS_POLICY_PROFILE` is only used for legacy/non-pinned local runs.
+The runtime also tries `kms-phala-attestation-policy.json` as a backward-compatible fallback.
+For profile-pinned images (`/etc/mero-kms/image-profile`), deploy-time profile overrides are rejected.
+`MERO_KMS_PROFILE` is the deploy-time profile input; `KMS_POLICY_PROFILE` remains as deprecated legacy fallback.
 At startup (when mock attestation is disabled), KMS attempts to emit a runtime
 event `calimero.kms.profile=<profile>` to extend RTMR3 and bind measurements to
 the selected profile cohort. If runtime extension is unavailable in a target
 environment, KMS logs a warning and continues startup.
-For backward compatibility, `locked-read-only` can fall back to `kms-phala-attestation-policy.json`.
 
-This ensures the policy cannot be tweaked via env vars; it comes from the
-canonical source. If the fetch fails, startup fails closed.
+This ensures policy is version/profile-driven and fetched from canonical release assets.
+If policy fetch is unavailable, `/attest` still works for diagnostics while `/get-key`
+fails closed with `policy_not_ready`.
 
 Production recommendation:
 
-- keep release policy as primary source (KMS uses `CARGO_PKG_VERSION` from build);
+- always set `MERO_KMS_VERSION` and `MERO_KMS_PROFILE` in deployment compose/env;
 - optionally verify policy with `MERO_KMS_POLICY_SHA256` when fetching from release;
 - use `USE_ENV_POLICY=true` only for explicit air-gapped env-policy mode;
-- treat startup failures on missing/invalid policy as fail-closed signals, not something to bypass.
+- treat `policy_not_ready` responses as fail-closed signals, not something to bypass.
 
 ### Policy source: env vars (air-gapped / legacy)
 
@@ -140,7 +140,9 @@ Environment variables:
 - `MAX_PENDING_CHALLENGES` (default: `10000`) – cap on unconsumed challenges
 - `ACCEPT_MOCK_ATTESTATION` (default: `false`)
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
-- `KMS_POLICY_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only` (legacy/non-pinned runs only)
+- `MERO_KMS_VERSION` – release version used for policy fetch (for example `2.2.0`)
+- `MERO_KMS_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only`
+- `KMS_POLICY_PROFILE` – deprecated legacy profile override for non-pinned local runs
 - `MERO_KMS_POLICY_SHA256` – optional; when set, verifies the fetched policy matches this SHA256
 - `USE_ENV_POLICY` – if `true`, use env vars instead of release fetch (air-gapped)
 - `KEY_NAMESPACE_PREFIX` – key namespace prefix (default: `merod/storage`)
@@ -186,12 +188,8 @@ export DSTACK_SOCKET_PATH=/var/run/dstack.sock
 export CHALLENGE_TTL_SECS=60
 export ACCEPT_MOCK_ATTESTATION=false
 export ENFORCE_MEASUREMENT_POLICY=true
-export ALLOWED_TCB_STATUSES=UpToDate
-export ALLOWED_MRTD=<trusted_mrtd_hex>
-export ALLOWED_RTMR0=<trusted_rtmr0_hex>
-export ALLOWED_RTMR1=<trusted_rtmr1_hex>
-export ALLOWED_RTMR2=<trusted_rtmr2_hex>
-export ALLOWED_RTMR3=<trusted_rtmr3_hex>
+export MERO_KMS_VERSION=2.2.0
+export MERO_KMS_PROFILE=locked-read-only
 ```
 
 ## Development mode

@@ -47,7 +47,7 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe uses canonical names (`calimero-kms-debug`, `calimero-kms-debug-read-only`, `calimero-kms-locked-read-only`). **MDMA and production should use the same names** for compose_hash to match.
 
-2. **Different env vars** — KMS uses `CARGO_PKG_VERSION` (build-time) when `MERO_KMS_VERSION` is unset, so we omit it from the compose. Probe and MDMA emit identical compose. See [MDMA compose alignment](#mdma-compose-alignment) below.
+2. **Different env vars** — Probe and MDMA must pass the same `MERO_KMS_VERSION` and `MERO_KMS_PROFILE` values in compose. If these differ, compose_hash diverges and runtime policy selection diverges. See [MDMA compose alignment](#mdma-compose-alignment) below.
 
 3. **Different compose YAML structure** — Key order and formatting affect the hash. MDMA must emit identical YAML to the probe (same key order: image, restart, ports, environment, volumes; port mapping `host:8080`; `LISTEN_ADDR: "0.0.0.0:8080"`).
 
@@ -75,9 +75,7 @@ When creating a KMS deployment in MDMA, use the name that matches your image pro
 
 ## MDMA compose alignment
 
-**Single source of truth:** Both the probe and MDMA use `scripts/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__` and `__SERVICE_PORT__` at workflow time; MDMA fetches the template from `https://raw.githubusercontent.com/{phala_mero_tee_repo}/mero-kms-v{version}/scripts/phala/kms-compose-template.yaml` and substitutes the same placeholders. This eliminates version drift.
-
-Both omit `MERO_KMS_VERSION`; the KMS falls back to its build-time version (`CARGO_PKG_VERSION`). The workflow publishes a minimal release before the probe so the KMS can fetch policy at boot.
+**Single source of truth:** Both the probe and MDMA use `scripts/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__`, `__SERVICE_PORT__`, `__MERO_KMS_VERSION__`, and `__MERO_KMS_PROFILE__` at workflow time; MDMA must substitute the same placeholders. This eliminates version/profile drift.
 
 ## Verification script
 
