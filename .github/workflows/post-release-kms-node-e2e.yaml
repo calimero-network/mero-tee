@@ -336,22 +336,46 @@ jobs:
             exit 1
           fi
 
+          normalize_kms_policy_source_version() {
+            local raw="$1"
+            raw="${raw#refs/tags/}"
+            raw="${raw//[[:space:]]/}"
+            if [[ -z "${raw}" ]]; then
+              echo ""
+              return
+            fi
+            if [[ "${raw}" == mero-kms-v* ]]; then
+              echo "${raw#mero-kms-v}"
+              return
+            fi
+            if [[ "${raw}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+              echo "${raw}"
+              return
+            fi
+            echo ""
+          }
+
           kms_policy_source_tag="$(jq -r '.compatibility.kms_probe_policy_source_tag // empty' "${compatibility_map}")"
           KMS_VERSION_OVERRIDE="$(jq -r '.compatibility.kms_probe_policy_source_version // empty' "${compatibility_map}")"
           if [[ -n "${kms_policy_source_tag}" && -z "${KMS_VERSION_OVERRIDE}" ]]; then
-            KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
+            KMS_VERSION_OVERRIDE="$(normalize_kms_policy_source_version "${kms_policy_source_tag}")"
           fi
 
           if [[ -z "${KMS_VERSION_OVERRIDE}" ]]; then
-            kms_policy_source_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name // empty' 2>/dev/null || true)"
+            kms_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
+              [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")))]
+              | sort_by(.publishedAt)
+              | reverse
+              | .[0].tagName // empty
+            ')"
             if [[ -z "${kms_policy_source_tag}" ]]; then
-              echo "::error::Could not resolve latest published release tag for probe policy source."
+              echo "::error::Could not resolve latest published mero-kms-v* release tag for probe policy source."
               exit 1
             fi
-            KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
+            KMS_VERSION_OVERRIDE="$(normalize_kms_policy_source_version "${kms_policy_source_tag}")"
           fi
 
-          if [[ -z "${KMS_VERSION_OVERRIDE}" || "${KMS_VERSION_OVERRIDE}" == "${kms_policy_source_tag}" ]]; then
+          if [[ -z "${KMS_VERSION_OVERRIDE}" ]]; then
             echo "::error::Resolved probe policy source has unexpected format: tag='${kms_policy_source_tag}' version='${KMS_VERSION_OVERRIDE}'."
             exit 1
           fi
