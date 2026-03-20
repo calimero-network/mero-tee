@@ -138,17 +138,8 @@ release events:
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
-  - Release resolves probe policy source once (latest published prior
-    `mero-kms-v*`) and passes it as `kms_version_override`.
-  - That resolved source tag/version is written into
-    `kms-phala-compatibility-map.json`; post-release e2e reuses it so probe
-    compose inputs stay aligned with release-time compose-hash generation.
-  - `post-release-kms-node-e2e.yaml` now requires those compatibility-map source
-    fields (no fallback/hack path); releases missing them are treated as
-    incompatible for strict post-release validation.
-  - `kms-phala-staging-probe.yaml` also includes a compatibility fallback: when
-    dispatched with `kms_tag=pinned` and no explicit `kms_version_override`, it
-    auto-resolves the latest published `mero-kms-v*` policy source.
+  - Probes rely on default KMS release-version resolution (`CARGO_PKG_VERSION`)
+    and do not pass runtime KMS version override flags.
 - RTMR3 policy allowlists are not used as a strict subset gate in post-release
   e2e checks. RTMR3 integrity is validated through verified attestation replay
   (event log -> RTMR3) and quote parity, matching verifier semantics.

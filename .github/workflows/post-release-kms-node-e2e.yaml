@@ -112,42 +112,14 @@ jobs:
 
           kms_release_has_required_assets() {
             local tag="$1"
-            local has_assets
-            has_assets="$(gh release view "${tag}" \
+            gh release view "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --json assets \
               --jq '([.assets[].name]
                 | index("kms-phala-compatibility-map.json") != null
                   and index("kms-phala-attestation-policy.debug.json") != null
                   and index("kms-phala-attestation-policy.debug-read-only.json") != null
-                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)')"
-            if [[ "${has_assets}" != "true" ]]; then
-              echo "false"
-              return
-            fi
-
-            local map_tmp_dir
-            map_tmp_dir="$(mktemp -d)"
-            if ! gh release download "${tag}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern "kms-phala-compatibility-map.json" \
-              --dir "${map_tmp_dir}" >/dev/null 2>&1; then
-              rm -rf "${map_tmp_dir}"
-              echo "false"
-              return
-            fi
-
-            if jq -e '
-              (.compatibility.kms_probe_policy_source_tag | type == "string" and test("^mero-kms-v")) and
-              (.compatibility.kms_probe_policy_source_version | type == "string" and length > 0) and
-              ((.compatibility.kms_probe_policy_source_tag | sub("^mero-kms-v"; "")) == .compatibility.kms_probe_policy_source_version)
-            ' "${map_tmp_dir}/kms-phala-compatibility-map.json" >/dev/null 2>&1; then
-              rm -rf "${map_tmp_dir}"
-              echo "true"
-            else
-              rm -rf "${map_tmp_dir}"
-              echo "false"
-            fi
+                  and index("kms-phala-attestation-policy.locked-read-only.json") != null)'
           }
 
           wait_for_kms_release_with_assets() {
@@ -251,7 +223,7 @@ jobs:
               exit 1
             fi
             if [[ "$(kms_release_has_required_assets "${kms_tag}")" != "true" ]]; then
-              echo "::error::Input KMS release tag '${kms_tag}' is missing required e2e assets, immutable profile digests, or probe policy source fields in compatibility map."
+              echo "::error::Input KMS release tag '${kms_tag}' is missing required e2e assets (compatibility map and profile policies)."
               exit 1
             fi
           elif [[ "${should_run}" == "true" ]]; then
@@ -261,7 +233,7 @@ jobs:
               kms_tag_source="default-for-version"
             else
               if [[ "${strict_release_mode}" == "true" ]]; then
-                echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets/compatibility-map fields."
+                echo "::error::Required KMS release '${default_kms_tag}' is missing or lacks required e2e assets (compatibility map and profile policies)."
                 echo "::error::Release validation requires same-version node/KMS tags unless explicit kms_tag override is provided."
                 exit 1
               fi
@@ -363,19 +335,6 @@ jobs:
             echo "::error::Missing compatibility map asset: ${compatibility_map}"
             exit 1
           fi
-
-          kms_policy_source_tag="$(jq -r '.compatibility.kms_probe_policy_source_tag // empty' "${compatibility_map}")"
-          KMS_VERSION_OVERRIDE="$(jq -r '.compatibility.kms_probe_policy_source_version // empty' "${compatibility_map}")"
-          if [[ -z "${kms_policy_source_tag}" || -z "${KMS_VERSION_OVERRIDE}" ]]; then
-            echo "::error::KMS compatibility map is missing required probe policy source fields."
-            echo "::error::Expected .compatibility.kms_probe_policy_source_tag and .compatibility.kms_probe_policy_source_version."
-            exit 1
-          fi
-          if [[ "${kms_policy_source_tag#mero-kms-v}" != "${KMS_VERSION_OVERRIDE}" ]]; then
-            echo "::error::KMS compatibility map probe policy source fields are inconsistent: tag='${kms_policy_source_tag}' version='${KMS_VERSION_OVERRIDE}'."
-            exit 1
-          fi
-          echo "[post-release-e2e] probe policy source tag=${kms_policy_source_tag:-unknown} version=${KMS_VERSION_OVERRIDE}"
 
           wait_for_workflow_run() {
             local run_id="$1"
@@ -491,7 +450,6 @@ jobs:
                 -f kms_tag="pinned"
                 -f probe_label="${probe_label}"
                 -f deployment_name="${deployment_name}"
-                -f kms_version_override="${KMS_VERSION_OVERRIDE}"
               )
               gh workflow run "kms-phala-staging-probe.yaml" \
                 --repo "${GITHUB_REPOSITORY}" \
@@ -721,7 +679,6 @@ jobs:
             -f kms_tag="pinned"
             -f probe_label="${cross_profile_probe_label}"
             -f deployment_name="${cross_profile_deployment_name}"
-            -f kms_version_override="${KMS_VERSION_OVERRIDE}"
             # Keep the locked KMS alive just long enough for debug-node runtime probe.
             -f hold_after_upload_seconds="900"
           )
