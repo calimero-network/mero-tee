@@ -342,34 +342,10 @@ jobs:
             KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"
           fi
 
-          # Backward-compatible path for older releases that do not persist
-          # kms_probe_policy_source_{tag,version} in compatibility-map yet.
           if [[ -z "${KMS_VERSION_OVERRIDE}" ]]; then
-            release_manifest="e2e/kms-release/kms-phala-release-manifest.json"
-            if [[ -f "${release_manifest}" ]]; then
-              release_workflow_run_id="$(jq -r '.workflow_run_id // empty' "${release_manifest}")"
-              if [[ -n "${release_workflow_run_id}" ]]; then
-                release_probe_source_tag="$(gh run view "${release_workflow_run_id}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --log 2>/dev/null \
-                  | awk '/Resolved probe policy source:/ {for (i=1; i<=NF; i++) if ($i ~ /^mero-kms-v/) {print $i; exit}}' || true)"
-                if [[ -n "${release_probe_source_tag}" ]]; then
-                  kms_policy_source_tag="${release_probe_source_tag}"
-                  KMS_VERSION_OVERRIDE="${release_probe_source_tag#mero-kms-v}"
-                fi
-              fi
-            fi
-          fi
-
-          if [[ -z "${KMS_VERSION_OVERRIDE}" ]]; then
-            kms_policy_source_tag="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName,isDraft,publishedAt --jq '
-              [.[] | select(.isDraft == false and (.tagName | test("^mero-kms-v")) and .tagName != "'"${KMS_TAG}"'")]
-              | sort_by(.publishedAt)
-              | reverse
-              | .[0].tagName // empty
-            ')"
+            kms_policy_source_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name // empty' 2>/dev/null || true)"
             if [[ -z "${kms_policy_source_tag}" ]]; then
-              echo "::error::Could not resolve a published prior KMS release tag for probe policy source."
+              echo "::error::Could not resolve latest published release tag for probe policy source."
               exit 1
             fi
             KMS_VERSION_OVERRIDE="${kms_policy_source_tag#mero-kms-v}"

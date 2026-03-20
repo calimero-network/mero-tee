@@ -143,10 +143,8 @@ release events:
   - That resolved source tag/version is written into
     `kms-phala-compatibility-map.json`; post-release e2e reuses it so probe
     compose inputs stay aligned with release-time compose-hash generation.
-  - For older releases that predate those compatibility-map fields, post-release
-    e2e derives the same source from the referenced release workflow run logs
-    (`Resolved probe policy source: ...`) before falling back to dynamic
-    latest-published selection.
+  - If those compatibility-map fields are absent, post-release e2e falls back to
+    the latest published release tag (`/releases/latest`).
   - `kms-phala-staging-probe.yaml` also includes a compatibility fallback: when
     dispatched with `kms_tag=pinned` and no explicit `kms_version_override`, it
     auto-resolves the latest published `mero-kms-v*` policy source.
