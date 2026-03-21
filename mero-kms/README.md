@@ -109,7 +109,7 @@ https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v{VERSIO
 ```
 
 The runtime also tries `kms-phala-attestation-policy.json` as a backward-compatible fallback.
-For profile-pinned images (`/etc/mero-kms/image-profile`), deploy-time profile overrides are rejected.
+For profile-pinned images (`/etc/mero-kms/image-profile`), any deploy-time profile override must match the pinned profile value.
 `MERO_KMS_PROFILE` is the deploy-time profile input; `KMS_POLICY_PROFILE` remains as deprecated legacy fallback.
 At startup (when mock attestation is disabled), KMS attempts to emit a runtime
 event `calimero.kms.profile=<profile>` to extend RTMR3 and bind measurements to

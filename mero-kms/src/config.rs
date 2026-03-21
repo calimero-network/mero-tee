@@ -429,20 +429,26 @@ fn read_image_profile_from_file(image_profile_path: &str) -> EyreResult<Option<S
     }
 }
 
-/// Resolve effective KMS policy profile with strict pinning semantics:
-/// if image profile is pinned, env overrides are rejected.
+/// Resolve effective KMS policy profile:
+/// if image profile is pinned, env override must match the pinned profile.
 fn resolve_kms_profile(
     pinned_profile: Option<&str>,
     env_override: Option<&str>,
 ) -> EyreResult<String> {
     if let Some(pinned) = pinned_profile {
-        if env_override.is_some() {
-            bail!(
-                "MERO_KMS_PROFILE override is not allowed for profile-pinned images. \
-                 Build/deploy the matching KMS image profile instead."
-            );
+        let pinned_profile = parse_profile(pinned)?;
+        if let Some(override_raw) = env_override {
+            let override_profile = parse_profile(override_raw)?;
+            if override_profile != pinned_profile {
+                bail!(
+                    "MERO_KMS_PROFILE '{}' does not match profile-pinned image value '{}'. \
+                     Build/deploy the matching KMS image profile instead.",
+                    override_profile,
+                    pinned_profile
+                );
+            }
         }
-        return parse_profile(pinned);
+        return Ok(pinned_profile);
     }
 
     parse_profile(
@@ -738,12 +744,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_kms_profile_rejects_override_for_pinned_image() {
-        let err = resolve_kms_profile(Some("locked-read-only"), Some("locked-read-only"))
-            .expect_err("override should be rejected for pinned profile");
+    fn resolve_kms_profile_allows_matching_override_for_pinned_image() {
+        let selected = resolve_kms_profile(Some("locked-read-only"), Some("locked-read-only"))
+            .expect("matching override should be accepted for pinned profile");
+        assert_eq!(selected, "locked-read-only");
+    }
+
+    #[test]
+    fn resolve_kms_profile_rejects_mismatched_override_for_pinned_image() {
+        let err = resolve_kms_profile(Some("locked-read-only"), Some("debug"))
+            .expect_err("mismatched override should be rejected for pinned profile");
         assert!(err
             .to_string()
-            .contains("MERO_KMS_PROFILE override is not allowed"));
+            .contains("does not match profile-pinned image value"));
     }
 
     #[test]
@@ -934,7 +947,7 @@ mod tests {
             .expect_err("pinned image should reject MERO_KMS_PROFILE override");
         assert!(err
             .to_string()
-            .contains("MERO_KMS_PROFILE override is not allowed"));
+            .contains("does not match profile-pinned image value"));
     }
 
     #[test]
