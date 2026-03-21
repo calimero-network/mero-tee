@@ -262,11 +262,11 @@ jobs:
               -e "s|__MERO_KMS_VERSION__|${resolved_kms_version}|g" \
               -e "s|__MERO_KMS_PROFILE__|${selected_profile}|g" \
               scripts/phala/kms-compose-template.yaml > "${compose_file}"
-          if rg -q 'USE_ENV_POLICY|ALLOWED_TCB_STATUSES|ALLOWED_MRTD|ALLOWED_RTMR' "${compose_file}"; then
+          if grep -Eq 'USE_ENV_POLICY|ALLOWED_TCB_STATUSES|ALLOWED_MRTD|ALLOWED_RTMR' "${compose_file}"; then
             echo "::error::Rendered probe compose still contains legacy env-policy fields."
             exit 1
           fi
-          if ! rg -q 'MERO_KMS_VERSION:' "${compose_file}" || ! rg -q 'MERO_KMS_PROFILE:' "${compose_file}"; then
+          if ! grep -Eq 'MERO_KMS_VERSION:' "${compose_file}" || ! grep -Eq 'MERO_KMS_PROFILE:' "${compose_file}"; then
             echo "::error::Rendered probe compose is missing MERO_KMS_VERSION/MERO_KMS_PROFILE."
             exit 1
           fi
