@@ -3,7 +3,7 @@
 Downstream deployers should use this runtime contract for `mero-kms-phala`:
 
 - **Required**
-- `MERO_KMS_VERSION` (for example `2.2.2`)
+- `MERO_KMS_VERSION` (for example `2.2.3`)
   - `MERO_KMS_PROFILE` (`debug`, `debug-read-only`, or `locked-read-only`)
   - `ENFORCE_MEASUREMENT_POLICY=true`
 - **Do not set in release/probe deployments**
