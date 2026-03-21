@@ -140,7 +140,7 @@ Environment variables:
 - `MAX_PENDING_CHALLENGES` (default: `10000`) – cap on unconsumed challenges
 - `ACCEPT_MOCK_ATTESTATION` (default: `false`)
 - `ENFORCE_MEASUREMENT_POLICY` (default: `true`)
-- `MERO_KMS_VERSION` – release version used for policy fetch (for example `2.2.3`)
+- `MERO_KMS_VERSION` – release version used for policy fetch (for example `2.2.4`)
 - `MERO_KMS_PROFILE` – `debug`, `debug-read-only`, or `locked-read-only`
 - `KMS_POLICY_PROFILE` – deprecated legacy profile override for non-pinned local runs
 - `MERO_KMS_POLICY_SHA256` – optional; when set, verifies the fetched policy matches this SHA256
@@ -188,7 +188,7 @@ export DSTACK_SOCKET_PATH=/var/run/dstack.sock
 export CHALLENGE_TTL_SECS=60
 export ACCEPT_MOCK_ATTESTATION=false
 export ENFORCE_MEASUREMENT_POLICY=true
-export MERO_KMS_VERSION=2.2.3
+export MERO_KMS_VERSION=2.2.4
 export MERO_KMS_PROFILE=locked-read-only
 ```
 
