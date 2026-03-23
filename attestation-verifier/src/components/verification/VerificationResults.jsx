@@ -7,13 +7,14 @@ import { QuoteJsonCard } from './QuoteJsonCard.jsx';
 /**
  * Shared verification results display.
  * Single responsibility: render result cards from verification data.
- * Paste-only results omit quote/RTMR cards (no ITA verification).
+ * Node (merod) verification omits compose hash and event log (KMS-only).
  */
 export function VerificationResults({ result }) {
   if (!result) return null;
 
   const hasQuoteData = result.ita_token_verified != null;
   const hasRtmrData = result.quoteRtmrs != null || result.replayedRtmrs != null;
+  const hasComposeOrEventLog = (result.eventCount ?? 0) > 0 || result.composeHash != null;
 
   return (
     <div className="results-section">
@@ -30,28 +31,32 @@ export function VerificationResults({ result }) {
             profileFromComposeHash={result.matches?.[0]}
           />
         )}
-        <ComposeHashCard
-          composeHash={result.composeHash}
-          appId={result.appId}
-          matches={result.matches}
-          policyMatches={result.policyMatches}
-          profiles={result.profiles}
-          policyComposeHashesByProfile={result.policyComposeHashesByProfile}
-          releaseComposePublishing={result.releaseComposePublishing}
-          tagToUse={result.tagToUse}
-          selectedProfile={result.selectedProfile}
-        />
-        <EventLogCard
-          eventCount={result.eventCount}
-          eventLog={result.eventLog}
-          composeHash={result.composeHash}
-          appId={result.appId}
-          expectedComposeHashes={result.profiles}
-          expectedPolicyComposeHashes={result.policyComposeHashesByProfile}
-          rtmr3ReplaySteps={result.rtmr3ReplaySteps}
-          quoteRtmr3={result.quoteRtmrs?.rtmr3}
-          selectedProfile={result.selectedProfile}
-        />
+        {hasComposeOrEventLog && (
+          <>
+            <ComposeHashCard
+              composeHash={result.composeHash}
+              appId={result.appId}
+              matches={result.matches}
+              policyMatches={result.policyMatches}
+              profiles={result.profiles}
+              policyComposeHashesByProfile={result.policyComposeHashesByProfile}
+              releaseComposePublishing={result.releaseComposePublishing}
+              tagToUse={result.tagToUse}
+              selectedProfile={result.selectedProfile}
+            />
+            <EventLogCard
+              eventCount={result.eventCount}
+              eventLog={result.eventLog}
+              composeHash={result.composeHash}
+              appId={result.appId}
+              expectedComposeHashes={result.profiles}
+              expectedPolicyComposeHashes={result.policyComposeHashesByProfile}
+              rtmr3ReplaySteps={result.rtmr3ReplaySteps}
+              quoteRtmr3={result.quoteRtmrs?.rtmr3}
+              selectedProfile={result.selectedProfile}
+            />
+          </>
+        )}
         {hasQuoteData && (
           <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} />
         )}

@@ -90,7 +90,8 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
       : [];
     const profileForExpected = inferredProfile || DEFAULT_PROFILE;
     const expectedVal = i !== 3 ? getExpectedValue(policiesByProfile, profileForExpected, rtmrKey) : null;
-    const policyMatch = expectedVal && val && normalizeHex(val) === normalizeHex(expectedVal);
+    const allowlist = i !== 3 ? getAllowlist(policiesByProfile?.[profileForExpected], rtmrKey) : null;
+    const policyMatch = val && allowlist && isInAllowlist(val, allowlist);
 
     rows.push(
       <div key={i} className="rtmr-row">
@@ -104,7 +105,12 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
             <div>
               <span className="label">Expected ({tagToUse} · {profileForExpected}):</span>{' '}
               <code>{truncateHex(expectedVal, 12)}</code>
-              {val && expectedVal && (
+              {allowlist && allowlist.length > 1 && (
+                <span className="label" style={{ marginLeft: '0.25rem' }}>
+                  (or one of {allowlist.length} values)
+                </span>
+              )}
+              {val && allowlist && (
                 <span className={policyMatch ? 'result-ok' : 'result-err'}>
                   {' '}
                   {policyMatch ? '✓ Match' : '✗ Mismatch'}
@@ -122,7 +128,7 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
               </span>
             </div>
           )}
-          {showExpected && val && !inferredProfile && i !== 3 && (
+          {showExpected && val && !policyMatch && i !== 3 && (
             <div className="rtmr-expected">
               <span className="label">In release allowlist:</span>{' '}
               {inReleaseProfiles.length > 0 ? (
@@ -144,10 +150,9 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
       : [];
     const profileForMrtd = inferredProfile || DEFAULT_PROFILE;
     const expectedMrtd = getExpectedValue(policiesByProfile, profileForMrtd, 'mrtd');
+    const mrtdAllowlist = getAllowlist(policiesByProfile?.[profileForMrtd], 'mrtd');
     const mrtdPolicyMatch =
-      expectedMrtd &&
-      quoteRtmrs.mrtd &&
-      normalizeHex(quoteRtmrs.mrtd) === normalizeHex(expectedMrtd);
+      quoteRtmrs.mrtd && mrtdAllowlist && isInAllowlist(quoteRtmrs.mrtd, mrtdAllowlist);
     rows.unshift(
       <div key="mrtd" className="rtmr-row">
         <span className="rtmr-label">MRTD</span>
@@ -160,7 +165,12 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
             <div>
               <span className="label">Expected ({tagToUse} · {profileForMrtd}):</span>{' '}
               <code>{truncateHex(expectedMrtd, 12)}</code>
-              {quoteRtmrs.mrtd && expectedMrtd && (
+              {mrtdAllowlist && mrtdAllowlist.length > 1 && (
+                <span className="label" style={{ marginLeft: '0.25rem' }}>
+                  (or one of {mrtdAllowlist.length} values)
+                </span>
+              )}
+              {quoteRtmrs.mrtd && mrtdAllowlist && (
                 <span className={mrtdPolicyMatch ? 'result-ok' : 'result-err'}>
                   {' '}
                   {mrtdPolicyMatch ? '✓ Match' : '✗ Mismatch'}
@@ -168,7 +178,7 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
               )}
             </div>
           )}
-          {showExpected && !inferredProfile && (
+          {showExpected && !mrtdPolicyMatch && (
             <div className="rtmr-expected">
               <span className="label">In allowlist:</span>{' '}
               {mrtdInProfiles.length > 0 ? (
