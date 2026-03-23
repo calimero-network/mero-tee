@@ -9,13 +9,14 @@ export function KmsVerificationPage() {
   const [searchParams] = useSearchParams();
   const kmsUrlParam = searchParams.get('kms_url');
   const releaseTagParam = searchParams.get('release_tag');
+  const profileParam = searchParams.get('profile');
   const { status, error, result, verify } = useVerification();
 
   useEffect(() => {
     if (kmsUrlParam) {
-      verify(kmsUrlParam, releaseTagParam || undefined);
+      verify(kmsUrlParam, releaseTagParam || undefined, profileParam || undefined);
     }
-  }, [kmsUrlParam, releaseTagParam, verify]);
+  }, [kmsUrlParam, releaseTagParam, profileParam, verify]);
 
   return (
     <section className="verification-page">
@@ -27,6 +28,7 @@ export function KmsVerificationPage() {
       <KmsVerifierForm
         initialUrl={kmsUrlParam}
         initialReleaseTag={releaseTagParam}
+        initialProfile={profileParam}
         status={status}
         onVerify={verify}
       />

@@ -9,6 +9,7 @@ export function ComposeHashCard({
   policyComposeHashesByProfile,
   releaseComposePublishing,
   tagToUse,
+  selectedProfile,
 }) {
   const hasCompatMatch = composeHash && matches?.length > 0;
   const hasPolicyMatch = composeHash && policyMatches?.length > 0;
@@ -18,6 +19,19 @@ export function ComposeHashCard({
     releaseComposePublishing && releaseComposePublishing.allConsistent === false;
   const inconsistentProfiles = releaseComposePublishing?.inconsistentProfiles || [];
   const cardStatus = hasCompatMatch ? 'ok' : policyOnlyMatch ? 'warn' : composeHash ? 'err' : null;
+
+  const profilesToShow =
+    selectedProfile && profiles?.[selectedProfile]
+      ? [[selectedProfile, profiles[selectedProfile]]]
+      : profiles
+        ? Object.entries(profiles)
+        : [];
+  const policyProfilesToShow =
+    selectedProfile && policyComposeHashesByProfile?.[selectedProfile]
+      ? [[selectedProfile, policyComposeHashesByProfile[selectedProfile]]]
+      : policyComposeHashesByProfile
+        ? Object.entries(policyComposeHashesByProfile)
+        : [];
 
   return (
     <Card title="Compose hash" status={cardStatus}>
@@ -29,6 +43,12 @@ export function ComposeHashCard({
         <span className="label">app_id:</span>
         <code>{appId || 'n/a'}</code>
       </div>
+      {selectedProfile && (
+        <div className="hash-row">
+          <span className="label">Verifying against profile:</span>
+          <code>{selectedProfile}</code>
+        </div>
+      )}
       {hasCompatMatch && (
         <span className="result-ok">
           ✓ MATCH — compose_hash matches release policy for profile(s): {matches.join(', ')}{' '}
@@ -43,24 +63,32 @@ export function ComposeHashCard({
       )}
       {composeHash && !hasAnyMatch && (
         <>
-          <span className="result-err">✗ NO MATCH — compose_hash not found in primary or last 5 releases.</span>
-          {publishingInconsistent ? (
-            <div className="result-warn">
-              Release asset publishing inconsistency detected for profile(s):{' '}
-              <code>{inconsistentProfiles.join(', ') || 'unknown'}</code>. Compatibility map and
-              profile policy allowlists disagree.
-            </div>
-          ) : (
-            <div className="result-warn">
-              Release assets are internally consistent. This usually indicates a deployment-specific
-              compose hash (deployment name/app-id/env/rendering drift) rather than verifier
-              extraction mismatch.
-            </div>
+          <span className="result-err">
+            ✗ NO MATCH
+            {selectedProfile ? ` for profile ${selectedProfile}` : ' — compose_hash not found in primary or last 5 releases'}
+            .
+          </span>
+          {!selectedProfile && (
+            publishingInconsistent ? (
+              <div className="result-warn">
+                Release asset publishing inconsistency detected for profile(s):{' '}
+                <code>{inconsistentProfiles.join(', ') || 'unknown'}</code>. Compatibility map and
+                profile policy allowlists disagree.
+              </div>
+            ) : (
+              <div className="result-warn">
+                Release assets are internally consistent. This usually indicates a deployment-specific
+                compose hash (deployment name/app-id/env/rendering drift) rather than verifier
+                extraction mismatch.
+              </div>
+            )
           )}
-          {profiles && Object.keys(profiles).length > 0 && (
+          {profilesToShow.length > 0 && (
             <div className="expected-section">
-              <span className="label">Expected (from {tagToUse}):</span>
-              {Object.entries(profiles).map(([profile, p]) => (
+              <span className="label">
+                Expected {selectedProfile ? `for ${selectedProfile}` : ''} (from {tagToUse}):
+              </span>
+              {profilesToShow.map(([profile, p]) => (
                 <div key={profile} className="hash-row">
                   <span className="label">{profile}:</span>
                   <code>{(p.event_payload ?? '').toLowerCase() || '(empty)'}</code>
@@ -70,19 +98,17 @@ export function ComposeHashCard({
           )}
         </>
       )}
-      {policyComposeHashesByProfile &&
-        Object.keys(policyComposeHashesByProfile).length > 0 &&
-        !hasCompatMatch && (
-          <div className="expected-section">
-            <span className="label">Policy allowlist (kms_allowed_event_payload):</span>
-            {Object.entries(policyComposeHashesByProfile).map(([profile, hashes]) => (
-              <div key={profile} className="hash-row">
-                <span className="label">{profile}:</span>
-                <code>{Array.isArray(hashes) && hashes.length > 0 ? hashes.join(', ') : '(empty)'}</code>
-              </div>
-            ))}
-          </div>
-        )}
+      {policyProfilesToShow.length > 0 && !hasCompatMatch && (
+        <div className="expected-section">
+          <span className="label">Policy allowlist {selectedProfile ? `(${selectedProfile})` : ''}:</span>
+          {policyProfilesToShow.map(([profile, hashes]) => (
+            <div key={profile} className="hash-row">
+              <span className="label">{profile}:</span>
+              <code>{Array.isArray(hashes) && hashes.length > 0 ? hashes.join(', ') : '(empty)'}</code>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

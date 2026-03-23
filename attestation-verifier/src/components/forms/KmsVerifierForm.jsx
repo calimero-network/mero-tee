@@ -1,10 +1,18 @@
-export function KmsVerifierForm({ initialUrl, initialReleaseTag, status, onVerify }) {
+const PROFILES = [
+  { value: '', label: 'All (compare to all profiles)' },
+  { value: 'debug', label: 'debug' },
+  { value: 'debug-read-only', label: 'debug-read-only' },
+  { value: 'locked-read-only', label: 'locked-read-only' },
+];
+
+export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile, status, onVerify }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     const form = e.target;
     const url = form.kms_url?.value?.trim();
     const releaseTag = form.release_tag?.value?.trim() || null;
-    if (url) onVerify(url, releaseTag || undefined);
+    const profile = form.profile?.value?.trim() || null;
+    if (url) onVerify(url, releaseTag || undefined, profile || undefined);
   };
 
   return (
@@ -30,6 +38,16 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, status, onVerif
           defaultValue={initialReleaseTag}
           disabled={status === 'loading'}
         />
+      </div>
+      <p className="hint">Profile to verify against (optional): compare compose_hash to a specific image profile</p>
+      <div className="input-row">
+        <select name="profile" defaultValue={initialProfile || ''} disabled={status === 'loading'}>
+          {PROFILES.map(({ value, label }) => (
+            <option key={value || 'all'} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
       </div>
     </form>
   );

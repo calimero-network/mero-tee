@@ -95,6 +95,7 @@ export function EventLogCard({
   expectedPolicyComposeHashes,
   rtmr3ReplaySteps,
   quoteRtmr3,
+  selectedProfile,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showChain, setShowChain] = useState(false);
@@ -158,14 +159,20 @@ export function EventLogCard({
         )}
         {expectedComposeHashes && Object.keys(expectedComposeHashes).length > 0 && composeHash && (
           <div className="expected-compose-section">
-            <span className="label">Compare to release:</span>
-            {Object.entries(expectedComposeHashes).map(([profile, p]) => {
-              const expected = (p.event_payload ?? '').toLowerCase();
+            <span className="label">
+              Compare to release{selectedProfile ? ` (${selectedProfile})` : ''}:
+            </span>
+            {(selectedProfile
+              ? [[selectedProfile, expectedComposeHashes[selectedProfile]]].filter(
+                  ([, p]) => p != null
+                )
+              : Object.entries(expectedComposeHashes)
+            ).map(([profile, p]) => {
+              const expected = (p?.event_payload ?? '').toLowerCase();
               const match = expected && composeHash === expected;
               return (
                 <div key={profile} className="hash-row">
-                  <span className="label">{profile}:</span>{' '}
-                  <code>{expected || '—'}</code>
+                  <span className="label">{profile}:</span> <code>{expected || '—'}</code>
                   {expected && (
                     <span className={match ? 'result-ok' : 'result-err'}>
                       {' '}
@@ -181,8 +188,16 @@ export function EventLogCard({
           Object.keys(expectedPolicyComposeHashes).length > 0 &&
           composeHash && (
             <div className="expected-compose-section">
-              <span className="label">Compare to profile policy allowlist:</span>
-              {Object.entries(expectedPolicyComposeHashes).map(([profile, hashes]) => {
+              <span className="label">
+                Compare to profile policy allowlist
+                {selectedProfile ? ` (${selectedProfile})` : ''}:
+              </span>
+              {(selectedProfile
+                ? [[selectedProfile, expectedPolicyComposeHashes[selectedProfile]]].filter(
+                    ([, h]) => h != null
+                  )
+                : Object.entries(expectedPolicyComposeHashes)
+              ).map(([profile, hashes]) => {
                 const values = Array.isArray(hashes) ? hashes.filter(Boolean) : [];
                 const match = values.includes(composeHash);
                 return (

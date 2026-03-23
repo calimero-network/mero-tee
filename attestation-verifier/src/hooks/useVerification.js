@@ -40,7 +40,7 @@ export function useVerification() {
     result: null,
   });
 
-  const verify = useCallback(async (kmsUrl, releaseTag = null) => {
+  const verify = useCallback(async (kmsUrl, releaseTag = null, selectedProfile = null) => {
     setState({ status: 'loading', error: null, result: null });
     try {
       const data = await verifyKmsAttestation(kmsUrl);
@@ -56,9 +56,15 @@ export function useVerification() {
 
       const { composeHash, appId } = extractComposeHashAndAppId(events);
       const latestTag = (await fetchKmsReleases(1))[0];
-      const { tag: tagToUse, compatMap, matches } = composeHash
+      let { tag: tagToUse, compatMap, matches } = composeHash
         ? await findMatchingRelease(composeHash, releaseTag || undefined)
         : { tag: releaseTag || latestTag, compatMap: null, matches: [] };
+      // When selectedProfile is set, only consider it a match if composeHash matches that profile
+      if (selectedProfile && compatMap?.compatibility?.profiles?.[selectedProfile]) {
+        const expected = (compatMap.compatibility.profiles[selectedProfile].event_payload ?? '').toLowerCase();
+        const matchForSelected = expected && composeHash === expected;
+        matches = matchForSelected ? [selectedProfile] : [];
+      }
 
       // Proper verification split: MRTD, RTMR0-2 from ITA; RTMR3 and compose from quote/event log
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
@@ -117,6 +123,7 @@ export function useVerification() {
           tagToUse,
           compatMap,
           matches,
+          selectedProfile: selectedProfile || null,
           profiles: compatMap?.compatibility?.profiles || {},
           policyMatches,
           policyComposeHashesByProfile,

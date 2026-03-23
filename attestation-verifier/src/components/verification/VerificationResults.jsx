@@ -39,6 +39,7 @@ export function VerificationResults({ result }) {
           policyComposeHashesByProfile={result.policyComposeHashesByProfile}
           releaseComposePublishing={result.releaseComposePublishing}
           tagToUse={result.tagToUse}
+          selectedProfile={result.selectedProfile}
         />
         <EventLogCard
           eventCount={result.eventCount}
@@ -49,6 +50,7 @@ export function VerificationResults({ result }) {
           expectedPolicyComposeHashes={result.policyComposeHashesByProfile}
           rtmr3ReplaySteps={result.rtmr3ReplaySteps}
           quoteRtmr3={result.quoteRtmrs?.rtmr3}
+          selectedProfile={result.selectedProfile}
         />
         {hasQuoteData && (
           <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} />
