@@ -2,7 +2,7 @@
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
 # Attestation: calimero.role + calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
 # calimero-init extends RTMR[3] with role+profile+root_hash at boot (kernel 6.16+).
-# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub — cannot be forged.
+# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod binaries — cannot be forged.
 - hosts: all
   become: true
   pre_tasks:
@@ -58,12 +58,15 @@
         mode: "0644"
 
     # Hash profile-specific root content and inject into kernel cmdline (measured into RTMR[2]).
-    # An attacker cannot forge: different root content = different hash = different measurement.
+    # Includes merod/meroctl/mero-auth so binary substitution changes measurements (no swap attack).
     - name: Compute root content hash for attestation
       shell: |
-        # Hash calimero config + init (profile-specific) and grub (lockdown strips console)
+        # Hash calimero config, init, grub, and baked binaries (profile-specific)
         { find /etc/calimero /usr/local/lib/calimero -type f 2>/dev/null
           [ -f /etc/default/grub ] && echo /etc/default/grub
+          [ -f /usr/local/bin/merod ] && echo /usr/local/bin/merod
+          [ -f /usr/local/bin/meroctl ] && echo /usr/local/bin/meroctl
+          [ -f /usr/local/bin/mero-auth ] && echo /usr/local/bin/mero-auth
         } | sort -u | xargs -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}'
       register: root_hash_result
       changed_when: false

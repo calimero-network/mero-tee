@@ -138,6 +138,10 @@ Expected signing workflows (on `master`):
 OIDC issuer:
 - `https://token.actions.githubusercontent.com`
 
+## RTMR3 and image legitimacy
+
+For a detailed description of how RTMR3 is extended at boot and how clients verify image legitimacy, see [RTMR3-based image legitimacy verification](rtmr3-image-legitimacy-verification.md).
+
 ## Related docs
 
 - [Platform runbooks](../runbooks/platforms/README.md)
