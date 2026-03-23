@@ -50,6 +50,33 @@ export async function fetchKmsReleases(limit = 10) {
   return kmsReleases.slice(0, limit).map((r) => r.tag_name);
 }
 
+export async function fetchNodeReleases(limit = 10) {
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/releases?per_page=30`
+  );
+  if (!res.ok) throw new Error('Failed to fetch releases');
+  const releases = await res.json();
+  const nodeReleases = releases.filter(
+    (r) => r.tag_name && r.tag_name.startsWith('mero-tee-v')
+  );
+  if (nodeReleases.length === 0) throw new Error('No mero-tee node releases found');
+  nodeReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+  return nodeReleases.slice(0, limit).map((r) => r.tag_name);
+}
+
+/**
+ * Fetch node (mero-tee) measurement policy from published-mrtds.json.
+ * Returns { profiles: { debug: {...}, "debug-read-only": {...}, "locked-read-only": {...} } }
+ */
+export async function fetchNodePolicy(tag) {
+  const base = getApiBase();
+  const url = `${base}/api/node-policy?tag=${encodeURIComponent(tag)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch node policy: ${res.status}`);
+  const data = await res.json();
+  return data?.profiles || {};
+}
+
 export async function fetchCompatibilityMap(tag) {
   const base = getApiBase();
   const url = base

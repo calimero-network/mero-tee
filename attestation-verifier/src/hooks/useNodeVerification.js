@@ -1,10 +1,11 @@
 /**
  * Hook for node (merod) attestation verification.
  * Nodes return TDX quotes only (no event_log/compose_hash).
+ * Compares MRTD/RTMR0-2 against published-mrtds.json (like KMS verification).
  */
 
 import { useState, useCallback } from 'react';
-import { verifyNodeAttestation } from '../services/api.js';
+import { verifyNodeAttestation, fetchNodeReleases, fetchNodePolicy } from '../services/api.js';
 import {
   extractRTMRsFromClaims,
   extractMeasurementsFromQuoteB64,
@@ -17,7 +18,7 @@ export function useNodeVerification() {
     result: null,
   });
 
-  const verify = useCallback(async (nodeUrl) => {
+  const verify = useCallback(async (nodeUrl, releaseTag = null) => {
     setState({ status: 'loading', error: null, result: null });
     try {
       const data = await verifyNodeAttestation(nodeUrl);
@@ -43,6 +44,15 @@ export function useNodeVerification() {
         rtmr3: fromQuote?.rtmr3 ? 'quote' : fromITA.rtmr3 ? 'ita' : null,
       };
 
+      const latestTag = (await fetchNodeReleases(1))[0];
+      const tagToUse = releaseTag?.trim() || latestTag;
+      let policiesByProfile = {};
+      try {
+        policiesByProfile = await fetchNodePolicy(tagToUse);
+      } catch {
+        // Policy fetch failed; continue without expected values
+      }
+
       setState({
         status: 'success',
         error: null,
@@ -56,6 +66,8 @@ export function useNodeVerification() {
           composeHash: null,
           eventLog: [],
           eventCount: 0,
+          tagToUse,
+          policiesByProfile,
         },
       });
     } catch (e) {

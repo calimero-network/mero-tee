@@ -1,38 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useVerification } from '../hooks/useVerification.js';
 import { useNodeVerification } from '../hooks/useNodeVerification.js';
 import { VerificationResults } from '../components/verification/VerificationResults.jsx';
 import { MeroTeeVerifierForm } from '../components/forms/MeroTeeVerifierForm.jsx';
-import { parseAttestation, extractComposeHashAndAppId } from '../utils/attestation.js';
-import { findMatchingRelease } from '../services/compat.js';
-import { fetchAttestationPolicy } from '../services/api.js';
-import {
-  buildPolicyComposeHashesByProfile,
-  findPolicyComposeMatches,
-  analyzeReleaseComposePublishing,
-} from '../utils/composeHashPolicy.js';
 import './VerificationPage.css';
-
-const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
-
-async function fetchPoliciesForTag(tag) {
-  const results = {};
-  for (const profile of PROFILES) {
-    try {
-      const policy = await fetchAttestationPolicy(tag, profile);
-      results[profile] = policy;
-    } catch {
-      results[profile] = null;
-    }
-  }
-  return results;
-}
 
 export function MeroTeeVerificationPage() {
   const [searchParams] = useSearchParams();
   const nodeUrlParam = searchParams.get('node_url') || searchParams.get('nodeUrl');
-  const [pasteResult, setPasteResult] = useState(null);
+  const nodeReleaseTagParam = searchParams.get('release_tag') || searchParams.get('releaseTag');
   const { status, error, result, verify } = useVerification();
   const {
     status: nodeStatus,
@@ -43,57 +20,16 @@ export function MeroTeeVerificationPage() {
 
   useEffect(() => {
     if (nodeUrlParam) {
-      verifyNode(nodeUrlParam);
+      verifyNode(nodeUrlParam, nodeReleaseTagParam || undefined);
     }
-  }, [nodeUrlParam, verifyNode]);
+  }, [nodeUrlParam, nodeReleaseTagParam, verifyNode]);
 
   const handleVerifyByUrl = (kmsUrl, releaseTag) => {
-    setPasteResult(null);
     verify(kmsUrl, releaseTag || undefined);
   };
 
-  const handleVerifyByPaste = async (jsonInput, releaseTag) => {
-    setPasteResult(null);
-    try {
-      const { eventLog } = parseAttestation(jsonInput);
-      const { composeHash, appId } = extractComposeHashAndAppId(eventLog);
-      if (!composeHash) {
-        setPasteResult({ error: 'No compose-hash found in event log.' });
-        return;
-      }
-      const { tag, compatMap, matches } = await findMatchingRelease(
-        composeHash,
-        releaseTag?.trim() || undefined
-      );
-      const policiesByProfile = await fetchPoliciesForTag(tag);
-      const policyComposeHashesByProfile = buildPolicyComposeHashesByProfile(policiesByProfile);
-      const policyMatches = findPolicyComposeMatches(composeHash, policyComposeHashesByProfile);
-      const releaseComposePublishing = analyzeReleaseComposePublishing(
-        compatMap?.compatibility?.profiles || {},
-        policyComposeHashesByProfile
-      );
-      setPasteResult({
-        composeHash,
-        appId,
-        tagToUse: tag,
-        matches,
-        profiles: compatMap?.compatibility?.profiles || {},
-        policyMatches,
-        policyComposeHashesByProfile,
-        releaseComposePublishing,
-        eventCount: eventLog.length,
-        ita_token_verified: null,
-        quoteRtmrs: null,
-        replayedRtmrs: null,
-      });
-    } catch (err) {
-      setPasteResult({ error: err.message });
-    }
-  };
-
-  const handleVerifyNode = (nodeUrl) => {
-    setPasteResult(null);
-    verifyNode(nodeUrl);
+  const handleVerifyNode = (nodeUrl, releaseTag) => {
+    verifyNode(nodeUrl, releaseTag || undefined);
   };
 
   const activeStatus = nodeStatus !== 'idle' ? nodeStatus : status;
@@ -107,21 +43,22 @@ export function MeroTeeVerificationPage() {
         Verify mero-tee node attestations (GCP TDX nodes) or KMS instances. Enter a node URL (e.g.{' '}
         <code>http://public-ip:80</code>) or KMS URL.
       </p>
-      <MeroTeeVerifierForm
-        status={status}
-        onVerifyByUrl={handleVerifyByUrl}
-        onVerifyByPaste={handleVerifyByPaste}
-      />
+      <MeroTeeVerifierForm status={status} onVerifyByUrl={handleVerifyByUrl} />
       <div className="verifier-form" style={{ marginTop: '1.5rem' }}>
         <h3>Node (merod) verification</h3>
         <p className="hint">
           Verify a Calimero node at its admin API base URL. The node must be reachable (http://public-ip:80).
+          MRTD/RTMR measurements are compared against published release policy (like KMS).
         </p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            const input = e.target.querySelector('input[type="url"]');
-            if (input?.value?.trim()) handleVerifyNode(input.value.trim());
+            const form = e.target;
+            const urlInput = form.querySelector('input[name="node_url"]');
+            const tagInput = form.querySelector('input[name="node_release_tag"]');
+            if (urlInput?.value?.trim()) {
+              handleVerifyNode(urlInput.value.trim(), tagInput?.value?.trim() || undefined);
+            }
           }}
           className="verifier-form"
         >
@@ -137,6 +74,20 @@ export function MeroTeeVerificationPage() {
               {nodeStatus === 'loading' ? 'Verifying…' : 'Verify node'}
             </button>
           </div>
+          <div className="input-row" style={{ marginTop: '0.5rem' }}>
+            <label htmlFor="node_release_tag" className="input-label">
+              Release tag for MRTD/RTMR check (optional, e.g. mero-tee-v2.2.4):
+            </label>
+            <input
+              type="text"
+              id="node_release_tag"
+              name="node_release_tag"
+              placeholder="mero-tee-v2.2.4"
+              disabled={nodeStatus === 'loading'}
+              defaultValue={nodeReleaseTagParam || ''}
+              style={{ maxWidth: '16rem' }}
+            />
+          </div>
         </form>
       </div>
       {(nodeStatus === 'loading' || status === 'loading') && (
@@ -147,15 +98,6 @@ export function MeroTeeVerificationPage() {
       )}
       {activeStatus === 'success' && activeResult && (
         <VerificationResults result={activeResult} />
-      )}
-      {pasteResult && (
-        <>
-          {pasteResult.error ? (
-            <p className="result-err">{pasteResult.error}</p>
-          ) : (
-            <VerificationResults result={pasteResult} />
-          )}
-        </>
       )}
     </section>
   );
