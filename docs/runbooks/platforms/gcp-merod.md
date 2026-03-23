@@ -110,7 +110,35 @@ Check that `node_image_tag` matches the node release you deployed and that polic
 
 ---
 
-## 6) Interaction with `core` attestation paths
+## 6) Compare MDMA-deployed nodes with mero-tee release
+
+When MDMA creates nodes, they use images from either release-provenance (if `MDMA_TEE_RELEASE_PROVENANCE_URL` is set) or the name pattern `merotee-ubuntu-questing-25-10-amd64-{profile}-{version}`. The mero-tee release workflow builds and attests images in CI, then publishes `published-mrtds.json` and `release-provenance.json`.
+
+To compare an MDMA node with the attested release:
+
+```bash
+# Node URL = http://<public_ip>:80 (from MDMA node detail)
+./scripts/release/compare-mdma-node-with-release.sh http://34.40.15.76:80
+
+# Or with explicit version:
+./scripts/release/compare-mdma-node-with-release.sh http://34.40.15.76:80 2.2.4
+```
+
+The script:
+
+1. Fetches node `/admin-api/tee/info` and attestation (via attestation verifier API).
+2. Fetches `published-mrtds.json` and `release-provenance.json` from the release.
+3. Compares:
+   - **Image**: Does the node's OS image match release-provenance?
+   - **Measurements**: Do MRTD, RTMR0–2 match the published allowlist?
+
+**Requirements**: Node must have a public IP reachable by the attestation verifier (Vercel). Set `ATTESTATION_VERIFIER_URL` to use a different verifier.
+
+**Mismatch causes**: Different image (project, version), different profile, or MDMA using non-release image source. Ensure `MDMA_TEE_RELEASE_PROVENANCE_URL` points to the same release as `published-mrtds.json`.
+
+---
+
+## 7) Interaction with `core` attestation paths
 
 `core` contains generic attestation tooling and TEE-mode configuration docs, but
 this GCP lane in `mero-tee` is specifically about signed node-image-gcp artifacts
@@ -122,7 +150,7 @@ Reference:
 
 ---
 
-## 7) Common mistakes to avoid
+## 8) Common mistakes to avoid
 
 - Treating this lane as equivalent to the Phala KMS lane.
 - Skipping release signature verification before image rollout.
@@ -136,3 +164,4 @@ Reference:
 - [Platform runbooks index](README.md)
 - [Architecture & verification boundaries](../../architecture/trust-boundaries.md)
 - [Trust & verification](../../release/trust-and-verification.md)
+- [MDMA dispatcher vs mero-tee probe](../../../../docs/mdma-dispatcher-vs-mero-tee-probe.md) — alignment for RTMR consistency
