@@ -73,7 +73,6 @@ jobs:
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
           bash -n scripts/release/kms-phala/get-version-info.sh
-          bash -n scripts/release/kms-phala/publish-minimal-release.sh
           bash -n scripts/release/kms-phala/trigger-staging-probe.sh
           bash -n scripts/release/kms-phala/download-probe-artifact.sh
           bash -n scripts/release/kms-phala/sign-release-assets.sh
@@ -326,32 +325,11 @@ jobs:
           subject-digest: ${{ steps.build_debug_ro.outputs.digest }}
           push-to-registry: true
 
-  publish-minimal-release:
-    name: Publish minimal release (bootstrap)
-    if: needs.prepare.outputs.binary_release == 'true'
-    runs-on: ubuntu-latest
-    needs: [prepare, release-container]
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Publish minimal release for compose hash alignment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
-          TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
-        run: bash scripts/release/kms-phala/publish-minimal-release.sh
-
   probe:
     name: Run staging probe (${{ matrix.profile }})
     if: needs.prepare.outputs.binary_release == 'true'
     runs-on: ubuntu-latest
-    needs: [prepare, release-container, publish-minimal-release]
+    needs: [prepare, release-container]
     strategy:
       fail-fast: false
       max-parallel: 1

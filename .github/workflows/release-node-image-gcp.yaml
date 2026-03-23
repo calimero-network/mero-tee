@@ -114,7 +114,7 @@ jobs:
       GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         profile: [debug, debug-read-only, locked-read-only]
     permissions:

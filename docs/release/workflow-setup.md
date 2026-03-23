@@ -125,16 +125,8 @@ release events:
   - wrong expected application hash is rejected.
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
   compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
-  Release publishes a minimal bootstrap release before the probe so KMS fetches
-  policy at boot.
-  - Bootstrap release remains **draft** (mutable) until `release-metadata` uploads
-    all release assets and publishes the final release.
-  - Bootstrap policy source defaults to the latest published prior
-    `mero-kms-v*` release in `scripts/release/kms-phala/publish-minimal-release.sh`
-    (or can be overridden with `BOOTSTRAP_POLICY_SOURCE_TAG` when needed).
-  - Bootstrap policy payloads copied from that source tag are normalized to the
-    current release metadata (`tag`, `role`, `profile`) before upload so KMS
-    startup validation for the current version can succeed.
+  The probe only exercises `/attest`; policy is derived from node attestation
+  during the probe and published by `release-metadata` when it runs.
   - Release probes use per-profile image digests built in the current
     `release-container` job (`debug`, `debug-read-only`, `locked-read-only`)
     so attestation is validated against the exact release candidate images.
