@@ -9,7 +9,6 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 | Variable | Description |
 |----------|-------------|
 | `GCP_PACKER_PROJECT_ID` | GCP project for Packer |
-| `PACKER_GCP_SOURCE_IMAGE` | Base image (e.g. ubuntu-2510) |
 | `GCP_PACKER_REGION` | Region |
 | `GCP_PACKER_ZONE` | Zone |
 | `PACKER_GCP_SUBNETWORK` | Subnetwork URL |
@@ -27,7 +26,7 @@ Configure under Settings → Secrets and variables → Actions → Variables:
 
 ## Base image notes
 
-Current builds use Ubuntu 25.10 (Questing Quokka) for kernel 6.17+ (RTMR3 sysfs support). When unset, `PACKER_GCP_SOURCE_IMAGE` causes Packer to use the `ubuntu-2510-amd64` image family.
+Builds use the hardcoded source image family `ubuntu-2510-amd64` (Ubuntu 25.10 Questing Quokka, kernel 6.17+) for RTMR3 sysfs support. No override is allowed for release reproducibility.
 
 **Ubuntu 26.04 LTS availability**: Based on discussions in the Ubuntu community, Ubuntu 26.04 LTS is expected to be part of the official Ubuntu repositories by March 2026, with components like authd maintained by Canonical for this release. When available, consider migrating to `ubuntu-2604-lts-amd64` for longer support.
 

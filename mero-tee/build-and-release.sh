@@ -48,9 +48,7 @@ fi
 if [[ -n "${PACKER_GCP_SUBNETWORK:-}" ]]; then
   packer_args+=(-var "subnetwork=${PACKER_GCP_SUBNETWORK}")
 fi
-if [[ -n "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
-  packer_args+=(-var "source_image=${PACKER_GCP_SOURCE_IMAGE}")
-fi
+# source_image is hardcoded to ubuntu-2510-amd64 in ubuntu.pkr.hcl; no override allowed for release reproducibility
 
 packer_cmd=(packer build)
 if [[ "${PACKER_FORCE_BUILD:-false}" == "true" ]]; then

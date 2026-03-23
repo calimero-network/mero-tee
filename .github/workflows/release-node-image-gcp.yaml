@@ -24,7 +24,6 @@ concurrency:
 env:
   PACKER_GITHUB_API_TOKEN: ${{ github.token }}
   PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
-  PACKER_GCP_SOURCE_IMAGE: ${{ vars.PACKER_GCP_SOURCE_IMAGE }}
   PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
   PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
   PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
@@ -151,13 +150,6 @@ jobs:
           echo "  - GCP_SERVICE_ACCOUNT_KEY"
           exit 1
 
-      - name: Resolve base source image
-        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        run: |
-          if [[ -z "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
-            echo "::notice::PACKER_GCP_SOURCE_IMAGE unset; Packer will use source_image_family ubuntu-2510-amd64. Set repo variable to pin a specific image."
-          fi
-
       - name: Setup packer
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
         uses: hashicorp/setup-packer@v3.1.0
@@ -242,14 +234,9 @@ jobs:
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
           set -euo pipefail
-          if [[ -n "${PACKER_GCP_SOURCE_IMAGE:-}" ]]; then
-            echo "PACKER_GCP_SOURCE_IMAGE is set; skipping family check."
-            exit 0
-          fi
-          echo "Checking source image family ubuntu-2510-amd64 in ubuntu-os-cloud..."
+          echo "Checking hardcoded source image family ubuntu-2510-amd64 in ubuntu-os-cloud..."
           if ! gcloud compute images describe-from-family ubuntu-2510-amd64 --project ubuntu-os-cloud >/dev/null 2>&1; then
             echo "::error::Source image family ubuntu-2510-amd64 not found in ubuntu-os-cloud."
-            echo "Set PACKER_GCP_SOURCE_IMAGE repo variable to pin a specific image (e.g. ubuntu-2510-amd64-v20251031)."
             echo "List available: gcloud compute images list --project=ubuntu-os-cloud --filter='family:ubuntu-25'"
             exit 1
           fi

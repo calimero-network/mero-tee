@@ -67,11 +67,6 @@ variable "project_id" {
   default = "calimero-p2p-development"
 }
 
-variable "source_image" {
-  type    = string
-  default = ""
-}
-
 variable "region" {
   type    = string
   default = "europe-west4"
@@ -89,9 +84,8 @@ variable "subnetwork" {
 
 source "googlecompute" "this" {
   project_id           = var.project_id
-  source_image         = var.source_image != "" ? var.source_image : null
-  # ubuntu-2510-amd64 is Canonical's standard x86_64 image family (Intel TDX uses x86_64)
-  source_image_family  = var.source_image == "" ? "ubuntu-2510-amd64" : null
+  # Hardcoded for release reproducibility; kernel 6.17+ required for RTMR3 sysfs support
+  source_image_family  = "ubuntu-2510-amd64"
   source_image_project_id = ["ubuntu-os-cloud"]
   disable_default_service_account = true
   zone                 = var.zone

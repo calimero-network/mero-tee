@@ -24,7 +24,7 @@ Security intent:
 
 Configure via GitHub repo variables or environment:
 
-- `GCP_PACKER_PROJECT_ID`, `PACKER_GCP_SOURCE_IMAGE`, `GCP_PACKER_REGION`, `GCP_PACKER_ZONE`
+- `GCP_PACKER_PROJECT_ID`, `PACKER_GCP_REGION`, `GCP_PACKER_ZONE`
 - `GCP_ATTESTATION_*` for attestation VM
 - `ITA_APPRAISAL_URL`, `ITA_POLICY_IDS` for attestation verification
 
