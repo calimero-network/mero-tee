@@ -22,7 +22,14 @@ notes_file="$(mktemp)"
 } > "${notes_file}"
 
 if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-  gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${VERSION}" --draft
+  release_is_draft="$(gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")"
+  if [[ "${release_is_draft}" == "true" ]]; then
+    # Keep as draft; KMS will publish when it runs
+    gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${VERSION}" --draft
+  else
+    # Already published by KMS; update notes only, do not touch draft status
+    gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file "${notes_file}" --title "${VERSION}"
+  fi
 else
   gh release create "${VERSION}" --repo "${GITHUB_REPOSITORY}" --title "${VERSION}" --notes-file "${notes_file}" --target "${TARGET_COMMIT}" --draft
 fi

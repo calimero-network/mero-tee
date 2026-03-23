@@ -43,6 +43,7 @@ permissions:
   packages: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BINARY: mero-kms-phala
   DOCKER_PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
   INCLUDE_AARCH64: ${{ github.event_name == 'pull_request' && 'false' || 'true' }}
