@@ -16,6 +16,12 @@ const KMS_ALLOWED_HOSTS = (process.env.KMS_ALLOWED_HOSTS || 'phala\\.network$|^l
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Node (merod) URLs: allow http for IPs and localhost. Pattern: ^\d+\.\d+\.\d+\.\d+$ for IPv4.
+const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$|^localhost$|^127\\.0\\.0\\.1$')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 function validateKmsUrl(url) {
   let parsed;
   try {
@@ -30,6 +36,24 @@ function validateKmsUrl(url) {
   const allowed = KMS_ALLOWED_HOSTS.some((re) => new RegExp(re, 'i').test(host));
   if (!allowed) {
     throw new Error('KMS URL host not in allowed list (phala.network, localhost). Set KMS_ALLOWED_HOSTS to override.');
+  }
+}
+
+function validateNodeUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid node URL');
+  }
+  // Nodes typically use HTTP; allow for IPs and localhost
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Node URL must use HTTP or HTTPS');
+  }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = NODE_ALLOWED_HOSTS.some((re) => new RegExp(re).test(host));
+  if (!allowed) {
+    throw new Error('Node URL host not in allowed list (IP addresses, localhost). Set NODE_ALLOWED_HOSTS to override.');
   }
 }
 
@@ -138,6 +162,7 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const kmsUrl = (body?.kms_url || body?.kmsUrl || '').trim();
+    const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
 
     if (kmsUrl) {
       validateKmsUrl(kmsUrl);
@@ -154,10 +179,36 @@ export default async function handler(req, res) {
       }
       attestation = await attestRes.json();
       verifyNonceInAttestation(attestation, nonceBytes);
+    } else if (nodeUrl) {
+      validateNodeUrl(nodeUrl);
+      const nonceBytes = crypto.randomBytes(32);
+      const nonceHex = nonceBytes.toString('hex');
+      const base = nodeUrl.replace(/\/$/, '');
+      const attestRes = await fetch(`${base}/admin-api/tee/attest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: nonceHex }),
+      });
+      if (!attestRes.ok) {
+        const errText = await attestRes.text();
+        return res.status(502).json({ error: `Node /admin-api/tee/attest failed: ${attestRes.status}. ${errText.slice(0, 200)}` });
+      }
+      const raw = await attestRes.json();
+      const data = raw?.data ?? raw;
+      const quoteB64 = data?.quote_b64 ?? data?.quoteB64;
+      const quote = data?.quote;
+      const reportDataHex = quote?.body?.reportdata ?? quote?.body?.reportData ?? data?.reportDataHex ?? data?.report_data_hex;
+      if (!quoteB64) {
+        return res.status(400).json({ error: 'Node attest response missing quote_b64' });
+      }
+      attestation = { quoteB64, reportDataHex };
+      if (reportDataHex) {
+        verifyNonceInAttestation(attestation, nonceBytes);
+      }
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
-        return res.status(400).json({ error: 'Provide kms_url or attestation in request body' });
+        return res.status(400).json({ error: 'Provide kms_url, node_url, or attestation in request body' });
       }
     }
   } catch (e) {

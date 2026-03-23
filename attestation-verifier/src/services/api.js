@@ -24,6 +24,18 @@ export async function verifyKmsAttestation(kmsUrl) {
   return data;
 }
 
+export async function verifyNodeAttestation(nodeUrl) {
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_url: nodeUrl }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 export async function fetchKmsReleases(limit = 10) {
   const res = await fetch(
     `https://api.github.com/repos/${REPO}/releases?per_page=30`
