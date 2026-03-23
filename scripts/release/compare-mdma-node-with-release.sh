@@ -79,7 +79,7 @@ node_os_image=""
 if [[ -f "${tmp_dir}/tee-info.json" ]]; then
   node_os_image="$(jq -r '.data.osImage // .osImage // empty' "${tmp_dir}/tee-info.json")"
   if [[ -z "${release_version}" && -n "${node_os_image}" ]]; then
-    # Try to extract version from image name: merotee-ubuntu-questing-25-10-amd64-debug-2-2-4 -> 2.2.4
+    # Try to extract version from image name: merotee-ubuntu-questing-25-10-intel-debug-2-2-4 -> 2.2.4
     if [[ "${node_os_image}" =~ -([0-9]+-[0-9]+-[0-9]+)$ ]]; then
       release_version="${BASH_REMATCH[1]//-/.}"
     fi

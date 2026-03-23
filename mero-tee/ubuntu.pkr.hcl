@@ -90,6 +90,7 @@ variable "subnetwork" {
 source "googlecompute" "this" {
   project_id           = var.project_id
   source_image         = var.source_image != "" ? var.source_image : null
+  # ubuntu-2510-amd64 is Canonical's standard x86_64 image family (Intel TDX uses x86_64)
   source_image_family  = var.source_image == "" ? "ubuntu-2510-amd64" : null
   source_image_project_id = ["ubuntu-os-cloud"]
   disable_default_service_account = true
