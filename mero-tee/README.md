@@ -32,7 +32,7 @@ Configure via GitHub repo variables or environment:
 
 ```bash
 cd mero-tee
-packer build -var-file=ubuntu-intel.pkrvars.hcl ubuntu.pkr.hcl
+packer build -var-file=ubuntu-x86.pkrvars.hcl ubuntu.pkr.hcl
 ```
 
 ## Release

@@ -112,7 +112,7 @@ Check that `node_image_tag` matches the node release you deployed and that polic
 
 ## 6) Compare MDMA-deployed nodes with mero-tee release
 
-When MDMA creates nodes, they use images from either release-provenance (if `MDMA_TEE_RELEASE_PROVENANCE_URL` is set) or the name pattern `merotee-ubuntu-questing-25-10-intel-{profile}-{version}`. The mero-tee release workflow builds and attests images in CI, then publishes `published-mrtds.json` and `release-provenance.json`.
+When MDMA creates nodes, they use images from either release-provenance (if `MDMA_TEE_RELEASE_PROVENANCE_URL` is set) or the name pattern `merotee-ubuntu-questing-25-10-{profile}-{version}`. The mero-tee release workflow builds and attests images in CI, then publishes `published-mrtds.json` and `release-provenance.json`.
 
 To compare an MDMA node with the attested release:
 

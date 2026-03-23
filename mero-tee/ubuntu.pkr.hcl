@@ -96,7 +96,7 @@ source "googlecompute" "this" {
   disable_default_service_account = true
   zone                 = var.zone
   region               = var.region
-  image_name           = "merotee-ubuntu-questing-25-10-${var.cpu_architecture}-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
+  image_name           = "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
   image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}"
   image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 25.10 (Questing Quokka, kernel 6.17+) with Traefik and mero-auth"
   machine_type         = var.instance_type

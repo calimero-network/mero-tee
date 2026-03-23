@@ -22,25 +22,15 @@ if [[ -z "${image_version}" ]]; then
   echo "::error::Could not read imageVersion from versions.json (missing file or key)."
   exit 1
 fi
-packer_vars_file="ubuntu-intel.pkrvars.hcl"
+packer_vars_file="ubuntu-x86.pkrvars.hcl"
 if [[ ! -f "${packer_vars_file}" ]]; then
   echo "::error::Missing packer vars file: ${packer_vars_file}"
   exit 1
 fi
 
-cpu_architecture=""
-while IFS= read -r line; do
-  if [[ "${line}" =~ ^[[:space:]]*cpu_architecture[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
-    cpu_architecture="${BASH_REMATCH[1]}"
-    break
-  fi
-done < "${packer_vars_file}"
-if [[ -z "${cpu_architecture}" ]]; then
-  echo "::error::Unable to resolve cpu_architecture from ${packer_vars_file}."
-  exit 1
-fi
-
-image_name="merotee-ubuntu-questing-25-10-${cpu_architecture}-${profile}-${image_version//./-}"
+# Always x86; architecture in image name omitted (we only deploy on Intel TDX)
+cpu_architecture="x86"
+image_name="merotee-ubuntu-questing-25-10-${profile}-${image_version//./-}"
 image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
 
 vm_project="${GCP_ATTESTATION_PROJECT_ID:-${image_project}}"

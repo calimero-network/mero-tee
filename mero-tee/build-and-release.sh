@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-# MeroTEE only supports Intel x86_64 architecture for TDX confidential computing.
-# First arg: "intel" (or empty) = build all three profiles; or a profile name (locked-read-only, debug-read-only, debug) = build only that profile (GCP workflow matrix).
-case "${1:-intel}" in
+# MeroTEE node images: x86_64 for build; Intel TDX for confidential compute at runtime.
+# First arg: "x86" (or empty) = build all three profiles; or a profile name = build only that profile (GCP workflow matrix).
+case "${1:-x86}" in
   locked-read-only|debug-read-only|debug)
-    cpu_architecture="intel"
+    cpu_architecture="x86"
     build_only_profile="${1}"
     ;;
   *)
-    cpu_architecture="${1:-intel}"
+    cpu_architecture="${1:-x86}"
     build_only_profile=""
     ;;
 esac
@@ -33,7 +33,7 @@ packer_args=(
   -var "node_exporter_version=${node_exporter_version}"
   -var "vmagent_version=${vmagent_version}"
   -var "vector_version=${vector_version}"
-  --var-file "ubuntu-${cpu_architecture}.pkrvars.hcl"
+  --var-file "ubuntu-x86.pkrvars.hcl"
 )
 
 # Optional CI overrides. If unset, ubuntu.pkr.hcl defaults are used.
