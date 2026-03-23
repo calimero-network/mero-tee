@@ -3,14 +3,12 @@
 set -euo pipefail
 
 # MeroTEE node images: x86_64 for build; Intel TDX for confidential compute at runtime.
-# First arg: "x86" (or empty) = build all three profiles; or a profile name = build only that profile (GCP workflow matrix).
-case "${1:-x86}" in
+# First arg: profile name (locked-read-only|debug-read-only|debug) = build only that profile (GCP matrix); else build all three.
+case "${1:-}" in
   locked-read-only|debug-read-only|debug)
-    cpu_architecture="x86"
     build_only_profile="${1}"
     ;;
   *)
-    cpu_architecture="${1:-x86}"
     build_only_profile=""
     ;;
 esac
