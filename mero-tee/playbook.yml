@@ -13,8 +13,8 @@
   roles:
     - role: ansible/roles/mero-traefik
       vars:
-        # Third-party binaries use amd64 in release URLs; x86/x86_64 -> amd64
-        cpu_architecture: "{{ 'amd64' if cpu_architecture in ['x86', 'x86_64'] else cpu_architecture }}"
+        # Third-party releases use amd64 for x86_64; always amd64
+        cpu_architecture: "amd64"
         traefik_version: "{{ traefik_version }}"
 
     # Bake merod/meroctl/mero-auth at build time (core tag). calimero-init skips download if present.
@@ -30,12 +30,12 @@
     - role: ansible/roles/node-exporter
       vars:
         version: "{{ node_exporter_version }}"
-        cpu_architecture: "{{ 'amd64' if cpu_architecture in ['x86', 'x86_64'] else cpu_architecture }}"
+        cpu_architecture: "amd64"
 
     - role: ansible/roles/vmagent
       vars:
         vmagent_version: "{{ vmagent_version }}"
-        cpu_architecture: "{{ 'amd64' if cpu_architecture in ['x86', 'x86_64'] else cpu_architecture }}"
+        cpu_architecture: "amd64"
 
     - role: ansible/roles/vector
       vars:
