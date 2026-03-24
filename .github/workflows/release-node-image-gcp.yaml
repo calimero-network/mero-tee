@@ -558,6 +558,7 @@ jobs:
           fi
           python3 scripts/attestation/extract_tdx_policy_candidates.py \
             --claims "${claims_file}" \
+            --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
             --allow-missing-tcb
 

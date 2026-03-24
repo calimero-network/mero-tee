@@ -614,6 +614,7 @@ jobs:
           set -euo pipefail
           python3 scripts/attestation/extract_tdx_policy_candidates.py \
             --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
+            --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --output-json "${ARTIFACTS_DIR}/kms-policy-candidates.json" \
             --output-env "${ARTIFACTS_DIR}/kms-policy-candidates.env"
 

@@ -6,9 +6,16 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.10] - 2026-03-24
+
 ### Changed
 
-- Synchronized release version to `2.3.9` across:
+- `scripts/attestation/extract_tdx_policy_candidates.py`: when `--attest-response` is set,
+  derive MRTD and RTMR0–3 from the TD quote (same layout as `attestation-verifier`); drop
+  heuristic scored-walk selection for measurements (canonical ITA keys only if the quote
+  path is not used).
+- Release and probe workflows pass `--attest-response` into policy candidate extraction.
+- Synchronized release version to `2.3.10` across:
   - `mero-kms/Cargo.toml`,
   - `Cargo.lock` (`mero-kms-phala` package),
   - `mero-tee/versions.json` (`imageVersion`).
