@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
+use crate::measurement::HexMeasurement;
+use crate::util::{normalize_hex_unchecked, CHALLENGE_ID_HEX_LEN};
 use crate::Config;
 
 use super::challenge::validate_peer_id_shape;
@@ -22,15 +24,10 @@ use super::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyRequest {
-    /// Challenge ID obtained from /challenge.
     pub challenge_id: String,
-    /// Base64-encoded TDX attestation quote.
     pub quote_b64: String,
-    /// Peer ID of the requesting merod node (base58 encoded).
     pub peer_id: String,
-    /// Base64-encoded protobuf representation of libp2p public key.
     pub peer_public_key_b64: String,
-    /// Base64-encoded signature over challenge payload.
     pub signature_b64: String,
 }
 
@@ -38,13 +35,10 @@ pub struct GetKeyRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
-    /// Hex-encoded storage encryption key (as received from dstack).
     pub key: String,
 }
 
 /// Handler for the get-key endpoint.
-///
-/// Validates the TDX attestation and returns a deterministic storage encryption key.
 pub(crate) async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
@@ -156,7 +150,6 @@ pub(crate) async fn get_key_handler(
     }))
 }
 
-/// Hash a peer ID string to create a 32-byte identity binding value.
 pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(peer_id.as_bytes());
@@ -164,10 +157,13 @@ pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
 }
 
 pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceError> {
-    if challenge_id.len() != 32 || !challenge_id.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(ServiceError::InvalidChallenge(
-            "challenge ID must be 32 hex characters".to_string(),
-        ));
+    if challenge_id.len() != CHALLENGE_ID_HEX_LEN
+        || !challenge_id.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(ServiceError::InvalidChallenge(format!(
+            "challenge ID must be {} hex characters",
+            CHALLENGE_ID_HEX_LEN
+        )));
     }
     Ok(())
 }
@@ -255,18 +251,31 @@ pub(crate) fn enforce_attestation_policy(
         )));
     }
 
-    require_non_empty_allowlist("MRTD", &policy.allowed_mrtd)?;
-    require_non_empty_allowlist("RTMR0", &policy.allowed_rtmr0)?;
-    require_non_empty_allowlist("RTMR1", &policy.allowed_rtmr1)?;
-    require_non_empty_allowlist("RTMR2", &policy.allowed_rtmr2)?;
-    require_non_empty_allowlist("RTMR3", &policy.allowed_rtmr3)?;
-
     let body = &verification_result.quote.body;
-    enforce_measurement_allowlist("MRTD", &body.mrtd, &policy.allowed_mrtd)?;
-    enforce_measurement_allowlist("RTMR0", &body.rtmr0, &policy.allowed_rtmr0)?;
-    enforce_measurement_allowlist("RTMR1", &body.rtmr1, &policy.allowed_rtmr1)?;
-    enforce_measurement_allowlist("RTMR2", &body.rtmr2, &policy.allowed_rtmr2)?;
-    enforce_measurement_allowlist("RTMR3", &body.rtmr3, &policy.allowed_rtmr3)?;
+    let register_checks: [(&str, &str, &[HexMeasurement]); 5] = [
+        ("MRTD", &body.mrtd, &policy.allowed_mrtd),
+        ("RTMR0", &body.rtmr0, &policy.allowed_rtmr0),
+        ("RTMR1", &body.rtmr1, &policy.allowed_rtmr1),
+        ("RTMR2", &body.rtmr2, &policy.allowed_rtmr2),
+        ("RTMR3", &body.rtmr3, &policy.allowed_rtmr3),
+    ];
+
+    for (label, actual, allowlist) in register_checks {
+        if allowlist.is_empty() {
+            return Err(ServiceError::MeasurementPolicyRejected(format!(
+                "{} allowlist is empty",
+                label
+            )));
+        }
+        let normalized_actual = normalize_hex_unchecked(actual);
+        if !allowlist.iter().any(|m| m.as_str() == normalized_actual) {
+            return Err(ServiceError::MeasurementPolicyRejected(format!(
+                "{} '{}' is not in allowlist",
+                label, normalized_actual
+            )));
+        }
+    }
+
     Ok(())
 }
 
@@ -278,40 +287,4 @@ pub(crate) fn ensure_policy_ready_for_key_release(config: &Config) -> Result<(),
         "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, or use explicit USE_ENV_POLICY mode.".to_string()
     });
     Err(ServiceError::PolicyNotReady(details))
-}
-
-fn require_non_empty_allowlist(
-    label: &str,
-    allowed_measurements: &[String],
-) -> Result<(), ServiceError> {
-    if allowed_measurements.is_empty() {
-        return Err(ServiceError::MeasurementPolicyRejected(format!(
-            "{} allowlist is empty",
-            label
-        )));
-    }
-    Ok(())
-}
-
-fn enforce_measurement_allowlist(
-    label: &str,
-    actual_measurement: &str,
-    allowed_measurements: &[String],
-) -> Result<(), ServiceError> {
-    let normalized_actual = normalize_measurement(actual_measurement);
-    if allowed_measurements
-        .iter()
-        .any(|allowed| allowed == &normalized_actual)
-    {
-        return Ok(());
-    }
-
-    Err(ServiceError::MeasurementPolicyRejected(format!(
-        "{} '{}' is not in allowlist",
-        label, normalized_actual
-    )))
-}
-
-fn normalize_measurement(value: &str) -> String {
-    value.trim().trim_start_matches("0x").to_ascii_lowercase()
 }

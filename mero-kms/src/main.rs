@@ -6,20 +6,27 @@
 mod challenge_store;
 mod config;
 mod handlers;
+mod measurement;
 mod policy;
 mod runtime_event;
+mod util;
+
+#[cfg(test)]
+mod test_util;
 
 use axum::http::{HeaderValue, Method};
 use eyre::Result as EyreResult;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
+use crate::config::log_startup_config;
 use crate::handlers::create_router;
 use crate::runtime_event::ensure_kms_profile_runtime_event;
 
 pub use crate::config::Config;
+pub use crate::measurement::HexMeasurement;
 pub use crate::policy::AttestationPolicy;
 
 #[tokio::main]
@@ -34,56 +41,7 @@ async fn main() -> eyre::Result<()> {
 
     let config = Config::from_env().await?;
 
-    info!("Starting mero-kms-phala");
-    info!("Listen address: {}", config.listen_addr);
-    info!("Dstack socket: {}", config.dstack_socket_path);
-    info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
-    info!("Max pending challenges: {}", config.max_pending_challenges);
-    info!(
-        "Accept mock attestation: {}",
-        config.accept_mock_attestation
-    );
-    info!("KMS profile cohort: {}", config.kms_profile);
-    info!("Key namespace prefix: {}", config.key_namespace_prefix);
-    if let Some(redis_url) = config.redis_url.as_deref() {
-        info!("Challenge store backend: redis ({})", redis_url);
-    } else {
-        info!("Challenge store backend: in-memory");
-    }
-    if let Some(policy_sha256) = config.policy_sha256.as_deref() {
-        info!("Policy SHA-256 pin enabled: {}", policy_sha256);
-    }
-    if let Some(kms_version) = config.kms_version.as_deref() {
-        info!("Policy release version: {}", kms_version);
-    }
-    info!("Policy ready for key issuance: {}", config.policy_ready);
-    if !config.policy_ready {
-        warn!(
-            "Policy unavailable; /attest remains available but /get-key is fail-closed: {}",
-            config
-                .policy_unavailable_reason
-                .as_deref()
-                .unwrap_or("unknown policy readiness error")
-        );
-    }
-    info!(
-        "Measurement policy enforced: {}",
-        config.attestation_policy.enforce_measurement_policy
-    );
-    if !config.attestation_policy.enforce_measurement_policy {
-        warn!("Measurement policy enforcement is disabled; this is not safe for production");
-    }
-    if config.policy_ready {
-        info!(
-            "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
-            config.attestation_policy.allowed_tcb_statuses.len(),
-            config.attestation_policy.allowed_mrtd.len(),
-            config.attestation_policy.allowed_rtmr0.len(),
-            config.attestation_policy.allowed_rtmr1.len(),
-            config.attestation_policy.allowed_rtmr2.len(),
-            config.attestation_policy.allowed_rtmr3.len()
-        );
-    }
+    log_startup_config(&config);
 
     if config.accept_mock_attestation {
         warn!(
@@ -98,28 +56,62 @@ async fn main() -> eyre::Result<()> {
     }
 
     let base_app = create_router(config.clone())?.layer(TraceLayer::new_for_http());
-    let app = if config.cors_allowed_origins.is_empty() {
-        tracing::info!("CORS disabled (CORS_ALLOWED_ORIGINS not set)");
-        base_app
-    } else {
-        let origins: Vec<HeaderValue> = config
-            .cors_allowed_origins
-            .iter()
-            .map(|origin| {
-                HeaderValue::from_str(origin)
-                    .map_err(|e| eyre::eyre!("Invalid CORS origin '{}': {}", origin, e))
-            })
-            .collect::<EyreResult<_>>()?;
-        base_app.layer(
-            CorsLayer::new()
-                .allow_origin(AllowOrigin::list(origins))
-                .allow_methods([Method::GET, Method::POST])
-                .allow_headers(Any),
-        )
-    };
+    let app = build_cors_layer(&config.cors_allowed_origins, base_app)?;
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
-    info!("Server listening on {}", config.listen_addr);
-    axum::serve(listener, app).await?;
+    tracing::info!("Server listening on {}", config.listen_addr);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
+}
+
+fn build_cors_layer<S>(
+    origins: &[String],
+    app: axum::Router<S>,
+) -> EyreResult<axum::Router<S>>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    if origins.is_empty() {
+        tracing::info!("CORS disabled (CORS_ALLOWED_ORIGINS not set)");
+        return Ok(app);
+    }
+    let header_values: Vec<HeaderValue> = origins
+        .iter()
+        .map(|origin| {
+            HeaderValue::from_str(origin)
+                .map_err(|e| eyre::eyre!("Invalid CORS origin '{}': {}", origin, e))
+        })
+        .collect::<EyreResult<_>>()?;
+    Ok(app.layer(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(header_values))
+            .allow_methods([Method::GET, Method::POST])
+            .allow_headers(Any),
+    ))
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("Received Ctrl+C, shutting down gracefully"),
+        () = terminate => tracing::info!("Received SIGTERM, shutting down gracefully"),
+    }
 }
