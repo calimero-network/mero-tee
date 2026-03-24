@@ -6,11 +6,15 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.18] - 2026-03-24
+
+### Fixed
+
+- `verify_tdx_quote_ita.py`: resolve MRTD from parsed TD quote bytes when ITA JWT claims do not expose mrtd/mr_td-style hex fields; cross-check when both sources exist.
+
 ### Changed
 
-- ITA tooling (`verify_tdx_quote_ita`, `extract_tdx_policy_candidates`, `verify_dstack_compose_hash`): removed numeric scoring for JWT, MRTD, TCB status, and RTMR3; use fixed key paths (merod/KMS-style) and lexicographic path order as fallback.
-- `extract_tdx_policy_candidates.py`: **`--attest-response` is required**; removed ITA-claims-only measurement fallback and `--allow-missing-mrtd`.
-- `verify_tdx_quote_ita.py`: removed `collect_ita_tdx_measurement_fields` (ITA JWT TDX field previews in CI summary); measurements are documented as merod-attest ground truth.
+- Synchronized release version to `2.3.18` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
 
 ## [2.3.17] - 2026-03-24
 
