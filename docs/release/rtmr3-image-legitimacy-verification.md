@@ -95,23 +95,22 @@ Measurements are captured from attested VMs (Intel ITA verification). Policy is 
 
 ## 4. Safety Improvements
 
-### 4.1 Fail-Closed RTMR3 (Production)
+### 4.1 Boot-Resilient RTMR3 Extension
 
-For `locked-read-only`, require RTMR3 extend to succeed. If sysfs is unavailable or the write fails, **fail the boot** (exit 1 in calimero-init). This ensures production images always have a meaningful RTMR3.
+`calimero-init` attempts RTMR3 extension at boot and logs success/failure, but does not hard-fail node startup when the RTMR3 sysfs path is unavailable or write fails. This avoids taking down `locked-read-only` nodes due to platform/kernel differences while still producing RTMR3 when supported.
 
 ```bash
-# In calimero-init.sh.j2, for locked-read-only:
-if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-  if [[ ! -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
-    log "ERROR: RTMR3 extend required for locked-read-only; sysfs not available"
-    exit 1
-  fi
-  if ! printf '%s' "${RTMR3_EXTEND}" > "${RTMR3_SYSFS}" 2>/dev/null; then
-    log "ERROR: RTMR3 extend write failed"
-    exit 1
-  fi
+# In calimero-init.sh.j2:
+if cat "$RTMR3_EXTEND_FILE" > "${RTMR3_SYSFS}" 2>/dev/null; then
+  log "Extended RTMR3 for attestation (...)"
+else
+  log "WARN: RTMR3 extend write failed"
 fi
 ```
+
+Operational guidance:
+- Treat RTMR3 extension as a measured signal, not a boot prerequisite.
+- Enforce strictness at verification/policy time (see 4.4), e.g. reject all-zero or unexpected RTMR3 values for production cohorts.
 
 ### 4.2 Publish root_hash in Provenance
 

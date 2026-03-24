@@ -25,30 +25,31 @@ log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
 # --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
 # RTMR3 is empty by default; extending with role+profile+root_hash makes each image unique.
-# Requires tdx_guest module + sysfs (kernel 6.16+). For locked-read-only, RTMR3 extend is mandatory.
+# Keep this best-effort at boot so merod can still start if kernel/sysfs support is unavailable.
 RTMR3_SYSFS="/sys/class/misc/tdx_guest/mr/rtmr3:sha384"
 ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
-RTMR3_EXTEND=$(printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary 2>/dev/null)
-if [[ -n "${RTMR3_EXTEND}" ]]; then
-  modprobe tdx_guest 2>/dev/null || true
-  if [[ -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
-    if printf '%s' "${RTMR3_EXTEND}" > "${RTMR3_SYSFS}" 2>/dev/null; then
-      log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
-    else
-      if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-        log "ERROR: RTMR3 extend write failed; required for production profile"
-        exit 1
+RTMR3_EXTEND_FILE="$(mktemp)"
+if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary > "$RTMR3_EXTEND_FILE" 2>/dev/null; then
+  # shellcheck disable=SC2002
+  RTMR3_EXTEND_SIZE="$(cat "$RTMR3_EXTEND_FILE" | wc -c | tr -d '[:space:]')"
+  if [[ "${RTMR3_EXTEND_SIZE}" == "48" ]]; then
+    modprobe tdx_guest 2>/dev/null || true
+    if [[ -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
+      if cat "$RTMR3_EXTEND_FILE" > "${RTMR3_SYSFS}" 2>/dev/null; then
+        log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+      else
+        log "WARN: RTMR3 extend write failed"
       fi
-      log "WARN: RTMR3 extend write failed"
+    else
+      log "RTMR3 extend skipped (sysfs not writable; kernel 6.16+ required for /sys/class/misc/tdx_guest/mr/)"
     fi
   else
-    if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-      log "ERROR: RTMR3 extend required for locked-read-only; sysfs not writable (kernel 6.16+ required)"
-      exit 1
-    fi
-    log "RTMR3 extend skipped (sysfs not writable; kernel 6.16+ required for /sys/class/misc/tdx_guest/mr/)"
+    log "WARN: RTMR3 extend input has unexpected size (${RTMR3_EXTEND_SIZE}, expected 48)"
   fi
+else
+  log "WARN: Failed to generate RTMR3 extend input digest"
 fi
+rm -f "$RTMR3_EXTEND_FILE"
 
 # --- R7: observability off by default; enable only if endpoint set ---
 systemctl stop vmagent vector 2>/dev/null || true
