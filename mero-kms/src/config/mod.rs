@@ -29,7 +29,6 @@ pub mod env;
 pub mod policy_loader;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use eyre::{bail, Result as EyreResult};
 
@@ -228,11 +227,6 @@ impl Config {
             allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
             allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
         })
-    }
-
-    /// Wrap this config in an `Arc` for shared ownership without cloning.
-    pub fn into_shared(self) -> Arc<Self> {
-        Arc::new(self)
     }
 }
 
