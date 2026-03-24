@@ -8,6 +8,9 @@ MRTD and RTMR0–3 are taken from **merod** ``data.quote.body`` when present (sa
 TCB status strings still come from ITA token claims (not present as plain text in the
 quote blob we parse here).
 
+Requires ``--attest-response`` (merod ``/admin-api/tee/attest`` JSON): measurements are
+never taken from ITA claims alone.
+
 This helper reads ``external-attestation-token-claims.json`` produced by
 ``scripts/attestation/verify_tdx_quote_ita.py`` and derives candidate values for:
 
@@ -28,8 +31,6 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-
-HEX_48_RE = re.compile(r"^(?:0x)?([A-Fa-f0-9]{96})$")
 
 BASE64_CANDIDATE_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 
@@ -147,14 +148,6 @@ def save_json(path: str, payload: Any) -> None:
         file.write("\n")
 
 
-def normalize_measurement(value: str) -> Optional[str]:
-    candidate = value.strip()
-    match = HEX_48_RE.match(candidate)
-    if not match:
-        return None
-    return match.group(1).lower()
-
-
 def normalize_key_segment(path: str) -> str:
     key = path.split(".")[-1]
     key = re.sub(r"\[[0-9]+\]", "", key)
@@ -177,35 +170,6 @@ def normalize_tcb_status(raw: str) -> Optional[str]:
         "unrecognized": "unrecognized",
     }
     return aliases.get(token, token)
-
-
-def extract_measurement_from_claims_canonical(
-    payload: Any, target: str
-) -> Optional[Tuple[str, str]]:
-    """Pick MRTD/RTMR from ITA JWT claims using only canonical Intel field names.
-
-    Used when ``--attest-response`` is not passed. Prefer passing ``--attest-response`` so
-    measurements come from the parsed TD quote (ground truth)."""
-    preferred_keys = {
-        "mrtd": ("tdx_mrtd", "mr_td", "mrtd"),
-        "rtmr0": ("tdx_rtmr0",),
-        "rtmr1": ("tdx_rtmr1",),
-        "rtmr2": ("tdx_rtmr2",),
-        "rtmr3": ("tdx_rtmr3",),
-    }
-    if target not in preferred_keys:
-        return None
-    want: Tuple[str, ...] = preferred_keys[target]
-    for path, value in walk_json(payload):
-        if not isinstance(value, str):
-            continue
-        key_norm = normalize_key_segment(path)
-        for pk in want:
-            if key_norm == re.sub(r"[^a-z0-9]", "", pk.lower()):
-                measurement = normalize_measurement(value)
-                if measurement is not None:
-                    return measurement, path
-    return None
 
 
 def measurements_from_quote(attest_payload: Any) -> Tuple[Dict[str, Tuple[str, str]], str]:
@@ -296,12 +260,8 @@ def main() -> int:
     parser.add_argument("--claims", required=True, help="Path to token claims JSON")
     parser.add_argument(
         "--attest-response",
-        required=False,
-        help=(
-            "Path to tee/attest JSON (same as verify_tdx_quote_ita.py). When set, MRTD and "
-            "RTMR0–3 are read from the TD quote binary (recommended); claims are not used for "
-            "those fields."
-        ),
+        required=True,
+        help="Path to merod /admin-api/tee/attest JSON (same as verify_tdx_quote_ita.py).",
     )
     parser.add_argument("--output-json", required=True, help="Output JSON summary path")
     parser.add_argument(
@@ -314,54 +274,29 @@ def main() -> int:
         action="store_true",
         help="Do not fail if no TCB status claim is found",
     )
-    parser.add_argument(
-        "--allow-missing-mrtd",
-        action="store_true",
-        help="Do not fail if no MRTD claim is found",
-    )
     args = parser.parse_args()
 
     claims = load_json(args.claims)
-
-    measurement_source: str
-    quote_field_path: Optional[str] = None
-    if args.attest_response:
-        attest_payload = load_json(args.attest_response)
-        from_quote, quote_field_path = measurements_from_quote(attest_payload)
-        mrtd = from_quote["mrtd"]
-        rtmr0 = from_quote["rtmr0"]
-        rtmr1 = from_quote["rtmr1"]
-        rtmr2 = from_quote["rtmr2"]
-        rtmr3 = from_quote["rtmr3"]
-        measurement_source = "td_quote"
-    else:
-        mrtd = extract_measurement_from_claims_canonical(claims, "mrtd")
-        rtmr0 = extract_measurement_from_claims_canonical(claims, "rtmr0")
-        rtmr1 = extract_measurement_from_claims_canonical(claims, "rtmr1")
-        rtmr2 = extract_measurement_from_claims_canonical(claims, "rtmr2")
-        rtmr3 = extract_measurement_from_claims_canonical(claims, "rtmr3")
-        measurement_source = "ita_claims_canonical"
+    attest_payload = load_json(args.attest_response)
+    from_quote, quote_field_path = measurements_from_quote(attest_payload)
+    mrtd = from_quote["mrtd"]
+    rtmr0 = from_quote["rtmr0"]
+    rtmr1 = from_quote["rtmr1"]
+    rtmr2 = from_quote["rtmr2"]
+    rtmr3 = from_quote["rtmr3"]
+    measurement_source = "td_quote"
     tcb_candidates = extract_tcb_status_candidates(claims)
-
-    if mrtd is None and not args.allow_missing_mrtd:
-        hint = (
-            " Pass --attest-response with the same JSON used for verify_tdx_quote_ita.py "
-            "to derive MRTD/RTMR from the TD quote."
-        )
-        raise RuntimeError(
-            "Could not extract MRTD; refusing to generate candidate policy." + hint
-        )
     if not tcb_candidates and not args.allow_missing_tcb:
         raise RuntimeError(
             "Could not extract attester TCB status from token claims; refusing to generate candidate policy."
         )
 
     allowed_tcb_statuses = [value for value, _, _ in tcb_candidates]
-    allowed_mrtd = [mrtd[0]] if mrtd is not None else []
-    allowed_rtmr0 = [rtmr0[0]] if rtmr0 is not None else []
-    allowed_rtmr1 = [rtmr1[0]] if rtmr1 is not None else []
-    allowed_rtmr2 = [rtmr2[0]] if rtmr2 is not None else []
-    allowed_rtmr3 = [rtmr3[0]] if rtmr3 is not None else []
+    allowed_mrtd = [mrtd[0]]
+    allowed_rtmr0 = [rtmr0[0]]
+    allowed_rtmr1 = [rtmr1[0]]
+    allowed_rtmr2 = [rtmr2[0]]
+    allowed_rtmr3 = [rtmr3[0]]
 
     output = {
         "schema_version": 1,
@@ -371,11 +306,11 @@ def main() -> int:
         "quote_field_path": quote_field_path,
         "source_claims_path": args.claims,
         "source_claim_paths": {
-            "mrtd": mrtd[1] if mrtd is not None else None,
-            "rtmr0": rtmr0[1] if rtmr0 is not None else None,
-            "rtmr1": rtmr1[1] if rtmr1 is not None else None,
-            "rtmr2": rtmr2[1] if rtmr2 is not None else None,
-            "rtmr3": rtmr3[1] if rtmr3 is not None else None,
+            "mrtd": mrtd[1],
+            "rtmr0": rtmr0[1],
+            "rtmr1": rtmr1[1],
+            "rtmr2": rtmr2[1],
+            "rtmr3": rtmr3[1],
             "tcb_statuses": [
                 {"value": value, "path": path, "raw": raw}
                 for value, path, raw in tcb_candidates

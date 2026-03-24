@@ -9,6 +9,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 ### Changed
 
 - ITA tooling (`verify_tdx_quote_ita`, `extract_tdx_policy_candidates`, `verify_dstack_compose_hash`): removed numeric scoring for JWT, MRTD, TCB status, and RTMR3; use fixed key paths (merod/KMS-style) and lexicographic path order as fallback.
+- `extract_tdx_policy_candidates.py`: **`--attest-response` is required**; removed ITA-claims-only measurement fallback and `--allow-missing-mrtd`.
 
 ## [2.3.16] - 2026-03-24
 
