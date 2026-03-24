@@ -8,8 +8,8 @@ MRTD and RTMR0–3 are taken from **merod** ``data.quote.body`` when present (sa
 TCB status strings still come from ITA token claims (not present as plain text in the
 quote blob we parse here).
 
-Requires ``--attest-response`` (merod ``/admin-api/tee/attest`` JSON): measurements are
-never taken from ITA claims alone.
+Requires ``--attest-response`` (merod ``data.quoteB64`` shape or mero-kms ``/attest``
+top-level ``quoteB64``): measurements are never taken from ITA claims alone.
 
 This helper reads ``external-attestation-token-claims.json`` produced by
 ``scripts/attestation/verify_tdx_quote_ita.py`` and derives candidate values for:
@@ -94,17 +94,20 @@ def _measurements_from_merod_quote_body(attest_payload: Any) -> Optional[Dict[st
     return out if out else None
 
 
-def _quote_b64_from_merod_attest(attest_payload: Any) -> Tuple[Optional[str], str]:
-    """Canonical ``data.quoteB64`` from merod tee/attest JSON."""
+def _quote_b64_from_attest_payload(attest_payload: Any) -> Tuple[Optional[str], str]:
+    """``data.quoteB64`` (merod) or top-level ``quoteB64`` (mero-kms /attest)."""
     if not isinstance(attest_payload, dict):
         return None, ""
     data = attest_payload.get("data")
-    if not isinstance(data, dict):
-        return None, ""
+    if isinstance(data, dict):
+        for key in ("quoteB64", "quote_b64"):
+            raw = data.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip(), f"$.data.{key}"
     for key in ("quoteB64", "quote_b64"):
-        raw = data.get(key)
+        raw = attest_payload.get(key)
         if isinstance(raw, str) and raw.strip():
-            return raw.strip(), f"$.data.{key}"
+            return raw.strip(), f"$.{key}"
     return None, ""
 
 
@@ -184,11 +187,11 @@ def measurements_from_quote(attest_payload: Any) -> Tuple[Dict[str, Tuple[str, s
             out[k] = (bm[k], label)
         return out, "$.data.quote.body"
 
-    quote_b64, field_path = _quote_b64_from_merod_attest(attest_payload)
+    quote_b64, field_path = _quote_b64_from_attest_payload(attest_payload)
     if not quote_b64:
         raise RuntimeError(
-            "Attest JSON missing data.quote.body measurements and data.quoteB64; "
-            "expected merod /admin-api/tee/attest shape"
+            "Attest JSON missing data.quote.body measurements and quote base64 "
+            "(merod data.quoteB64 or mero-kms top-level quoteB64)"
         )
     raw = decode_base64_flexible(quote_b64)
     if raw is None:

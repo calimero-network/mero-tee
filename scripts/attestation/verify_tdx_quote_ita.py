@@ -97,18 +97,23 @@ def decode_base64_flexible(value: str) -> Optional[bytes]:
         return None
 
 
-def quote_b64_from_merod_tee_attest(attestation_response: Any) -> Tuple[str, str]:
-    """``data.quoteB64`` from merod ``/admin-api/tee/attest`` (no heuristic scoring)."""
+def quote_b64_from_attest_json(attestation_response: Any) -> Tuple[str, str]:
+    """TD quote base64: merod ``data.quoteB64`` or mero-kms ``/attest`` top-level ``quoteB64``."""
     if not isinstance(attestation_response, dict):
         raise RuntimeError("Attest response must be a JSON object")
     data = attestation_response.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("Attest response missing data object (merod tee/attest shape)")
+    if isinstance(data, dict):
+        for key in ("quoteB64", "quote_b64"):
+            raw = data.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip(), f"$.data.{key}"
     for key in ("quoteB64", "quote_b64"):
-        raw = data.get(key)
+        raw = attestation_response.get(key)
         if isinstance(raw, str) and raw.strip():
-            return raw.strip(), f"$.data.{key}"
-    raise RuntimeError("Attest response missing data.quoteB64 (merod /admin-api/tee/attest)")
+            return raw.strip(), f"$.{key}"
+    raise RuntimeError(
+        "Attest response missing quote base64: expected merod data.quoteB64 or mero-kms quoteB64 (top-level)"
+    )
 
 
 def parse_policy_ids(raw: str) -> List[str]:
@@ -338,7 +343,7 @@ def main() -> int:
     os.makedirs(args.output_dir, exist_ok=True)
 
     attest_payload = load_json(args.attest_response)
-    quote_b64, quote_path = quote_b64_from_merod_tee_attest(attest_payload)
+    quote_b64, quote_path = quote_b64_from_attest_json(attest_payload)
 
     policy_ids = parse_policy_ids(args.policy_ids)
     request_payload: Dict[str, Any] = {"tdx": {"quote": quote_b64}}
