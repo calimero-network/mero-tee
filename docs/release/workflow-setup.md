@@ -116,7 +116,7 @@ KMS workflow checks whether a same-commit `Release mero-tee` run exists:
 ## Post-release mero-tee node e2e (mero-kms-independent)
 
 `post-release-mero-tee-node-e2e.yaml` runs after a successful **`Release mero-tee`**
-workflow (or manually via `workflow_dispatch`). It:
+workflow, on **`push` to `master`** when version or related paths change (same pattern as **`post-release-kms-node-e2e`**), or manually via **`workflow_dispatch`**. On push, if the **`mero-tee-v*`** GitHub release is not published yet, the verify job **skips** with a clear summary instead of failing. It:
 
 - Waits for the **`mero-tee-v*`** GitHub release to publish `published-mrtds.json` and `release-provenance.json`.
 - For each node profile (**`debug`**, **`debug-read-only`**, **`locked-read-only`**), dispatches **`node-image-gcp-staging-probe.yaml`**, boots a **fresh GCP TDX VM** from the released image metadata, and asserts that **`measurement-policy-candidates.json`** from the probe is a subset of **`published-mrtds.json`** (same **MRTD / RTMR0–2 / TCB** gate as the node section of the KMS-node workflow; **RTMR3** is not used as a strict allowlist subset — see below).

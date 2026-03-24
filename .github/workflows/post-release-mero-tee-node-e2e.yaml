@@ -13,10 +13,16 @@ on:
     paths:
       - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
       - "scripts/release/e2e-mero-tee-node-post-release.sh"
+      - "mero-tee/versions.json"
+      - "mero-kms/Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     paths:
       - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
       - "scripts/release/e2e-mero-tee-node-post-release.sh"
+      - "mero-tee/versions.json"
+      - "mero-kms/Cargo.toml"
+      - "Cargo.lock"
   workflow_run:
     workflows:
       - Release mero-tee
@@ -56,7 +62,8 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'workflow_run' &&
             github.event.workflow_run.conclusion == 'success' &&
-            github.event.workflow_run.head_branch == 'master') }}
+            github.event.workflow_run.head_branch == 'master') ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -68,11 +75,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
           INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
         run: |
           set -euo pipefail
+
+          should_run="true"
+          skip_reason=""
+          version=""
+          tee_tag=""
+          probe_workflow_ref=""
+          probe_expected_sha=""
+
+          release_exists() {
+            local tag="$1"
+            gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1
+          }
+
+          wait_for_release_tag() {
+            local tag="$1"
+            local attempts="${2:-30}"
+            local delay_secs="${3:-10}"
+            local attempt
+            for attempt in $(seq 1 "${attempts}"); do
+              echo "[mero-tee-node-e2e] release poll ${attempt}/${attempts} for ${tag}..."
+              if release_exists "${tag}"; then
+                return 0
+              fi
+              sleep "${delay_secs}"
+            done
+            return 1
+          }
 
           if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
             if [[ "${{ github.event.workflow_run.name }}" != "Release mero-tee" ]]; then
@@ -96,6 +132,23 @@ jobs:
               exit 1
             fi
             probe_expected_sha="${resolved_probe_sha}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ "${REF_NAME}" != "master" ]]; then
+              echo "::error::Expected push on master, got ref '${REF_NAME}'."
+              exit 1
+            fi
+            version="$(jq -r '.imageVersion // empty' "mero-tee/versions.json")"
+            if [[ -z "${version}" ]]; then
+              echo "::error::Could not resolve imageVersion from mero-tee/versions.json"
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
+            probe_workflow_ref="${REF_NAME}"
+            probe_expected_sha="${GITHUB_SHA}"
+            if ! wait_for_release_tag "${tee_tag}" 30 10; then
+              should_run="false"
+              skip_reason="GitHub release '${tee_tag}' is not published yet (normal right after a version bump; run again after the release is cut)."
+            fi
           else
             version="${INPUT_RELEASE_VERSION}"
             if [[ -z "${version}" ]]; then
@@ -116,8 +169,22 @@ jobs:
           echo "tee_tag=${tee_tag}" >> "${GITHUB_OUTPUT}"
           echo "probe_workflow_ref=${probe_workflow_ref}" >> "${GITHUB_OUTPUT}"
           echo "probe_expected_sha=${probe_expected_sha}" >> "${GITHUB_OUTPUT}"
+          echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
+          echo "skip_reason=${skip_reason}" >> "${GITHUB_OUTPUT}"
+
+      - name: Skip verify until GitHub release exists
+        if: ${{ steps.resolve.outputs.should_run != 'true' }}
+        run: |
+          {
+            echo "## Post-release mero-tee node e2e"
+            echo ""
+            echo "- **Status:** skipped"
+            echo "- **Reason:** ${{ steps.resolve.outputs.skip_reason }}"
+            echo "- **Release tag:** ${{ steps.resolve.outputs.tee_tag }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Run mero-tee node post-release verification
+        if: ${{ steps.resolve.outputs.should_run == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           E2E_TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
@@ -130,7 +197,7 @@ jobs:
           bash scripts/release/e2e-mero-tee-node-post-release.sh
 
       - name: Summary
-        if: success()
+        if: success() && steps.resolve.outputs.should_run == 'true'
         env:
           TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
           VERSION: ${{ steps.resolve.outputs.version }}
