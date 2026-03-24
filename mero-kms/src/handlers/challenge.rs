@@ -41,8 +41,7 @@ pub(crate) async fn challenge_handler(
     let nonce: [u8; 32] = random();
 
     let challenge_id = create_challenge_id();
-    let now = unix_now_secs()
-        .map_err(|e| ServiceError::InvalidChallenge(format!("system clock error: {}", e)))?;
+    let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
     state
         .challenge_store

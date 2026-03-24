@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
 use crate::measurement::HexMeasurement;
-use crate::util::{normalize_hex_unchecked, CHALLENGE_ID_HEX_LEN};
+use crate::util::CHALLENGE_ID_HEX_LEN;
 use crate::Config;
 
 use super::challenge::validate_peer_id_shape;
@@ -267,11 +267,11 @@ pub(crate) fn enforce_attestation_policy(
                 label
             )));
         }
-        let normalized_actual = normalize_hex_unchecked(actual);
-        if !allowlist.iter().any(|m| m.as_str() == normalized_actual) {
+        if !allowlist.iter().any(|m| m.matches_raw(actual)) {
             return Err(ServiceError::MeasurementPolicyRejected(format!(
                 "{} '{}' is not in allowlist",
-                label, normalized_actual
+                label,
+                actual.trim().trim_start_matches("0x").to_ascii_lowercase()
             )));
         }
     }

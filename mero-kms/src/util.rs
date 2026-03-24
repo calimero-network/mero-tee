@@ -11,7 +11,7 @@ pub const CHALLENGE_ID_HEX_LEN: usize = CHALLENGE_ID_BYTES * 2;
 pub const MAX_PEER_ID_LENGTH: usize = 128;
 
 #[derive(Debug, Error)]
-#[error("system clock error: {0}")]
+#[error("{0}")]
 pub struct ClockError(String);
 
 pub fn unix_now_secs() -> Result<u64, ClockError> {
@@ -37,11 +37,6 @@ pub fn normalize_hex(raw: &str, expected_bytes: usize) -> Result<String, HexNorm
         return Err(HexNormalizeError::NonHexCharacters);
     }
     Ok(normalized)
-}
-
-/// Normalize a measurement/hash value without length validation.
-pub fn normalize_hex_unchecked(value: &str) -> String {
-    value.trim().trim_start_matches("0x").to_ascii_lowercase()
 }
 
 #[derive(Debug, Error)]
