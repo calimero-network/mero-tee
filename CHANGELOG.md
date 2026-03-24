@@ -6,13 +6,26 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.12] - 2026-03-25
+
+### Fixed
+
+- Phala CVM `name` must not contain dots; version segment is normalized to hyphens
+  (e.g. `mero-kms-debug-2-3-11`) in `trigger-staging-probe.sh`, `kms-phala-staging-probe.yaml`,
+  and docs. `MERO_KMS_VERSION` in compose remains the real semver.
+
+### Changed
+
+- Synchronized release version to `2.3.12` across:
+  - `mero-kms/Cargo.toml`,
+  - `Cargo.lock` (`mero-kms-phala` package),
+  - `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.3.11] - 2026-03-25
 
 ### Changed
 
-- KMS Phala staging probe and `trigger-staging-probe.sh`: Phala CVM deployment names are
-  `mero-kms-{profile}-{semver}` (e.g. `mero-kms-debug-2.3.11`) to match MDMA and align
-  measurements / compose_hash with production.
+- KMS Phala staging probe and `trigger-staging-probe.sh`: versioned Phala CVM deployment names aligned with MDMA (see 2.3.12 for Phala-valid naming).
 - `docs/attestation/compose-hash-flow.md`: document versioned deployment names.
 - Synchronized release version to `2.3.11` across:
   - `mero-kms/Cargo.toml`,

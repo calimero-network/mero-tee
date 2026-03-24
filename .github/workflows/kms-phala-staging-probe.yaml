@@ -297,8 +297,9 @@ jobs:
           if [[ -n "${DEPLOY_NAME_INPUT}" ]]; then
             deploy_name="${DEPLOY_NAME_INPUT}"
           else
-            # Match MDMA: mero-kms-{profile}-{semver} for measurement / compose_hash parity
-            deploy_name="mero-kms-${KMS_PROFILE}-${KMS_VERSION}"
+            # Match MDMA; Phala allows only letters/numbers/hyphens (no dots in semver).
+            kms_ver_safe="${KMS_VERSION//./-}"
+            deploy_name="mero-kms-${KMS_PROFILE}-${kms_ver_safe}"
           fi
           if [[ ! "${deploy_name}" =~ ^[a-zA-Z0-9._-]{3,100}$ ]]; then
             ci_fail "INVALID_DEPLOYMENT_NAME" "deployment_name must match ^[a-zA-Z0-9._-]{3,100}$"

@@ -45,7 +45,7 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 **Why the same release (e.g. mero-kms-v2.1.73) produces different compose_hash when deployed:**
 
-1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe and MDMA use **versioned** canonical names: `mero-kms-{profile}-{semver}` (e.g. `mero-kms-debug-2.3.10`). **Probe and MDMA must use the same profile + release version** for compose_hash to match.
+1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe and MDMA use **versioned** canonical names: `mero-kms-{profile}-{semver}` with **dots in the version replaced by hyphens** for Phala (e.g. `mero-kms-debug-2-3-11`; Phala rejects `.` in CVM names). **MERO_KMS_VERSION** in compose stays the real semver (`2.3.11`). **Probe and MDMA must use the same profile + release version** for compose_hash to match.
 
 2. **Different env vars** — Probe and MDMA must pass the same `MERO_KMS_VERSION` and `MERO_KMS_PROFILE` values in compose. If these differ, compose_hash diverges and runtime policy selection diverges. See [MDMA compose alignment](#mdma-compose-alignment) below.
 
@@ -65,11 +65,11 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 For compose_hash to match between release and production, use the **same** Phala CVM name for the **same** `mero-kms-v{semver}` release:
 
-| Profile           | Deployment name (example for 2.3.10)   |
-|-------------------|----------------------------------------|
-| debug             | `mero-kms-debug-2.3.10`                |
-| debug-read-only   | `mero-kms-debug-read-only-2.3.10`      |
-| locked-read-only  | `mero-kms-locked-read-only-2.3.10`     |
+| Profile           | Phala CVM name (example for release 2.3.11) |
+|-------------------|-----------------------------------------------|
+| debug             | `mero-kms-debug-2-3-11`                       |
+| debug-read-only   | `mero-kms-debug-read-only-2-3-11`             |
+| locked-read-only  | `mero-kms-locked-read-only-2-3-11`            |
 
 MDMA defaults to this pattern; the release workflow (`trigger-staging-probe.sh`) passes the same name to the staging probe.
 

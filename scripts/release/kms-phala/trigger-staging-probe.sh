@@ -54,9 +54,10 @@ wait_for_workflow_run() {
   return 1
 }
 
-# Match MDMA KMS deployment names: mero-kms-{profile}-{semver} (e.g. mero-kms-debug-2.3.10)
-# so Phala compose_hash / measurements align with production for the same release.
-deployment_name="mero-kms-${PROFILE}-${RELEASE_VERSION}"
+# Match MDMA KMS deployment names: mero-kms-{profile}-{semver} with dots -> hyphens
+# (Phala requires letters/numbers/hyphens only; e.g. mero-kms-debug-2-3-11).
+RELEASE_VERSION_SAFE="${RELEASE_VERSION//./-}"
+deployment_name="mero-kms-${PROFILE}-${RELEASE_VERSION_SAFE}"
 max_probe_attempts=2
 run_id=""
 
