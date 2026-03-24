@@ -37,6 +37,7 @@ QUOTE_KEY_HINTS = {
     "quote",
     "raw_quote",
     "quote_b64",
+    "quoteb64",  # merod JSON: "quoteB64" -> segment quoteb64
     "quote_base64",
     "quotebase64",
     "quotebytes",
