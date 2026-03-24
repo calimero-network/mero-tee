@@ -31,6 +31,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from extract_tdx_policy_candidates import measurements_from_quote
+
 
 MRTD_KEY_HINTS = frozenset(
     {
@@ -264,6 +266,48 @@ def normalize_hex(value: str) -> str:
     return value.lower().strip()
 
 
+def resolve_mrtd(
+    claims: Any,
+    attest_payload: Any,
+) -> Tuple[str, str, str]:
+    """ITA JWT MRTD when present; else MRTD parsed from TD quote (v4/v5 layout).
+
+    If both are present, they must agree (hex-normalized).
+    Returns (mrtd_hex, path_description, source) where source is
+    ``external_attestation_token``, ``parsed_td_quote``, or ``ita_and_quote`` when both matched.
+    """
+    claim_mrtd = find_mrtd(claims)
+    quote_mrtd: Optional[Tuple[str, str]] = None
+    try:
+        meas, _field = measurements_from_quote(attest_payload)
+        quote_mrtd = meas["mrtd"]
+    except RuntimeError:
+        pass
+
+    if claim_mrtd is not None and quote_mrtd is not None:
+        cv, cp = claim_mrtd
+        qv, qp = quote_mrtd
+        if normalize_hex(cv) != normalize_hex(qv):
+            raise RuntimeError(
+                "MRTD mismatch between ITA JWT claims and measurements parsed from TD quote "
+                f"(claims {cp} vs quote {qp})"
+            )
+        return cv, cp, "ita_and_quote"
+
+    if claim_mrtd is not None:
+        v, p = claim_mrtd
+        return v, p, "external_attestation_token"
+
+    if quote_mrtd is not None:
+        v, p = quote_mrtd
+        return v, p, "parsed_td_quote"
+
+    raise RuntimeError(
+        "Could not extract MRTD from ITA claims or from TD quote bytes "
+        "(expected ITA mrtd/mr_td-style fields or merod/KMS quoteB64 / data.quote.body)"
+    )
+
+
 def write_ci_verification_summary(
     *,
     output_dir: str,
@@ -433,10 +477,7 @@ def main() -> int:
         token_path=token_path,
     )
 
-    mrtd_info = find_mrtd(claims)
-    if mrtd_info is None:
-        raise RuntimeError("Could not extract MRTD from external attestation token claims")
-    mrtd_value, mrtd_path = mrtd_info
+    mrtd_value, mrtd_path, mrtd_source = resolve_mrtd(claims, attest_payload)
 
     tee_info_mrtd = None
     tee_info_path = None
@@ -448,7 +489,7 @@ def main() -> int:
 
     mrtd_payload = {
         "mrtd": mrtd_value,
-        "mrtd_source": "external_attestation_token",
+        "mrtd_source": mrtd_source,
         "mrtd_path": mrtd_path,
         "quote_path": quote_path,
         "token_path": token_path,
@@ -462,7 +503,7 @@ def main() -> int:
         mrtd_payload["tee_info_mrtd_path"] = tee_info_path
         if normalize_hex(tee_info_mrtd) != normalize_hex(mrtd_value):
             save_json(os.path.join(args.output_dir, "mrtd.json"), mrtd_payload)
-            raise RuntimeError("MRTD mismatch between tee-info and external attestation token")
+            raise RuntimeError("MRTD mismatch between tee-info and resolved attestation MRTD")
 
     save_json(os.path.join(args.output_dir, "mrtd.json"), mrtd_payload)
 
