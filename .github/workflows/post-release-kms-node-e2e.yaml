@@ -109,12 +109,16 @@ jobs:
             local tag="$1"
             local attempts="${2:-24}"
             local delay_secs="${3:-10}"
+            local attempt
             for attempt in $(seq 1 "${attempts}"); do
+              echo "[post-release-e2e] Node release tag poll ${attempt}/${attempts} for ${tag}..."
               if release_exists "${tag}"; then
+                echo "[post-release-e2e] OK: found release ${tag}"
                 return 0
               fi
               sleep "${delay_secs}"
             done
+            echo "::error::Timed out waiting for GitHub release tag '${tag}' (${attempts} × ${delay_secs}s)."
             return 1
           }
 
@@ -155,26 +159,26 @@ jobs:
             fi
           }
 
+          # Poll until mero-kms-v* has compatibility map + profile policy assets.
+          # Bounded wait: max_attempts * delay_secs (default 40*45s = 30m) then fail with a clear error.
+          # Logs every attempt so the job never looks "stuck" in the UI.
           wait_for_kms_release_with_assets() {
             local tag="$1"
-            local attempts="${2:-90}"
-            local delay_secs="${3:-60}"
-            local expected_commit="${4:-}"
-            for attempt in $(seq 1 "${attempts}"); do
+            local max_attempts="${2:-40}"
+            local delay_secs="${3:-45}"
+            local attempt
+            local started
+            started="$(date +%s)"
+            for attempt in $(seq 1 "${max_attempts}"); do
+              local elapsed=$(( $(date +%s) - started ))
+              echo "[post-release-e2e] KMS assets poll ${attempt}/${max_attempts} for ${tag} (elapsed ${elapsed}s, next sleep ${delay_secs}s)"
               if [[ "$(kms_release_has_required_assets "${tag}")" == "true" ]]; then
-                if [[ -z "${expected_commit}" ]]; then
-                  return 0
-                fi
-                local target_commit
-                target_commit="$(release_target_commit "${tag}")"
-                if [[ -n "${target_commit}" && "${target_commit}" == "${expected_commit}" ]]; then
-                  return 0
-                fi
-                echo "Waiting for KMS release ${tag} to target ${expected_commit} (current target=${target_commit:-unknown}; attempt ${attempt}/${attempts})..."
+                echo "[post-release-e2e] OK: KMS release ${tag} has required e2e assets after ${elapsed}s (${attempt} polls)."
+                return 0
               fi
-              echo "Waiting for KMS release ${tag} assets (attempt ${attempt}/${attempts})..."
               sleep "${delay_secs}"
             done
+            echo "::error::Timed out after $(( max_attempts * delay_secs ))s (${max_attempts} polls × ${delay_secs}s) waiting for KMS release '${tag}' to publish kms-phala-compatibility-map.json and profile policy assets."
             return 1
           }
 
@@ -270,11 +274,8 @@ jobs:
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            # Do not pass mero-tee tag SHA as expected_kms_commit: mero-kms-v* and mero-tee-v* are
-            # separate GitHub releases and almost always have different targetCommitish values.
-            # Requiring equality caused wait_for_kms_release_with_assets to spin for ~90m then fail.
-            # Alignment is by version number + assets (compatibility map, profile policies), not raw SHA.
-            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60 ""; then
+            # mero-kms-v* and mero-tee-v* are separate releases; we only wait for KMS assets (bounded ~30m default).
+            if wait_for_kms_release_with_assets "${default_kms_tag}" 40 45; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
               if [[ "${strict_release_mode}" != "true" ]]; then
@@ -397,6 +398,7 @@ jobs:
             local deadline=$(( $(date +%s) + timeout_secs ))
             local last_status=""
             local last_conclusion=""
+            local last_heartbeat=0
 
             while (( $(date +%s) < deadline )); do
               local state
@@ -420,6 +422,14 @@ jobs:
               if [[ "${status}" == "completed" ]]; then
                 [[ "${conclusion}" == "success" ]] && return 0
                 return 1
+              fi
+
+              local now sec_left
+              now="$(date +%s)"
+              sec_left=$(( deadline - now ))
+              if (( now - last_heartbeat >= 60 )); then
+                echo "[post-release-e2e] ${label}: still running (status=${status:-unknown}, ~${sec_left}s left before timeout) run=${run_url}"
+                last_heartbeat="${now}"
               fi
               sleep 10
             done
@@ -513,6 +523,7 @@ jobs:
 
               probe_run_id=""
               for attempt in $(seq 1 90); do
+                echo "[post-release-e2e] resolving kms-phala-staging-probe run id (attempt ${attempt}/90, profile=${profile})..."
                 probe_run_id="$(gh run list \
                   --repo "${GITHUB_REPOSITORY}" \
                   --workflow "kms-phala-staging-probe.yaml" \
@@ -745,6 +756,7 @@ jobs:
             "${cross_profile_dispatch_args[@]}"
 
           for attempt in $(seq 1 90); do
+            echo "[post-release-e2e] resolving cross-profile kms-phala-staging-probe run id (attempt ${attempt}/90)..."
             cross_profile_kms_run_id="$(gh run list \
               --repo "${GITHUB_REPOSITORY}" \
               --workflow "kms-phala-staging-probe.yaml" \
@@ -920,6 +932,7 @@ jobs:
 
             node_probe_run_id=""
             for attempt in $(seq 1 90); do
+              echo "[post-release-e2e] resolving node-image-gcp-staging-probe run id (attempt ${attempt}/90, profile=${profile})..."
               node_probe_run_id="$(gh run list \
                 --repo "${GITHUB_REPOSITORY}" \
                 --workflow "node-image-gcp-staging-probe.yaml" \
