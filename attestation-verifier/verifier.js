@@ -162,10 +162,19 @@ async function replayRTMR(events, imr) {
 }
 
 async function fetchKmsReleases(limit = 10) {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`);
-  if (!res.ok) throw new Error('Failed to fetch releases');
-  const releases = await res.json();
-  const kmsReleases = releases.filter(r => r.tag_name && r.tag_name.startsWith('mero-kms-v'));
+  const perPage = 100;
+  const maxPages = 3;
+  const kmsReleases = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=${perPage}&page=${page}`);
+    if (!res.ok) break;
+    const releases = await res.json();
+    if (!releases.length) break;
+    for (const r of releases) {
+      if (r.tag_name && r.tag_name.startsWith('mero-kms-v')) kmsReleases.push(r);
+    }
+    if (kmsReleases.length >= limit) break;
+  }
   if (kmsReleases.length === 0) throw new Error('No mero-kms releases found');
   kmsReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
   return kmsReleases.slice(0, limit).map(r => r.tag_name);
@@ -330,9 +339,24 @@ async function loadByKmsUrl(kmsUrl, releaseTag = null) {
     const eventLog = attestation.event_log ?? attestation.eventLog;
     const events = Array.isArray(eventLog) ? eventLog : (eventLog ? JSON.parse(eventLog) : []);
     const { composeHash, appId } = extractComposeHashAndAppId(events);
-    const { tag: tagToUse, compatMap, matches } = composeHash
-      ? await findMatchingRelease(composeHash, releaseTag || undefined)
-      : { tag: releaseTag || (await fetchLatestKmsTag()), compatMap: null, matches: [] };
+    let tagToUse, compatMap, matches;
+    if (releaseTag) {
+      tagToUse = releaseTag;
+      try { compatMap = await fetchCompatibilityMap(releaseTag); } catch { compatMap = null; }
+      matches = [];
+      if (composeHash && compatMap?.compatibility?.profiles) {
+        for (const [profile, p] of Object.entries(compatMap.compatibility.profiles)) {
+          const expected = (p.event_payload || '').toLowerCase();
+          if (expected && expected === composeHash) matches.push(profile);
+        }
+      }
+    } else if (composeHash) {
+      ({ tag: tagToUse, compatMap, matches } = await findMatchingRelease(composeHash));
+    } else {
+      tagToUse = await fetchLatestKmsTag();
+      compatMap = null;
+      matches = [];
+    }
     const profiles = compatMap?.compatibility?.profiles || {};
 
     const quoteRtmrs = extractRTMRsFromClaims(ita_claims || {});

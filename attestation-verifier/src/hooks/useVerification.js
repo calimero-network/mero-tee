@@ -4,7 +4,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { verifyKmsAttestation, fetchKmsReleases, fetchAttestationPolicy } from '../services/api.js';
+import { verifyKmsAttestation, fetchKmsReleases, fetchAttestationPolicy, fetchCompatibilityMap } from '../services/api.js';
 import { findMatchingRelease } from '../services/compat.js';
 import {
   extractComposeHashAndAppId,
@@ -56,10 +56,27 @@ export function useVerification() {
           : [];
 
       const { composeHash, appId } = extractComposeHashAndAppId(events);
-      const latestTag = (await fetchKmsReleases(1))[0];
-      let { tag: tagToUse, compatMap, matches } = composeHash
-        ? await findMatchingRelease(composeHash, releaseTag || undefined)
-        : { tag: releaseTag || latestTag, compatMap: null, matches: [] };
+      let tagToUse, compatMap, matches;
+      if (releaseTag) {
+        tagToUse = releaseTag;
+        try {
+          compatMap = await fetchCompatibilityMap(releaseTag);
+        } catch { compatMap = null; }
+        matches = [];
+        if (composeHash && compatMap?.compatibility?.profiles) {
+          for (const [profile, p] of Object.entries(compatMap.compatibility.profiles)) {
+            const expected = (p.event_payload || '').toLowerCase();
+            if (expected && expected === composeHash) matches.push(profile);
+          }
+        }
+      } else if (composeHash) {
+        ({ tag: tagToUse, compatMap, matches } = await findMatchingRelease(composeHash));
+      } else {
+        const latestTag = (await fetchKmsReleases(1))[0];
+        tagToUse = latestTag;
+        compatMap = null;
+        matches = [];
+      }
       // When selectedProfile is set, only consider it a match if composeHash matches that profile
       if (selectedProfile && compatMap?.compatibility?.profiles?.[selectedProfile]) {
         const expected = (compatMap.compatibility.profiles[selectedProfile].event_payload ?? '').toLowerCase();
