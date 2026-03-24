@@ -6,6 +6,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.20] - 2026-03-25
+
+### Changed
+
+- Added **`post-release-mero-tee-node-e2e`** workflow and **`scripts/release/e2e-mero-tee-node-post-release.sh`**: after a successful **Release mero-tee** run, boot fresh GCP TDX VMs per profile and verify probe measurements against **`published-mrtds.json`** without waiting for **mero-kms** (documented in `docs/release/workflow-setup.md`).
+- Synchronized release version to `2.3.20` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
+
 ## [2.3.19] - 2026-03-24
 
 ### Fixed

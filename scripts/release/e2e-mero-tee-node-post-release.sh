@@ -11,8 +11,8 @@
 #
 # Required env:
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT
-#   E2E_TEE_TAG              e.g. mero-tee-v2.3.19
-#   E2E_RELEASE_VERSION      e.g. 2.3.19 (for naming)
+#   E2E_TEE_TAG              e.g. mero-tee-v2.3.20
+#   E2E_RELEASE_VERSION      e.g. 2.3.20 (for naming)
 #   E2E_PROBE_WORKFLOW_REF   branch or tag for gh workflow run --ref
 #   E2E_PROBE_EXPECTED_SHA   commit SHA child workflows must use
 # Optional:
