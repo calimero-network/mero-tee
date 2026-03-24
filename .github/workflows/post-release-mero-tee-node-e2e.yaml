@@ -145,9 +145,11 @@ jobs:
             tee_tag="mero-tee-v${version}"
             probe_workflow_ref="${REF_NAME}"
             probe_expected_sha="${GITHUB_SHA}"
-            if ! wait_for_release_tag "${tee_tag}" 30 10; then
+            # Push races Release mero-tee (same commit). A 5-minute poll often timed out
+            # before the GitHub release existed; wait up to ~60 minutes (120 × 30s).
+            if ! wait_for_release_tag "${tee_tag}" 120 30; then
               should_run="false"
-              skip_reason="GitHub release '${tee_tag}' is not published yet (normal right after a version bump; run again after the release is cut)."
+              skip_reason="GitHub release '${tee_tag}' was not published within the wait window (Release mero-tee may still be running). Re-run this workflow, rely on the workflow_run trigger after Release mero-tee succeeds, or use workflow_dispatch."
             fi
           else
             version="${INPUT_RELEASE_VERSION}"

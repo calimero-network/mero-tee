@@ -116,7 +116,7 @@ KMS workflow checks whether a same-commit `Release mero-tee` run exists:
 ## Post-release mero-tee node e2e (mero-kms-independent)
 
 `post-release-mero-tee-node-e2e.yaml` runs after a successful **`Release mero-tee`**
-workflow, on **`push` to `master`** when version or related paths change (same pattern as **`post-release-kms-node-e2e`**), or manually via **`workflow_dispatch`**. On push, if the **`mero-tee-v*`** GitHub release is not published yet, the verify job **skips** with a clear summary instead of failing. It:
+workflow, on **`push` to `master`** when version or related paths change (same pattern as **`post-release-kms-node-e2e`**), or manually via **`workflow_dispatch`**. On push, the verify job **polls for the `mero-tee-v*` GitHub release** (up to about **60 minutes**) because the push races **`Release mero-tee`** on the same commit; if the release is still not published after that window, the verify job **skips** with a clear summary. Prefer relying on the automatic **`workflow_run`** run after **`Release mero-tee`** completes (no long poll). It:
 
 - Waits for the **`mero-tee-v*`** GitHub release to publish `published-mrtds.json` and `release-provenance.json`.
 - For each node profile (**`debug`**, **`debug-read-only`**, **`locked-read-only`**), dispatches **`node-image-gcp-staging-probe.yaml`**, boots a **fresh GCP TDX VM** from the released image metadata, and asserts that **`measurement-policy-candidates.json`** from the probe is a subset of **`published-mrtds.json`** (same **MRTD / RTMR0–2 / TCB** gate as the node section of the KMS-node workflow; **RTMR3** is not used as a strict allowlist subset — see below).
@@ -184,8 +184,10 @@ release events:
   non-latest (`--latest=false`) at finish so it is no longer left as a mutable
   draft.
 
-`push` on `master` can still skip when release assets are not yet published, but
-release-triggered validation is expected to fail explicitly on missing or
+`push` on `master` can still skip when the **`mero-tee-v*`** GitHub release is not
+published within the post-release e2e wait window (see above), but
+`workflow_run`-triggered validation does not need that poll. `Release mero-tee`
+failures are explicit; other release-triggered workflows fail on missing or
 mismatched release inputs.
 Additionally, push-triggered post-release e2e skips when the selected KMS
 release tag exists but still targets an older commit; strict release-triggered
