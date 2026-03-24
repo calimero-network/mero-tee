@@ -45,7 +45,7 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 **Why the same release (e.g. mero-kms-v2.1.73) produces different compose_hash when deployed:**
 
-1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe uses canonical names (`calimero-kms-debug`, `calimero-kms-debug-read-only`, `calimero-kms-locked-read-only`). **MDMA and production should use the same names** for compose_hash to match.
+1. **Deployment-specific metadata** — If the hashed compose includes deployment name, app_id, instance-id, or env vars, each deployment gets a different hash. The release probe and MDMA use **versioned** canonical names: `mero-kms-{profile}-{semver}` (e.g. `mero-kms-debug-2.3.10`). **Probe and MDMA must use the same profile + release version** for compose_hash to match.
 
 2. **Different env vars** — Probe and MDMA must pass the same `MERO_KMS_VERSION` and `MERO_KMS_PROFILE` values in compose. If these differ, compose_hash diverges and runtime policy selection diverges. See [MDMA compose alignment](#mdma-compose-alignment) below.
 
@@ -63,15 +63,15 @@ The compose_hash is **computed by Phala/dstack** from the `app-compose.json` (Do
 
 ## Recommended deployment names (probe + MDMA)
 
-For compose_hash to match between release and production, use the same deployment names:
+For compose_hash to match between release and production, use the **same** Phala CVM name for the **same** `mero-kms-v{semver}` release:
 
-| Profile           | Deployment name              |
-|-------------------|------------------------------|
-| debug             | `calimero-kms-debug`         |
-| debug-read-only   | `calimero-kms-debug-read-only` |
-| locked-read-only  | `calimero-kms-locked-read-only` |
+| Profile           | Deployment name (example for 2.3.10)   |
+|-------------------|----------------------------------------|
+| debug             | `mero-kms-debug-2.3.10`                |
+| debug-read-only   | `mero-kms-debug-read-only-2.3.10`      |
+| locked-read-only  | `mero-kms-locked-read-only-2.3.10`     |
 
-When creating a KMS deployment in MDMA, use the name that matches your image profile.
+MDMA defaults to this pattern; the release workflow (`trigger-staging-probe.sh`) passes the same name to the staging probe.
 
 ## MDMA compose alignment
 

@@ -54,8 +54,9 @@ wait_for_workflow_run() {
   return 1
 }
 
-# Use canonical names matching MDMA/production for compose_hash consistency
-deployment_name="calimero-kms-${PROFILE}"
+# Match MDMA KMS deployment names: mero-kms-{profile}-{semver} (e.g. mero-kms-debug-2.3.10)
+# so Phala compose_hash / measurements align with production for the same release.
+deployment_name="mero-kms-${PROFILE}-${RELEASE_VERSION}"
 max_probe_attempts=2
 run_id=""
 
