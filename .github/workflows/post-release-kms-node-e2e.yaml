@@ -270,11 +270,11 @@ jobs:
             fi
           elif [[ "${should_run}" == "true" ]]; then
             default_kms_tag="mero-kms-v${version}"
-            expected_kms_commit=""
-            if [[ "${strict_release_mode}" == "true" ]]; then
-              expected_kms_commit="${probe_expected_sha}"
-            fi
-            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60 "${expected_kms_commit}"; then
+            # Do not pass mero-tee tag SHA as expected_kms_commit: mero-kms-v* and mero-tee-v* are
+            # separate GitHub releases and almost always have different targetCommitish values.
+            # Requiring equality caused wait_for_kms_release_with_assets to spin for ~90m then fail.
+            # Alignment is by version number + assets (compatibility map, profile policies), not raw SHA.
+            if wait_for_kms_release_with_assets "${default_kms_tag}" 90 60 ""; then
               kms_tag="${default_kms_tag}"
               kms_tag_source="default-for-version"
               if [[ "${strict_release_mode}" != "true" ]]; then
