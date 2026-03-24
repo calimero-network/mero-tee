@@ -12,6 +12,38 @@ const MRTD_OFFSET_V4 = 184;
 const MRTD_OFFSET_V5 = 190;
 const RTMR0_OFFSET_FROM_MRTD = 192;
 
+const HEX96_RE = /^[a-f0-9]{96}$/i;
+
+/** Normalize 96-char hex (merod data.quote.body fields). */
+function normHex96(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toLowerCase().replace(/^0x/i, '');
+  return HEX96_RE.test(s) ? s : null;
+}
+
+/**
+ * Same order as mero-tee extract_tdx_policy_candidates.measurements_from_quote / MDMA tee_quote_measurements:
+ * use data.quote.body when MRTD + RTMR0–3 are all present; else parse quoteB64 bytes.
+ */
+export function extractMeasurementsFromMerodAttest(attestation) {
+  const out = { mrtd: null, rtmr0: null, rtmr1: null, rtmr2: null, rtmr3: null };
+  if (!attestation || typeof attestation !== 'object') return out;
+  const body = attestation.quoteBody;
+  if (body && typeof body === 'object') {
+    const mrtd = normHex96(body.mrtd);
+    const r0 = normHex96(body.rtmr0);
+    const r1 = normHex96(body.rtmr1);
+    const r2 = normHex96(body.rtmr2);
+    const r3 = normHex96(body.rtmr3);
+    if (mrtd && r0 && r1 && r2 && r3) {
+      return { mrtd, rtmr0: r0, rtmr1: r1, rtmr2: r2, rtmr3: r3 };
+    }
+  }
+  const qb = attestation.quoteB64 ?? attestation.quote_b64;
+  if (qb) return extractMeasurementsFromQuoteB64(qb);
+  return out;
+}
+
 /** Extract MRTD and RTMR0-3 (48-byte hex each) from raw TDX quote base64. */
 export function extractMeasurementsFromQuoteB64(quoteB64) {
   const out = { mrtd: null, rtmr0: null, rtmr1: null, rtmr2: null, rtmr3: null };

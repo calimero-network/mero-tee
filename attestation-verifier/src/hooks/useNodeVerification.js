@@ -9,7 +9,7 @@ import { useState, useCallback } from 'react';
 import { verifyNodeAttestation, fetchNodeReleases, fetchNodePolicy } from '../services/api.js';
 import {
   extractRTMRsFromClaims,
-  extractMeasurementsFromQuoteB64,
+  extractMeasurementsFromMerodAttest,
   mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
 
@@ -27,9 +27,8 @@ export function useNodeVerification() {
       const { attestation, ita_claims, ita_token_verified } = data;
       if (!attestation) throw new Error('No attestation in response');
 
-      const quoteB64 = attestation.quoteB64 ?? attestation.quote_b64;
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
-      const fromQuote = quoteB64 ? extractMeasurementsFromQuoteB64(quoteB64) : null;
+      const fromQuote = extractMeasurementsFromMerodAttest(attestation);
       const { quoteRtmrs, measurementSources, itaRtmrs } = mergeQuoteFirstMeasurements(
         fromQuote,
         fromITA

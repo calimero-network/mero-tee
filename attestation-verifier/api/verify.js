@@ -195,7 +195,8 @@ export default async function handler(req, res) {
       if (!quoteB64) {
         return res.status(400).json({ error: 'Node attest response missing quote_b64' });
       }
-      attestation = { quoteB64, reportDataHex };
+      const quoteBody = quote?.body && typeof quote.body === 'object' ? quote.body : null;
+      attestation = { quoteB64, reportDataHex, ...(quoteBody ? { quoteBody } : {}) };
       if (reportDataHex) {
         verifyNonceInAttestation(attestation, nonceBytes);
       }
