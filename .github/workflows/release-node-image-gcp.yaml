@@ -152,7 +152,7 @@ jobs:
 
       - name: Setup packer
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        uses: hashicorp/setup-packer@v3.1.0
+        uses: hashicorp/setup-packer@v3.2.0
         with:
           version: v1.11.2
 
