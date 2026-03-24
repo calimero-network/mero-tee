@@ -6,6 +6,16 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.22] - 2026-03-26
+
+### Fixed
+
+- **`upsert-umbrella-release-links.sh`** (node + KMS): when **Release mero-tee** and **Release mero-kms** run together on the same version bump, concurrent `gh release create` for the semver umbrella tag no longer fails the job; the script reconciles with `gh release edit` if the release already exists.
+
+### Changed
+
+- Synchronized release version to `2.3.22` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
+
 ## [2.3.21] - 2026-03-26
 
 ### Changed
