@@ -1,0 +1,145 @@
+# After a successful "Release mero-tee" run, boots fresh GCP TDX VMs (one per profile)
+# and verifies that measurement-policy-candidates from /admin-api/tee/attest are covered
+# by published-mrtds.json from the same GitHub release — without waiting for mero-kms.
+#
+# Complements post-release-kms-node-e2e.yaml (which also runs these node probes after KMS
+# gates). Use this workflow when you need mero-tee-only validation or KMS release lags.
+name: Post-release mero-tee node e2e
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
+      - "scripts/release/e2e-mero-tee-node-post-release.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
+      - "scripts/release/e2e-mero-tee-node-post-release.sh"
+  workflow_run:
+    workflows:
+      - Release mero-tee
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Released mero-tee version to validate (example: 2.3.19)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: post-release-mero-tee-node-e2e-${{ github.event_name }}-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  smoke_script_wiring:
+    name: Smoke mero-tee node e2e script
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate helper script syntax
+        run: bash -n scripts/release/e2e-mero-tee-node-post-release.sh
+
+  verify_published_node_policy_on_fresh_vms:
+    name: Verify published-mrtds.json on fresh TDX VMs
+    runs-on: ubuntu-latest
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'master') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve release tags and refs
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
+            if [[ "${{ github.event.workflow_run.name }}" != "Release mero-tee" ]]; then
+              echo "::error::Expected workflow_run from 'Release mero-tee', got '${{ github.event.workflow_run.name }}'."
+              exit 1
+            fi
+            if [[ "${WORKFLOW_RUN_HEAD_BRANCH}" != "master" ]]; then
+              echo "::error::Expected master workflow_run, got branch '${WORKFLOW_RUN_HEAD_BRANCH}'."
+              exit 1
+            fi
+            version="$(jq -r '.imageVersion // empty' "mero-tee/versions.json")"
+            if [[ -z "${version}" ]]; then
+              echo "::error::Could not resolve imageVersion from mero-tee/versions.json"
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
+            probe_workflow_ref="${tee_tag}"
+            resolved_probe_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tee_tag}" --jq '.sha' 2>/dev/null || true)"
+            if [[ -z "${resolved_probe_sha}" ]]; then
+              echo "::error::Could not resolve commit SHA for tag '${tee_tag}'."
+              exit 1
+            fi
+            probe_expected_sha="${resolved_probe_sha}"
+          else
+            version="${INPUT_RELEASE_VERSION}"
+            if [[ -z "${version}" ]]; then
+              echo "::error::workflow_dispatch requires release_version."
+              exit 1
+            fi
+            tee_tag="mero-tee-v${version}"
+            probe_workflow_ref="${tee_tag}"
+            resolved_probe_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tee_tag}" --jq '.sha' 2>/dev/null || true)"
+            if [[ -z "${resolved_probe_sha}" ]]; then
+              echo "::error::Could not resolve commit SHA for '${tee_tag}'. Publish the GitHub release first."
+              exit 1
+            fi
+            probe_expected_sha="${resolved_probe_sha}"
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tee_tag=${tee_tag}" >> "${GITHUB_OUTPUT}"
+          echo "probe_workflow_ref=${probe_workflow_ref}" >> "${GITHUB_OUTPUT}"
+          echo "probe_expected_sha=${probe_expected_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run mero-tee node post-release verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          E2E_TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
+          E2E_RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
+          E2E_PROBE_WORKFLOW_REF: ${{ steps.resolve.outputs.probe_workflow_ref }}
+          E2E_PROBE_EXPECTED_SHA: ${{ steps.resolve.outputs.probe_expected_sha }}
+          DEFAULT_NODE_VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/e2e-mero-tee-node-post-release.sh
+
+      - name: Summary
+        if: success()
+        env:
+          TEE_TAG: ${{ steps.resolve.outputs.tee_tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          {
+            echo "## Post-release mero-tee node e2e"
+            echo ""
+            echo "- **Status:** passed"
+            echo "- **Release:** ${TEE_TAG}"
+            echo "- **Checks:** For each profile (debug, debug-read-only, locked-read-only), a fresh GCP TDX VM was booted from \`release-provenance.json\`, and \`measurement-policy-candidates\` values were verified as subsets of \`published-mrtds.json\` (same gates as the node section of the KMS-node e2e workflow, except no KMS staging probes and no debug→locked KMS runtime probe)."
+            echo "- **Docs:** see \`docs/release/workflow-setup.md\` (Post-release mero-tee node e2e)."
+          } >> "${GITHUB_STEP_SUMMARY}"

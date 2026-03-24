@@ -113,6 +113,19 @@ KMS workflow checks whether a same-commit `Release mero-tee` run exists:
   changed in the triggering push, KMS fails fast with an explicit error instead
   of waiting for the full polling timeout.
 
+## Post-release mero-tee node e2e (mero-kms-independent)
+
+`post-release-mero-tee-node-e2e.yaml` runs after a successful **`Release mero-tee`**
+workflow (or manually via `workflow_dispatch`). It:
+
+- Waits for the **`mero-tee-v*`** GitHub release to publish `published-mrtds.json` and `release-provenance.json`.
+- For each node profile (**`debug`**, **`debug-read-only`**, **`locked-read-only`**), dispatches **`node-image-gcp-staging-probe.yaml`**, boots a **fresh GCP TDX VM** from the released image metadata, and asserts that **`measurement-policy-candidates.json`** from the probe is a subset of **`published-mrtds.json`** (same **MRTD / RTMR0–2 / TCB** gate as the node section of the KMS-node workflow; **RTMR3** is not used as a strict allowlist subset — see below).
+- Runs **`node-client-verification.json`** anti-fake checks (nonce / tamper / hash rejection).
+
+It does **not** wait for **`mero-kms-v*`** assets or run KMS staging probes. It does **not** run the **debug node → locked KMS** runtime negative probe (that remains in **`post-release-kms-node-e2e.yaml`**).
+
+**Relationship to the KMS-node workflow:** `post-release-kms-node-e2e.yaml` **already** includes the same node staging probes **after** KMS gates. The dedicated mero-tee workflow exists so you can validate **`published-mrtds.json`** on fresh VMs **without** KMS release readiness. If both workflows run for the same version, node probes may execute twice (separate `gh workflow run` dispatches).
+
 ## Post-release KMS-node e2e guardrails
 
 `post-release-kms-node-e2e.yaml` has strict release-validation behavior for

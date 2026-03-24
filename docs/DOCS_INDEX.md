@@ -55,7 +55,7 @@ When changing release automation, policy workflows, or verification scripts:
 
 - KMS release helpers: `scripts/release/kms-phala/*.sh`
 - Node-image release helpers: `scripts/release/node-image-gcp/*.sh`
-- Release-level verifiers and E2E checks: `scripts/release/verify-*.sh`, `scripts/release/e2e-*.sh`
+- Release-level verifiers and E2E checks: `scripts/release/verify-*.sh`, `scripts/release/e2e-*.sh` (including `e2e-mero-tee-node-post-release.sh` and workflow `post-release-mero-tee-node-e2e.yaml`)
 
 ## Index update checklist
 
