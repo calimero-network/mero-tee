@@ -37,11 +37,10 @@ use crate::policy::{validate_policy_requirements, AttestationPolicy};
 use crate::util::MEASUREMENT_BYTES;
 
 use self::env::{
-    normalize_hash_pin, parse_bool_env, parse_csv_env, parse_csv_env_raw, parse_measurement_list_env,
-    read_env_utf8,
+    normalize_hash_pin, parse_bool_env, parse_csv_env, parse_csv_env_raw,
+    parse_measurement_list_env, read_env_utf8,
 };
 use self::policy_loader::fetch_policy_from_release;
-
 
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
 const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
@@ -397,7 +396,7 @@ mod tests {
 
     use super::*;
     use crate::config::policy_loader::policy_candidate_urls;
-    use crate::test_util::{ENV_KEYS, valid_measurement_hex};
+    use crate::test_util::{valid_measurement_hex, ENV_KEYS};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

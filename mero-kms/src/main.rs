@@ -66,10 +66,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn build_cors_layer<S>(
-    origins: &[String],
-    app: axum::Router<S>,
-) -> EyreResult<axum::Router<S>>
+fn build_cors_layer<S>(origins: &[String], app: axum::Router<S>) -> EyreResult<axum::Router<S>>
 where
     S: Clone + Send + Sync + 'static,
 {

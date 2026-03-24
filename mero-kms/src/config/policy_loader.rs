@@ -6,8 +6,7 @@ use crate::policy::AttestationPolicy;
 
 use super::env::hash_bytes_hex;
 
-const POLICY_RELEASE_BASE: &str =
-    "https://github.com/calimero-network/mero-tee/releases/download";
+const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
 
 /// A candidate URL for fetching an attestation policy, with metadata
 /// about whether it is a legacy (profile-less) fallback.

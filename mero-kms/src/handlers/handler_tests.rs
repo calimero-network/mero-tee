@@ -151,10 +151,8 @@ fn test_signature_payload_is_deterministic() {
     let quote = b"quote-bytes";
     let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
 
-    let payload1 =
-        get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
-    let payload2 =
-        get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
+    let payload1 = get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
+    let payload2 = get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
     assert_eq!(payload1, payload2);
 }
 
@@ -301,8 +299,7 @@ async fn test_attest_endpoint_rejects_invalid_nonce_length() {
 
 #[tokio::test]
 async fn test_policy_not_ready_error_maps_to_service_unavailable() {
-    let response =
-        ServiceError::PolicyNotReady("policy fetch pending".to_string()).into_response();
+    let response = ServiceError::PolicyNotReady("policy fetch pending".to_string()).into_response();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let payload = read_json_body(response).await;
     assert_eq!(payload["error"], "policy_not_ready");

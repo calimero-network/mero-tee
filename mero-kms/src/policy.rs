@@ -101,8 +101,7 @@ impl AttestationPolicy {
         let allowed_tcb_statuses = parse_json_string_array(policy, "node_allowed_tcb_statuses")
             .or_else(|| parse_json_string_array(policy, "allowed_tcb_statuses"))
             .unwrap_or_else(|| vec!["uptodate".to_owned()]);
-        let allowed_mrtd =
-            parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd")?;
+        let allowed_mrtd = parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd")?;
         let allowed_rtmr0 =
             parse_policy_hex_allowlist(policy, "node_allowed_rtmr0", "allowed_rtmr0")?;
         let allowed_rtmr1 =
@@ -205,9 +204,10 @@ fn parse_json_hex_array(
         let raw = value
             .as_str()
             .ok_or_else(|| eyre::eyre!("Policy field '{}' entries must be strings", key))?;
-        parsed.push(HexMeasurement::parse(raw).map_err(|e| {
-            eyre::eyre!("Invalid measurement in policy field '{}': {}", key, e)
-        })?);
+        parsed
+            .push(HexMeasurement::parse(raw).map_err(|e| {
+                eyre::eyre!("Invalid measurement in policy field '{}': {}", key, e)
+            })?);
     }
     Ok(Some(parsed))
 }
