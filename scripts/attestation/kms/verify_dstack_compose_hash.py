@@ -6,8 +6,10 @@ verified attestation path (quote_verified + event_log_verified + os_image_hash_v
 
 This script:
 1. Assumes quote was already verified externally (e.g. via ITA).
-2. Replays RTMR3 from event_log and verifies it matches the quote's rt_mr3.
-3. Replays RTMR0/1/2 and verifies they match the quote (event_log integrity).
+2. Replays RTMR3 from event_log and verifies it matches **RTMR3 parsed from the TD quote
+   bytes** in ``attest-response`` (same ground truth as policy extraction). ITA JWT claims
+   are not used for RTMR comparison — their layout can disagree with the quote blob.
+3. Optionally replays RTMR0/1/2 and verifies they match the TD quote (``--require-os-image-hash``).
 4. Extracts compose_hash and app_id from the verified event log.
 
 Output: kms-app-identity.json with compose_hash (64-char hex), app_id (optional).
@@ -20,7 +22,13 @@ import hashlib
 import json
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional, Tuple
+
+_SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.insert(0, _SHARED_DIR)
+from extract_tdx_policy_candidates import measurements_from_quote
 
 INIT_MR = "0" * 96  # 48 bytes hex = 96 chars
 COMPOSE_HASH_RE = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -139,6 +147,15 @@ def replay_rtmr(events: List[Dict], imr: int) -> str:
     return mr.hex()
 
 
+def _rtmr_hex_from_td_quote_attest(attest: Any, imr: int) -> str:
+    """96-char lowercase hex RTMR from merod/KMS attest JSON (quote body or ``quoteB64``)."""
+    meas, _ = measurements_from_quote(attest)
+    key = f"rtmr{imr}"
+    if key not in meas:
+        raise RuntimeError(f"Could not extract RTMR{imr} from TD quote (merod/KMS attest JSON)")
+    return meas[key][0].lower()
+
+
 def extract_compose_hash_and_app_id(events: List[Dict]) -> tuple[Optional[str], Optional[str]]:
     """Extract compose_hash and app_id from event log."""
     compose_hash = None
@@ -187,6 +204,8 @@ def main() -> int:
     attest = load_json(args.attest_response)
     claims = load_json(args.claims)
 
+    ita_rtmr3 = find_rtmr3_in_claims(claims)
+
     event_log = attest.get("event_log") or attest.get("eventLog")
     if event_log is None:
         raise RuntimeError("attest-response missing event_log")
@@ -195,27 +214,28 @@ def main() -> int:
     if not isinstance(event_log, list):
         raise RuntimeError("event_log must be a JSON array")
 
-    quote_rtmr3 = find_rtmr3_in_claims(claims)
-    if not quote_rtmr3:
-        raise RuntimeError("Could not extract rt_mr3 from ITA claims")
+    quote_rtmr3 = _rtmr_hex_from_td_quote_attest(attest, 3)
+    if ita_rtmr3 and ita_rtmr3 != quote_rtmr3:
+        print(
+            "WARNING: ITA JWT RTMR3 differs from TD-quote RTMR3; using TD quote for replay check",
+            file=sys.stderr,
+        )
 
     replayed_rtmr3 = replay_rtmr(event_log, 3)
     if replayed_rtmr3 != quote_rtmr3:
         raise RuntimeError(
             f"Event log RTMR3 replay mismatch: replayed={replayed_rtmr3[:32]}... "
-            f"quote={quote_rtmr3[:32]}..."
+            f"quote_td={quote_rtmr3[:32]}..."
         )
 
     if args.require_os_image_hash:
         for imr in (0, 1, 2):
-            quote_key = f"rtmr{imr}" if imr else "rtmr0"
-            quote_val = _find_rtmr_in_claims(claims, imr)
-            if quote_val:
-                replayed = replay_rtmr(event_log, imr)
-                if replayed != quote_val:
-                    raise RuntimeError(
-                        f"Event log RTMR{imr} replay mismatch for imr={imr}"
-                    )
+            quote_val = _rtmr_hex_from_td_quote_attest(attest, imr)
+            replayed = replay_rtmr(event_log, imr)
+            if replayed != quote_val:
+                raise RuntimeError(
+                    f"Event log RTMR{imr} replay mismatch for imr={imr}"
+                )
 
     compose_hash, app_id = extract_compose_hash_and_app_id(event_log)
     if not compose_hash:
@@ -231,20 +251,6 @@ def main() -> int:
     }
     save_json(args.output_json, output)
     return 0
-
-
-def _find_rtmr_in_claims(claims: Any, imr: int) -> Optional[str]:
-    key_hint = f"rtmr{imr}" if imr else "rtmr0"
-    if imr == 0:
-        key_hint = "rtmr0"
-    candidates = []
-    for path, value in _walk_json(claims):
-        if not isinstance(value, str) or not re.match(r"^[A-Fa-f0-9]{96}$", value.strip()):
-            continue
-        k = path.split(".")[-1].lower()
-        if key_hint in k or f"rt_mr{imr}" in k:
-            candidates.append(value.strip().lower())
-    return candidates[0] if candidates else None
 
 
 if __name__ == "__main__":

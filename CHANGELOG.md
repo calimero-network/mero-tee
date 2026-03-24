@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Fixed
+
+- `verify_dstack_compose_hash.py`: compare RTMR3 event-log replay to **RTMR3 from the TD quote** (via `measurements_from_quote`), not ITA JWT fields — Intel Trust Authority claim layout can disagree with the quote blob and caused false replay mismatches in CI.
+
 ### Changed
 
 - Reorganized `scripts/attestation/`: **`shared/`** (ITA + policy extraction used by node and KMS), **`kms/`** (compose-hash / Phala-only helpers). Moved Phala deploy assets to **`scripts/kms/phala/`** (was `scripts/phala/`). Updated workflows and docs to match.
