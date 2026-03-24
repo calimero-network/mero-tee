@@ -6,6 +6,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.16] - 2026-03-24
+
+### Changed
+
+- Attestation tooling uses merod canonical paths only: prefer `data.quote.body` for measurements, then `data.quoteB64` (no JSON tree scoring). Updated `extract_tdx_policy_candidates.py`, `verify_tdx_quote_ita.py`, and `attestation-verifier` `extractQuote`.
+- Synchronized release version to `2.3.16` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), and `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.3.15] - 2026-03-24
 
 ### Changed
