@@ -6,6 +6,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.25] - 2026-03-26
+
+### Changed
+
+- **Post-release e2e**: tightened probe-vs-published verification from **subset** to **exact equality** for MRTD, RTMR0–2, and TCB status checks across all three workflows (`e2e-mero-tee-node-post-release.sh`, `post-release-kms-node-e2e.yaml`, `e2e-verify-kms-node-compatibility.sh`). Fresh VM / KMS measurements must now match the published release policy exactly, not just be contained within it.
+- Synchronized release version to `2.3.25` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
+
 ## [2.3.24] - 2026-03-26
 
 ### Changed

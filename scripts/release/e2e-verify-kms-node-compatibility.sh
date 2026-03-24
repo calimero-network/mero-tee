@@ -95,22 +95,22 @@ kms_probe_policy = kms_probe.get("policy")
 if not isinstance(kms_probe_policy, dict):
     fail(f"KMS probe policy missing in {kms_probe_path}")
 
-# 0) Deployed KMS measurement must match published release policy.
+# 0) Deployed KMS measurement must exactly match published release policy.
 locked_policy = kms_policies["locked-read-only"]
 for key in ["allowed_tcb_statuses", *measurement_keys]:
-    probe_values = normalize(kms_probe_policy.get(key, []))
-    published_values = normalize(locked_policy.get(f"kms_{key}", locked_policy.get(key, [])))
+    probe_values = set(normalize(kms_probe_policy.get(key, [])))
+    published_values = set(normalize(locked_policy.get(f"kms_{key}", locked_policy.get(key, []))))
     if not probe_values:
         fail(f"KMS probe candidates missing values for {key}")
     if not published_values:
         fail(f"Published KMS locked policy missing values for kms_{key}")
-    if not set(probe_values).issubset(set(published_values)):
+    if probe_values != published_values:
         fail(
-            f"Deployed KMS measurements do not match published locked policy for {key}. "
-            f"probe={probe_values} published={published_values}"
+            f"Deployed KMS measurements do not exactly match published locked policy for {key}. "
+            f"probe={sorted(probe_values)} published={sorted(published_values)}"
         )
 
-print("[e2e-kms-node] OK: deployed KMS measurement candidates match published KMS policy")
+print("[e2e-kms-node] OK: deployed KMS measurements exactly match published KMS policy")
 
 
 def policy_allows_node(node_profile: str, kms_profile: str) -> bool:

@@ -636,7 +636,6 @@ jobs:
                           f"for profile={profile}"
                       )
 
-          # Keep policy subset checks aligned with attestation verifier semantics:
           # RTMR3 is derived from replayed event log, not policy allowlist matching.
           keys = [
               "allowed_tcb_statuses",
@@ -646,18 +645,20 @@ jobs:
               "allowed_rtmr2",
           ]
           for key in keys:
-              probe_values = normalize(probe_policy.get(key, []))
-              release_values = normalize(release_policy.get(f"kms_{key}", release_policy.get(key, [])))
+              probe_values = set(normalize(probe_policy.get(key, [])))
+              release_values = set(normalize(release_policy.get(f"kms_{key}", release_policy.get(key, []))))
               if not probe_values:
                   raise SystemExit(f"[post-release-e2e] ERROR: missing probe values for {profile}.{key}")
               if not release_values:
                   raise SystemExit(f"[post-release-e2e] ERROR: missing release policy values for {profile}.{key}")
-              if not set(probe_values).issubset(set(release_values)):
+              if probe_values != release_values:
                   raise SystemExit(
-                      "[post-release-e2e] ERROR: probe values are not covered by release policy "
-                      f"for profile={profile} key={key}"
+                      f"[post-release-e2e] ERROR: KMS probe measurements do not exactly match release policy "
+                      f"for profile={profile} key={key}\n"
+                      f"  probe:   {sorted(probe_values)}\n"
+                      f"  release: {sorted(release_values)}"
                   )
-          print(f"[post-release-e2e] OK: probed KMS measurements match release policy for profile={profile}")
+          print(f"[post-release-e2e] OK: probed KMS measurements exactly match release policy for profile={profile}")
           PY
               )"; then
                 echo "${probe_validation_output}"
@@ -1046,7 +1047,7 @@ jobs:
           published_payload = json.loads(published_file.read_text(encoding="utf-8"))
           published_profile = published_payload.get("profiles", {}).get(profile, {})
 
-          # Mirror verifier-style handling: do not gate on RTMR3 allowlist subset checks.
+          # RTMR3 is derived from replayed event log, not policy allowlist matching.
           keys = [
               "allowed_tcb_statuses",
               "allowed_mrtd",
@@ -1055,18 +1056,20 @@ jobs:
               "allowed_rtmr2",
           ]
           for key in keys:
-              probe_values = normalize(probe_policy.get(key, []))
-              published_values = normalize(published_profile.get(key, []))
+              probe_values = set(normalize(probe_policy.get(key, [])))
+              published_values = set(normalize(published_profile.get(key, [])))
               if not probe_values:
                   raise SystemExit(f"[post-release-e2e] ERROR: missing node probe values for {profile}.{key}")
               if not published_values:
                   raise SystemExit(f"[post-release-e2e] ERROR: missing published node policy values for {profile}.{key}")
-              if not set(probe_values).issubset(set(published_values)):
+              if probe_values != published_values:
                   raise SystemExit(
-                      "[post-release-e2e] ERROR: node probe values are not covered by published policy "
-                      f"for profile={profile} key={key}"
+                      f"[post-release-e2e] ERROR: node probe measurements do not exactly match published policy "
+                      f"for profile={profile} key={key}\n"
+                      f"  probe:     {sorted(probe_values)}\n"
+                      f"  published: {sorted(published_values)}"
                   )
-          print(f"[post-release-e2e] OK: probed node measurements match published policy for profile={profile}")
+          print(f"[post-release-e2e] OK: probed node measurements exactly match published policy for profile={profile}")
           PY
 
             python3 - "${profile}" "${node_client_verification_file}" <<'PY'

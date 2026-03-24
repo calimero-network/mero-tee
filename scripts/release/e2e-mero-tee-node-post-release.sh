@@ -301,18 +301,20 @@ keys = [
     "allowed_rtmr2",
 ]
 for key in keys:
-    probe_values = normalize(probe_policy.get(key, []))
-    published_values = normalize(published_profile.get(key, []))
+    probe_values = set(normalize(probe_policy.get(key, [])))
+    published_values = set(normalize(published_profile.get(key, [])))
     if not probe_values:
         raise SystemExit(f"[mero-tee-node-e2e] ERROR: missing node probe values for {profile}.{key}")
     if not published_values:
         raise SystemExit(f"[mero-tee-node-e2e] ERROR: missing published node policy values for {profile}.{key}")
-    if not set(probe_values).issubset(set(published_values)):
+    if probe_values != published_values:
         raise SystemExit(
-            "[mero-tee-node-e2e] ERROR: node probe values are not covered by published policy "
-            f"for profile={profile} key={key}"
+            f"[mero-tee-node-e2e] ERROR: node probe measurements do not exactly match published policy "
+            f"for profile={profile} key={key}\n"
+            f"  probe:     {sorted(probe_values)}\n"
+            f"  published: {sorted(published_values)}"
         )
-print(f"[mero-tee-node-e2e] OK: probed node measurements match published policy for profile={profile}")
+print(f"[mero-tee-node-e2e] OK: probed node measurements exactly match published policy for profile={profile}")
 PY
 
   python3 - "${profile}" "${node_client_verification_file}" <<'PY'
