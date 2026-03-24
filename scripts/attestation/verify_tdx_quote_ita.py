@@ -259,45 +259,6 @@ def normalize_hex(value: str) -> str:
     return value.lower().strip()
 
 
-def _hex_preview(value: str, head: int = 16, tail: int = 8) -> str:
-    v = normalize_hex(value).lstrip("0x")
-    if len(v) <= head + tail + 1:
-        return v
-    return f"{v[:head]}…{v[-tail:]}"
-
-
-def collect_ita_tdx_measurement_fields(claims: Any) -> Dict[str, Dict[str, str]]:
-    """Extract TDX measurement strings from ITA JWT claims (canonical Intel field names)."""
-    want_keys = {
-        "tdx_mrtd",
-        "tdx_rtmr0",
-        "tdx_rtmr1",
-        "tdx_rtmr2",
-        "tdx_rtmr3",
-        "mr_td",
-        "mrtd",
-    }
-    out: Dict[str, Dict[str, str]] = {}
-    for path, value in walk_json(claims):
-        if not isinstance(value, str):
-            continue
-        key = path.split(".")[-1].lower().strip("[]0123456789")
-        if key not in want_keys:
-            continue
-        if key in out:
-            continue
-        raw = value.strip()
-        if not raw:
-            continue
-        if not HEX_RE.match(raw.replace("0x", "").replace("0X", "")):
-            # Some ITA payloads use non-hex; still surface for debugging
-            out[key] = {"json_path": path, "value_preview": raw[:128] + ("…" if len(raw) > 128 else "")}
-            continue
-        cleaned = normalize_hex(raw.lstrip("0x").lstrip("0X"))
-        out[key] = {"json_path": path, "value_full_hex": cleaned, "value_preview": _hex_preview(cleaned)}
-    return out
-
-
 def write_ci_verification_summary(
     *,
     output_dir: str,
@@ -312,7 +273,6 @@ def write_ci_verification_summary(
     quote_bytes = decode_base64_flexible(quote_b64) or b""
     quote_sha256 = hashlib.sha256(quote_bytes).hexdigest() if quote_bytes else ""
 
-    tdx_fields = collect_ita_tdx_measurement_fields(claims)
     top_keys = list(claims.keys()) if isinstance(claims, dict) else []
 
     summary: Dict[str, Any] = {
@@ -323,7 +283,7 @@ def write_ci_verification_summary(
         "node_quote_sha256_hex": quote_sha256,
         "ita_jwt_token_json_path": token_path,
         "ita_jwt_claim_top_level_keys": top_keys,
-        "ita_jwt_tdx_measurement_fields": tdx_fields,
+        "note": "MRTD/RTMR ground truth: merod data.quote.body / data.quoteB64; see external-attestation-token-claims.json for full ITA JWT.",
     }
 
     path = os.path.join(output_dir, "ita-ci-verification-summary.json")
@@ -338,15 +298,7 @@ def write_ci_verification_summary(
     print(f"node_quote_sha256={quote_sha256}")
     print(f"ita_jwt_token_path={token_path}")
     print(f"ita_jwt_claim_top_level_keys={top_keys}")
-    print("Measurements reported in ITA attestation JWT (canonical TDX fields):")
-    if not tdx_fields:
-        print("  (no tdx_mrtd/tdx_rtmr* fields found in claims — see external-attestation-token-claims.json)")
-    for name in sorted(tdx_fields.keys()):
-        entry = tdx_fields[name]
-        if "value_full_hex" in entry:
-            print(f"  {name}={entry['value_preview']} (full hex in ita-ci-verification-summary.json)")
-        else:
-            print(f"  {name}={entry.get('value_preview', entry)}")
+    print("MRTD/RTMR: use merod attest JSON (data.quote.body); ITA claims in external-attestation-token-claims.json")
     print(f"Full JSON: {path}")
     print("=== End ITA CI summary ===")
     print("")
