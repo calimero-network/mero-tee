@@ -30,6 +30,7 @@ export function VerificationResults({ result }) {
             policiesByProfile={result.policiesByProfile}
             tagToUse={result.tagToUse}
             profileFromComposeHash={result.matches?.[0]}
+            isKms={hasComposeOrEventLog}
           />
         )}
         {hasComposeOrEventLog && (

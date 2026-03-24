@@ -89,6 +89,7 @@ export function RtmrCard({
   policiesByProfile,
   tagToUse,
   profileFromComposeHash,
+  isKms = false,
 }) {
   const showExpected = hasAnyPolicy(policiesByProfile);
   const inferredProfile = showExpected
@@ -110,6 +111,8 @@ export function RtmrCard({
     const allowlist = getAllowlist(policiesByProfile?.[profileForExpected], rtmrKey);
     const policyMatch = val && allowlist && isInAllowlist(val, allowlist);
 
+    const skipPolicyForThisRtmr = isKms && i === 3;
+
     rows.push(
       <div key={i} className="rtmr-row">
         <span className="rtmr-label">RTMR{i}</span>
@@ -118,7 +121,7 @@ export function RtmrCard({
             <span className="label">Observed ({sourceLabel || '—'}):</span>{' '}
             <code>{truncateHex(val, 12)}</code>
           </div>
-          {showExpected && (
+          {showExpected && !skipPolicyForThisRtmr && (
             <div>
               <span className="label">Expected ({tagToUse} · {profileForExpected}):</span>{' '}
               <code>{truncateHex(expectedVal, 12)}</code>
@@ -145,7 +148,7 @@ export function RtmrCard({
               </span>
             </div>
           )}
-          {showExpected && val && !policyMatch && (
+          {showExpected && !skipPolicyForThisRtmr && val && !policyMatch && (
             <div className="rtmr-expected">
               <span className="label">In release allowlist:</span>{' '}
               {inReleaseProfiles.length > 0 ? (
@@ -225,8 +228,10 @@ export function RtmrCard({
       <p className="rtmr-hint">
         MRTD and RTMR0–3 shown for policy comparison are parsed from the TDX quote (same as published
         releases). All registers are compared against the release allowlist. Intel Trust Authority (ITA)
-        JWT signature is verified separately. TCB status comes from ITA claims (when present). For KMS,
-        RTMR3 is also checked against event log replay.
+        JWT signature is verified separately. TCB status comes from ITA claims (when present).
+        {isKms
+          ? ' For KMS, RTMR3 changes per deployment (includes compose_hash); only event log replay integrity is checked.'
+          : ''}
       </p>
       {itaMismatchWarning && (
         <p className="rtmr-hint">
