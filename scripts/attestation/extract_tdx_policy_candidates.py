@@ -244,42 +244,45 @@ def measurements_from_quote(attest_payload: Any) -> Tuple[Dict[str, Tuple[str, s
 
 
 def extract_tcb_status_candidates(payload: Any) -> List[Tuple[str, str, str]]:
-    candidates: List[Tuple[int, str, str, str]] = []
+    """TCB status strings from ITA claims: fixed key names first, then deterministic path order (no scoring)."""
+    if isinstance(payload, dict):
+        for key in (
+            "attester_tcb_status",
+            "attesterTcbStatus",
+            "tcb_status",
+            "tcbStatus",
+        ):
+            v = payload.get(key)
+            if isinstance(v, str):
+                ns = normalize_tcb_status(v)
+                if ns is not None:
+                    return [(ns, f"$.{key}", v)]
+
+    rows: List[Tuple[str, str, str, str]] = []
     for path, value in walk_json(payload):
         if not isinstance(value, str):
             continue
-
         normalized_status = normalize_tcb_status(value)
         if normalized_status is None:
             continue
-
         key_norm = normalize_key_segment(path)
         path_norm = re.sub(r"[^a-z0-9]", "", path.lower())
-        score = 0
-
         if key_norm in {"tcbstatus", "attestertcbstatus"}:
-            score += 30
-        if "tcb" in key_norm and "status" in key_norm:
-            score += 20
-        if "tcb" in path_norm and "status" in path_norm:
-            score += 12
-        if path_norm.endswith("status"):
-            score += 3
+            rows.append((path, normalized_status, path, value))
+        elif "tcb" in key_norm and "status" in key_norm:
+            rows.append((path, normalized_status, path, value))
+        elif "tcb" in path_norm and "status" in path_norm:
+            rows.append((path, normalized_status, path, value))
 
-        if score > 0:
-            candidates.append((score, normalized_status, path, value))
-
-    candidates.sort(key=lambda item: (item[0], len(item[2])), reverse=True)
-
-    unique_values: Dict[str, Tuple[str, str]] = {}
-    for _, normalized_status, path, raw in candidates:
-        if normalized_status in unique_values:
+    rows.sort(key=lambda x: x[0])
+    seen: set[str] = set()
+    out: List[Tuple[str, str, str]] = []
+    for _, normalized_status, path, raw in rows:
+        if normalized_status in seen:
             continue
-        unique_values[normalized_status] = (path, raw)
-
-    return [
-        (status, path, raw) for status, (path, raw) in unique_values.items()
-    ]
+        seen.add(normalized_status)
+        out.append((normalized_status, path, raw))
+    return out
 
 
 def compact_json(value: Any) -> str:

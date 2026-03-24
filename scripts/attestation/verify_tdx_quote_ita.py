@@ -32,19 +32,29 @@ import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
-TOKEN_KEY_HINTS = {
-    "token",
-    "attestation_token",
-    "jwt",
-    "signed_token",
-}
+MRTD_KEY_HINTS = frozenset(
+    {
+        "mrtd",
+        "tdx_mrtd",
+        "mr_td",
+        "mrtd_hex",
+    }
+)
 
-MRTD_KEY_HINTS = {
-    "mrtd",
-    "tdx_mrtd",
-    "mr_td",
-    "mrtd_hex",
-}
+# Intel Trust Authority HTTP JSON: try these before any tree walk (deterministic).
+ITA_JWT_PATHS: Tuple[Tuple[str, ...], ...] = (
+    ("token",),
+    ("attestationToken",),
+    ("attestation_token",),
+    ("jwt",),
+    ("signed_token",),
+    ("signedToken",),
+    ("data", "token"),
+    ("data", "attestationToken"),
+    ("data", "attestation_token"),
+    ("result", "token"),
+    ("response", "token"),
+)
 
 BASE64_CANDIDATE_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 HEX_RE = re.compile(r"^[A-Fa-f0-9]{32,}$")
@@ -155,36 +165,44 @@ def looks_like_jwt(value: str) -> bool:
     return len(parts) == 3 and all(parts)
 
 
-def find_token(payload: Any) -> Optional[Tuple[str, str]]:
-    if isinstance(payload, str):
-        if looks_like_jwt(payload):
-            token = payload.strip()
-            if token.lower().startswith("bearer "):
-                token = token.split(" ", 1)[1].strip()
-            return token, "$"
-        return None
-
-    token_candidates: List[Tuple[int, int, str, str]] = []
-    for path, value in walk_json(payload):
-        if not isinstance(value, str):
-            continue
-        if not looks_like_jwt(value):
-            continue
-        key = path.split(".")[-1].lower().strip("[]0123456789")
-        score = 1
-        if key in TOKEN_KEY_HINTS:
-            score += 5
-        if "token" in key or "jwt" in key:
-            score += 3
-        token_candidates.append((score, len(value), value, path))
-
-    if not token_candidates:
-        return None
-    best = sorted(token_candidates, key=lambda x: (x[0], x[1]), reverse=True)[0]
-    token = best[2].strip()
+def _strip_bearer_jwt(value: str) -> str:
+    token = value.strip()
     if token.lower().startswith("bearer "):
         token = token.split(" ", 1)[1].strip()
-    return token, best[3]
+    return token
+
+
+def _get_at_path(obj: Any, parts: Tuple[str, ...]) -> Any:
+    cur: Any = obj
+    for p in parts:
+        if not isinstance(cur, dict) or p not in cur:
+            return None
+        cur = cur[p]
+    return cur
+
+
+def find_token(payload: Any) -> Optional[Tuple[str, str]]:
+    """JWT from ITA response: fixed paths first, else lexicographically first JWT in tree (no scoring)."""
+    if isinstance(payload, str):
+        if looks_like_jwt(payload):
+            return _strip_bearer_jwt(payload), "$"
+        return None
+
+    if isinstance(payload, dict):
+        for parts in ITA_JWT_PATHS:
+            v = _get_at_path(payload, parts)
+            if isinstance(v, str) and looks_like_jwt(v):
+                path_str = "$." + ".".join(parts)
+                return _strip_bearer_jwt(v), path_str
+
+    jwt_at_paths: List[Tuple[str, str]] = []
+    for path, value in walk_json(payload):
+        if isinstance(value, str) and looks_like_jwt(value):
+            jwt_at_paths.append((path, _strip_bearer_jwt(value)))
+    if not jwt_at_paths:
+        return None
+    path, token = sorted(jwt_at_paths, key=lambda x: x[0])[0]
+    return token, path
 
 
 def decode_jwt_claims(token: str) -> Dict[str, Any]:
@@ -201,27 +219,40 @@ def decode_jwt_claims(token: str) -> Dict[str, Any]:
         raise RuntimeError("Failed to decode JWT payload") from exc
 
 
-def find_mrtd(payload: Any) -> Optional[Tuple[str, str]]:
-    candidates: List[Tuple[int, str, str]] = []
+def _mrtd_key_segment(path: str) -> str:
+    key = path.split(".")[-1]
+    key = re.sub(r"\[[0-9]+\]", "", key)
+    return re.sub(r"[^a-z0-9]", "", key.lower())
 
+
+def find_mrtd(payload: Any) -> Optional[Tuple[str, str]]:
+    """MRTD hex for tee-info (merod ``data.mrtd``) or ITA claims (``tdx_mrtd`` / …). No scoring."""
+    if not isinstance(payload, dict):
+        return None
+    # merod /admin-api/tee/info
+    data = payload.get("data")
+    if isinstance(data, dict):
+        v = data.get("mrtd")
+        if isinstance(v, str) and HEX_RE.match(v.replace("0x", "").replace("0X", "")):
+            return v, "$.data.mrtd"
+    for key in ("tdx_mrtd", "mr_td", "mrtd", "mrtd_hex"):
+        v = payload.get(key)
+        if isinstance(v, str) and HEX_RE.match(v.replace("0x", "").replace("0X", "")):
+            return v, f"$.{key}"
+
+    matches: List[Tuple[str, str]] = []
     for path, value in walk_json(payload):
         if not isinstance(value, str):
             continue
-        key = path.split(".")[-1].lower().strip("[]0123456789")
-        score = 0
-        if key in MRTD_KEY_HINTS:
-            score += 10
-        if "mrtd" in key or "mr_td" in key:
-            score += 5
-        if HEX_RE.match(value):
-            score += 2
-        if score > 0:
-            candidates.append((score, value, path))
-
-    if not candidates:
+        if not HEX_RE.match(value.replace("0x", "").replace("0X", "")):
+            continue
+        seg = _mrtd_key_segment(path)
+        if seg in MRTD_KEY_HINTS:
+            matches.append((path, value))
+    if not matches:
         return None
-    best = sorted(candidates, key=lambda x: (x[0], len(x[1])), reverse=True)[0]
-    return best[1], best[2]
+    path, value = sorted(matches, key=lambda x: x[0])[0]
+    return value, path
 
 
 def normalize_hex(value: str) -> str:

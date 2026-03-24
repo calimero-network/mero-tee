@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 INIT_MR = "0" * 96  # 48 bytes hex = 96 chars
 COMPOSE_HASH_RE = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -38,8 +38,15 @@ def save_json(path: str, payload: Any) -> None:
 
 
 def find_rtmr3_in_claims(claims: Any) -> Optional[str]:
-    """Extract rt_mr3 (96-char hex) from ITA token claims."""
-    candidates: List[tuple[int, str]] = []
+    """Extract RTMR3 (96-char hex) from ITA claims: canonical keys first, else lexicographically first path."""
+    if isinstance(claims, dict):
+        for key in ("tdx_rtmr3", "tdx_rtmr_3", "rt_mr3", "rtmr3", "rtmr_3"):
+            v = claims.get(key)
+            if isinstance(v, str):
+                norm = v.strip()
+                if re.match(r"^[A-Fa-f0-9]{96}$", norm):
+                    return norm.lower()
+    paths: List[Tuple[str, str]] = []
     for path, value in _walk_json(claims):
         if not isinstance(value, str):
             continue
@@ -47,13 +54,11 @@ def find_rtmr3_in_claims(claims: Any) -> Optional[str]:
         if not re.match(r"^[A-Fa-f0-9]{96}$", norm):
             continue
         key = path.split(".")[-1].lower()
-        score = 30 if "rtmr3" in key or "rt_mr3" in key else 5
-        if "rtmr" in key or "rt_mr" in key:
-            score += 10
-        candidates.append((score, norm.lower()))
-    if not candidates:
+        if "rtmr3" in key or "rt_mr3" in key or "rtmr" in key or "rt_mr" in key:
+            paths.append((path, norm.lower()))
+    if not paths:
         return None
-    return max(candidates, key=lambda x: x[0])[1]
+    return sorted(paths, key=lambda x: x[0])[0][1]
 
 
 def _walk_json(value: Any, path: str = "$"):
