@@ -34,7 +34,6 @@ use std::sync::Arc;
 use eyre::{bail, Result as EyreResult};
 
 use crate::policy::{validate_policy_requirements, AttestationPolicy};
-use crate::util::MEASUREMENT_BYTES;
 
 use self::env::{
     normalize_hash_pin, parse_bool_env, parse_csv_env, parse_csv_env_raw,
@@ -223,11 +222,11 @@ impl Config {
             enforce_measurement_policy: true,
             allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES")
                 .unwrap_or_else(|| vec!["uptodate".to_string()]),
-            allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD", MEASUREMENT_BYTES)?,
-            allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0", MEASUREMENT_BYTES)?,
-            allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1", MEASUREMENT_BYTES)?,
-            allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2", MEASUREMENT_BYTES)?,
-            allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3", MEASUREMENT_BYTES)?,
+            allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD")?,
+            allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0")?,
+            allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1")?,
+            allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
+            allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
         })
     }
 

@@ -2,7 +2,7 @@
 
 use eyre::{bail, Result as EyreResult};
 
-use crate::util::{normalize_hex, SHA256_HEX_LEN};
+use crate::util::SHA256_HEX_LEN;
 
 pub fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -67,9 +67,9 @@ pub fn read_env_utf8(name: &str) -> EyreResult<Option<String>> {
 }
 
 /// Parse a comma-separated env var into validated hex measurement values.
+/// Each entry must be a valid [`HexMeasurement`] (48-byte / 96-hex-char TDX register value).
 pub fn parse_measurement_list_env(
     name: &str,
-    expected_bytes: usize,
 ) -> EyreResult<Vec<crate::measurement::HexMeasurement>> {
     match std::env::var(name) {
         Ok(raw) => raw
@@ -83,9 +83,7 @@ pub fn parse_measurement_list_env(
                 }
             })
             .map(|value| {
-                let normalized = normalize_hex(&value, expected_bytes)?;
-                Ok(crate::measurement::HexMeasurement::parse(&normalized)
-                    .expect("already validated"))
+                crate::measurement::HexMeasurement::parse(&value).map_err(|e| eyre::eyre!("{e}"))
             })
             .collect(),
         Err(std::env::VarError::NotPresent) => Ok(Vec::new()),

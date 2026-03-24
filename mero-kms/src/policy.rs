@@ -38,17 +38,6 @@ impl Default for AttestationPolicy {
 }
 
 impl AttestationPolicy {
-    /// Return an iterator of (register_name, allowlist) pairs.
-    pub fn measurement_allowlists(&self) -> [(&str, &[HexMeasurement]); 5] {
-        [
-            ("MRTD", &self.allowed_mrtd),
-            ("RTMR0", &self.allowed_rtmr0),
-            ("RTMR1", &self.allowed_rtmr1),
-            ("RTMR2", &self.allowed_rtmr2),
-            ("RTMR3", &self.allowed_rtmr3),
-        ]
-    }
-
     /// Parse a release-fetched or inline JSON policy document into an `AttestationPolicy`.
     pub fn from_json(
         json_str: &str,

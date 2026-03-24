@@ -51,45 +51,101 @@ pub enum ServiceError {
 }
 
 impl ServiceError {
-    /// Map each variant to its HTTP status code and machine-readable error tag.
-    fn status_and_tag(&self) -> (StatusCode, &'static str) {
+    /// Map each variant to its HTTP status code, machine-readable error tag,
+    /// and human-readable details string (preserving the original API format
+    /// where details contain only the inner message, not the thiserror prefix).
+    fn status_tag_details(&self) -> (StatusCode, &'static str, Option<String>) {
         match self {
-            Self::InvalidBase64(_) => (StatusCode::BAD_REQUEST, "invalid_request"),
-            Self::InvalidPeerId(_) => (StatusCode::BAD_REQUEST, "invalid_peer_id"),
-            Self::InvalidAttestationRequest(_) => {
-                (StatusCode::BAD_REQUEST, "invalid_attestation_request")
-            }
-            Self::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
-            Self::InvalidChallenge(_) => (StatusCode::UNAUTHORIZED, "invalid_challenge"),
-            Self::InvalidPeerPublicKey(_) => (StatusCode::BAD_REQUEST, "invalid_peer_public_key"),
-            Self::InvalidSignature(_) => (StatusCode::UNAUTHORIZED, "invalid_signature"),
-            Self::AttestationVerificationFailed(_) => {
-                (StatusCode::UNAUTHORIZED, "attestation_verification_failed")
-            }
-            Self::MockAttestationRejected => {
-                (StatusCode::UNAUTHORIZED, "mock_attestation_rejected")
-            }
-            Self::PeerIdentityMismatch => (StatusCode::UNAUTHORIZED, "peer_identity_mismatch"),
-            Self::PeerIdMismatch => (StatusCode::UNAUTHORIZED, "peer_id_mismatch"),
-            Self::TcbStatusRejected(_) => (StatusCode::FORBIDDEN, "tcb_status_rejected"),
-            Self::MeasurementPolicyRejected(_) => {
-                (StatusCode::FORBIDDEN, "measurement_policy_rejected")
-            }
-            Self::PolicyNotReady(_) => (StatusCode::SERVICE_UNAVAILABLE, "policy_not_ready"),
-            Self::KeyDerivationFailed(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "key_derivation_failed")
-            }
+            Self::InvalidBase64(msg) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                Some(msg.clone()),
+            ),
+            Self::InvalidPeerId(msg) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_peer_id",
+                Some(msg.clone()),
+            ),
+            Self::InvalidAttestationRequest(msg) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_attestation_request",
+                Some(msg.clone()),
+            ),
+            Self::RateLimited(msg) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                Some(msg.clone()),
+            ),
+            Self::InvalidChallenge(msg) => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_challenge",
+                Some(msg.clone()),
+            ),
+            Self::InvalidPeerPublicKey(msg) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_peer_public_key",
+                Some(msg.clone()),
+            ),
+            Self::InvalidSignature(msg) => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_signature",
+                Some(msg.clone()),
+            ),
+            Self::AttestationVerificationFailed(msg) => (
+                StatusCode::UNAUTHORIZED,
+                "attestation_verification_failed",
+                Some(msg.clone()),
+            ),
+            Self::MockAttestationRejected => (
+                StatusCode::UNAUTHORIZED,
+                "mock_attestation_rejected",
+                Some("Mock attestations are not accepted in production mode".to_string()),
+            ),
+            Self::PeerIdentityMismatch => (
+                StatusCode::UNAUTHORIZED,
+                "peer_identity_mismatch",
+                Some(
+                    "The provided peer public key does not correspond to the claimed peer ID"
+                        .to_string(),
+                ),
+            ),
+            Self::PeerIdMismatch => (
+                StatusCode::UNAUTHORIZED,
+                "peer_id_mismatch",
+                Some(
+                    "The peer ID in the attestation does not match the claimed peer ID".to_string(),
+                ),
+            ),
+            Self::TcbStatusRejected(msg) => (
+                StatusCode::FORBIDDEN,
+                "tcb_status_rejected",
+                Some(msg.clone()),
+            ),
+            Self::MeasurementPolicyRejected(msg) => (
+                StatusCode::FORBIDDEN,
+                "measurement_policy_rejected",
+                Some(msg.clone()),
+            ),
+            Self::PolicyNotReady(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "policy_not_ready",
+                Some(msg.clone()),
+            ),
+            Self::KeyDerivationFailed(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "key_derivation_failed",
+                Some(msg.clone()),
+            ),
         }
     }
 }
 
 impl IntoResponse for ServiceError {
     fn into_response(self) -> axum::response::Response {
-        let (status, tag) = self.status_and_tag();
-        let details = self.to_string();
+        let (status, tag, details) = self.status_tag_details();
         let error_response = ErrorResponse {
             error: tag.to_string(),
-            details: Some(details),
+            details,
         };
         (status, Json(error_response)).into_response()
     }
