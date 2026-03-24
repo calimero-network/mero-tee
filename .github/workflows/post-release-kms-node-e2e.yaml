@@ -224,6 +224,7 @@ jobs:
               exit 1
             fi
             tee_tag="mero-tee-v${version}"
+            # Default to master; upgraded to tag ref after wait_for_release_tag succeeds (see below).
             probe_workflow_ref="${REF_NAME}"
             probe_expected_sha="${GITHUB_SHA}"
           else
@@ -247,16 +248,18 @@ jobs:
             skip_reason="Node release tag '${tee_tag}' is not published yet."
           fi
 
-          # In strict release mode, use immutable release tag ref for downstream
-          # probe dispatches so head SHA checks stay stable even if master moves.
-          if [[ "${should_run}" == "true" && "${strict_release_mode}" == "true" ]]; then
-            probe_workflow_ref="${tee_tag}"
+          # Once the release tag exists, use it as an immutable ref for downstream
+          # probe dispatches so head SHA checks stay stable even if master moves
+          # (automation commits can advance master between bump push and probe dispatch).
+          if [[ "${should_run}" == "true" ]]; then
             resolved_probe_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tee_tag}" --jq '.sha' 2>/dev/null || true)"
-            if [[ -z "${resolved_probe_sha}" ]]; then
+            if [[ -n "${resolved_probe_sha}" ]]; then
+              probe_workflow_ref="${tee_tag}"
+              probe_expected_sha="${resolved_probe_sha}"
+            elif [[ "${strict_release_mode}" == "true" ]]; then
               echo "::error::Could not resolve commit SHA for strict probe ref '${tee_tag}'."
               exit 1
             fi
-            probe_expected_sha="${resolved_probe_sha}"
           fi
 
           kms_tag=""

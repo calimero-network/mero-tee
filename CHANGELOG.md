@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.23] - 2026-03-26
+
+### Fixed
+
+- **`post-release-mero-tee-node-e2e`** and **`post-release-kms-node-e2e`**: on `push`, dispatch child probe workflows from the immutable release tag ref (`mero-tee-v*`) instead of `master`; automation commits advancing `master` between the bump push and probe dispatch no longer cause an unexpected-HEAD-SHA failure.
+- Extended push-path release poll to ~60 minutes (was ~5 minutes) so the mero-tee e2e verify job waits long enough for **Release mero-tee** to finish.
+
+### Changed
+
+- Synchronized release version to `2.3.23` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
+
 ## [2.3.22] - 2026-03-26
 
 ### Fixed
