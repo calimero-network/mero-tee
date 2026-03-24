@@ -6,6 +6,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.15] - 2026-03-24
+
+### Changed
+
+- Post-release KMS-node e2e: bounded KMS asset wait (~30m) with per-poll logs; heartbeats while waiting on child workflows; no longer require KMS release `targetCommitish` to match the mero-tee tag SHA; `quoteb64` scoring in attestation scripts aligned with merod JSON.
+- Synchronized release version to `2.3.15` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), and `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.3.14] - 2026-03-24
 
 ### Changed
