@@ -6,6 +6,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.19] - 2026-03-24
+
 ### Fixed
 
 - `verify_dstack_compose_hash.py`: compare RTMR3 event-log replay to **RTMR3 from the TD quote** (via `measurements_from_quote`), not ITA JWT fields — Intel Trust Authority claim layout can disagree with the quote blob and caused false replay mismatches in CI.
@@ -14,6 +16,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 - Reorganized `scripts/attestation/`: **`shared/`** (ITA + policy extraction used by node and KMS), **`kms/`** (compose-hash / Phala-only helpers). Moved Phala deploy assets to **`scripts/kms/phala/`** (was `scripts/phala/`). Updated workflows and docs to match.
 - Removed optional local/operator helpers: `patch-release-policy.sh`, `fetch-and-analyze-failed-attestation.sh`, `fetch-and-inspect-phala-probe-event-log.sh`, `verify-compose-hash-flow.sh`, `compare-mdma-node-with-release.sh` (docs updated for manual compare steps).
+- Synchronized release version to `2.3.19` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
 
 ## [2.3.18] - 2026-03-24
 
