@@ -41,21 +41,6 @@ export function extractMeasurementsFromQuoteB64(quoteB64) {
   return out;
 }
 
-export function parseAttestation(input) {
-  let data;
-  try {
-    data = typeof input === 'string' ? JSON.parse(input) : input;
-  } catch (e) {
-    throw new Error('Invalid JSON: ' + e.message);
-  }
-  const eventLog = data.event_log ?? data.eventLog;
-  if (!eventLog) throw new Error('Attestation response missing event_log');
-  return {
-    data,
-    eventLog: Array.isArray(eventLog) ? eventLog : JSON.parse(eventLog),
-  };
-}
-
 export function extractComposeHashAndAppId(eventLog) {
   let composeHash = null;
   let appId = null;
@@ -122,4 +107,38 @@ export function extractRTMRsFromClaims(claims) {
   }
   walk(claims);
   return result;
+}
+
+/**
+ * Prefer measurements parsed from the TDX quote for policy comparison (matches
+ * published-mrtds.json and CI extract_tdx_policy_candidates). Fall back to ITA
+ * JWT claims when the quote cannot be parsed. ITA signature is verified separately.
+ */
+export function mergeQuoteFirstMeasurements(fromQuote, fromITA) {
+  const ita = fromITA || {};
+  const q = fromQuote || {};
+  return {
+    quoteRtmrs: {
+      mrtd: q.mrtd ?? ita.mrtd,
+      rtmr0: q.rtmr0 ?? ita.rtmr0,
+      rtmr1: q.rtmr1 ?? ita.rtmr1,
+      rtmr2: q.rtmr2 ?? ita.rtmr2,
+      rtmr3: q.rtmr3 ?? ita.rtmr3,
+      tcb_status: ita.tcb_status ?? null,
+    },
+    measurementSources: {
+      mrtd: q.mrtd ? 'quote' : ita.mrtd ? 'ita' : null,
+      rtmr0: q.rtmr0 ? 'quote' : ita.rtmr0 ? 'ita' : null,
+      rtmr1: q.rtmr1 ? 'quote' : ita.rtmr1 ? 'ita' : null,
+      rtmr2: q.rtmr2 ? 'quote' : ita.rtmr2 ? 'ita' : null,
+      rtmr3: q.rtmr3 ? 'quote' : ita.rtmr3 ? 'ita' : null,
+    },
+    itaRtmrs: {
+      mrtd: ita.mrtd || null,
+      rtmr0: ita.rtmr0 || null,
+      rtmr1: ita.rtmr1 || null,
+      rtmr2: ita.rtmr2 || null,
+      rtmr3: ita.rtmr3 || null,
+    },
+  };
 }

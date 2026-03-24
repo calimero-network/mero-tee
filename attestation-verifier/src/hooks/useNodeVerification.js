@@ -1,7 +1,8 @@
 /**
  * Hook for node (merod) attestation verification.
  * Nodes return TDX quotes only (no event_log/compose_hash).
- * Compares MRTD/RTMR0-2 against published-mrtds.json (like KMS verification).
+ * Policy comparison uses MRTD/RTMR0–3 parsed from the quote (same as published-mrtds.json);
+ * Intel Trust Authority JWT is verified separately (QuoteAttestationCard).
  */
 
 import { useState, useCallback } from 'react';
@@ -9,6 +10,7 @@ import { verifyNodeAttestation, fetchNodeReleases, fetchNodePolicy } from '../se
 import {
   extractRTMRsFromClaims,
   extractMeasurementsFromQuoteB64,
+  mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
 
 export function useNodeVerification() {
@@ -28,21 +30,10 @@ export function useNodeVerification() {
       const quoteB64 = attestation.quoteB64 ?? attestation.quote_b64;
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
       const fromQuote = quoteB64 ? extractMeasurementsFromQuoteB64(quoteB64) : null;
-      const quoteRtmrs = {
-        mrtd: fromITA.mrtd || fromQuote?.mrtd,
-        rtmr0: fromITA.rtmr0 || fromQuote?.rtmr0,
-        rtmr1: fromITA.rtmr1 || fromQuote?.rtmr1,
-        rtmr2: fromITA.rtmr2 || fromQuote?.rtmr2,
-        rtmr3: fromQuote?.rtmr3 ?? fromITA.rtmr3,
-        tcb_status: fromITA.tcb_status,
-      };
-      const measurementSources = {
-        mrtd: fromITA.mrtd ? 'ita' : fromQuote?.mrtd ? 'quote' : null,
-        rtmr0: fromITA.rtmr0 ? 'ita' : fromQuote?.rtmr0 ? 'quote' : null,
-        rtmr1: fromITA.rtmr1 ? 'ita' : fromQuote?.rtmr1 ? 'quote' : null,
-        rtmr2: fromITA.rtmr2 ? 'ita' : fromQuote?.rtmr2 ? 'quote' : null,
-        rtmr3: fromQuote?.rtmr3 ? 'quote' : fromITA.rtmr3 ? 'ita' : null,
-      };
+      const { quoteRtmrs, measurementSources, itaRtmrs } = mergeQuoteFirstMeasurements(
+        fromQuote,
+        fromITA
+      );
 
       const latestTag = (await fetchNodeReleases(1))[0];
       const tagToUse = releaseTag?.trim() || latestTag;
@@ -61,6 +52,7 @@ export function useNodeVerification() {
           ita_claims: ita_claims || null,
           ita_token_verified,
           quoteRtmrs,
+          itaRtmrs,
           measurementSources,
           replayedRtmrs: {},
           composeHash: null,

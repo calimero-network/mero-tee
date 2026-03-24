@@ -24,6 +24,7 @@ export function VerificationResults({ result }) {
         {hasRtmrData && (
           <RtmrCard
             quoteRtmrs={result.quoteRtmrs}
+            itaRtmrs={result.itaRtmrs}
             measurementSources={result.measurementSources}
             replayedRtmrs={result.replayedRtmrs}
             policiesByProfile={result.policiesByProfile}

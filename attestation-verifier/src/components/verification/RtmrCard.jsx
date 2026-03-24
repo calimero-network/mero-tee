@@ -72,7 +72,26 @@ function inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash) {
 /** When no profile inferred, use debug for expected display (common case). */
 const DEFAULT_PROFILE = 'debug';
 
-export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, policiesByProfile, tagToUse, profileFromComposeHash }) {
+function itaDisagreesWithDisplayedQuote(quoteRtmrs, itaRtmrs) {
+  if (!itaRtmrs || !quoteRtmrs) return false;
+  const keys = ['mrtd', 'rtmr0', 'rtmr1', 'rtmr2', 'rtmr3'];
+  for (const k of keys) {
+    const q = normalizeHex(quoteRtmrs[k]);
+    const i = normalizeHex(itaRtmrs[k]);
+    if (q && i && q !== i) return true;
+  }
+  return false;
+}
+
+export function RtmrCard({
+  quoteRtmrs,
+  itaRtmrs,
+  measurementSources,
+  replayedRtmrs,
+  policiesByProfile,
+  tagToUse,
+  profileFromComposeHash,
+}) {
   const showExpected = hasAnyPolicy(policiesByProfile);
   const inferredProfile = showExpected
     ? inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash)
@@ -200,12 +219,22 @@ export function RtmrCard({ quoteRtmrs, measurementSources, replayedRtmrs, polici
       </div>
     );
   }
+  const itaMismatchWarning =
+    itaRtmrs && itaDisagreesWithDisplayedQuote(quoteRtmrs, itaRtmrs);
+
   return (
     <Card title="RTMR / MRTD measurements">
       <p className="rtmr-hint">
-        MRTD, RTMR0–2 from ITA verification; RTMR3 and compose hash from quote/event log.
-        Event log replay verifies RTMR3 integrity.
+        MRTD and RTMR0–3 shown for policy comparison are parsed from the TDX quote (same as published
+        releases). Intel Trust Authority (ITA) JWT signature is verified separately. TCB status comes
+        from ITA claims (when present). For KMS, RTMR3 is also checked against event log replay.
       </p>
+      {itaMismatchWarning && (
+        <p className="rtmr-hint">
+          <strong>Note:</strong> At least one ITA JWT claim for MRTD/RTMR0–3 differs from the quote
+          parse. Values above use the quote; see raw claims below.
+        </p>
+      )}
       {rows}
     </Card>
   );

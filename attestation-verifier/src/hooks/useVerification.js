@@ -10,6 +10,7 @@ import {
   extractComposeHashAndAppId,
   extractRTMRsFromClaims,
   extractMeasurementsFromQuoteB64,
+  mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
 import { replayRTMR, replayRTMRWithSteps } from '../utils/crypto.js';
 import {
@@ -66,25 +67,14 @@ export function useVerification() {
         matches = matchForSelected ? [selectedProfile] : [];
       }
 
-      // Proper verification split: MRTD, RTMR0-2 from ITA; RTMR3 and compose from quote/event log
+      // Policy comparison: MRTD/RTMR0–3 from parsed quote first (matches release policy); ITA JWT verified separately.
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
       const quoteB64 = attestation.quoteB64 ?? attestation.quote_b64;
       const fromQuote = quoteB64 ? extractMeasurementsFromQuoteB64(quoteB64) : null;
-      const quoteRtmrs = {
-        mrtd: fromITA.mrtd || fromQuote?.mrtd,
-        rtmr0: fromITA.rtmr0 || fromQuote?.rtmr0,
-        rtmr1: fromITA.rtmr1 || fromQuote?.rtmr1,
-        rtmr2: fromITA.rtmr2 || fromQuote?.rtmr2,
-        rtmr3: fromQuote?.rtmr3 ?? fromITA.rtmr3,
-        tcb_status: fromITA.tcb_status,
-      };
-      const measurementSources = {
-        mrtd: fromITA.mrtd ? 'ita' : fromQuote?.mrtd ? 'quote' : null,
-        rtmr0: fromITA.rtmr0 ? 'ita' : fromQuote?.rtmr0 ? 'quote' : null,
-        rtmr1: fromITA.rtmr1 ? 'ita' : fromQuote?.rtmr1 ? 'quote' : null,
-        rtmr2: fromITA.rtmr2 ? 'ita' : fromQuote?.rtmr2 ? 'quote' : null,
-        rtmr3: fromQuote?.rtmr3 ? 'quote' : fromITA.rtmr3 ? 'ita' : null,
-      };
+      const { quoteRtmrs, measurementSources, itaRtmrs } = mergeQuoteFirstMeasurements(
+        fromQuote,
+        fromITA
+      );
       const replayedRtmrs = {};
       let rtmr3ReplaySteps = null;
       for (let i = 0; i <= 3; i++) {
@@ -118,6 +108,7 @@ export function useVerification() {
           attestation,
           ita_claims: ita_claims || null,
           ita_token_verified,
+          itaRtmrs,
           composeHash,
           appId,
           tagToUse,
