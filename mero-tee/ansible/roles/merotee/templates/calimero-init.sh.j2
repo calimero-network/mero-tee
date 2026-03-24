@@ -26,7 +26,7 @@ log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 # --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
 # RTMR3 is empty by default; extending with role+profile+root_hash makes each image unique.
 # Keep this best-effort at boot so merod can still start if kernel/sysfs support is unavailable.
-RTMR3_SYSFS="/sys/class/misc/tdx_guest/mr/rtmr3:sha384"
+# Newer kernels (e.g. 6.17+ GCP) expose RTMR under tdx_guest/measurements/; older use tdx_guest/mr/.
 ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
 RTMR3_EXTEND_FILE="$(mktemp)"
 if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary > "$RTMR3_EXTEND_FILE" 2>/dev/null; then
@@ -34,14 +34,23 @@ if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HA
   RTMR3_EXTEND_SIZE="$(cat "$RTMR3_EXTEND_FILE" | wc -c | tr -d '[:space:]')"
   if [[ "${RTMR3_EXTEND_SIZE}" == "48" ]]; then
     modprobe tdx_guest 2>/dev/null || true
-    if [[ -w "${RTMR3_SYSFS}" ]] 2>/dev/null; then
+    RTMR3_SYSFS=""
+    for candidate in \
+      "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
+      "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
+      if [[ -e "${candidate}" ]] && [[ -w "${candidate}" ]]; then
+        RTMR3_SYSFS="${candidate}"
+        break
+      fi
+    done
+    if [[ -n "${RTMR3_SYSFS}" ]]; then
       if cat "$RTMR3_EXTEND_FILE" > "${RTMR3_SYSFS}" 2>/dev/null; then
-        log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+        log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}... via ${RTMR3_SYSFS})"
       else
-        log "WARN: RTMR3 extend write failed"
+        log "WARN: RTMR3 extend write failed (${RTMR3_SYSFS})"
       fi
     else
-      log "RTMR3 extend skipped (sysfs not writable; kernel 6.16+ required for /sys/class/misc/tdx_guest/mr/)"
+      log "RTMR3 extend skipped (no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/measurements/ or .../mr/)"
     fi
   else
     log "WARN: RTMR3 extend input has unexpected size (${RTMR3_EXTEND_SIZE}, expected 48)"
