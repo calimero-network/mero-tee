@@ -6,6 +6,12 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.26] - 2026-03-26
+
+### Changed
+
+- Synchronized release version to `2.3.26` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), `mero-tee/versions.json` (`imageVersion`), and `compatibility-catalog.json`.
+
 ## [2.3.25] - 2026-03-26
 
 ### Changed
