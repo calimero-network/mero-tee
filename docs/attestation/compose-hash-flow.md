@@ -32,7 +32,7 @@ How `compose_hash` flows from release to attestation verifier, and when mismatch
 
 ## Extraction logic (parity)
 
-Both Python (`verify_dstack_compose_hash.py`) and JS (`attestation.js`) use identical logic:
+Both Python (`scripts/attestation/kms/verify_dstack_compose_hash.py`) and JS (`attestation.js`) use identical logic:
 
 - Filter events with `imr === 3`
 - Find event with `event === "compose-hash"`
@@ -75,7 +75,7 @@ MDMA defaults to this pattern; the release workflow (`trigger-staging-probe.sh`)
 
 ## MDMA compose alignment
 
-**Single source of truth:** Both the probe and MDMA use `scripts/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__`, `__SERVICE_PORT__`, `__MERO_KMS_VERSION__`, and `__MERO_KMS_PROFILE__` at workflow time; MDMA must substitute the same placeholders. This eliminates version/profile drift.
+**Single source of truth:** Both the probe and MDMA use `scripts/kms/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__`, `__SERVICE_PORT__`, `__MERO_KMS_VERSION__`, and `__MERO_KMS_PROFILE__` at workflow time; MDMA must substitute the same placeholders. This eliminates version/profile drift.
 
 ## Verification script
 
@@ -83,10 +83,10 @@ Run to verify the flow and check extraction parity:
 
 ```bash
 # Verify release fetch and structure
-./scripts/attestation/verify-compose-hash-flow.sh mero-kms-v2.1.73
+./scripts/attestation/kms/verify-compose-hash-flow.sh mero-kms-v2.1.73
 
 # Also compare Python vs JS extraction on an attest-response
-./scripts/attestation/verify-compose-hash-flow.sh mero-kms-v2.1.73 path/to/attest-response.json
+./scripts/attestation/kms/verify-compose-hash-flow.sh mero-kms-v2.1.73 path/to/attest-response.json
 ```
 
 ## Debugging a mismatch

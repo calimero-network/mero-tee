@@ -10,7 +10,7 @@ Pinned via DSTACK_PREFER_DEV (default false). Env vars:
   PHALA_API_VERSION (default: 2026-01-21)
 
 Usage:
-  scripts/phala/provision_prod.py --name NAME --compose COMPOSE_FILE \\
+  scripts/kms/phala/provision_prod.py --name NAME --compose COMPOSE_FILE \\
     --instance-type tdx.small [--region REGION] [--output OUTPUT_JSON]
 """
 

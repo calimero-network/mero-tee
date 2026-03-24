@@ -2,14 +2,14 @@
 # Download attestation artifacts from a KMS Phala probe run and inspect event_log for compose_hash debugging.
 #
 # Usage:
-#   ./scripts/attestation/fetch-and-inspect-phala-probe-event-log.sh [run_id] [version] [profile] [out_dir]
+#   ./scripts/attestation/kms/fetch-and-inspect-phala-probe-event-log.sh [run_id] [version] [profile] [out_dir]
 #
 # Examples:
 #   # From release workflow run (e.g. 2.1.72 release): download kms-probe-2.1.72-debug
-#   ./scripts/attestation/fetch-and-inspect-phala-probe-event-log.sh 12345678 2.1.72 debug
+#   ./scripts/attestation/kms/fetch-and-inspect-phala-probe-event-log.sh 12345678 2.1.72 debug
 #
 #   # From staging probe run directly: download kms-staging-probe-{run_id}-{attempt}
-#   ./scripts/attestation/fetch-and-inspect-phala-probe-event-log.sh 12345678 "" "" ./phala-probe-inspect
+#   ./scripts/attestation/kms/fetch-and-inspect-phala-probe-event-log.sh 12345678 "" "" ./phala-probe-inspect
 #
 # When version and profile are empty, assumes run_id is a staging probe run and looks for
 # artifact kms-staging-probe-{run_id}-*.
@@ -126,6 +126,6 @@ fi
 echo ""
 echo "Artifacts saved to ${OUT_DIR}"
 echo ""
-echo "To compare with our verifier expectations, see: scripts/attestation/verify_dstack_compose_hash.py"
+echo "To compare with our verifier expectations, see: scripts/attestation/kms/verify_dstack_compose_hash.py"
 echo "  - Expects: imr: 3, event: \"compose-hash\", payload: 64-char hex"
 echo "  - Digest: sha384(event_type:event:payload) → 96-char hex"

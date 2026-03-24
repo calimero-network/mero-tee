@@ -130,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           pip install requests
-          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py scripts/phala/provision_prod.py
+          python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py scripts/attestation/shared/extract_tdx_policy_candidates.py scripts/kms/phala/provision_prod.py
           npm install -g phala@latest
           phala --version
           jq --version
@@ -261,7 +261,7 @@ jobs:
               -e "s|__SERVICE_PORT__|${SERVICE_PORT}|g" \
               -e "s|__MERO_KMS_VERSION__|${resolved_kms_version}|g" \
               -e "s|__MERO_KMS_PROFILE__|${selected_profile}|g" \
-              scripts/phala/kms-compose-template.yaml > "${compose_file}"
+              scripts/kms/phala/kms-compose-template.yaml > "${compose_file}"
           if grep -Eq 'USE_ENV_POLICY|ALLOWED_TCB_STATUSES|ALLOWED_MRTD|ALLOWED_RTMR' "${compose_file}"; then
             echo "::error::Rendered probe compose still contains legacy env-policy fields."
             exit 1
@@ -334,7 +334,7 @@ jobs:
           fi
 
           ci_start "Running provision_prod.py (same API flow as MDMA, dstack-0.5.7 prod)"
-          python3 scripts/phala/provision_prod.py \
+          python3 scripts/kms/phala/provision_prod.py \
             --name "${deploy_name}" \
             --compose "${COMPOSE_FILE}" \
             --instance-type "${INSTANCE_TYPE}" \
@@ -583,7 +583,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts/attestation/verify_tdx_quote_ita.py \
+          python3 scripts/attestation/shared/verify_tdx_quote_ita.py \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --output-dir "${ARTIFACTS_DIR}" \
             --ita-url "${ITA_APPRAISAL_URL}" \
@@ -600,8 +600,8 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/ci/logging.sh
-          python3 -m py_compile scripts/attestation/verify_dstack_compose_hash.py
-          python3 scripts/attestation/verify_dstack_compose_hash.py \
+          python3 -m py_compile scripts/attestation/kms/verify_dstack_compose_hash.py
+          python3 scripts/attestation/kms/verify_dstack_compose_hash.py \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
             --output-json "${ARTIFACTS_DIR}/kms-app-identity.json" 2>&1 | tee "${ARTIFACTS_DIR}/verify-compose-hash.log"
@@ -620,7 +620,7 @@ jobs:
           ARTIFACTS_DIR: ${{ steps.prepare.outputs.artifacts_dir }}
         run: |
           set -euo pipefail
-          python3 scripts/attestation/extract_tdx_policy_candidates.py \
+          python3 scripts/attestation/shared/extract_tdx_policy_candidates.py \
             --claims "${ARTIFACTS_DIR}/external-attestation-token-claims.json" \
             --attest-response "${ARTIFACTS_DIR}/attest-response.json" \
             --output-json "${ARTIFACTS_DIR}/kms-policy-candidates.json" \

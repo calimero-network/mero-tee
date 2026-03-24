@@ -13,7 +13,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
-      - "scripts/phala/**"
+      - "scripts/kms/**"
       - "scripts/release/kms-phala/**"
   pull_request:
     paths:
@@ -25,7 +25,7 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/deps/**"
       - "scripts/attestation/**"
-      - "scripts/phala/**"
+      - "scripts/kms/**"
       - "scripts/release/kms-phala/**"
   workflow_dispatch:
     inputs:
@@ -79,7 +79,7 @@ jobs:
           bash -n scripts/release/kms-phala/sign-release-assets.sh
           bash -n scripts/release/kms-phala/verify-generated-signatures.sh
           bash -n scripts/release/kms-phala/upsert-umbrella-release-links.sh
-          python3 -m py_compile scripts/attestation/verify_dstack_compose_hash.py
+          python3 -m py_compile scripts/attestation/kms/verify_dstack_compose_hash.py
 
       - name: Get version info
         id: version_info

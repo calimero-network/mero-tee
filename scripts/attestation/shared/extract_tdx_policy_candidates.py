@@ -12,7 +12,7 @@ Requires ``--attest-response`` (merod ``data.quoteB64`` shape or mero-kms ``/att
 top-level ``quoteB64``): measurements are never taken from ITA claims alone.
 
 This helper reads ``external-attestation-token-claims.json`` produced by
-``scripts/attestation/verify_tdx_quote_ita.py`` and derives candidate values for:
+``scripts/attestation/shared/verify_tdx_quote_ita.py`` and derives candidate values for:
 
   - MERO_KMS_ALLOWED_TCB_STATUSES_JSON
   - MERO_KMS_ALLOWED_MRTD_JSON

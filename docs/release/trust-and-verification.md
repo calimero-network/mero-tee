@@ -121,7 +121,7 @@ For Phala KMS deployments, **compose_hash** proves which exact Docker Compose co
 
 `published-mrtds.json` on `mero-tee-vX.Y.Z` is assembled **only** in
 `release-node-image-gcp` from `measurement-policy-candidates-*.json`, which are
-produced by `scripts/attestation/extract_tdx_policy_candidates.py` with
+produced by `scripts/attestation/shared/extract_tdx_policy_candidates.py` with
 `--attest-response` (required) — i.e. **MRTD/RTMR0–3 are read from the TD quote bytes** from
 the **ephemeral probe VM** for each profile, not from ITA JWT fields.
 

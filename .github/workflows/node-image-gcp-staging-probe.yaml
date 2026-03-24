@@ -122,7 +122,7 @@ jobs:
           SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/attestation/verify_tdx_quote_ita.py scripts/attestation/extract_tdx_policy_candidates.py
+          python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py scripts/attestation/shared/extract_tdx_policy_candidates.py
           if [[ -z "${ITA_API_KEY}" ]]; then
             echo "::error::ITA_API_KEY is required for release-grade node attestation verification."
             exit 1
@@ -439,7 +439,7 @@ jobs:
             policy_flags+=(--policy-must-match)
           fi
 
-          python3 scripts/attestation/verify_tdx_quote_ita.py \
+          python3 scripts/attestation/shared/verify_tdx_quote_ita.py \
             --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --tee-info "${artifacts_dir}/tee-info.json" \
             --output-dir "${artifacts_dir}" \
@@ -453,7 +453,7 @@ jobs:
             exit 1
           fi
 
-          python3 scripts/attestation/extract_tdx_policy_candidates.py \
+          python3 scripts/attestation/shared/extract_tdx_policy_candidates.py \
             --claims "${claims_file}" \
             --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --output-json "${artifacts_dir}/measurement-policy-candidates.json" \

@@ -171,6 +171,6 @@ The hash chain: `RTMR3_new = SHA384(RTMR3_old || SHA384(event))`. Instance-id is
 
 If staying on Phala:
 
-1. **Align compose generation** — Probe and MDMA use the same template (`scripts/phala/kms-compose-template.yaml`) and substitute (image_ref, service_port).
+1. **Align compose generation** — Probe and MDMA use the same template (`scripts/kms/phala/kms-compose-template.yaml`) and substitute (image_ref, service_port).
 2. **Use image digest** — `image: ghcr.io/.../mero-kms-phala@sha256:...` for reproducibility.
 3. **Confirm with Phala** — What exactly is hashed for `compose_hash`? If instance-id or deployment name is included, portability is not achievable without Phala changes.

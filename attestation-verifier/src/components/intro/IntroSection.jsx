@@ -28,7 +28,7 @@ export function IntroSection() {
       <p className="intro-note">
         For full verification (including policy allowlists), use the{' '}
         <a
-          href="https://github.com/calimero-network/mero-tee/tree/master/scripts/attestation"
+          href="https://github.com/calimero-network/mero-tee/blob/master/scripts/attestation/README.md"
           target="_blank"
           rel="noopener noreferrer"
         >

@@ -3,7 +3,7 @@
 # Run from mero-tee repo root.
 #
 # Usage:
-#   ./scripts/attestation/verify-compose-hash-flow.sh [mero-kms-v2.1.73]
+#   ./scripts/attestation/kms/verify-compose-hash-flow.sh [mero-kms-v2.1.73]
 #
 # Checks:
 # 1. Fetch compatibility map from GitHub release, verify structure
@@ -16,7 +16,7 @@ TAG="${1:-mero-kms-v2.1.73}"
 REPO="calimero-network/mero-tee"
 COMPAT_URL="https://github.com/${REPO}/releases/download/${TAG}/kms-phala-compatibility-map.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 echo "=== Compose hash flow verification ==="
 echo "Tag: ${TAG}"

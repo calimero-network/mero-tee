@@ -13,3 +13,4 @@
 /scripts/release/ @chefsale
 /scripts/policy/ @chefsale
 /scripts/attestation/ @chefsale
+/scripts/kms/ @chefsale

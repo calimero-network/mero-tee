@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Changed
+
+- Reorganized `scripts/attestation/`: **`shared/`** (ITA + policy extraction used by node and KMS), **`kms/`** (compose-hash / Phala-only helpers). Moved Phala deploy assets to **`scripts/kms/phala/`** (was `scripts/phala/`). Updated workflows and docs to match.
+
 ## [2.3.18] - 2026-03-24
 
 ### Fixed
@@ -87,7 +91,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
-- `scripts/attestation/extract_tdx_policy_candidates.py`: when `--attest-response` is set,
+- `scripts/attestation/shared/extract_tdx_policy_candidates.py`: when `--attest-response` is set,
   derive MRTD and RTMR0–3 from the TD quote (same layout as `attestation-verifier`); drop
   heuristic scored-walk selection for measurements (canonical ITA keys only if the quote
   path is not used).

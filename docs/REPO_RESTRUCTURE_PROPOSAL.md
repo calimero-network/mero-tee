@@ -90,6 +90,7 @@ mero-tee/
 scripts/release/
 scripts/policy/
 scripts/attestation/
+scripts/kms/
 policies/
 docs/
 ```

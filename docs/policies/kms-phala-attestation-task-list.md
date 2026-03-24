@@ -54,7 +54,7 @@ Legend:
 - [x] Provide machine-readable policy format for downstream ingestion by core.
   - `kms-phala-attestation-policy.json` schema and helper ingestion scripts are in place.
 - [x] Automate staging measurement collection for policy candidates.
-  - `kms-phala-staging-probe.yaml` + `scripts/attestation/extract_tdx_policy_candidates.py`.
+  - `kms-phala-staging-probe.yaml` + `scripts/attestation/shared/extract_tdx_policy_candidates.py`.
 - [x] Gate policy promotion through reviewed PR updates.
   - Staging probe outputs are promoted via PR updates to
     `policies/kms-phala/<tag>.json` and `policies/index.json` before release publication.

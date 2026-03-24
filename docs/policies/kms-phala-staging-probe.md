@@ -11,12 +11,12 @@ Workflow file:
 1. Deploys an ephemeral CVM running `mero-kms-phala` from a provided image via the Phala REST API with pinned dstack version 0.5.7 (`prefer_dev=false`, `DSTACK_VERSION=0.5.7`), matching MDMA prod.
 2. Waits for `GET /health`.
 3. Calls `POST /attest` with a fresh nonce.
-4. Verifies the quote via Intel Trust Authority (`scripts/attestation/verify_tdx_quote_ita.py`).
-5. Verifies dstack event log and extracts compose hash (`scripts/attestation/verify_dstack_compose_hash.py`):
+4. Verifies the quote via Intel Trust Authority (`scripts/attestation/shared/verify_tdx_quote_ita.py`).
+5. Verifies dstack event log and extracts compose hash (`scripts/attestation/kms/verify_dstack_compose_hash.py`):
    - Replays RTMR3 from event log and verifies it matches the quote.
    - Extracts `compose_hash` (64-char hex) from the verified path.
    - Writes `kms-app-identity.json` (compose_hash, app_id).
-6. Extracts candidate policy values (`scripts/attestation/extract_tdx_policy_candidates.py`) and writes:
+6. Extracts candidate policy values (`scripts/attestation/shared/extract_tdx_policy_candidates.py`) and writes:
    - `kms-policy-candidates.json` (canonical candidate policy payload),
    - `kms-policy-candidates.env` (compatibility/env export form).
 7. Uploads full probe artifacts.

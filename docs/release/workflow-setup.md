@@ -67,7 +67,8 @@ documentation update in `docs/**` or `README.md`:
 - `.github/workflows/**`
 - `scripts/release/**`
 - `scripts/policy/**`
-- `scripts/attestation/**`
+- `scripts/attestation/**` (shared ITA/policy tools under `shared/`, KMS-only under `kms/`)
+- `scripts/kms/**` (Phala KMS deploy assets)
 - `scripts/ci/**`
 - `mero-tee/**`
 
@@ -139,7 +140,7 @@ release events:
   - tampered quote is rejected,
   - wrong expected application hash is rejected.
 - Post-release KMS probes dispatch `kms-phala-staging-probe.yaml` with the same
-  compose as release (single template from `scripts/phala/kms-compose-template.yaml`).
+  compose as release (single template from `scripts/kms/phala/kms-compose-template.yaml`).
   The probe only exercises `/attest`; policy is derived from node attestation
   during the probe and published by `release-metadata` when it runs.
   - Release probes use per-profile image digests built in the current
