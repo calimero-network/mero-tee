@@ -75,29 +75,23 @@ function verifyNonceInAttestation(attestation, nonceBytes) {
   }
 }
 
+/** Merod: data.quoteB64; KMS paste: top-level quote_b64. No tree walking / scoring. */
 function extractQuote(attestation) {
-  const candidates = [];
-  function walk(obj, path = '') {
-    if (!obj || typeof obj !== 'object') return;
-    if (Array.isArray(obj)) {
-      obj.forEach((v, i) => walk(v, `${path}[${i}]`));
-      return;
-    }
-    for (const [k, v] of Object.entries(obj)) {
-      const p = path ? `${path}.${k}` : k;
-      if (typeof v === 'string' && /quote/i.test(k)) {
-        const cleaned = v.trim();
-        if (cleaned.length > 100 && /^[A-Za-z0-9+/=_-]+$/.test(cleaned)) {
-          candidates.push({ score: /quote/i.test(k) ? 10 : 5, value: cleaned });
-        }
-      }
-      walk(v, p);
+  if (!attestation || typeof attestation !== 'object') {
+    throw new Error('No attestation object');
+  }
+  const direct = attestation.quoteB64 ?? attestation.quote_b64;
+  if (typeof direct === 'string' && direct.trim().length > 50) {
+    return direct.trim();
+  }
+  const data = attestation.data;
+  if (data && typeof data === 'object') {
+    const q = data.quoteB64 ?? data.quote_b64;
+    if (typeof q === 'string' && q.trim().length > 50) {
+      return q.trim();
     }
   }
-  walk(attestation);
-  if (candidates.length === 0) throw new Error('No quote found in attestation');
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].value;
+  throw new Error('Attestation missing quoteB64 (expected merod data.quoteB64 or top-level quote_b64)');
 }
 
 async function callITA(quoteB64, apiKey) {

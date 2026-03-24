@@ -111,7 +111,7 @@ export function extractRTMRsFromClaims(claims) {
 
 /**
  * Prefer measurements parsed from the TDX quote for policy comparison (matches
- * published-mrtds.json and CI extract_tdx_policy_candidates). Fall back to ITA
+ * published-mrtds.json and CI extract_tdx_policy_candidates (merod body or quoteB64)). Fall back to ITA
  * JWT claims when the quote cannot be parsed. ITA signature is verified separately.
  */
 export function mergeQuoteFirstMeasurements(fromQuote, fromITA) {

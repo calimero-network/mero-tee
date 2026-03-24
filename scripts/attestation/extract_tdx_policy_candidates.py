@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Extract KMS policy candidate values from ITA attestation token claims.
 
-MRTD and RTMR0–3 are taken from the **TD quote** when ``--attest-response`` is passed
-(same binary layout as ``attestation-verifier/src/utils/attestation.js``). That matches
-sysfs and avoids ambiguous fields in the JWT.
+MRTD and RTMR0–3 are taken from **merod** ``data.quote.body`` when present (same as
+``tdx_quote`` / KMS quote-first behaviour); otherwise from ``data.quoteB64`` bytes
+(same layout as ``attestation-verifier`` ``extractMeasurementsFromQuoteB64``).
 
 TCB status strings still come from ITA token claims (not present as plain text in the
 quote blob we parse here).
@@ -33,17 +33,6 @@ HEX_48_RE = re.compile(r"^(?:0x)?([A-Fa-f0-9]{96})$")
 
 BASE64_CANDIDATE_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 
-QUOTE_KEY_HINTS = {
-    "quote",
-    "raw_quote",
-    "quote_b64",
-    "quoteb64",  # merod JSON: "quoteB64" -> segment quoteb64
-    "quote_base64",
-    "quotebase64",
-    "quotebytes",
-    "tdx_quote",
-}
-
 # TDX quote binary layout (Intel TDX DCAP) — keep in sync with attestation.js
 MRTD_LEN = 48
 MRTD_OFFSET_V4 = 184
@@ -64,13 +53,6 @@ def decode_base64_flexible(value: str) -> Optional[bytes]:
         return None
 
 
-def looks_like_quote_b64(value: str) -> bool:
-    decoded = decode_base64_flexible(value)
-    if decoded is None:
-        return False
-    return len(decoded) > 300
-
-
 def walk_json(value: Any, path: str = "$") -> Iterable[Tuple[str, Any]]:
     yield path, value
     if isinstance(value, dict):
@@ -81,25 +63,48 @@ def walk_json(value: Any, path: str = "$") -> Iterable[Tuple[str, Any]]:
             yield from walk_json(child, f"{path}[{index}]")
 
 
-def extract_best_quote(attestation_response: Any) -> Tuple[str, str]:
-    candidates: List[Tuple[int, int, str, str]] = []
-    for path, value in walk_json(attestation_response):
-        if not isinstance(value, str):
-            continue
-        key = path.split(".")[-1].lower().strip("[]0123456789")
-        score = 0
-        if key in QUOTE_KEY_HINTS:
-            score += 10
-        if "quote" in key:
-            score += 5
-        if looks_like_quote_b64(value):
-            score += 3
-        if score > 0:
-            candidates.append((score, len(value), value, path))
-    if not candidates:
-        raise RuntimeError("Could not find any quote-like field in attestation response JSON")
-    best = sorted(candidates, key=lambda x: (x[0], x[1]), reverse=True)[0]
-    return best[2], best[3]
+def _norm_hex_96(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    s = value.strip().lower().replace("0x", "")
+    if len(s) == 96 and all(c in "0123456789abcdef" for c in s):
+        return s
+    return None
+
+
+def _measurements_from_merod_quote_body(attest_payload: Any) -> Optional[Dict[str, str]]:
+    """MRTD and RTMR0–3 from ``data.quote.body`` (merod /admin-api/tee/attest)."""
+    if not isinstance(attest_payload, dict):
+        return None
+    data = attest_payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    quote = data.get("quote")
+    if not isinstance(quote, dict):
+        return None
+    body = quote.get("body")
+    if not isinstance(body, dict):
+        return None
+    out: Dict[str, str] = {}
+    for k in ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"):
+        h = _norm_hex_96(body.get(k))
+        if h:
+            out[k] = h
+    return out if out else None
+
+
+def _quote_b64_from_merod_attest(attest_payload: Any) -> Tuple[Optional[str], str]:
+    """Canonical ``data.quoteB64`` from merod tee/attest JSON."""
+    if not isinstance(attest_payload, dict):
+        return None, ""
+    data = attest_payload.get("data")
+    if not isinstance(data, dict):
+        return None, ""
+    for key in ("quoteB64", "quote_b64"):
+        raw = data.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip(), f"$.data.{key}"
+    return None, ""
 
 
 def _hex48(data: bytes) -> str:
@@ -204,19 +209,35 @@ def extract_measurement_from_claims_canonical(
 
 
 def measurements_from_quote(attest_payload: Any) -> Tuple[Dict[str, Tuple[str, str]], str]:
-    """Return per-target (hex, path) entries and the JSON path to the quote field."""
-    quote_b64, field_path = extract_best_quote(attest_payload)
+    """Return per-target (hex, path) entries and the source path (merod body or quoteB64)."""
+    body_meas = _measurements_from_merod_quote_body(attest_payload)
+    if body_meas and body_meas.get("mrtd") and all(body_meas.get(f"rtmr{i}") for i in range(4)):
+        bm = body_meas
+        label = "quote:$.data.quote.body"
+        out: Dict[str, Tuple[str, str]] = {"mrtd": (bm["mrtd"], label)}
+        for i in range(4):
+            k = f"rtmr{i}"
+            out[k] = (bm[k], label)
+        return out, "$.data.quote.body"
+
+    quote_b64, field_path = _quote_b64_from_merod_attest(attest_payload)
+    if not quote_b64:
+        raise RuntimeError(
+            "Attest JSON missing data.quote.body measurements and data.quoteB64; "
+            "expected merod /admin-api/tee/attest shape"
+        )
     raw = decode_base64_flexible(quote_b64)
     if raw is None:
-        raise RuntimeError("Could not base64-decode quote from attestation response")
+        raise RuntimeError("Could not base64-decode data.quoteB64")
     parsed = extract_measurements_from_quote_bytes(raw)
     if parsed is None:
         raise RuntimeError(
             "Could not parse MRTD/RTMR from TD quote (expected quote version 4 or 5)"
         )
     label = f"quote:{field_path}"
-    out: Dict[str, Tuple[str, str]] = {}
-    out["mrtd"] = (parsed["mrtd"], label)
+    out = {
+        "mrtd": (parsed["mrtd"], label),
+    }
     for i in range(4):
         out[f"rtmr{i}"] = (parsed[f"rtmr{i}"], label)
     return out, field_path
