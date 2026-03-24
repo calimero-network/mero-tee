@@ -27,10 +27,12 @@ env:
   PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
   PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
   PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
-  GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID }}
-  GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE }}
+  # Defaults match Calimero Cloud MDMA (cloud-486420, europe-west4-a, c3-standard-4) so
+  # published-mrtds.json RTMRs match dispatcher-created VMs. Override via repo Variables.
+  GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+  GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
   GCP_ATTESTATION_SUBNETWORK: ${{ vars.GCP_ATTESTATION_SUBNETWORK }}
-  GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
+  GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
   GCP_ATTESTATION_ADMIN_API_PORT: ${{ vars.GCP_ATTESTATION_ADMIN_API_PORT }}
   GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
   GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS: ${{ vars.GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS }}
@@ -585,6 +587,18 @@ jobs:
           echo "mrtd=${mrtd}" >> "${GITHUB_OUTPUT}"
           echo "status=performed" >> "${GITHUB_OUTPUT}"
           echo "performed=true" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo ""
+            echo "# After Intel Trust Authority verification"
+            for rel in ita-ci-verification-summary.json external-attestation-token-claims.json external-verification-response.json external-attestation-token.jwt; do
+              if [[ -f "${artifacts_dir}/${rel}" ]]; then
+                echo "${rel}|yes|ITA / quote verification artifact"
+              else
+                echo "${rel}|no|missing"
+              fi
+            done
+          } >> "${artifacts_dir}/artifacts-index.txt"
 
       - name: Build per-profile provenance record
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}

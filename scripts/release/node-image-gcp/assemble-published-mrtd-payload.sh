@@ -214,6 +214,17 @@ jq -n \
     }
   }' > artifacts/published-mrtds.json
 
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  {
+    echo "### Published RTMR0 preview (first 16 hex chars per profile)"
+    echo "- \`debug\`: \`${debug_rtmr0:0:16}…\`"
+    echo "- \`debug-read-only\`: \`${debug_ro_rtmr0:0:16}…\`"
+    echo "- \`locked-read-only\`: \`${locked_ro_rtmr0:0:16}…\`"
+    echo ""
+    echo "Source: \`measurement-policy-candidates-*.json\` (TD quote parse from release probe VMs)."
+  } >> "${GITHUB_STEP_SUMMARY}"
+fi
+
 jq -e '
   .role == "node" and
   (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0) and

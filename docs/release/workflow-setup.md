@@ -6,16 +6,32 @@ The GCP node-image build workflow requires GitHub repo configuration. **No secre
 
 Configure under Settings → Secrets and variables → Actions → Variables:
 
+### Attestation defaults (Calimero Cloud / MDMA alignment)
+
+`release-node-image-gcp.yaml` and `node-image-gcp-staging-probe.yaml` apply **built-in defaults** when a variable is **unset or empty** so `published-mrtds.json` is captured from the same **project / zone / machine class** as MDMA on Calimero Cloud:
+
+| When unset | Default |
+|------------|---------|
+| `GCP_ATTESTATION_PROJECT_ID` | `cloud-486420` |
+| `GCP_ATTESTATION_ZONE` | `europe-west4-a` |
+| `GCP_ATTESTATION_MACHINE_TYPE` | `c3-standard-4` |
+
+Set these repo Variables explicitly to override (e.g. fork or non-production pipelines).
+
+**IAM:** The CI service account (WIF or key) must be able to create Confidential VMs, firewall rules, and disks in **`cloud-486420`** (or whatever project you set for attestation). If the workflow previously only used the Packer project, grant the same roles on `cloud-486420` or attestation will fail at VM create.
+
+### Variable table
+
 | Variable | Description |
 |----------|-------------|
 | `GCP_PACKER_PROJECT_ID` | GCP project for Packer |
 | `GCP_PACKER_REGION` | Region |
 | `GCP_PACKER_ZONE` | Zone |
 | `PACKER_GCP_SUBNETWORK` | Subnetwork URL |
-| `GCP_ATTESTATION_PROJECT_ID` | Project for attestation VM |
-| `GCP_ATTESTATION_ZONE` | Zone for attestation |
-| `GCP_ATTESTATION_SUBNETWORK` | Subnetwork for attestation |
-| `GCP_ATTESTATION_MACHINE_TYPE` | Machine type (e.g. c3-standard-4) |
+| `GCP_ATTESTATION_PROJECT_ID` | Project for attestation VM (default `cloud-486420`) |
+| `GCP_ATTESTATION_ZONE` | Zone for attestation (default `europe-west4-a`) |
+| `GCP_ATTESTATION_SUBNETWORK` | Subnetwork for attestation (optional; auto-discovered in attestation project if empty) |
+| `GCP_ATTESTATION_MACHINE_TYPE` | Machine type (default `c3-standard-4`) |
 | `GCP_ATTESTATION_ADMIN_API_PORT` | Admin API port (e.g. 80) |
 | `GCP_ATTESTATION_ALLOWED_CIDRS` | CIDRs for attestation VM access |
 | `GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS` | Cleanup age |

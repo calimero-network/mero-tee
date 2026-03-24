@@ -33,9 +33,16 @@ cpu_architecture="x86"
 image_name="merotee-ubuntu-questing-25-10-${profile}-${image_version//./-}"
 image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
 
-vm_project="${GCP_ATTESTATION_PROJECT_ID:-${image_project}}"
+# Attestation VM project: same as Calimero Cloud MDMA (cloud-486420) by default so
+# published-mrtds.json matches dispatcher nodes. Set GCP_ATTESTATION_PROJECT_ID to override
+# (e.g. image_project for legacy Packer-only attestation).
+vm_project="${GCP_ATTESTATION_PROJECT_ID:-cloud-486420}"
 vm_zone="${GCP_ATTESTATION_ZONE:-${PACKER_GCP_ZONE:-europe-west4-a}}"
-vm_subnetwork="${GCP_ATTESTATION_SUBNETWORK:-${PACKER_GCP_SUBNETWORK:-}}"
+# Do not reuse Packer subnet in a different project (subnet URLs are project-scoped).
+vm_subnetwork="${GCP_ATTESTATION_SUBNETWORK:-}"
+if [[ -z "${vm_subnetwork}" ]] && [[ "${vm_project}" == "${image_project}" ]]; then
+  vm_subnetwork="${PACKER_GCP_SUBNETWORK:-}"
+fi
 vm_machine_type="${GCP_ATTESTATION_MACHINE_TYPE:-c3-standard-4}"
 vm_region="${vm_zone%-[a-z]}"
 admin_api_port="${GCP_ATTESTATION_ADMIN_API_PORT:-80}"
@@ -50,10 +57,10 @@ if [[ -z "${vm_subnetwork}" ]]; then
     --limit=1 2>/dev/null | head -n1 || true)"
 fi
 if [[ -z "${vm_subnetwork}" ]]; then
-  echo "::error::No subnetwork for attestation VM. Set GCP_ATTESTATION_SUBNETWORK or GCP_PACKER_SUBNETWORK, or ensure project has a subnet in region ${vm_region}."
+  echo "::error::No subnetwork for attestation VM in project '${vm_project}' (region ${vm_region}). Set GCP_ATTESTATION_SUBNETWORK or ensure this project has a subnet (Packer subnet is only inherited when vm_project == image_project)."
   exit 1
 fi
-echo "Using subnetwork: ${vm_subnetwork}"
+echo "Using attestation vm_project=${vm_project} (image_project=${image_project}), subnetwork: ${vm_subnetwork}"
 vm_subnetwork_name="${vm_subnetwork##*/}"
 vm_network_uri="$(gcloud compute networks subnets describe "${vm_subnetwork_name}" \
   --project "${vm_project}" \

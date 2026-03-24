@@ -97,10 +97,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID }}
-      GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE }}
+      # Defaults align with Calimero Cloud MDMA; override via repo Variables.
+      GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+      GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
       GCP_ATTESTATION_SUBNETWORK: ${{ vars.GCP_ATTESTATION_SUBNETWORK }}
-      GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE }}
+      GCP_ATTESTATION_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
       GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
       GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
@@ -480,6 +481,10 @@ jobs:
             --entry "node-client-verification.json|Anti-fake verification outcomes" \
             --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
+            --entry "ita-ci-verification-summary.json|ITA JWT tdx fields + node quote SHA-256 (CI summary)" \
+            --entry "external-attestation-token-claims.json|ITA JWT claims (full)" \
+            --entry "external-verification-response.json|Raw ITA API JSON response" \
+            --entry "external-attestation-token.jwt|ITA attestation JWT" \
             --entry "node-kms-probe-ssh-stdout.log|Runtime probe stdout log" \
             --entry "node-kms-probe-ssh-stderr.log|Runtime probe stderr log"
           ci_artifact "artifact index saved to ${index_file}"

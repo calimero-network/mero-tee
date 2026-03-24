@@ -12,6 +12,7 @@ Outputs (written under output-dir):
   - external-verification-response.json
   - external-attestation-token.jwt
   - external-attestation-token-claims.json
+  - ita-ci-verification-summary.json (human-readable fields for CI logs / artifacts)
   - mrtd.json
 """
 
@@ -20,6 +21,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -256,6 +258,99 @@ def normalize_hex(value: str) -> str:
     return value.lower().strip()
 
 
+def _hex_preview(value: str, head: int = 16, tail: int = 8) -> str:
+    v = normalize_hex(value).lstrip("0x")
+    if len(v) <= head + tail + 1:
+        return v
+    return f"{v[:head]}…{v[-tail:]}"
+
+
+def collect_ita_tdx_measurement_fields(claims: Any) -> Dict[str, Dict[str, str]]:
+    """Extract TDX measurement strings from ITA JWT claims (canonical Intel field names)."""
+    want_keys = {
+        "tdx_mrtd",
+        "tdx_rtmr0",
+        "tdx_rtmr1",
+        "tdx_rtmr2",
+        "tdx_rtmr3",
+        "mr_td",
+        "mrtd",
+    }
+    out: Dict[str, Dict[str, str]] = {}
+    for path, value in walk_json(claims):
+        if not isinstance(value, str):
+            continue
+        key = path.split(".")[-1].lower().strip("[]0123456789")
+        if key not in want_keys:
+            continue
+        if key in out:
+            continue
+        raw = value.strip()
+        if not raw:
+            continue
+        if not HEX_RE.match(raw.replace("0x", "").replace("0X", "")):
+            # Some ITA payloads use non-hex; still surface for debugging
+            out[key] = {"json_path": path, "value_preview": raw[:128] + ("…" if len(raw) > 128 else "")}
+            continue
+        cleaned = normalize_hex(raw.lstrip("0x").lstrip("0X"))
+        out[key] = {"json_path": path, "value_full_hex": cleaned, "value_preview": _hex_preview(cleaned)}
+    return out
+
+
+def write_ci_verification_summary(
+    *,
+    output_dir: str,
+    ita_url: str,
+    ita_request_kind: str,
+    quote_path: str,
+    quote_b64: str,
+    claims: Any,
+    token_path: str,
+) -> None:
+    """Print and save a bounded summary for GitHub Actions (no raw quote base64)."""
+    quote_bytes = decode_base64_flexible(quote_b64) or b""
+    quote_sha256 = hashlib.sha256(quote_bytes).hexdigest() if quote_bytes else ""
+
+    tdx_fields = collect_ita_tdx_measurement_fields(claims)
+    top_keys = list(claims.keys()) if isinstance(claims, dict) else []
+
+    summary: Dict[str, Any] = {
+        "ita_url": ita_url,
+        "ita_request_kind": ita_request_kind,
+        "node_attest_response_quote_json_path": quote_path,
+        "node_quote_b64_character_count": len(quote_b64),
+        "node_quote_sha256_hex": quote_sha256,
+        "ita_jwt_token_json_path": token_path,
+        "ita_jwt_claim_top_level_keys": top_keys,
+        "ita_jwt_tdx_measurement_fields": tdx_fields,
+    }
+
+    path = os.path.join(output_dir, "ita-ci-verification-summary.json")
+    save_json(path, summary)
+
+    print("")
+    print("=== ITA verification — CI summary (Intel Trust Authority) ===")
+    print(f"ita_url={ita_url}")
+    print(f"ita_request_kind={ita_request_kind}")
+    print(f"node_quote_json_path={quote_path}")
+    print(f"node_quote_b64_length={len(quote_b64)}")
+    print(f"node_quote_sha256={quote_sha256}")
+    print(f"ita_jwt_token_path={token_path}")
+    print(f"ita_jwt_claim_top_level_keys={top_keys}")
+    print("Measurements reported in ITA attestation JWT (canonical TDX fields):")
+    if not tdx_fields:
+        print("  (no tdx_mrtd/tdx_rtmr* fields found in claims — see external-attestation-token-claims.json)")
+    for name in sorted(tdx_fields.keys()):
+        entry = tdx_fields[name]
+        if "value_full_hex" in entry:
+            print(f"  {name}={entry['value_preview']} (full hex in ita-ci-verification-summary.json)")
+        else:
+            print(f"  {name}={entry.get('value_preview', entry)}")
+    print(f"Full JSON: {path}")
+    print("=== End ITA CI summary ===")
+    print("")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="External TDX quote verification via Intel Trust Authority")
     parser.add_argument("--attest-response", required=True, help="Path to tee-attest-response.json")
@@ -370,6 +465,16 @@ def main() -> int:
     claims = decode_jwt_claims(token)
     save_json(os.path.join(args.output_dir, "external-attestation-token-claims.json"), claims)
 
+    write_ci_verification_summary(
+        output_dir=args.output_dir,
+        ita_url=str(chosen_response["url"]),
+        ita_request_kind=str(chosen_response["request_kind"]),
+        quote_path=quote_path,
+        quote_b64=quote_b64,
+        claims=claims,
+        token_path=token_path,
+    )
+
     mrtd_info = find_mrtd(claims)
     if mrtd_info is None:
         raise RuntimeError("Could not extract MRTD from external attestation token claims")
@@ -406,6 +511,7 @@ def main() -> int:
     print(f"MRTD={mrtd_value}")
     print(f"MRTD_PATH={mrtd_path}")
     print(f"QUOTE_PATH={quote_path}")
+    print("(See ITA CI summary above for ITA JWT tdx_* fields and node quote SHA-256.)")
     return 0
 
 

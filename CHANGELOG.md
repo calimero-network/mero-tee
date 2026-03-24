@@ -6,6 +6,14 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.14] - 2026-03-24
+
+### Changed
+
+- **`verify_tdx_quote_ita.py`:** Prints an **ITA CI summary** to stdout (ITA URL, request kind, node quote JSON path, quote length, **SHA-256 of the quote bytes**, JWT claim keys, and **`tdx_mrtd` / `tdx_rtmr0`–`3`** previews from the ITA token). Writes **`ita-ci-verification-summary.json`** next to other verification artifacts. Does not log raw base64 quotes (too large for CI).
+- **Node image release:** Attestation probe VMs now default to **`cloud-486420`**, **`europe-west4-a`**, **`c3-standard-4`** when GitHub repo Variables are unset, matching Calimero Cloud MDMA so `published-mrtds.json` RTMR measurements align with dispatcher-created nodes. `resolve-image-vm-parameters.sh` no longer inherits the Packer subnetwork when the attestation project differs from the image project (subnet is auto-discovered in the attestation project). See `docs/release/workflow-setup.md`.
+- Synchronized release version to `2.3.14` across `mero-kms/Cargo.toml`, `Cargo.lock` (`mero-kms-phala` package), and `mero-tee/versions.json` (`imageVersion`).
+
 ## [2.3.13] - 2026-03-26
 
 ### Changed

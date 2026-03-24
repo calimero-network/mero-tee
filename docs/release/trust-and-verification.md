@@ -117,6 +117,49 @@ For Phala KMS deployments, **compose_hash** proves which exact Docker Compose co
   - `allowed_rtmr3`
   - allowed TCB statuses
 
+### Troubleshooting: “Expected” RTMR0 from GitHub ≠ quote on a live node
+
+`published-mrtds.json` on `mero-tee-vX.Y.Z` is assembled **only** in
+`release-node-image-gcp` from `measurement-policy-candidates-*.json`, which are
+produced by `scripts/attestation/extract_tdx_policy_candidates.py` with
+`--attest-response` — i.e. **MRTD/RTMR0–3 are read from the TD quote bytes** from
+the **ephemeral probe VM** for each profile, not from ITA JWT fields.
+
+If the **public verifier** (or any tool) shows **Observed (quote)** for RTMR0 as
+`f023…` but **Expected** from `published-mrtds.json` as `423b…` for the **same**
+`mero-tee-vX.Y.Z` tag, then one of these is true:
+
+1. **The running node is not the same image/boot chain** as the VM that was
+   probed in the release run that produced the asset on GitHub (different image
+   family revision, zone, firmware, kernel, or profile).
+2. **The GitHub asset is not from the pipeline you think** — e.g. tag bumped
+   without a full `publish_mrtds` upload, stale/wrong asset on the release, or
+   comparing a **staging** probe artifact to a **release** published file from
+   another run.
+
+**What to do**
+
+- Align **deployment** with the **image** attested in that release (same family,
+  profile, and rollout as CI), **or**
+- Run **`release-node-image-gcp`** again so `publish_mrtds` re-uploads
+  `published-mrtds.json` (and signatures) from fresh probe VMs for the image
+  you actually ship.
+
+**Sanity check** (compare GitHub to a downloaded CI artifact):
+
+```bash
+TAG=2.3.13
+curl -fsSL "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v${TAG}/published-mrtds.json" \
+  | jq -r '.profiles.debug.allowed_rtmr0[0]'
+
+# Compare to measurement-policy-candidates-debug.json from artifact
+# gcp-tdx-attestation-debug-<run> (same workflow run as publish_mrtds):
+# jq -r '.policy.allowed_rtmr0[0]' measurement-policy-candidates-debug.json
+```
+
+If those two match each other but still differ from a **production** IP, the
+production workload is not the release-probed image.
+
 ### Why some RTMRs may match across different image profiles
 
 This is expected in some cases and does **not** automatically indicate a bug.
