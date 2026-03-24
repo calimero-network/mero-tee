@@ -8,7 +8,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
-- Synchronized release version to `2.1.85` across:
+- Synchronized release version to `2.3.9` across:
   - `mero-kms/Cargo.toml`,
   - `Cargo.lock` (`mero-kms-phala` package),
   - `mero-tee/versions.json` (`imageVersion`).
