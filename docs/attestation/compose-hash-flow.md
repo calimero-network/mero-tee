@@ -77,20 +77,13 @@ MDMA defaults to this pattern; the release workflow (`trigger-staging-probe.sh`)
 
 **Single source of truth:** Both the probe and MDMA use `scripts/kms/phala/kms-compose-template.yaml` from mero-tee. The probe substitutes `__IMAGE_REF__`, `__SERVICE_PORT__`, `__MERO_KMS_VERSION__`, and `__MERO_KMS_PROFILE__` at workflow time; MDMA must substitute the same placeholders. This eliminates version/profile drift.
 
-## Verification script
+## Manual checks
 
-Run to verify the flow and check extraction parity:
-
-```bash
-# Verify release fetch and structure
-./scripts/attestation/kms/verify-compose-hash-flow.sh mero-kms-v2.1.73
-
-# Also compare Python vs JS extraction on an attest-response
-./scripts/attestation/kms/verify-compose-hash-flow.sh mero-kms-v2.1.73 path/to/attest-response.json
-```
+- **Release compatibility map:** fetch `kms-phala-compatibility-map.json` for the tag and confirm `compatibility.profiles.<profile>.event_payload` values (64-char hex) look sane.
+- **Parity with CI:** run `scripts/attestation/kms/verify_dstack_compose_hash.py` locally with `--attest-response` and `--claims` (ITA claims JSON) if you need the same path as the KMS staging probe.
 
 ## Debugging a mismatch
 
-1. **Confirm extraction** — Run the verification script with your attest-response. Python and JS should produce the same compose_hash.
+1. **Confirm extraction** — From `attest-response.json`, ensure the `compose-hash` event under `imr === 3` matches what you expect; compare to the compatibility map `event_payload` for that profile.
 2. **Check release asset** — Fetch the compatibility map and verify `event_payload` values match what the verifier shows as "Expected".
 3. **Compare event logs** — If your event log has a different `compose-hash` event payload than the probe's, the hashes will differ. This usually means different compose/config at runtime.

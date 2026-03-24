@@ -114,25 +114,13 @@ Check that `node_image_tag` matches the node release you deployed and that polic
 
 When MDMA creates nodes, they use images from either release-provenance (if `MDMA_TEE_RELEASE_PROVENANCE_URL` is set) or the name pattern `merotee-ubuntu-questing-25-10-{profile}-{version}`. The mero-tee release workflow builds and attests images in CI, then publishes `published-mrtds.json` and `release-provenance.json`.
 
-To compare an MDMA node with the attested release:
+To compare manually:
 
-```bash
-# Node URL = http://<public_ip>:80 (from MDMA node detail)
-./scripts/release/compare-mdma-node-with-release.sh http://34.40.15.76:80
+1. Fetch `published-mrtds.json` and `release-provenance.json` from the GitHub release for your node version.
+2. Call the node’s `/admin-api/tee/info` (and attestation as needed) and compare **MRTD** and **RTMR0–3** to the allowlists in `published-mrtds.json`.
+3. Compare the node image reference to `release-provenance.json` (project, image name, digest).
 
-# Or with explicit version:
-./scripts/release/compare-mdma-node-with-release.sh http://34.40.15.76:80 2.2.4
-```
-
-The script:
-
-1. Fetches node `/admin-api/tee/info` and attestation (via attestation verifier API).
-2. Fetches `published-mrtds.json` and `release-provenance.json` from the release.
-3. Compares:
-   - **Image**: Does the node's OS image match release-provenance?
-   - **Measurements**: Do MRTD, RTMR0–2 match the published allowlist?
-
-**Requirements**: Node must have a public IP reachable by the attestation verifier (Vercel). Set `ATTESTATION_VERIFIER_URL` to use a different verifier.
+Use the [attestation verifier](https://github.com/calimero-network/mero-tee/tree/master/attestation-verifier) if you want a browser flow over the same measurements.
 
 **Mismatch causes**: Different image (project, version), different profile, or MDMA using non-release image source. Ensure `MDMA_TEE_RELEASE_PROVENANCE_URL` points to the same release as `published-mrtds.json`.
 

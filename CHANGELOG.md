@@ -13,6 +13,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 ### Changed
 
 - Reorganized `scripts/attestation/`: **`shared/`** (ITA + policy extraction used by node and KMS), **`kms/`** (compose-hash / Phala-only helpers). Moved Phala deploy assets to **`scripts/kms/phala/`** (was `scripts/phala/`). Updated workflows and docs to match.
+- Removed optional local/operator helpers: `patch-release-policy.sh`, `fetch-and-analyze-failed-attestation.sh`, `fetch-and-inspect-phala-probe-event-log.sh`, `verify-compose-hash-flow.sh`, `compare-mdma-node-with-release.sh` (docs updated for manual compare steps).
 
 ## [2.3.18] - 2026-03-24
 
