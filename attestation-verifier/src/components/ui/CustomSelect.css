@@ -1,0 +1,124 @@
+.cselect {
+  position: relative;
+  user-select: none;
+  width: 100%;
+}
+
+.cselect-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0s;
+  /* override global button styles */
+  position: relative;
+  overflow: hidden;
+}
+
+.cselect-trigger::after { display: none; }
+
+.cselect-trigger:hover:not(:disabled) {
+  border-color: rgba(165, 255, 17, 0.4);
+  box-shadow: 0 0 0 3px rgba(165, 255, 17, 0.06);
+  transform: none;
+}
+
+.cselect--open .cselect-trigger {
+  border-color: rgba(165, 255, 17, 0.55);
+  box-shadow: 0 0 0 3px rgba(165, 255, 17, 0.08);
+}
+
+.cselect-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cselect-value {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cselect-arrow {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  transition: transform 0.2s ease, color 0.15s;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cselect-arrow--up {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+/* Dropdown menu */
+.cselect-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  min-width: 100%;
+  width: max-content;
+  background: #1a2030;
+  border: 1px solid rgba(165, 255, 17, 0.25);
+  border-radius: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem;
+  z-index: 200;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(165,255,17,0.06);
+  animation: cselect-open 0.15s ease;
+  overflow: hidden;
+}
+
+@keyframes cselect-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.cselect-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 5px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+
+.cselect-option:hover {
+  background: rgba(165, 255, 17, 0.07);
+  color: var(--text);
+}
+
+.cselect-option--active {
+  color: var(--accent);
+  background: rgba(165, 255, 17, 0.06);
+}
+
+.cselect-check {
+  font-size: 0.75rem;
+  color: var(--accent);
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.cselect--disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}

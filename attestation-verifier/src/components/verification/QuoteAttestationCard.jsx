@@ -1,10 +1,11 @@
 import { Card } from '../ui/Card.jsx';
 
-export function QuoteAttestationCard({ verified }) {
+export function QuoteAttestationCard({ verified, style }) {
   return (
     <Card
       title="Quote attestation"
       status={verified ? 'ok' : 'err'}
+      style={style}
     >
       {verified ? (
         <span className="result-ok">

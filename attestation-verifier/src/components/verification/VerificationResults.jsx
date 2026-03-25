@@ -16,11 +16,14 @@ export function VerificationResults({ result }) {
   const hasRtmrData = result.quoteRtmrs != null || result.replayedRtmrs != null;
   const hasComposeOrEventLog = (result.eventCount ?? 0) > 0 || result.composeHash != null;
 
+  let cardIndex = 0;
+  const delay = (n) => ({ style: { animationDelay: `${n * 0.07}s` } });
+
   return (
     <div className="results-section">
       <h2>Results</h2>
       <div className="results-grid">
-        {hasQuoteData && <QuoteAttestationCard verified={result.ita_token_verified} />}
+        {hasQuoteData && <QuoteAttestationCard verified={result.ita_token_verified} {...delay(cardIndex++)} />}
         {hasRtmrData && (
           <RtmrCard
             quoteRtmrs={result.quoteRtmrs}
@@ -31,6 +34,7 @@ export function VerificationResults({ result }) {
             tagToUse={result.tagToUse}
             profileFromComposeHash={result.matches?.[0]}
             isKms={hasComposeOrEventLog}
+            {...delay(cardIndex++)}
           />
         )}
         {hasComposeOrEventLog && (
@@ -45,6 +49,7 @@ export function VerificationResults({ result }) {
               releaseComposePublishing={result.releaseComposePublishing}
               tagToUse={result.tagToUse}
               selectedProfile={result.selectedProfile}
+              {...delay(cardIndex++)}
             />
             <EventLogCard
               eventCount={result.eventCount}
@@ -56,11 +61,12 @@ export function VerificationResults({ result }) {
               rtmr3ReplaySteps={result.rtmr3ReplaySteps}
               quoteRtmr3={result.quoteRtmrs?.rtmr3}
               selectedProfile={result.selectedProfile}
+              {...delay(cardIndex++)}
             />
           </>
         )}
         {hasQuoteData && (
-          <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} />
+          <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} {...delay(cardIndex++)} />
         )}
       </div>
       {result.tagToUse && (

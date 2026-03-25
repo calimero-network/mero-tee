@@ -1,17 +1,22 @@
+import { useRef } from 'react';
+import { CustomSelect } from '../ui/CustomSelect.jsx';
+
 const PROFILES = [
-  { value: '', label: 'All (compare to all profiles)' },
+  { value: '', label: 'All profiles' },
   { value: 'debug', label: 'debug' },
   { value: 'debug-read-only', label: 'debug-read-only' },
   { value: 'locked-read-only', label: 'locked-read-only' },
 ];
 
 export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile, status, onVerify }) {
+  const profileRef = useRef(initialProfile || '');
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const form = e.target;
     const url = form.kms_url?.value?.trim();
     const releaseTag = form.release_tag?.value?.trim() || null;
-    const profile = form.profile?.value?.trim() || null;
+    const profile = profileRef.current || null;
     if (url) onVerify(url, releaseTag || undefined, profile || undefined);
   };
 
@@ -28,11 +33,12 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           disabled={status === 'loading'}
         />
         <button type="submit" disabled={status === 'loading'}>
+          {status === 'loading' && <span className="spinner" />}
           {status === 'loading' ? 'Verifying…' : 'Verify KMS'}
         </button>
       </div>
       <div className="input-row">
-        <label htmlFor="release_tag" className="hint">Release tag for compose_hash check (optional, e.g. mero-kms-v1.2.3)</label>
+        <label htmlFor="release_tag" className="hint">Release tag (optional, e.g. mero-kms-v1.2.3)</label>
         <input
           id="release_tag"
           type="text"
@@ -42,15 +48,16 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           disabled={status === 'loading'}
         />
       </div>
-      <div className="input-row">
-        <label htmlFor="profile" className="hint">Profile to verify against (optional): compare compose_hash to a specific image profile</label>
-        <select id="profile" name="profile" defaultValue={initialProfile || ''} disabled={status === 'loading'}>
-          {PROFILES.map(({ value, label }) => (
-            <option key={value || 'all'} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+      <div className="input-row input-row--col">
+        <label className="hint">Profile to verify against (optional)</label>
+        <CustomSelect
+          id="profile"
+          name="profile"
+          options={PROFILES}
+          defaultValue={initialProfile || ''}
+          disabled={status === 'loading'}
+          onChange={(v) => { profileRef.current = v; }}
+        />
       </div>
     </form>
   );

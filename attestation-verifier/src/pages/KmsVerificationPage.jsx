@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useVerification } from '../hooks/useVerification.js';
 import { VerificationResults } from '../components/verification/VerificationResults.jsx';
 import { KmsVerifierForm } from '../components/forms/KmsVerifierForm.jsx';
+import { DocsSection } from '../components/docs/DocsSection.jsx';
 import './VerificationPage.css';
 
 export function KmsVerificationPage() {
@@ -33,13 +34,13 @@ export function KmsVerificationPage() {
         onVerify={verify}
       />
       {status === 'loading' && (
-        <p className="result-warn">
-          Verifying (backend fetches attestation from KMS, verifies quote via Intel Trust
-          Authority)…
+        <p className="status-loading">
+          Fetching attestation and verifying with Intel Trust Authority…
         </p>
       )}
-      {status === 'error' && <p className="result-err">{error}</p>}
+      {status === 'error' && <div className="error-banner">{error}</div>}
       {status === 'success' && result && <VerificationResults result={result} />}
+      <DocsSection />
     </section>
   );
 }

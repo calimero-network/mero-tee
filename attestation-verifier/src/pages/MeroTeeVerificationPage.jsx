@@ -4,6 +4,7 @@ import { useVerification } from '../hooks/useVerification.js';
 import { useNodeVerification } from '../hooks/useNodeVerification.js';
 import { VerificationResults } from '../components/verification/VerificationResults.jsx';
 import { MeroTeeVerifierForm } from '../components/forms/MeroTeeVerifierForm.jsx';
+import { DocsSection } from '../components/docs/DocsSection.jsx';
 import './VerificationPage.css';
 
 export function MeroTeeVerificationPage() {
@@ -43,7 +44,7 @@ export function MeroTeeVerificationPage() {
         Verify mero-tee node attestations (GCP TDX nodes) or KMS instances. Enter a node URL (e.g.{' '}
         <code>http://public-ip:80</code>) or KMS URL.
       </p>
-      <MeroTeeVerifierForm status={status} onVerifyByUrl={handleVerifyByUrl} />
+      <MeroTeeVerifierForm status={status === 'loading' || nodeStatus === 'loading' ? 'loading' : status} onVerifyByUrl={handleVerifyByUrl} />
       <div className="verifier-form" style={{ marginTop: '1.5rem' }}>
         <h3>Node (merod) verification</h3>
         <p className="hint">
@@ -67,23 +68,24 @@ export function MeroTeeVerificationPage() {
               type="url"
               name="node_url"
               placeholder="http://34.65.123.45:80"
-              disabled={nodeStatus === 'loading'}
+              disabled={nodeStatus === 'loading' || status === 'loading'}
               defaultValue={nodeUrlParam || ''}
             />
-            <button type="submit" disabled={nodeStatus === 'loading'}>
+            <button type="submit" disabled={nodeStatus === 'loading' || status === 'loading'}>
+              {nodeStatus === 'loading' && <span className="spinner" />}
               {nodeStatus === 'loading' ? 'Verifying…' : 'Verify node'}
             </button>
           </div>
           <div className="input-row" style={{ marginTop: '0.5rem' }}>
-            <label htmlFor="node_release_tag" className="input-label">
-              Release tag for MRTD/RTMR check (optional, e.g. mero-tee-v2.2.4):
+            <label htmlFor="node_release_tag" className="hint">
+              Release tag (optional, e.g. mero-tee-v2.2.4)
             </label>
             <input
               type="text"
               id="node_release_tag"
               name="node_release_tag"
               placeholder="mero-tee-v2.2.4"
-              disabled={nodeStatus === 'loading'}
+              disabled={nodeStatus === 'loading' || status === 'loading'}
               defaultValue={nodeReleaseTagParam || ''}
               style={{ maxWidth: '16rem' }}
             />
@@ -91,14 +93,15 @@ export function MeroTeeVerificationPage() {
         </form>
       </div>
       {(nodeStatus === 'loading' || status === 'loading') && (
-        <p className="result-warn">Verifying…</p>
+        <p className="status-loading">Fetching attestation and verifying…</p>
       )}
       {(activeError || nodeError || error) && (
-        <p className="result-err">{activeError || nodeError || error}</p>
+        <div className="error-banner">{activeError || nodeError || error}</div>
       )}
       {activeStatus === 'success' && activeResult && (
         <VerificationResults result={activeResult} />
       )}
+      <DocsSection />
     </section>
   );
 }
