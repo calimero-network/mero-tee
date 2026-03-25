@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Card } from '../ui/Card.jsx';
 
-export function QuoteJsonCard({ itaClaims, attestation }) {
+export function QuoteJsonCard({ itaClaims, attestation, style }) {
   const [activeTab, setActiveTab] = useState('ita');
   const data = activeTab === 'ita' ? itaClaims : attestation;
   const jsonStr = data ? JSON.stringify(data, null, 2) : '';
@@ -9,7 +9,7 @@ export function QuoteJsonCard({ itaClaims, attestation }) {
   if (!itaClaims && !attestation) return null;
 
   return (
-    <Card title="Quote / attestation data">
+    <Card title="Quote / attestation data" style={style}>
       <div className="json-viewer-tabs">
         {itaClaims && (
           <button

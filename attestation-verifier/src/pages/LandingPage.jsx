@@ -1,9 +1,8 @@
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { IntroSection } from '../components/intro/IntroSection.jsx';
 
 /**
- * Landing page: intro + redirect.
- * If kms_url in query, redirect to /kms for MDMA deep-linking.
+ * Landing page: redirect straight to /kms (default tab).
+ * Deep-link support: if kms_url param present, pass it through.
  */
 export function LandingPage() {
   const [searchParams] = useSearchParams();
@@ -16,14 +15,5 @@ export function LandingPage() {
     return <Navigate to={`/kms?${params}`} replace />;
   }
 
-  return (
-    <>
-      <IntroSection />
-      <section className="landing-cta">
-        <p className="landing-cta-text">
-          Select a tab above to verify <strong>KMS (Phala)</strong> or <strong>Mero TEE</strong> attestations.
-        </p>
-      </section>
-    </>
-  );
+  return <Navigate to="/kms" replace />;
 }

@@ -22,6 +22,7 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl }) {
           disabled={status === 'loading'}
         />
         <button type="submit" disabled={status === 'loading' || !kmsUrl.trim()}>
+          {status === 'loading' && <span className="spinner" />}
           {status === 'loading' ? 'Verifying…' : 'Verify'}
         </button>
       </div>

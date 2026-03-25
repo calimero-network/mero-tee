@@ -10,6 +10,7 @@ export function ComposeHashCard({
   releaseComposePublishing,
   tagToUse,
   selectedProfile,
+  style,
 }) {
   const hasCompatMatch = composeHash && matches?.length > 0;
   const hasPolicyMatch = composeHash && policyMatches?.length > 0;
@@ -34,7 +35,7 @@ export function ComposeHashCard({
         : [];
 
   return (
-    <Card title="Compose hash" status={cardStatus}>
+    <Card title="Compose hash" status={cardStatus} style={style}>
       <div className="hash-row">
         <span className="label">Received:</span>
         <code>{composeHash || 'n/a'}</code>

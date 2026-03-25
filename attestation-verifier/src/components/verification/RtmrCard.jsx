@@ -90,6 +90,7 @@ export function RtmrCard({
   tagToUse,
   profileFromComposeHash,
   isKms = false,
+  style,
 }) {
   const showExpected = hasAnyPolicy(policiesByProfile);
   const inferredProfile = showExpected
@@ -224,7 +225,7 @@ export function RtmrCard({
     itaRtmrs && itaDisagreesWithDisplayedQuote(quoteRtmrs, itaRtmrs);
 
   return (
-    <Card title="RTMR / MRTD measurements">
+    <Card title="RTMR / MRTD measurements" style={style}>
       <p className="rtmr-hint">
         MRTD and RTMR0–3 shown for policy comparison are parsed from the TDX quote (same as published
         releases). All registers are compared against the release allowlist. Intel Trust Authority (ITA)

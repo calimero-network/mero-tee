@@ -13,7 +13,8 @@ function Rtmr3StepRow({ step, index }) {
         className="rtmr3-step-toggle"
         onClick={() => setShowDetail(!showDetail)}
       >
-        {showDetail ? '▼' : '▶'} Step {index + 1}: {step.event}
+        <span className={`toggle-icon${showDetail ? ' open' : ''}`}>▶</span>
+        Step {index + 1}: {step.event}
         {step.digestMatch !== null && (
           <span className={digestOk ? 'result-ok' : digestFail ? 'result-err' : ''}>
             {' '}
@@ -96,6 +97,7 @@ export function EventLogCard({
   rtmr3ReplaySteps,
   quoteRtmr3,
   selectedProfile,
+  style,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showChain, setShowChain] = useState(false);
@@ -109,7 +111,7 @@ export function EventLogCard({
   const appIdEvent = imr3Events.find((e) => e.event === 'app-id');
 
   return (
-    <Card title="Event log">
+    <Card title="Event log" style={style}>
       <div className="event-count">{eventCount} events</div>
       <div className="event-log-section">
         <h4 className="event-log-heading">imr=3 events (RTMR3 chain)</h4>
@@ -124,7 +126,8 @@ export function EventLogCard({
               className="event-log-toggle"
               onClick={() => setShowChain(!showChain)}
             >
-              {showChain ? '▼' : '▶'} Verify RTMR3 chain ({rtmr3ReplaySteps.length} steps)
+              <span className={`toggle-icon${showChain ? ' open' : ''}`}>▶</span>
+              Verify RTMR3 chain ({rtmr3ReplaySteps.length} steps)
               {quoteRtmr3 && (
                 <span className={chainMatchesQuote ? 'result-ok' : 'result-err'}>
                   {' '}
@@ -221,7 +224,8 @@ export function EventLogCard({
           className="event-log-toggle"
           onClick={() => setExpanded(!expanded)}
         >
-          {expanded ? '▼' : '▶'} All imr=3 events ({imr3Events.length})
+          <span className={`toggle-icon${expanded ? ' open' : ''}`}>▶</span>
+          All imr=3 events ({imr3Events.length})
         </button>
         {expanded && (
           <div className="event-list">

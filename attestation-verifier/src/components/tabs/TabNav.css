@@ -10,18 +10,20 @@
   padding: 1rem 1.25rem;
   text-decoration: none;
   color: var(--text-muted);
-  border-bottom: 3px solid transparent;
+  border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .tab-nav-item:hover {
   color: var(--text);
+  background: rgba(165, 255, 17, 0.03);
 }
 
 .tab-nav-item--active {
-  color: var(--accent);
+  color: var(--text);
   border-bottom-color: var(--accent);
+  background: rgba(165, 255, 17, 0.04);
 }
 
 .tab-nav-label {

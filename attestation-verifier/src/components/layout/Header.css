@@ -1,34 +1,83 @@
 .header {
-  text-align: center;
-  padding: 2rem 1rem;
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  height: 60px;
+  position: relative;
+  z-index: 10;
+}
+
+.header::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(165, 255, 17, 0.3), transparent);
 }
 
 .header-brand {
-  margin: 0;
   text-decoration: none;
-  color: inherit;
+  display: flex;
+  align-items: center;
+}
+
+.header-logo {
+  height: 26px;
+  display: block;
+  filter: brightness(0) invert(1);
+  opacity: 0.9;
+  transition: opacity 0.15s;
+}
+
+.header-brand:hover .header-logo {
+  opacity: 1;
+}
+
+/* CTA button — outlined green pill */
+.header-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 1rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--accent);
+  border: 1px solid rgba(165, 255, 17, 0.35);
+  border-radius: 999px;
+  text-decoration: none;
+  background: rgba(165, 255, 17, 0.06);
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+
+.header-cta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 120%, rgba(165, 255, 17, 0.12) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.header-cta:hover {
+  background: rgba(165, 255, 17, 0.1);
+  border-color: rgba(165, 255, 17, 0.6);
+  box-shadow: 0 0 16px rgba(165, 255, 17, 0.2);
+  transform: translateY(-1px);
+}
+
+.header-cta:hover::before {
+  opacity: 1;
+}
+
+.header-cta-arrow {
+  transition: transform 0.2s ease;
   display: inline-block;
 }
 
-.header-brand h1 {
-  font-size: 1.75rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem;
-}
-
-.header-brand p {
-  color: var(--text-muted);
-  margin: 0 0 1rem;
-  font-size: 0.95rem;
-}
-
-.header-github {
-  color: var(--accent);
-  text-decoration: none;
-  font-size: 0.9rem;
-}
-
-.header-github:hover {
-  text-decoration: underline;
+.header-cta:hover .header-cta-arrow {
+  transform: translateX(3px);
 }
