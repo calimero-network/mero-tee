@@ -12,7 +12,9 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl }) {
   return (
     <form onSubmit={handleUrlSubmit} className="verifier-form">
       <div className="input-row">
+        <label htmlFor="mero_tee_url" className="sr-only">KMS URL</label>
         <input
+          id="mero_tee_url"
           type="url"
           value={kmsUrl}
           onChange={(e) => setKmsUrl(e.target.value)}
@@ -24,7 +26,9 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl }) {
         </button>
       </div>
       <div className="input-row">
+        <label htmlFor="mero_tee_release_tag" className="hint">Release tag (optional)</label>
         <input
+          id="mero_tee_release_tag"
           type="text"
           value={releaseTag}
           onChange={(e) => setReleaseTag(e.target.value)}

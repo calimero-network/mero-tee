@@ -95,3 +95,67 @@ pub fn parse_measurement_list_env(
         Err(std::env::VarError::NotUnicode(_)) => bail!("{name} must be valid UTF-8"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_bool_flag_accepts_all_truthy_values() {
+        for input in ["1", "true", "TRUE", "yes", "on", " True "] {
+            assert!(
+                parse_bool_flag(input).unwrap(),
+                "expected true for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bool_flag_accepts_all_falsy_values() {
+        for input in ["0", "false", "FALSE", "no", "off", " False "] {
+            assert!(
+                !parse_bool_flag(input).unwrap(),
+                "expected false for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bool_flag_rejects_unknown() {
+        assert!(parse_bool_flag("maybe").is_err());
+    }
+
+    #[test]
+    fn normalize_hash_pin_accepts_valid_sha256() {
+        let valid = "ab".repeat(32);
+        let result = normalize_hash_pin(&valid).unwrap();
+        assert_eq!(result, valid);
+    }
+
+    #[test]
+    fn normalize_hash_pin_strips_0x_prefix_and_lowercases() {
+        let upper = "AB".repeat(32);
+        let result = normalize_hash_pin(&format!("0x{upper}")).unwrap();
+        assert_eq!(result, "ab".repeat(32));
+    }
+
+    #[test]
+    fn normalize_hash_pin_rejects_wrong_length() {
+        assert!(normalize_hash_pin("abcd").is_err());
+    }
+
+    #[test]
+    fn normalize_hash_pin_rejects_non_hex() {
+        let non_hex = "zz".repeat(32);
+        assert!(normalize_hash_pin(&non_hex).is_err());
+    }
+
+    #[test]
+    fn hash_bytes_hex_returns_consistent_sha256() {
+        let hash = hash_bytes_hex(b"hello");
+        assert_eq!(hash.len(), 64);
+        let hash2 = hash_bytes_hex(b"hello");
+        assert_eq!(hash, hash2);
+        assert_ne!(hash, hash_bytes_hex(b"world"));
+    }
+}
