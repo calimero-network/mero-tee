@@ -1,14 +1,14 @@
 //! `/challenge` endpoint: issues short-lived nonce challenges.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::extract::State;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rand::random;
 use serde::{Deserialize, Serialize};
 
 use crate::challenge_store::{ChallengeStoreError, PendingChallenge};
+use crate::util::{unix_now_secs, CHALLENGE_ID_BYTES, MAX_PEER_ID_LENGTH};
 
 use super::errors::ServiceError;
 use super::AppState;
@@ -42,7 +42,7 @@ pub(crate) async fn challenge_handler(
     let nonce: [u8; 32] = random();
 
     let challenge_id = create_challenge_id();
-    let now = unix_now_secs()?;
+    let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
     state
         .challenge_store
@@ -66,25 +66,17 @@ pub(crate) async fn challenge_handler(
 
     Ok(Json(ChallengeResponse {
         challenge_id,
-        nonce_b64: base64::engine::general_purpose::STANDARD.encode(nonce),
+        nonce_b64: BASE64.encode(nonce),
         expires_at,
     }))
 }
 
-fn unix_now_secs() -> Result<u64, ServiceError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .map_err(|e| ServiceError::InvalidChallenge(format!("system clock error: {}", e)))
-}
-
 fn create_challenge_id() -> String {
-    let raw: [u8; 16] = random();
+    let raw: [u8; CHALLENGE_ID_BYTES] = random();
     hex::encode(raw)
 }
 
 pub(crate) fn validate_peer_id_shape(peer_id: &str) -> Result<(), ServiceError> {
-    const MAX_PEER_ID_LENGTH: usize = 128;
     let trimmed = peer_id.trim();
     if trimmed.is_empty() {
         return Err(ServiceError::InvalidPeerId(

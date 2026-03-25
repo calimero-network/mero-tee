@@ -2,6 +2,7 @@
 
 use axum::extract::State;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use dstack_sdk::dstack_client::DstackClient;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ pub(crate) async fn attest_kms_handler(
         })?;
 
     Ok(Json(KmsAttestResponse {
-        quote_b64: base64::engine::general_purpose::STANDARD.encode(quote_bytes),
+        quote_b64: BASE64.encode(quote_bytes),
         report_data_hex: hex::encode(report_data),
         event_log: parsed_event_log,
         vm_config: quote_response.vm_config,
@@ -77,7 +78,7 @@ pub(crate) async fn attest_kms_handler(
 }
 
 pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], ServiceError> {
-    let decoded = base64::engine::general_purpose::STANDARD
+    let decoded = BASE64
         .decode(value)
         .map_err(|e| ServiceError::InvalidAttestationRequest(format!("{}: {}", field_name, e)))?;
     decoded.try_into().map_err(|_| {
@@ -85,6 +86,8 @@ pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 
     })
 }
 
+/// Domain-separated default binding when the caller doesn't supply one.
+/// Ensures the second half of report_data is never all-zeros.
 fn default_attestation_binding() -> [u8; 32] {
     Sha256::digest(b"mero-kms-phala-attest-v1").into()
 }
@@ -98,6 +101,8 @@ pub(crate) fn resolve_attestation_binding(
     }
 }
 
+/// Pack nonce (bytes 0..32) and binding (bytes 32..64) into the 64-byte
+/// TDX report_data field. The verifier reconstructs this to check the quote.
 pub(crate) fn build_attestation_report_data(nonce: &[u8; 32], binding: &[u8; 32]) -> [u8; 64] {
     let mut report_data = [0u8; 64];
     report_data[..32].copy_from_slice(nonce);

@@ -1,13 +1,44 @@
 //! Service configuration and release-policy loading.
+//!
+//! # Environment Variables
+//!
+//! | Variable | Type | Default | Description |
+//! |---|---|---|---|
+//! | `LISTEN_ADDR` | `SocketAddr` | `0.0.0.0:8080` | HTTP listen address |
+//! | `DSTACK_SOCKET_PATH` | `String` | `/var/run/dstack.sock` | Path to dstack Unix socket |
+//! | `CHALLENGE_TTL_SECS` | `u64` | `60` | Challenge nonce time-to-live in seconds |
+//! | `MAX_PENDING_CHALLENGES` | `usize` | `10000` | Maximum concurrent pending challenges |
+//! | `ACCEPT_MOCK_ATTESTATION` | `bool` | `false` | Accept mock quotes (dev only, **never** in production) |
+//! | `REDIS_URL` | `String` | *(none — in-memory)* | Redis URL for shared challenge store |
+//! | `MERO_KMS_VERSION` | `String` | *(none)* | Release version for policy fetch (e.g. `2.3.4` or `mero-kms-v2.3.4`) |
+//! | `MERO_KMS_PROFILE` | `String` | `locked-read-only` | KMS profile cohort (overrides `KMS_POLICY_PROFILE`) |
+//! | `KMS_POLICY_PROFILE` | `String` | *(deprecated)* | Legacy alias for `MERO_KMS_PROFILE` |
+//! | `KEY_NAMESPACE_PREFIX` | `String` | `merod/storage` | dstack key derivation namespace prefix |
+//! | `MERO_KMS_POLICY_SHA256` | `String` | *(none)* | Optional SHA-256 pin for fetched policy file |
+//! | `CORS_ALLOWED_ORIGINS` | `CSV` | *(none — CORS disabled)* | Comma-separated allowed CORS origins |
+//! | `ENFORCE_MEASUREMENT_POLICY` | `bool` | `true` | Whether TDX measurement checks are enforced |
+//! | `USE_ENV_POLICY` | `bool` | `false` | Load policy from `ALLOWED_*` env vars instead of release |
+//! | `ALLOWED_TCB_STATUSES` | `CSV` | `uptodate` | Allowed TCB status values (when `USE_ENV_POLICY=true`) |
+//! | `ALLOWED_MRTD` | `CSV` | *(empty)* | Allowed MRTD hex values (when `USE_ENV_POLICY=true`) |
+//! | `ALLOWED_RTMR0` | `CSV` | *(empty)* | Allowed RTMR0 hex values (when `USE_ENV_POLICY=true`) |
+//! | `ALLOWED_RTMR1` | `CSV` | *(empty)* | Allowed RTMR1 hex values (when `USE_ENV_POLICY=true`) |
+//! | `ALLOWED_RTMR2` | `CSV` | *(empty)* | Allowed RTMR2 hex values (when `USE_ENV_POLICY=true`) |
+//! | `ALLOWED_RTMR3` | `CSV` | *(empty)* | Allowed RTMR3 hex values (when `USE_ENV_POLICY=true`) |
+
+pub mod env;
+pub mod policy_loader;
 
 use std::net::SocketAddr;
 
 use eyre::{bail, Result as EyreResult};
-use sha2::Digest;
 
 use crate::policy::{validate_policy_requirements, AttestationPolicy};
 
-const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
+use self::env::{
+    normalize_hash_pin, parse_bool_env, parse_csv_env, parse_measurement_list_env, read_env_utf8,
+};
+use self::policy_loader::fetch_policy_from_release;
+
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
 const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
 
@@ -104,7 +135,7 @@ impl Config {
             .map(|v| normalize_hash_pin(&v))
             .transpose()?;
 
-        let cors_allowed_origins = parse_csv_env_raw("CORS_ALLOWED_ORIGINS").unwrap_or_default();
+        let cors_allowed_origins = parse_csv_env("CORS_ALLOWED_ORIGINS", false).unwrap_or_default();
 
         let enforce_measurement_policy = parse_bool_env("ENFORCE_MEASUREMENT_POLICY", true)?;
         let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
@@ -114,41 +145,15 @@ impl Config {
         } else {
             Self::release_version_from_env()?
         };
-        // MERO_KMS_POLICY_SHA256 is optional; when set, verifies the fetched policy matches.
 
-        let (mut attestation_policy, policy_ready, policy_unavailable_reason) = if use_env_policy {
-            (Self::load_policy_from_env()?, true, None::<String>)
-        } else if let Some(version) = release_version.as_deref() {
-            match Self::fetch_policy_from_release_async(
-                version,
+        let (mut attestation_policy, policy_ready, policy_unavailable_reason) =
+            resolve_attestation_policy(
+                use_env_policy,
+                release_version.as_deref(),
                 &kms_profile,
                 policy_sha256.as_deref(),
             )
-            .await
-            {
-                Ok(policy) => {
-                    tracing::info!(
-                        "Loaded attestation policy from release mero-kms-v{} profile {}",
-                        version,
-                        kms_profile
-                    );
-                    (policy, true, None::<String>)
-                }
-                Err(err) => {
-                    let reason = format!(
-                        "Failed to load release policy for version '{}' profile '{}': {}",
-                        version, kms_profile, err
-                    );
-                    tracing::warn!("{reason}");
-                    (AttestationPolicy::default(), false, Some(reason))
-                }
-            }
-        } else {
-            let reason =
-                "MERO_KMS_VERSION is not set; release policy is not available yet".to_string();
-            tracing::warn!("{reason}");
-            (AttestationPolicy::default(), false, Some(reason))
-        };
+            .await?;
         attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
         if policy_ready {
             validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
@@ -190,172 +195,65 @@ impl Config {
             Err(std::env::VarError::NotUnicode(_)) => bail!("MERO_KMS_VERSION must be valid UTF-8"),
         }
     }
+}
 
-    async fn fetch_policy_from_release_async(
-        version: &str,
-        profile: &str,
-        expected_policy_sha256: Option<&str>,
-    ) -> EyreResult<AttestationPolicy> {
-        let urls = policy_candidate_urls(version, profile);
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("mero-kms-phala/1.0")
-            .build()
-            .map_err(|e| eyre::eyre!("Failed to create HTTP client: {}", e))?;
-        let mut last_error: Option<String> = None;
-        for (url, legacy_fallback) in urls {
-            let resp = match client.get(&url).send().await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    last_error = Some(format!("request error for {}: {}", url, err));
-                    continue;
-                }
-            };
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                last_error = Some(format!("not found: {}", url));
-                continue;
-            }
-            if !resp.status().is_success() {
-                bail!("Policy fetch failed: {} {}", resp.status(), url);
-            }
-
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| eyre::eyre!("Failed to read policy response: {}", e))?;
-            if let Some(expected) = expected_policy_sha256 {
-                let actual = hash_bytes_hex(&bytes);
-                if actual != expected {
-                    bail!(
-                        "Policy hash mismatch for {}: expected {}, got {}",
-                        url,
-                        expected,
-                        actual
-                    );
-                }
-            }
-            let body = std::str::from_utf8(&bytes)
-                .map_err(|e| eyre::eyre!("Policy body is not valid UTF-8: {}", e))?;
-            return Self::parse_policy_json(body, version.trim(), profile, legacy_fallback);
-        }
-
-        bail!(
-            "Policy fetch failed for profile '{}': {}",
-            profile,
-            last_error.unwrap_or_else(|| "no policy candidates resolved".to_string())
-        );
+/// Determine the attestation policy source (env vars vs. GitHub release) and load it.
+/// Returns a default empty policy with `policy_ready=false` when the version is not
+/// yet set, allowing the service to start in degraded mode (/attest works, /get-key is blocked).
+async fn resolve_attestation_policy(
+    use_env_policy: bool,
+    release_version: Option<&str>,
+    kms_profile: &str,
+    policy_sha256: Option<&str>,
+) -> EyreResult<(AttestationPolicy, bool, Option<String>)> {
+    if use_env_policy {
+        return Ok((load_policy_from_env()?, true, None));
     }
-
-    pub(crate) fn parse_policy_json(
-        json_str: &str,
-        expected_tag: &str,
-        expected_profile: &str,
-        allow_legacy_missing_profile: bool,
-    ) -> EyreResult<AttestationPolicy> {
-        let root: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| eyre::eyre!("Invalid policy JSON: {}", e))?;
-        let tag = root
-            .get("tag")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| eyre::eyre!("Policy JSON missing 'tag' string"))?;
-        if tag != expected_tag {
-            bail!(
-                "Policy tag mismatch: expected '{}', got '{}'",
-                expected_tag,
-                tag
-            );
-        }
-        match root.get("role").and_then(|value| value.as_str()) {
-            Some("kms") => {}
-            Some(role) => bail!("Policy role mismatch: expected 'kms', got '{}'", role),
-            None if allow_legacy_missing_profile && expected_profile == "locked-read-only" => {}
-            None => bail!("Policy JSON missing 'role' for KMS policy"),
-        }
-        match root.get("profile").and_then(|value| value.as_str()) {
-            Some(profile) => {
-                let normalized = parse_profile(profile)?;
-                if normalized != expected_profile {
-                    bail!(
-                        "Policy profile mismatch: expected '{}', got '{}'",
-                        expected_profile,
-                        normalized
-                    );
-                }
+    if let Some(version) = release_version {
+        match fetch_policy_from_release(version, kms_profile, policy_sha256).await {
+            Ok(policy) => {
+                tracing::info!(
+                    "Loaded attestation policy from release mero-kms-v{} profile {}",
+                    version,
+                    kms_profile
+                );
+                Ok((policy, true, None))
             }
-            None if allow_legacy_missing_profile && expected_profile == "locked-read-only" => {}
-            None => bail!(
-                "Policy JSON missing 'profile' for requested profile '{}'",
-                expected_profile
-            ),
+            Err(err) => {
+                let reason = format!(
+                    "Failed to load release policy for version '{}' profile '{}': {}",
+                    version, kms_profile, err
+                );
+                tracing::warn!("{reason}");
+                Ok((AttestationPolicy::default(), false, Some(reason)))
+            }
         }
-
-        let policy = root
-            .get("policy")
-            .and_then(|v| v.as_object())
-            .ok_or_else(|| eyre::eyre!("Policy JSON missing 'policy' object"))?;
-
-        let allowed_tcb_statuses = parse_json_string_array(policy, "node_allowed_tcb_statuses")
-            .or_else(|| parse_json_string_array(policy, "allowed_tcb_statuses"))
-            .unwrap_or_else(|| vec!["uptodate".to_owned()]);
-        let allowed_mrtd =
-            parse_policy_hex_allowlist(policy, "node_allowed_mrtd", "allowed_mrtd", 48)?;
-        let allowed_rtmr0 =
-            parse_policy_hex_allowlist(policy, "node_allowed_rtmr0", "allowed_rtmr0", 48)?;
-        let allowed_rtmr1 =
-            parse_policy_hex_allowlist(policy, "node_allowed_rtmr1", "allowed_rtmr1", 48)?;
-        let allowed_rtmr2 =
-            parse_policy_hex_allowlist(policy, "node_allowed_rtmr2", "allowed_rtmr2", 48)?;
-        let allowed_rtmr3 =
-            parse_policy_hex_allowlist(policy, "node_allowed_rtmr3", "allowed_rtmr3", 48)?;
-
-        Ok(AttestationPolicy {
-            enforce_measurement_policy: true,
-            allowed_tcb_statuses,
-            allowed_mrtd,
-            allowed_rtmr0,
-            allowed_rtmr1,
-            allowed_rtmr2,
-            allowed_rtmr3,
-        })
-    }
-
-    fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
-        Ok(AttestationPolicy {
-            enforce_measurement_policy: true,
-            allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES")
-                .unwrap_or_else(|| vec!["uptodate".to_string()]),
-            allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD", 48)?,
-            allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0", 48)?,
-            allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1", 48)?,
-            allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2", 48)?,
-            allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3", 48)?,
-        })
+    } else {
+        let reason = "MERO_KMS_VERSION is not set; release policy is not available yet".to_string();
+        tracing::warn!("{reason}");
+        Ok((AttestationPolicy::default(), false, Some(reason)))
     }
 }
 
-fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        other => bail!("Invalid boolean value '{}'", other),
-    }
+fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
+    Ok(AttestationPolicy {
+        enforce_measurement_policy: true,
+        allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES", true)
+            .unwrap_or_else(|| vec!["uptodate".to_string()]),
+        allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD")?,
+        allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0")?,
+        allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1")?,
+        allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
+        allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
+    })
 }
 
+/// Read the KMS profile from env, handling the deprecated `KMS_POLICY_PROFILE`
+/// alias. If both are set they must agree; if only the legacy name is set a
+/// deprecation warning is emitted.
 fn profile_override_from_env() -> EyreResult<Option<String>> {
-    let modern = match std::env::var("MERO_KMS_PROFILE") {
-        Ok(value) => Some(value),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("MERO_KMS_PROFILE must be valid UTF-8")
-        }
-    };
-    let legacy = match std::env::var("KMS_POLICY_PROFILE") {
-        Ok(value) => Some(value),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            bail!("KMS_POLICY_PROFILE must be valid UTF-8")
-        }
-    };
+    let modern = read_env_utf8("MERO_KMS_PROFILE")?;
+    let legacy = read_env_utf8("KMS_POLICY_PROFILE")?;
 
     if let Some(modern_profile) = modern {
         if let Some(legacy_profile) = legacy.as_deref() {
@@ -377,34 +275,6 @@ fn profile_override_from_env() -> EyreResult<Option<String>> {
         );
     }
     Ok(legacy)
-}
-
-pub(crate) fn policy_candidate_urls(version: &str, profile: &str) -> Vec<(String, bool)> {
-    let tag = format!("mero-kms-v{}", version.trim());
-    vec![
-        (
-            format!(
-                "{}/{}/kms-phala-attestation-policy.{}.json",
-                POLICY_RELEASE_BASE, tag, profile
-            ),
-            false,
-        ),
-        (
-            format!(
-                "{}/{}/kms-phala-attestation-policy.json",
-                POLICY_RELEASE_BASE, tag
-            ),
-            true,
-        ),
-    ]
-}
-
-fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
-    match std::env::var(name) {
-        Ok(value) => parse_bool_flag(&value),
-        Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(std::env::VarError::NotUnicode(_)) => bail!("{name} must be valid UTF-8"),
-    }
 }
 
 /// Read and validate the image-pinned policy profile, if present.
@@ -459,7 +329,9 @@ fn resolve_kms_profile(
     )
 }
 
-fn parse_profile(raw: &str) -> EyreResult<String> {
+/// Normalize and validate a KMS profile name against the known set.
+/// Used both at config load time and when parsing policy JSON.
+pub fn parse_profile(raw: &str) -> EyreResult<String> {
     let value = raw.trim().to_ascii_lowercase();
     if value.is_empty() {
         bail!("KMS policy profile cannot be empty");
@@ -475,123 +347,60 @@ fn parse_profile(raw: &str) -> EyreResult<String> {
     }
 }
 
-fn normalize_hash_pin(raw: &str) -> EyreResult<String> {
-    let normalized = raw.trim().trim_start_matches("0x").to_ascii_lowercase();
-    if normalized.len() != 64 {
-        bail!(
-            "MERO_KMS_POLICY_SHA256 must contain exactly 64 hex chars (got {})",
-            normalized.len()
+/// Log all resolved configuration values at startup.
+pub fn log_startup_config(config: &Config) {
+    use tracing::{info, warn};
+
+    info!("Starting mero-kms-phala");
+    info!("Listen address: {}", config.listen_addr);
+    info!("Dstack socket: {}", config.dstack_socket_path);
+    info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
+    info!("Max pending challenges: {}", config.max_pending_challenges);
+    info!(
+        "Accept mock attestation: {}",
+        config.accept_mock_attestation
+    );
+    info!("KMS profile cohort: {}", config.kms_profile);
+    info!("Key namespace prefix: {}", config.key_namespace_prefix);
+    if let Some(redis_url) = config.redis_url.as_deref() {
+        info!("Challenge store backend: redis ({})", redis_url);
+    } else {
+        info!("Challenge store backend: in-memory");
+    }
+    if let Some(policy_sha256) = config.policy_sha256.as_deref() {
+        info!("Policy SHA-256 pin enabled: {}", policy_sha256);
+    }
+    if let Some(kms_version) = config.kms_version.as_deref() {
+        info!("Policy release version: {}", kms_version);
+    }
+    info!("Policy ready for key issuance: {}", config.policy_ready);
+    if !config.policy_ready {
+        warn!(
+            "Policy unavailable; /attest remains available but /get-key is fail-closed: {}",
+            config
+                .policy_unavailable_reason
+                .as_deref()
+                .unwrap_or("unknown policy readiness error")
         );
     }
-    if !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("MERO_KMS_POLICY_SHA256 contains non-hex characters");
+    info!(
+        "Measurement policy enforced: {}",
+        config.attestation_policy.enforce_measurement_policy
+    );
+    if !config.attestation_policy.enforce_measurement_policy {
+        warn!("Measurement policy enforcement is disabled; this is not safe for production");
     }
-    Ok(normalized)
-}
-
-fn hash_bytes_hex(bytes: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(bytes);
-    hex::encode(digest)
-}
-
-fn parse_json_string_array(
-    policy: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Option<Vec<String>> {
-    policy.get(key).and_then(|v| v.as_array()).map(|arr| {
-        arr.iter()
-            .filter_map(|value| value.as_str())
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>()
-    })
-}
-
-fn parse_json_hex_array(
-    policy: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    expected_bytes: usize,
-) -> EyreResult<Option<Vec<String>>> {
-    let Some(values) = policy.get(key) else {
-        return Ok(None);
-    };
-    let arr = values
-        .as_array()
-        .ok_or_else(|| eyre::eyre!("Policy field '{}' must be an array", key))?;
-    let mut parsed = Vec::new();
-    for value in arr {
-        let raw = value
-            .as_str()
-            .ok_or_else(|| eyre::eyre!("Policy field '{}' entries must be strings", key))?;
-        parsed.push(normalize_hex(raw, expected_bytes)?);
-    }
-    Ok(Some(parsed))
-}
-
-fn parse_policy_hex_allowlist(
-    policy: &serde_json::Map<String, serde_json::Value>,
-    preferred_key: &str,
-    fallback_key: &str,
-    expected_bytes: usize,
-) -> EyreResult<Vec<String>> {
-    if let Some(values) = parse_json_hex_array(policy, preferred_key, expected_bytes)? {
-        return Ok(values);
-    }
-    Ok(parse_json_hex_array(policy, fallback_key, expected_bytes)?.unwrap_or_default())
-}
-
-fn parse_csv_env(name: &str) -> Option<Vec<String>> {
-    std::env::var(name).ok().map(|v| {
-        v.split(',')
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
-}
-
-fn parse_csv_env_raw(name: &str) -> Option<Vec<String>> {
-    std::env::var(name).ok().map(|v| {
-        v.split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
-}
-
-fn parse_measurement_list_env(name: &str, expected_bytes: usize) -> EyreResult<Vec<String>> {
-    match std::env::var(name) {
-        Ok(raw) => raw
-            .split(',')
-            .filter_map(|entry| {
-                let trimmed = entry.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                }
-            })
-            .map(|value| normalize_hex(value, expected_bytes))
-            .collect(),
-        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
-        Err(std::env::VarError::NotUnicode(_)) => bail!("{name} must be valid UTF-8"),
-    }
-}
-
-fn normalize_hex(raw: &str, expected_bytes: usize) -> EyreResult<String> {
-    let normalized = raw.trim().trim_start_matches("0x").to_ascii_lowercase();
-    let expected_len = expected_bytes * 2;
-    if normalized.len() != expected_len {
-        bail!(
-            "Expected {} bytes ({} hex chars), got {} chars",
-            expected_bytes,
-            expected_len,
-            normalized.len()
+    if config.policy_ready {
+        info!(
+            "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
+            config.attestation_policy.allowed_tcb_statuses.len(),
+            config.attestation_policy.allowed_mrtd.len(),
+            config.attestation_policy.allowed_rtmr0.len(),
+            config.attestation_policy.allowed_rtmr1.len(),
+            config.attestation_policy.allowed_rtmr2.len(),
+            config.attestation_policy.allowed_rtmr3.len()
         );
     }
-    if !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        bail!("Value contains non-hex characters");
-    }
-    Ok(normalized)
 }
 
 #[cfg(test)]
@@ -602,29 +411,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-
-    const ENV_KEYS: &[&str] = &[
-        "LISTEN_ADDR",
-        "DSTACK_SOCKET_PATH",
-        "CHALLENGE_TTL_SECS",
-        "MAX_PENDING_CHALLENGES",
-        "ACCEPT_MOCK_ATTESTATION",
-        "REDIS_URL",
-        "MERO_KMS_VERSION",
-        "MERO_KMS_PROFILE",
-        "KMS_POLICY_PROFILE",
-        "KEY_NAMESPACE_PREFIX",
-        "MERO_KMS_POLICY_SHA256",
-        "CORS_ALLOWED_ORIGINS",
-        "ENFORCE_MEASUREMENT_POLICY",
-        "USE_ENV_POLICY",
-        "ALLOWED_TCB_STATUSES",
-        "ALLOWED_MRTD",
-        "ALLOWED_RTMR0",
-        "ALLOWED_RTMR1",
-        "ALLOWED_RTMR2",
-        "ALLOWED_RTMR3",
-    ];
+    use crate::config::policy_loader::policy_candidate_urls;
+    use crate::test_util::{valid_measurement_hex, ENV_KEYS};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -689,10 +477,6 @@ mod tests {
         }
     }
 
-    fn valid_measurement_hex() -> String {
-        "ab".repeat(48)
-    }
-
     fn valid_env_policy_overrides() -> Vec<(&'static str, String)> {
         let measurement = valid_measurement_hex();
         vec![
@@ -734,13 +518,13 @@ mod tests {
         let urls = policy_candidate_urls("2.3.4", "debug-read-only");
         assert_eq!(urls.len(), 2);
         assert!(urls[0]
-            .0
+            .url
             .ends_with("/mero-kms-v2.3.4/kms-phala-attestation-policy.debug-read-only.json"));
-        assert!(!urls[0].1);
+        assert!(!urls[0].is_legacy_fallback);
         assert!(urls[1]
-            .0
+            .url
             .ends_with("/mero-kms-v2.3.4/kms-phala-attestation-policy.json"));
-        assert!(urls[1].1);
+        assert!(urls[1].is_legacy_fallback);
     }
 
     #[test]
@@ -771,75 +555,6 @@ mod tests {
         let err = read_image_profile_from_file(temp.as_str())
             .expect_err("empty pinned profile file should fail");
         assert!(err.to_string().contains("is empty; refusing startup"));
-    }
-
-    #[test]
-    fn parse_policy_json_rejects_mismatched_profile() {
-        let policy_json = serde_json::json!({
-            "tag": "2.1.38",
-            "role": "kms",
-            "profile": "debug",
-            "policy": {
-                "node_allowed_tcb_statuses": ["uptodate"],
-                "node_allowed_mrtd": ["ab".repeat(48)],
-                "node_allowed_rtmr0": ["cd".repeat(48)],
-                "node_allowed_rtmr1": ["ef".repeat(48)],
-                "node_allowed_rtmr2": ["01".repeat(48)],
-                "node_allowed_rtmr3": ["23".repeat(48)]
-            }
-        });
-        let err = Config::parse_policy_json(
-            &policy_json.to_string(),
-            "2.1.38",
-            "locked-read-only",
-            false,
-        )
-        .expect_err("mismatched profile should fail");
-        assert!(err.to_string().contains("Policy profile mismatch"));
-    }
-
-    #[test]
-    fn parse_policy_json_rejects_non_kms_role() {
-        let policy_json = serde_json::json!({
-            "tag": "2.1.38",
-            "role": "node",
-            "profile": "locked-read-only",
-            "policy": {
-                "node_allowed_tcb_statuses": ["uptodate"],
-                "node_allowed_mrtd": ["aa".repeat(48)],
-                "node_allowed_rtmr0": ["bb".repeat(48)],
-                "node_allowed_rtmr1": ["cc".repeat(48)],
-                "node_allowed_rtmr2": ["dd".repeat(48)],
-                "node_allowed_rtmr3": ["ee".repeat(48)]
-            }
-        });
-        let err = Config::parse_policy_json(
-            &policy_json.to_string(),
-            "2.1.38",
-            "locked-read-only",
-            false,
-        )
-        .expect_err("non-kms role should fail");
-        assert!(err.to_string().contains("Policy role mismatch"));
-    }
-
-    #[test]
-    fn parse_policy_json_allows_locked_legacy_missing_profile() {
-        let policy_json = serde_json::json!({
-            "tag": "2.1.38",
-            "policy": {
-                "node_allowed_tcb_statuses": ["uptodate"],
-                "node_allowed_mrtd": ["aa".repeat(48)],
-                "node_allowed_rtmr0": ["bb".repeat(48)],
-                "node_allowed_rtmr1": ["cc".repeat(48)],
-                "node_allowed_rtmr2": ["dd".repeat(48)],
-                "node_allowed_rtmr3": ["ee".repeat(48)]
-            }
-        });
-        let parsed =
-            Config::parse_policy_json(&policy_json.to_string(), "2.1.38", "locked-read-only", true)
-                .expect("legacy policy should parse for locked profile");
-        assert_eq!(parsed.allowed_mrtd, vec!["aa".repeat(48)]);
     }
 
     #[test]
@@ -925,7 +640,7 @@ mod tests {
                 "/tmp/nonexistent-kms-profile",
             ))
             .expect_err("malformed ALLOWED_MRTD should fail");
-        assert!(err.to_string().contains("Expected 48 bytes"));
+        assert!(err.to_string().contains("expected 48 bytes"));
     }
 
     #[test]
