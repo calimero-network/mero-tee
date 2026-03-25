@@ -9,7 +9,7 @@ export function Header() {
         <img src={calimeroLogo} alt="Calimero" className="header-logo" />
       </Link>
       <a
-        href="https://manager.cloud.calimero.network/"
+        href="https://cloud.calimero.network"
         target="_blank"
         rel="noopener noreferrer"
         className="header-cta"
