@@ -8,11 +8,19 @@ use super::env::hash_bytes_hex;
 
 const POLICY_RELEASE_BASE: &str = "https://github.com/calimero-network/mero-tee/releases/download";
 
+/// HTTP client timeout for policy fetches.
+const POLICY_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// User-Agent header sent when fetching policies from GitHub releases.
+const POLICY_FETCH_USER_AGENT: &str = "mero-kms-phala/1.0";
+
 /// A candidate URL for fetching an attestation policy, with metadata
 /// about whether it is a legacy (profile-less) fallback.
 #[derive(Debug, Clone)]
 pub struct PolicyCandidate {
+    /// Full URL to the policy JSON asset on GitHub releases.
     pub url: String,
+    /// `true` when this candidate is the legacy profile-less fallback URL.
     pub is_legacy_fallback: bool,
 }
 
@@ -47,8 +55,8 @@ pub async fn fetch_policy_from_release(
 ) -> EyreResult<AttestationPolicy> {
     let candidates = policy_candidate_urls(version, profile);
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent("mero-kms-phala/1.0")
+        .timeout(POLICY_FETCH_TIMEOUT)
+        .user_agent(POLICY_FETCH_USER_AGENT)
         .build()
         .map_err(|e| eyre::eyre!("Failed to create HTTP client: {}", e))?;
     let mut last_error: Option<String> = None;

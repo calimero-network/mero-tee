@@ -12,6 +12,8 @@ fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
     }
 }
 
+/// Read a boolean from the environment variable `name`, returning `default`
+/// when the variable is not set. Accepts `1/true/yes/on` and `0/false/no/off`.
 pub fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     match std::env::var(name) {
         Ok(value) => parse_bool_flag(&value),
@@ -53,11 +55,14 @@ pub fn normalize_hash_pin(raw: &str) -> EyreResult<String> {
     Ok(normalized)
 }
 
+/// Compute the SHA-256 hash of `bytes` and return it as a lowercase hex string.
 pub fn hash_bytes_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(bytes))
 }
 
+/// Read an environment variable as a UTF-8 string, returning `None` when not
+/// set and an error when the value is not valid UTF-8.
 pub fn read_env_utf8(name: &str) -> EyreResult<Option<String>> {
     match std::env::var(name) {
         Ok(value) => Ok(Some(value)),

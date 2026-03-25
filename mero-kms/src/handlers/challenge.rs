@@ -13,6 +13,8 @@ use crate::util::{unix_now_secs, CHALLENGE_ID_BYTES, MAX_PEER_ID_LENGTH};
 use super::errors::ServiceError;
 use super::AppState;
 
+const RATE_LIMIT_MESSAGE: &str = "Too many pending challenges. Retry shortly.";
+
 /// Request body for the challenge endpoint.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +61,7 @@ pub(crate) async fn challenge_handler(
         .await
         .map_err(|err| match err {
             ChallengeStoreError::CapacityExceeded => {
-                ServiceError::RateLimited("Too many pending challenges. Retry shortly.".to_string())
+                ServiceError::RateLimited(RATE_LIMIT_MESSAGE.to_string())
             }
             _ => ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", err)),
         })?;

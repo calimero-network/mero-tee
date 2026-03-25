@@ -6,13 +6,25 @@ use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
 
-/// Error response body.
+/// JSON error response body returned by all handler error paths.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
+    /// Machine-readable error tag (e.g. `"invalid_request"`, `"rate_limited"`).
     pub error: String,
+    /// Optional human-readable details about the error, omitted from JSON when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+}
+
+impl std::fmt::Display for ErrorResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(details) = &self.details {
+            write!(f, ": {}", details)?;
+        }
+        Ok(())
+    }
 }
 
 /// Service-level errors with automatic `Display` and `std::error::Error` via thiserror.

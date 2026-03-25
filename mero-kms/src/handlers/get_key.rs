@@ -25,10 +25,15 @@ use super::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyRequest {
+    /// Hex-encoded challenge ID previously obtained from `/challenge`.
     pub challenge_id: String,
+    /// Base64-encoded raw TDX quote bytes with the challenge nonce in report_data.
     pub quote_b64: String,
+    /// Base58-encoded libp2p peer ID of the requesting merod node.
     pub peer_id: String,
+    /// Base64-encoded protobuf-serialized libp2p public key corresponding to `peer_id`.
     pub peer_public_key_b64: String,
+    /// Base64-encoded signature over the canonical challenge+quote+peer payload.
     pub signature_b64: String,
 }
 
@@ -36,6 +41,7 @@ pub struct GetKeyRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
+    /// Derived storage encryption key for the requesting peer.
     pub key: String,
 }
 
@@ -295,12 +301,17 @@ fn enforce_tcb_status(
     Ok(())
 }
 
+const DEFAULT_POLICY_NOT_READY_MSG: &str =
+    "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, \
+     or use explicit USE_ENV_POLICY mode.";
+
 pub(crate) fn ensure_policy_ready_for_key_release(config: &Config) -> Result<(), ServiceError> {
     if config.policy_ready {
         return Ok(());
     }
-    let details = config.policy_unavailable_reason.clone().unwrap_or_else(|| {
-        "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, or use explicit USE_ENV_POLICY mode.".to_string()
-    });
+    let details = config
+        .policy_unavailable_reason
+        .clone()
+        .unwrap_or_else(|| DEFAULT_POLICY_NOT_READY_MSG.to_string());
     Err(ServiceError::PolicyNotReady(details))
 }

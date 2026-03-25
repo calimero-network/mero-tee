@@ -2,6 +2,8 @@
 
 use crate::util::MEASUREMENT_BYTES;
 
+/// All environment variable names read by [`Config::from_env`](crate::Config),
+/// used by test guards to snapshot and restore env state.
 pub const ENV_KEYS: &[&str] = &[
     "LISTEN_ADDR",
     "DSTACK_SOCKET_PATH",
@@ -25,6 +27,8 @@ pub const ENV_KEYS: &[&str] = &[
     "ALLOWED_RTMR3",
 ];
 
+/// Return a valid 96-character hex string (`"ab"` repeated 48 times) suitable
+/// for use as a TDX measurement register value in tests.
 pub fn valid_measurement_hex() -> String {
     "ab".repeat(MEASUREMENT_BYTES)
 }
@@ -39,6 +43,9 @@ pub fn create_mock_quote(nonce: &[u8; 32]) -> Vec<u8> {
     quote
 }
 
+/// Read the full body of an Axum response and parse it as JSON.
+///
+/// Panics if the body cannot be read or is not valid JSON.
 pub async fn read_json_body(response: axum::response::Response) -> serde_json::Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
