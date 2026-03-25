@@ -15,6 +15,7 @@
   font-size: 0.85rem;
   color: var(--text-muted);
   margin: 0 0 0.5rem;
+  overflow-wrap: anywhere;
 }
 
 .hint code {
@@ -33,7 +34,8 @@
 .input-row > .hint {
   align-self: center;
   margin: 0;
-  white-space: nowrap;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* Stacked variant for label + full-width control */
@@ -48,9 +50,17 @@
   white-space: normal;
 }
 
+.input-row--col input[type="url"],
+.input-row--col input[type="text"],
+.input-row--col select {
+  width: 100%;
+}
+
 .input-row input[type="url"],
 .input-row input[type="text"] {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.5rem 0.75rem;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.9rem;
@@ -65,6 +75,8 @@
 }
 
 .input-row select {
+  min-width: 0;
+  max-width: 100%;
   padding: 0.5rem 0.75rem;
   font-family: inherit;
   font-size: 0.9rem;
@@ -247,6 +259,7 @@ form button:disabled {
 .card-body {
   font-size: 0.9rem;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .hash-row {
@@ -468,6 +481,7 @@ form button:disabled {
   font-size: 0.85rem;
   color: var(--text-muted);
   margin-top: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .landing-cta {
@@ -480,4 +494,38 @@ form button:disabled {
 .landing-cta-text {
   margin: 0;
   color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .verification-page {
+    padding: 1rem;
+  }
+
+  .input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .input-row > .hint {
+    align-self: flex-start;
+  }
+
+  .verifier-form button,
+  form button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .result-card {
+    padding: 0.9rem 1rem;
+  }
+
+  .json-viewer-tabs {
+    flex-wrap: wrap;
+  }
+
+  .event-summary-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
 }

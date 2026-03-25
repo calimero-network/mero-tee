@@ -26,7 +26,7 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl }) {
           {status === 'loading' ? 'Verifying…' : 'Verify'}
         </button>
       </div>
-      <div className="input-row">
+      <div className="input-row input-row--col">
         <label htmlFor="mero_tee_release_tag" className="hint">Release tag (optional)</label>
         <input
           id="mero_tee_release_tag"

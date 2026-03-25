@@ -33,3 +33,17 @@
   color: var(--text-muted);
   margin: 0;
 }
+
+@media (max-width: 720px) {
+  .layout-main {
+    padding: 1.5rem 1rem 2.5rem;
+  }
+
+  .page-hero {
+    margin-bottom: 1.5rem;
+  }
+
+  .page-hero-title {
+    font-size: 1.6rem;
+  }
+}

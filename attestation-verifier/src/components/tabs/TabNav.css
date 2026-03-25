@@ -38,3 +38,28 @@
   margin-top: 0.25rem;
   opacity: 0.85;
 }
+
+@media (max-width: 720px) {
+  .tab-nav {
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .tab-nav-item {
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--border);
+    border-left: 3px solid transparent;
+    margin-bottom: 0;
+  }
+
+  .tab-nav-item:last-child {
+    border-bottom: none;
+  }
+
+  .tab-nav-item--active {
+    border-bottom-color: transparent;
+    border-left-color: var(--accent);
+  }
+}
