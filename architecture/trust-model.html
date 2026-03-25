@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trust Model — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Trust Model</span></div>
+
+<h1>Trust <em>Model</em></h1>
+<p class="page-subtitle">Mutual hardware attestation — neither side trusts without proof</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OVERVIEW
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Mutual Attestation Overview</h2>
+<p style="margin-bottom:18px;">Trust in the mero-tee system is <strong>bidirectional</strong>. Both the node and the KMS must prove they are running genuine, untampered code inside a TDX hardware enclave before any sensitive operation (key release) occurs. Neither party relies on network identity, TLS certificates, or operator trust alone.</p>
+
+<svg viewBox="0 0 900 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Node -->
+  <rect x="30" y="60" width="260" height="100" rx="14" fill="#3b82f610" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="160" y="90" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="14" font-weight="700">merod Node</text>
+  <text x="160" y="112" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">TDX Confidential VM</text>
+  <text x="160" y="130" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Has peer key pair</text>
+  <text x="160" y="148" text-anchor="middle" fill="#3b82f680" font-family="JetBrains Mono" font-size="8">Produces TDX quote on demand</text>
+
+  <!-- KMS -->
+  <rect x="610" y="60" width="260" height="100" rx="14" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.8"/>
+  <text x="740" y="90" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="14" font-weight="700">mero-kms-phala</text>
+  <text x="740" y="112" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">TDX Confidential VM + dstack</text>
+  <text x="740" y="130" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Holds attestation policy</text>
+  <text x="740" y="148" text-anchor="middle" fill="#f59e0b80" font-family="JetBrains Mono" font-size="8">Produces TDX quote via dstack</text>
+
+  <!-- Plane 1: Node → KMS (top arrow) -->
+  <line x1="290" y1="90" x2="605" y2="90" stroke="#10b981" stroke-width="2"/>
+  <polygon points="605,90 597,86 597,94" fill="#10b981"/>
+  <text x="450" y="82" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="10" font-weight="700">Plane 1: Node verifies KMS</text>
+  <text x="450" y="100" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">POST /attest → verify quote → check report_data</text>
+
+  <!-- Plane 2: KMS → Node (bottom arrow) -->
+  <line x1="610" y1="140" x2="295" y2="140" stroke="#8b5cf6" stroke-width="2"/>
+  <polygon points="295,140 303,136 303,144" fill="#8b5cf6"/>
+  <text x="450" y="133" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="10" font-weight="700">Plane 2: KMS verifies Node</text>
+  <text x="450" y="152" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">challenge → get-key → sig verify → quote verify → policy check</text>
+
+  <!-- Trust root -->
+  <rect x="340" y="220" width="220" height="55" rx="10" fill="#ef444410" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="450" y="245" text-anchor="middle" fill="#ef4444" font-family="JetBrains Mono" font-size="11" font-weight="700">TDX Hardware Root</text>
+  <text x="450" y="263" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">CPU-level tamper evidence</text>
+
+  <line x1="160" y1="160" x2="350" y2="230" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+  <line x1="740" y1="160" x2="550" y2="230" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="ld" style="background:#10b981"></div>Node → KMS verification</div>
+  <div class="legend-item"><div class="ld" style="background:#8b5cf6"></div>KMS → Node verification</div>
+  <div class="legend-item"><div class="ld" style="background:#ef4444"></div>Hardware trust root</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PLANE 1: NODE VERIFIES KMS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Plane 1 &mdash; Node Verifies KMS</h2>
+<p style="margin-bottom:18px;">Before requesting a key, the node first verifies the KMS itself is running inside a genuine TDX enclave. This prevents a rogue server from impersonating the KMS and learning which keys nodes are requesting.</p>
+
+<div class="step"><div class="n">1</div><h4>Request Attestation</h4><p>The node sends <span class="code">POST /attest</span> with a freshly generated <span class="code">nonce</span>. The nonce ensures the attestation is fresh (not replayed).</p></div>
+<div class="step"><div class="n">2</div><h4>KMS Produces Quote</h4><p>KMS asks dstack to produce a TDX quote binding <span class="code">nonce || report_data</span> to the quote&rsquo;s user data field. dstack invokes the TDX guest driver to generate a hardware-signed quote.</p></div>
+<div class="step"><div class="n">3</div><h4>Node Verifies Quote</h4><p>The node receives the raw TDX quote and verifies: (a) the quote signature is valid, (b) the report_data contains the expected nonce binding, (c) MRTD and RTMR values match known-good KMS measurements.</p></div>
+<div class="step"><div class="n">4</div><h4>Trust Established</h4><p>If verification passes, the node trusts this KMS instance is the genuine mero-kms-phala running inside TDX. It proceeds to the key release protocol.</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PLANE 2: KMS VERIFIES NODE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Plane 2 &mdash; KMS Verifies Node</h2>
+<p style="margin-bottom:18px;">The KMS never releases a key without verifying the requesting node. This uses a challenge-response protocol that binds the node&rsquo;s identity (peerId) to a TDX attestation quote.</p>
+
+<div class="step"><div class="n">1</div><h4>Challenge</h4><p>Node sends <span class="code">POST /challenge { peerId }</span>. KMS generates a cryptographic nonce, stores it with the peerId and an expiry, and returns <span class="code">{ challengeId, nonce }</span>.</p></div>
+<div class="step"><div class="n">2</div><h4>Quote Generation</h4><p>The node produces a TDX quote binding the nonce to its report_data. It also signs the nonce with its peer private key to prove identity.</p></div>
+<div class="step"><div class="n">3</div><h4>Key Request</h4><p>Node sends <span class="code">POST /get-key { challengeId, quote, signature }</span>. The challenge is consumed (one-time use).</p></div>
+<div class="step"><div class="n">4</div><h4>Signature Verification</h4><p>KMS verifies the signature against the peerId&rsquo;s public key. This proves the request originates from the entity that initiated the challenge.</p></div>
+<div class="step"><div class="n">5</div><h4>Quote Verification</h4><p>KMS parses the TDX quote, verifies its cryptographic signature, and checks report_data contains the expected nonce binding.</p></div>
+<div class="step"><div class="n">6</div><h4>Policy Check</h4><p>KMS evaluates the quote&rsquo;s measurements (MRTD, RTMR0&ndash;3) and TCB status against the attestation policy. If any value is not in the allowlist, the request is rejected with <span class="code">403 PolicyViolation</span>.</p></div>
+<div class="step"><div class="n">7</div><h4>Key Derivation</h4><p>If all checks pass, KMS calls dstack to derive a deterministic key for the node&rsquo;s namespace. The same inputs always produce the same key.</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     POLICY ENFORCEMENT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Policy Enforcement</h2>
+<p style="margin-bottom:18px;">The attestation policy defines which TDX measurements and TCB statuses are acceptable. It is fetched from GitHub releases on KMS startup and can be pinned by SHA-256 hash.</p>
+
+<h3>Policy Fields</h3>
+<div class="typedef">
+<span class="kw">struct</span> <span class="ty">AttestationPolicy</span> {<br>
+&nbsp;&nbsp;<span class="field">allowed_mrtd</span>: Vec&lt;String&gt;,       <span class="comment">// Allowed VM image measurements</span><br>
+&nbsp;&nbsp;<span class="field">allowed_rtmr0</span>: Vec&lt;String&gt;,      <span class="comment">// Firmware measurement</span><br>
+&nbsp;&nbsp;<span class="field">allowed_rtmr1</span>: Vec&lt;String&gt;,      <span class="comment">// OS kernel measurement</span><br>
+&nbsp;&nbsp;<span class="field">allowed_rtmr2</span>: Vec&lt;String&gt;,      <span class="comment">// Application measurement</span><br>
+&nbsp;&nbsp;<span class="field">allowed_rtmr3</span>: Vec&lt;String&gt;,      <span class="comment">// Runtime events (profile marker)</span><br>
+&nbsp;&nbsp;<span class="field">allowed_tcb_status</span>: Vec&lt;String&gt;, <span class="comment">// e.g. ["UpToDate", "SWHardeningNeeded"]</span><br>
+}
+</div>
+
+<h3>Measurement Registers</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>MRTD</h4>
+    <p>Measures the initial VM image &mdash; the hash of the entire guest TD at launch. Changing any bit in the image changes MRTD. This pins the exact KMS or node binary.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR0</h4>
+    <p>Firmware measurement &mdash; extended by the TDVF (TDX Virtual Firmware) during early boot. Pins the firmware version.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR1</h4>
+    <p>OS kernel measurement &mdash; extended during kernel boot. Pins the kernel version and configuration.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR2</h4>
+    <p>Application measurement &mdash; extended when the application layer is loaded. Pins the merod or KMS application binary and initial config.</p>
+  </div>
+</div>
+
+<h3>RTMR3 &mdash; Profile Cohort Separation</h3>
+<p style="margin-bottom:14px;">RTMR3 is special: it records <strong>runtime events</strong> that happen after boot. In mero-tee, each image profile writes a distinct event to RTMR3 during startup. This creates cryptographic separation between profiles.</p>
+
+<div class="g3">
+  <div class="stat"><div class="v" style="font-size:1rem;color:var(--red)">debug</div><div class="l">RTMR3 event A</div></div>
+  <div class="stat"><div class="v" style="font-size:1rem;color:var(--amber)">debug-ro</div><div class="l">RTMR3 event B</div></div>
+  <div class="stat"><div class="v" style="font-size:1rem;color:var(--green)">locked-ro</div><div class="l">RTMR3 event C</div></div>
+</div>
+
+<p style="margin-top:14px;">The KMS attestation policy for production only includes the <strong>locked-read-only</strong> RTMR3 value in its allowlist. A debug node&rsquo;s RTMR3 will not match, so the KMS rejects its key request with <span class="code">403 PolicyViolation</span>. This is enforced by hardware &mdash; there is no software path to forge an RTMR3 value.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     THREAT MODEL
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Threat Mitigations</h2>
+<div class="g2">
+  <div class="cb">
+    <h4>Rogue KMS</h4>
+    <p>A fake KMS cannot produce a valid TDX quote with the expected MRTD. The node&rsquo;s Plane 1 verification rejects it before revealing any peerId or key request.</p>
+  </div>
+  <div class="cb">
+    <h4>Rogue Node</h4>
+    <p>A node running outside TDX cannot produce a valid TDX quote. A tampered node&rsquo;s MRTD/RTMR values differ from the policy. The KMS rejects the key request.</p>
+  </div>
+  <div class="cb">
+    <h4>Replay Attack</h4>
+    <p>Each challenge nonce is single-use and TTL-bound. A replayed <span class="code">/get-key</span> request fails because the challengeId has been consumed. The /attest nonce prevents quote replay.</p>
+  </div>
+  <div class="cb">
+    <h4>Profile Escalation</h4>
+    <p>A debug node cannot impersonate a production node. RTMR3 values are hardware-measured and differ between profiles. The KMS policy rejects any RTMR3 not in the allowlist.</p>
+  </div>
+  <div class="cb">
+    <h4>Man-in-the-Middle</h4>
+    <p>The nonce binding in TDX quotes ties attestation to a specific session. Even if traffic is intercepted, the attacker cannot produce matching quotes.</p>
+  </div>
+  <div class="cb">
+    <h4>Policy Tampering</h4>
+    <p>The policy is fetched from a versioned GitHub release and optionally pinned by SHA-256 hash (<span class="code">MERO_KMS_POLICY_SHA256</span>). Any modification is detected.</p>
+  </div>
+</div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

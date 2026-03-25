@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glossary — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.glossary-search { margin-bottom: 28px; }
+.glossary-search input {
+  width: 100%; max-width: 480px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface2); color: var(--text); font-family: 'DM Sans', sans-serif; font-size: .88rem;
+  outline: none; transition: border-color .15s;
+}
+.glossary-search input::placeholder { color: var(--text-dim); }
+.glossary-search input:focus { border-color: var(--amber); }
+.glossary-count { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-dim); margin-top: 6px; }
+
+.term-row {
+  display: grid; grid-template-columns: 240px 1fr; gap: 16px; padding: 12px 16px;
+  background: var(--surface2); border-radius: 10px; border: 1px solid transparent;
+  transition: border-color .15s; margin-bottom: 8px; align-items: start;
+}
+.term-row:hover { border-color: var(--border-hi); }
+.term-name { font-family: 'JetBrains Mono', monospace; font-size: .82rem; font-weight: 600; color: var(--amber); word-break: break-all; }
+.term-body { font-size: .84rem; color: var(--text-dim); line-height: 1.6; }
+.term-letter { font-family: 'Instrument Serif', serif; font-size: 1.4rem; color: var(--text-bright); margin: 28px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.term-letter:first-of-type { margin-top: 0; }
+.no-results { display: none; padding: 24px; text-align: center; color: var(--text-dim); font-size: .88rem; }
+
+@media (max-width: 700px) {
+  .term-row { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Glossary</span></div>
+
+<h1><em>Glossary</em></h1>
+<p class="page-subtitle">TEE and mero-tee key terms and concepts</p>
+
+<div class="glossary-search">
+  <input type="text" id="term-filter" placeholder="Filter terms…" autocomplete="off">
+  <div class="glossary-count" id="term-count"></div>
+</div>
+
+<div id="glossary-list">
+
+<!-- ─── A ─── -->
+<div class="term-letter" data-letter="A">A</div>
+
+<div class="term-row" data-term="attestation">
+  <div class="term-name">Attestation</div>
+  <div class="term-body">
+    The process by which a TEE proves its identity and integrity to a remote party. In TDX, attestation produces a cryptographic <strong>quote</strong> containing measurements of the running code and hardware configuration. The remote party verifies the quote against expected values.
+  </div>
+</div>
+
+<div class="term-row" data-term="attestation policy">
+  <div class="term-name">Attestation Policy</div>
+  <div class="term-body">
+    A JSON document specifying which TDX measurement values (MRTD, RTMR0&ndash;3) and TCB statuses the KMS considers acceptable. Fetched from GitHub releases and optionally pinned by SHA-256 hash. See <a href="config-reference.html">Config Reference</a>.
+  </div>
+</div>
+
+<div class="term-row" data-term="attestation verifier">
+  <div class="term-name">Attestation Verifier</div>
+  <div class="term-body">
+    A public web application (React + serverless API) that allows anyone to verify a KMS instance is running inside a genuine TDX enclave. Chains the KMS self-attestation through Intel Trust Authority. See <a href="attestation-flow.html">Attestation Flow</a>.
+  </div>
+</div>
+
+<!-- ─── C ─── -->
+<div class="term-letter" data-letter="C">C</div>
+
+<div class="term-row" data-term="challenge">
+  <div class="term-name">Challenge</div>
+  <div class="term-body">
+    A time-limited, single-use nonce issued by the KMS during the key release protocol. The node must produce a TDX quote binding this nonce to prove freshness. Stored in the <strong>ChallengeStore</strong> (InMemory or Redis).
+  </div>
+</div>
+
+<div class="term-row" data-term="challengeid">
+  <div class="term-name">ChallengeId</div>
+  <div class="term-body">
+    A UUID v4 identifier returned by <span class="code">POST /challenge</span>. Used to look up and consume the associated nonce during <span class="code">POST /get-key</span>. Single-use: consumed on first retrieval.
+  </div>
+</div>
+
+<div class="term-row" data-term="challengestore">
+  <div class="term-name">ChallengeStore</div>
+  <div class="term-body">
+    Trait-based storage abstraction for challenge nonces. Two implementations: <strong>InMemoryStore</strong> (DashMap, single-instance) and <strong>RedisStore</strong> (multi-instance). Maps <span class="code">challengeId &rarr; (nonce, peerId, expiry)</span>.
+  </div>
+</div>
+
+<div class="term-row" data-term="cohort separation">
+  <div class="term-name">Cohort Separation</div>
+  <div class="term-body">
+    Cryptographic isolation between image profiles via distinct RTMR3 runtime events. A debug node&rsquo;s RTMR3 differs from production, preventing cross-profile key access. Enforced by TDX hardware.
+  </div>
+</div>
+
+<div class="term-row" data-term="cvm">
+  <div class="term-name">CVM (Confidential VM)</div>
+  <div class="term-body">
+    A virtual machine with hardware-enforced memory encryption and isolation. In mero-tee, merod nodes and the KMS run as GCP TDX Confidential VMs. The hypervisor cannot read or tamper with CVM memory.
+  </div>
+</div>
+
+<!-- ─── D ─── -->
+<div class="term-letter" data-letter="D">D</div>
+
+<div class="term-row" data-term="dstack">
+  <div class="term-name">dstack</div>
+  <div class="term-body">
+    Phala Network&rsquo;s TEE runtime that provides deterministic key derivation and TDX quote generation. The KMS communicates with dstack via a Unix domain socket. dstack seals a root key to the hardware, enabling repeatable key derivation.
+  </div>
+</div>
+
+<!-- ─── H ─── -->
+<div class="term-letter" data-letter="H">H</div>
+
+<div class="term-row" data-term="hkdf">
+  <div class="term-name">HKDF</div>
+  <div class="term-body">
+    HMAC-based Key Derivation Function (RFC 5869). Used by dstack to derive deterministic encryption keys from a root secret and application-specific inputs (namespace + peerId). The same inputs always produce the same output.
+  </div>
+</div>
+
+<!-- ─── I ─── -->
+<div class="term-letter" data-letter="I">I</div>
+
+<div class="term-row" data-term="ita">
+  <div class="term-name">ITA (Intel Trust Authority)</div>
+  <div class="term-body">
+    Intel&rsquo;s cloud service for remote attestation verification. Accepts TDX quotes and returns signed JWTs containing verified measurements and TCB status. Used by the Attestation Verifier for independent verification.
+  </div>
+</div>
+
+<!-- ─── K ─── -->
+<div class="term-letter" data-letter="K">K</div>
+
+<div class="term-row" data-term="key derivation">
+  <div class="term-name">Key Derivation</div>
+  <div class="term-body">
+    The process of generating a storage encryption key from dstack&rsquo;s sealed root secret. Uses <span class="code">KEY_NAMESPACE_PREFIX + peerId</span> as input. Deterministic: the same node always receives the same key.
+  </div>
+</div>
+
+<div class="term-row" data-term="kms">
+  <div class="term-name">KMS (mero-kms-phala)</div>
+  <div class="term-body">
+    The Key Management Service &mdash; a Rust HTTP service running inside a TDX enclave. Validates node attestations and releases storage encryption keys via Phala dstack. See <a href="system-overview.html">System Overview</a>.
+  </div>
+</div>
+
+<!-- ─── M ─── -->
+<div class="term-letter" data-letter="M">M</div>
+
+<div class="term-row" data-term="merod">
+  <div class="term-name">merod</div>
+  <div class="term-body">
+    The Calimero node daemon from the <a href="https://github.com/calimero-network/core">core repository</a>. In the TEE context, merod runs inside a TDX Confidential VM and contacts the KMS on boot to obtain its storage encryption key.
+  </div>
+</div>
+
+<div class="term-row" data-term="mrtd">
+  <div class="term-name">MRTD</div>
+  <div class="term-body">
+    <strong>Measurement of the Trust Domain</strong> &mdash; a SHA-384 hash of the initial VM image at launch time. Computed by the CPU before the guest starts. Any change to the image (even a single byte) produces a different MRTD. Used to pin the exact binary.
+  </div>
+</div>
+
+<div class="term-row" data-term="mutual attestation">
+  <div class="term-name">Mutual Attestation</div>
+  <div class="term-body">
+    The bidirectional trust model where both the node and the KMS verify each other&rsquo;s TDX attestation before any sensitive operation. Plane 1: node verifies KMS. Plane 2: KMS verifies node. See <a href="trust-model.html">Trust Model</a>.
+  </div>
+</div>
+
+<!-- ─── N ─── -->
+<div class="term-letter" data-letter="N">N</div>
+
+<div class="term-row" data-term="nonce">
+  <div class="term-name">Nonce</div>
+  <div class="term-body">
+    A cryptographically random value used to ensure freshness of attestation quotes and challenge-response exchanges. Each nonce is single-use and time-limited (TTL). Prevents replay attacks.
+  </div>
+</div>
+
+<!-- ─── P ─── -->
+<div class="term-letter" data-letter="P">P</div>
+
+<div class="term-row" data-term="peerid">
+  <div class="term-name">PeerId</div>
+  <div class="term-body">
+    A libp2p peer identifier derived from the node&rsquo;s Ed25519 public key. Used as the node&rsquo;s identity in the challenge-response protocol and as input to key derivation. Format: <span class="code">12D3KooW...</span>.
+  </div>
+</div>
+
+<div class="term-row" data-term="profile">
+  <div class="term-name">Profile</div>
+  <div class="term-body">
+    One of three image build configurations: <strong>debug</strong> (full access), <strong>debug-read-only</strong> (SSH + RO filesystem), or <strong>locked-read-only</strong> (no SSH, RO, minimal surface). Each writes a unique RTMR3 runtime event for cohort separation.
+  </div>
+</div>
+
+<!-- ─── Q ─── -->
+<div class="term-letter" data-letter="Q">Q</div>
+
+<div class="term-row" data-term="quote">
+  <div class="term-name">Quote (TDX Quote)</div>
+  <div class="term-body">
+    A cryptographic data structure produced by the TDX hardware that contains the Trust Domain&rsquo;s measurements (MRTD, RTMR0&ndash;3), user-supplied report_data, and a hardware signature. Verifiers use the quote to confirm the software identity of a running enclave.
+  </div>
+</div>
+
+<!-- ─── R ─── -->
+<div class="term-letter" data-letter="R">R</div>
+
+<div class="term-row" data-term="report_data">
+  <div class="term-name">report_data</div>
+  <div class="term-body">
+    A 64-byte user-defined field in a TDX quote. The KMS uses this to bind a nonce (and optional context) to the attestation, ensuring the quote was produced for a specific request and cannot be replayed.
+  </div>
+</div>
+
+<div class="term-row" data-term="rtmr">
+  <div class="term-name">RTMR (Runtime Measurement Register)</div>
+  <div class="term-body">
+    Four extend-only registers (RTMR0&ndash;3) in TDX that record measurements during the VM lifecycle. Each register captures a different phase: RTMR0 (firmware), RTMR1 (OS kernel), RTMR2 (application), RTMR3 (runtime events). Values can only be extended, never reset.
+  </div>
+</div>
+
+<div class="term-row" data-term="rtmr0">
+  <div class="term-name">RTMR0</div>
+  <div class="term-body">
+    <strong>Firmware measurement</strong>. Extended by the TDVF (TDX Virtual Firmware) during early boot. Captures the firmware version and configuration. Changes if the firmware is updated.
+  </div>
+</div>
+
+<div class="term-row" data-term="rtmr1">
+  <div class="term-name">RTMR1</div>
+  <div class="term-body">
+    <strong>OS kernel measurement</strong>. Extended during kernel boot. Captures the kernel binary, initrd, and boot parameters. Changes if the kernel or boot configuration is modified.
+  </div>
+</div>
+
+<div class="term-row" data-term="rtmr2">
+  <div class="term-name">RTMR2</div>
+  <div class="term-body">
+    <strong>Application measurement</strong>. Extended when the application layer loads. In mero-tee, this captures the merod or KMS binary and its initial configuration.
+  </div>
+</div>
+
+<div class="term-row" data-term="rtmr3">
+  <div class="term-name">RTMR3</div>
+  <div class="term-body">
+    <strong>Runtime event register</strong>. Extended during runtime to record dynamic events. In mero-tee, each image profile writes a distinct RTMR3 event at boot, creating cryptographic cohort separation between debug and production nodes.
+  </div>
+</div>
+
+<!-- ─── S ─── -->
+<div class="term-letter" data-letter="S">S</div>
+
+<div class="term-row" data-term="serviceerror">
+  <div class="term-name">ServiceError</div>
+  <div class="term-body">
+    The centralized error enum in the KMS codebase. Variants: InvalidInput (400), InvalidChallenge (400/401), InvalidSignature (401), PolicyViolation (403), RateLimited (429), PolicyNotReady (503), InternalError (500). See <a href="error-handling.html">Error Handling</a>.
+  </div>
+</div>
+
+<!-- ─── T ─── -->
+<div class="term-letter" data-letter="T">T</div>
+
+<div class="term-row" data-term="tcb">
+  <div class="term-name">TCB (Trusted Computing Base)</div>
+  <div class="term-body">
+    The set of hardware, firmware, and software components that are critical to the security of a TEE. TCB status indicates whether the platform&rsquo;s security patches are current. Possible values: <span class="code">UpToDate</span>, <span class="code">SWHardeningNeeded</span>, <span class="code">ConfigurationAndSWHardeningNeeded</span>, <span class="code">OutOfDate</span>.
+  </div>
+</div>
+
+<div class="term-row" data-term="tdx">
+  <div class="term-name">TDX (Trust Domain Extensions)</div>
+  <div class="term-body">
+    Intel&rsquo;s hardware technology for creating isolated virtual machines (Trust Domains) with CPU-enforced memory encryption. The hypervisor and other VMs cannot access a TD&rsquo;s memory. TDX provides attestation via cryptographic quotes signed by hardware.
+  </div>
+</div>
+
+<div class="term-row" data-term="tdvf">
+  <div class="term-name">TDVF (TDX Virtual Firmware)</div>
+  <div class="term-body">
+    The firmware that runs inside a TDX Trust Domain during early boot. Extends RTMR0 with firmware measurements. Based on UEFI and provides the initial trusted boot environment.
+  </div>
+</div>
+
+<div class="term-row" data-term="tee">
+  <div class="term-name">TEE (Trusted Execution Environment)</div>
+  <div class="term-body">
+    A hardware-isolated processing environment that protects code and data from external access, including the OS and hypervisor. Intel TDX and Intel SGX are examples. mero-tee uses TDX for VM-level isolation.
+  </div>
+</div>
+
+<div class="term-row" data-term="trust domain">
+  <div class="term-name">Trust Domain (TD)</div>
+  <div class="term-body">
+    A TDX-protected virtual machine. Each TD has its own encrypted memory space, measurement registers, and attestation capabilities. In mero-tee, each merod node and the KMS run as separate Trust Domains.
+  </div>
+</div>
+
+</div>
+
+<div class="no-results" id="no-results">No matching terms found.</div>
+
+<script>
+(function () {
+  const input = document.getElementById('term-filter');
+  const list = document.getElementById('glossary-list');
+  const rows = list.querySelectorAll('.term-row');
+  const letters = list.querySelectorAll('.term-letter');
+  const noResults = document.getElementById('no-results');
+  const counter = document.getElementById('term-count');
+
+  function update() {
+    const q = input.value.toLowerCase();
+    let visible = 0;
+    rows.forEach(r => {
+      const match = r.dataset.term.includes(q) || r.textContent.toLowerCase().includes(q);
+      r.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    letters.forEach(l => {
+      let hasVisible = false;
+      let el = l.nextElementSibling;
+      while (el && !el.classList.contains('term-letter')) {
+        if (el.classList.contains('term-row') && el.style.display !== 'none') hasVisible = true;
+        el = el.nextElementSibling;
+      }
+      l.style.display = hasVisible ? '' : 'none';
+    });
+    noResults.style.display = visible === 0 ? 'block' : 'none';
+    counter.textContent = visible + ' of ' + rows.length + ' terms';
+  }
+
+  input.addEventListener('input', update);
+  update();
+})();
+</script>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

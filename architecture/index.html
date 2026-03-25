@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calimero mero-tee — Architecture Reference</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+
+<div class="hero">
+  <h1>Calimero <em>mero-tee</em></h1>
+  <p class="tagline">Trusted Execution Environment infrastructure for Calimero. Key management, TDX attestation, confidential VM images, and public verification &mdash; all inside hardware enclaves.</p>
+
+  <div class="g4" style="margin-bottom:36px;">
+    <div class="stat"><div class="v">3</div><div class="l">components</div></div>
+    <div class="stat"><div class="v">6</div><div class="l">API endpoints</div></div>
+    <div class="stat"><div class="v">3</div><div class="l">image profiles</div></div>
+    <div class="stat"><div class="v">2</div><div class="l">trust planes</div></div>
+  </div>
+</div>
+
+<div class="card ga">
+<h2>Start Here</h2>
+<p style="margin-bottom:18px;">New to the TEE infrastructure? Follow this path to understand how Calimero nodes run inside hardware enclaves.</p>
+<div class="g3">
+  <div class="step"><div class="n">1</div><h4>System Overview</h4><p>Understand the components: KMS, node images, and attestation verifier &mdash; and how they connect.</p><p style="margin-top:8px;"><a href="system-overview.html">Read System Overview &rarr;</a></p></div>
+  <div class="step"><div class="n">2</div><h4>Trust Model</h4><p>Learn the mutual attestation protocol: how nodes verify KMS and KMS verifies nodes.</p><p style="margin-top:8px;"><a href="trust-model.html">Read Trust Model &rarr;</a></p></div>
+  <div class="step"><div class="n">3</div><h4>Key Release Flow</h4><p>Deep-dive into the challenge-response protocol for releasing storage encryption keys.</p><p style="margin-top:8px;"><a href="key-release-flow.html">Read Key Release Flow &rarr;</a></p></div>
+</div>
+</div>
+
+<div class="card gb">
+<h2>System Map</h2>
+<svg viewBox="0 0 1000 480" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- merod nodes -->
+  <rect x="30" y="40" width="200" height="70" rx="10" fill="#3b82f610" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="130" y="68" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="13" font-weight="700">merod Nodes</text>
+  <text x="130" y="88" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="9">TDX Confidential VMs</text>
+  <text x="130" y="100" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">from calimero/core</text>
+
+  <!-- KMS -->
+  <rect x="380" y="30" width="240" height="90" rx="12" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.8"/>
+  <text x="500" y="58" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="14" font-weight="700">mero-kms-phala</text>
+  <text x="500" y="78" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Attestation &amp; Key Release</text>
+  <text x="500" y="93" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">/challenge &middot; /get-key &middot; /attest</text>
+  <text x="500" y="110" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">Rust HTTP Service</text>
+
+  <!-- Arrow: merod → KMS -->
+  <line x1="230" y1="75" x2="375" y2="75" stroke="#3b82f6" stroke-width="1.5"/>
+  <polygon points="375,75 367,71 367,79" fill="#3b82f6"/>
+  <text x="300" y="68" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">challenge/get-key</text>
+
+  <!-- dstack -->
+  <rect x="720" y="30" width="200" height="90" rx="10" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="820" y="58" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="13" font-weight="700">Phala dstack</text>
+  <text x="820" y="78" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Key Derivation &amp; Quotes</text>
+  <text x="820" y="95" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="8">TDX Hardware Root</text>
+
+  <!-- Arrow: KMS → dstack -->
+  <line x1="620" y1="75" x2="715" y2="75" stroke="#10b981" stroke-width="1.5"/>
+  <polygon points="715,75 707,71 707,79" fill="#10b981"/>
+  <text x="668" y="68" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">derive key</text>
+
+  <!-- GitHub Releases (Policy) -->
+  <rect x="380" y="180" width="240" height="60" rx="10" fill="#8b5cf610" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="500" y="205" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="12" font-weight="700">GitHub Releases</text>
+  <text x="500" y="225" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Attestation Policy (JSON)</text>
+
+  <!-- Arrow: GitHub → KMS -->
+  <line x1="500" y1="180" x2="500" y2="125" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="500,125 496,133 504,133" fill="#8b5cf6"/>
+  <text x="540" y="155" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">fetch policy</text>
+
+  <!-- Packer / Ansible -->
+  <rect x="30" y="170" width="200" height="80" rx="10" fill="#ec489910" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="130" y="198" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="12" font-weight="700">Image Builder</text>
+  <text x="130" y="218" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Packer + Ansible</text>
+  <text x="130" y="235" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">GCP TDX CVM images</text>
+
+  <!-- Arrow: Image Builder → merod -->
+  <line x1="130" y1="170" x2="130" y2="115" stroke="#ec4899" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="130,115 126,123 134,123" fill="#ec4899"/>
+  <text x="175" y="145" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">builds VM</text>
+
+  <!-- Attestation Verifier -->
+  <rect x="720" y="180" width="200" height="80" rx="10" fill="#06b6d410" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="820" y="205" text-anchor="middle" fill="#06b6d4" font-family="JetBrains Mono" font-size="11" font-weight="700">Attestation Verifier</text>
+  <text x="820" y="222" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">React + Serverless API</text>
+  <text x="820" y="240" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">public verification UI</text>
+
+  <!-- Arrow: Verifier → KMS -->
+  <line x1="720" y1="210" x2="625" y2="100" stroke="#06b6d4" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="690" y="148" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">POST /attest</text>
+
+  <!-- ITA -->
+  <rect x="720" y="310" width="200" height="60" rx="10" fill="#f9731610" stroke="#f97316" stroke-width="1.5"/>
+  <text x="820" y="335" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="12" font-weight="700">Intel Trust Authority</text>
+  <text x="820" y="355" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Quote verification &amp; JWT</text>
+
+  <!-- Arrow: Verifier → ITA -->
+  <line x1="820" y1="260" x2="820" y2="305" stroke="#f97316" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="820,305 816,297 824,297" fill="#f97316"/>
+  <text x="860" y="285" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">verify quote</text>
+
+  <!-- Profiles box -->
+  <rect x="30" y="310" width="200" height="80" rx="10" fill="#84cc1610" stroke="#84cc16" stroke-width="1"/>
+  <text x="130" y="335" text-anchor="middle" fill="#84cc16" font-family="JetBrains Mono" font-size="11" font-weight="600">Image Profiles</text>
+  <text x="130" y="355" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="9">debug</text>
+  <text x="130" y="368" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="9">debug-read-only</text>
+  <text x="130" y="381" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="9">locked-read-only</text>
+
+  <!-- Arrow: Profiles → Image Builder -->
+  <line x1="130" y1="310" x2="130" y2="255" stroke="#84cc16" stroke-width="1" stroke-dasharray="3 3"/>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="ld" style="background:#3b82f6"></div>Nodes</div>
+  <div class="legend-item"><div class="ld" style="background:#f59e0b"></div>KMS</div>
+  <div class="legend-item"><div class="ld" style="background:#10b981"></div>dstack</div>
+  <div class="legend-item"><div class="ld" style="background:#8b5cf6"></div>Policy</div>
+  <div class="legend-item"><div class="ld" style="background:#ec4899"></div>Image Builder</div>
+  <div class="legend-item"><div class="ld" style="background:#06b6d4"></div>Verifier</div>
+  <div class="legend-item"><div class="ld" style="background:#f97316"></div>ITA</div>
+</div>
+</div>
+
+<h2 id="component-index" style="margin-top:40px;">Component Index</h2>
+<div class="g3">
+  <a href="system-overview.html" class="hero-card">
+    <span class="card-icon" style="color:var(--amber);">&#9670;</span>
+    <h3 style="color:var(--amber)">mero-kms-phala</h3>
+    <p>Rust HTTP service that validates TDX attestations and releases storage encryption keys via Phala dstack key derivation.</p>
+  </a>
+  <a href="system-overview.html#node-images" class="hero-card">
+    <span class="card-icon" style="color:var(--pink);">&#9670;</span>
+    <h3 style="color:var(--pink)">Node Images</h3>
+    <p>Packer + Ansible builds for GCP TDX confidential VM images. Three profiles: debug, debug-read-only, locked-read-only.</p>
+  </a>
+  <a href="attestation-flow.html" class="hero-card">
+    <span class="card-icon" style="color:var(--cyan);">&#9670;</span>
+    <h3 style="color:var(--cyan)">Attestation Verifier</h3>
+    <p>React SPA + serverless API for public attestation verification via Intel Trust Authority.</p>
+  </a>
+</div>
+
+<div class="g3" style="margin-top:16px;">
+  <a href="trust-model.html" class="hero-card">
+    <span class="card-icon" style="color:var(--green);">&#9670;</span>
+    <h3 style="color:var(--green)">Trust Model</h3>
+    <p>Mutual attestation: nodes verify KMS, KMS verifies nodes. Policy enforcement with MRTD, RTMRs, TCB allowlists.</p>
+  </a>
+  <a href="key-release-flow.html" class="hero-card">
+    <span class="card-icon" style="color:var(--violet);">&#9670;</span>
+    <h3 style="color:var(--violet)">Key Release Flow</h3>
+    <p>Challenge-response protocol with nonce generation, signature verification, TDX quote validation, and dstack key derivation.</p>
+  </a>
+  <a href="config-reference.html" class="hero-card">
+    <span class="card-icon" style="color:var(--orange);">&#9670;</span>
+    <h3 style="color:var(--orange)">Config &amp; Errors</h3>
+    <p>All environment variables, attestation policy schema, error codes, and JSON response formats.</p>
+  </a>
+</div>
+
+<div class="card gc" style="margin-top:32px;">
+<h2>Key Concepts</h2>
+<div class="g2">
+  <div>
+    <h3>TDX Attestation</h3>
+    <p>Intel Trust Domain Extensions (TDX) creates hardware-isolated virtual machines. Attestation produces a cryptographic <strong>quote</strong> that proves code identity (MRTD), runtime state (RTMR0&ndash;3), and hardware TCB level. Remote parties verify quotes against expected measurements to establish trust.</p>
+  </div>
+  <div>
+    <h3>Key Management</h3>
+    <p>Storage encryption keys are never stored on disk. On boot, a node obtains its key from the KMS via a <strong>challenge-response protocol</strong>. The KMS derives keys using Phala dstack&rsquo;s deterministic key derivation, ensuring the same key is always produced for the same namespace and node.</p>
+  </div>
+  <div>
+    <h3>Mutual Verification</h3>
+    <p>Trust is bidirectional. Nodes verify the KMS is running in a genuine TDX enclave via <span class="code">POST /attest</span>. The KMS verifies each node&rsquo;s TDX quote and policy compliance before releasing keys. Neither party trusts the other without hardware-backed proof.</p>
+  </div>
+  <div>
+    <h3>Profile Cohorts</h3>
+    <p>Node images are built with one of three <strong>profiles</strong> (debug, debug-read-only, locked-read-only). Each profile writes a distinct RTMR3 runtime event, creating cryptographic <strong>cohort separation</strong> &mdash; a debug node cannot impersonate a production node.</p>
+  </div>
+</div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

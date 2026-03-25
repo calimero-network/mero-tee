@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Error Handling — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.error-row {
+  display: grid; grid-template-columns: 60px 180px 1fr; gap: 12px;
+  padding: 12px 16px; background: var(--surface2); border-radius: 10px;
+  border: 1px solid transparent; transition: border-color .15s; margin-bottom: 6px; align-items: start;
+}
+.error-row:hover { border-color: var(--border-hi); }
+.error-status { font-family: 'JetBrains Mono', monospace; font-size: .85rem; font-weight: 700; }
+.error-name { font-family: 'JetBrains Mono', monospace; font-size: .82rem; font-weight: 600; color: var(--amber); }
+.error-desc { font-size: .84rem; color: var(--text-dim); line-height: 1.55; }
+
+.error-header {
+  display: grid; grid-template-columns: 60px 180px 1fr; gap: 12px;
+  padding: 6px 16px; margin-bottom: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: .68rem; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .5px;
+}
+
+@media (max-width: 700px) {
+  .error-row { grid-template-columns: 1fr; }
+  .error-header { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Error Handling</span></div>
+
+<h1>Error <em>Handling</em></h1>
+<p class="page-subtitle">ServiceError variants, HTTP status codes, and JSON response format</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OVERVIEW
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Error Design</h2>
+<p style="margin-bottom:14px;">All KMS errors use a centralized <span class="code">ServiceError</span> enum that implements <span class="code">IntoResponse</span> for Axum. Every error path produces a consistent JSON body with an HTTP status code, a snake_case error code, and an optional details string.</p>
+
+<h3>JSON Response Format</h3>
+<div class="typedef">
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"snake_case_error_code"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"Optional human-readable description"</span>  <span class="comment">// may be null</span><br>
+}
+</div>
+
+<p style="margin-top:14px;">The <span class="code">error</span> field is always present and uses a stable snake_case identifier suitable for programmatic matching. The <span class="code">details</span> field provides context for debugging but may be omitted or null.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     ERROR TABLE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>ServiceError Variants</h2>
+
+<div class="error-header"><span>Status</span><span>Error Code</span><span>Description</span></div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--amber)">400</div>
+  <div class="error-name">InvalidInput</div>
+  <div class="error-desc">The request body is malformed, missing required fields, or contains invalid data types. Returned by all endpoints when JSON parsing fails or required fields are absent.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--amber)">400</div>
+  <div class="error-name">InvalidChallenge</div>
+  <div class="error-desc">The <span class="code">challengeId</span> in a <span class="code">/get-key</span> request was not found (already consumed or never existed) or has expired past its TTL. Also returned as 401 when the challenge exists but the peerId doesn&rsquo;t match the original challenger.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--red)">401</div>
+  <div class="error-name">InvalidSignature</div>
+  <div class="error-desc">The Ed25519 signature in the <span class="code">/get-key</span> request failed verification. Either the signature is corrupted, or the signing key doesn&rsquo;t match the peerId&rsquo;s public key.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--red)">403</div>
+  <div class="error-name">PolicyViolation</div>
+  <div class="error-desc">The TDX quote&rsquo;s measurements do not match the attestation policy. The <span class="code">details</span> field indicates which field failed (e.g. <span class="code">"RTMR3 not in allowed values"</span>). This is the primary defense against unauthorized or tampered nodes.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--orange)">429</div>
+  <div class="error-name">RateLimited</div>
+  <div class="error-desc">The requesting peerId has exceeded <span class="code">MAX_PENDING_CHALLENGES</span> active challenges. The node must wait for existing challenges to expire or be consumed before requesting new ones.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--violet)">503</div>
+  <div class="error-name">PolicyNotReady</div>
+  <div class="error-desc">The KMS has not yet finished fetching or parsing the attestation policy from GitHub releases. This typically occurs during startup. The node should retry after a brief delay.</div>
+</div>
+
+<div class="error-row">
+  <div class="error-status" style="color:var(--pink)">500</div>
+  <div class="error-name">InternalError</div>
+  <div class="error-desc">An unexpected internal error occurred (dstack communication failure, challenge store error, etc.). The <span class="code">details</span> field may contain a sanitized error message. Internal details are never leaked to the caller in production.</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SERVICEERROR ENUM
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>ServiceError Enum</h2>
+<p style="margin-bottom:12px;">The Rust enum that maps each variant to an HTTP status code and JSON body.</p>
+
+<div class="typedef">
+<span class="kw">pub enum</span> <span class="ty">ServiceError</span> {<br>
+&nbsp;&nbsp;<span class="field">InvalidInput</span>(String),        <span class="comment">// → 400</span><br>
+&nbsp;&nbsp;<span class="field">InvalidChallenge</span>(String),    <span class="comment">// → 400 or 401</span><br>
+&nbsp;&nbsp;<span class="field">InvalidSignature</span>(String),    <span class="comment">// → 401</span><br>
+&nbsp;&nbsp;<span class="field">PolicyViolation</span>(String),     <span class="comment">// → 403</span><br>
+&nbsp;&nbsp;<span class="field">RateLimited</span>,                  <span class="comment">// → 429</span><br>
+&nbsp;&nbsp;<span class="field">PolicyNotReady</span>,               <span class="comment">// → 503</span><br>
+&nbsp;&nbsp;<span class="field">InternalError</span>(String),       <span class="comment">// → 500</span><br>
+}<br>
+<br>
+<span class="kw">impl</span> IntoResponse <span class="kw">for</span> <span class="ty">ServiceError</span> {<br>
+&nbsp;&nbsp;<span class="kw">fn</span> <span class="field">into_response</span>(self) -&gt; Response {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// maps variant → (StatusCode, Json { error, details })</span><br>
+&nbsp;&nbsp;}<br>
+}
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     ERROR FLOWS BY ENDPOINT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Error Flows by Endpoint</h2>
+
+<h3>POST /challenge</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>400 InvalidInput</h4>
+    <p>Missing or malformed <span class="code">peerId</span> in the request body.</p>
+  </div>
+  <div class="cb">
+    <h4>429 RateLimited</h4>
+    <p>The peerId already has <span class="code">MAX_PENDING_CHALLENGES</span> active challenges.</p>
+  </div>
+  <div class="cb">
+    <h4>503 PolicyNotReady</h4>
+    <p>The KMS policy hasn&rsquo;t been loaded yet. The node should retry.</p>
+  </div>
+  <div class="cb">
+    <h4>500 InternalError</h4>
+    <p>Challenge store write failure (e.g. Redis connection error).</p>
+  </div>
+</div>
+
+<h3>POST /get-key</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>400 InvalidInput</h4>
+    <p>Missing or malformed fields in the request body (challengeId, quote, signature).</p>
+  </div>
+  <div class="cb">
+    <h4>400/401 InvalidChallenge</h4>
+    <p>Challenge not found, expired, or peerId mismatch. 400 for not-found/expired, 401 for peerId mismatch.</p>
+  </div>
+  <div class="cb">
+    <h4>401 InvalidSignature</h4>
+    <p>Ed25519 signature verification failed against the peerId&rsquo;s public key.</p>
+  </div>
+  <div class="cb">
+    <h4>403 PolicyViolation</h4>
+    <p>TDX quote measurements don&rsquo;t match the attestation policy allowlists.</p>
+  </div>
+  <div class="cb">
+    <h4>503 PolicyNotReady</h4>
+    <p>Policy not yet loaded (startup race).</p>
+  </div>
+  <div class="cb">
+    <h4>500 InternalError</h4>
+    <p>dstack communication failure, quote parsing error, or key derivation failure.</p>
+  </div>
+</div>
+
+<h3>POST /attest</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>400 InvalidInput</h4>
+    <p>Missing or malformed <span class="code">nonce</span> in the request body.</p>
+  </div>
+  <div class="cb">
+    <h4>500 InternalError</h4>
+    <p>dstack quote generation failure (socket error, TDX driver error).</p>
+  </div>
+</div>
+
+<h3>GET /health</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>503 PolicyNotReady</h4>
+    <p>Returns 503 until the attestation policy is successfully loaded. Load balancers should use this to determine readiness.</p>
+  </div>
+  <div class="cb">
+    <h4>200 OK</h4>
+    <p>Service is ready to accept requests. Policy is loaded and challenge store is operational.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     EXAMPLE RESPONSES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Example Responses</h2>
+
+<details>
+<summary>400 InvalidInput</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">400</span> Bad Request<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"invalid_input"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"missing field: peerId"</span><br>
+}
+</div>
+</div>
+</details>
+
+<details>
+<summary>401 InvalidSignature</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">401</span> Unauthorized<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"invalid_signature"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"Ed25519 signature verification failed"</span><br>
+}
+</div>
+</div>
+</details>
+
+<details>
+<summary>403 PolicyViolation</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">403</span> Forbidden<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"policy_violation"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"RTMR3 value 'a1b2c3...' not in allowed values for profile 'locked-read-only'"</span><br>
+}
+</div>
+</div>
+</details>
+
+<details>
+<summary>429 RateLimited</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">429</span> Too Many Requests<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"rate_limited"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="kw">null</span><br>
+}
+</div>
+</div>
+</details>
+
+<details>
+<summary>503 PolicyNotReady</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">503</span> Service Unavailable<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"policy_not_ready"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"attestation policy not yet loaded"</span><br>
+}
+</div>
+</div>
+</details>
+
+<details>
+<summary>500 InternalError</summary>
+<div class="detail-body">
+<div class="typedef">
+HTTP/1.1 <span class="ty">500</span> Internal Server Error<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"error"</span>: <span class="comment">"internal_error"</span>,<br>
+&nbsp;&nbsp;<span class="field">"details"</span>: <span class="comment">"failed to communicate with dstack"</span><br>
+}
+</div>
+</div>
+</details>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

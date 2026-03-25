@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Config Reference — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.config-field {
+  display: grid; grid-template-columns: 220px 100px 140px 1fr; gap: 8px;
+  padding: 8px 12px; background: var(--surface2); border-radius: 8px; margin-bottom: 4px;
+  align-items: start; font-size: .82rem; border: 1px solid transparent; transition: border-color .15s;
+}
+.config-field:hover { border-color: var(--border-hi); }
+.config-field .cf-key { font-family: 'JetBrains Mono', monospace; font-size: .78rem; color: var(--green); font-weight: 600; }
+.config-field .cf-type { font-family: 'JetBrains Mono', monospace; font-size: .74rem; color: var(--violet); }
+.config-field .cf-default { font-family: 'JetBrains Mono', monospace; font-size: .74rem; color: var(--amber); }
+.config-field .cf-desc { color: var(--text-dim); line-height: 1.5; }
+
+.config-header {
+  display: grid; grid-template-columns: 220px 100px 140px 1fr; gap: 8px;
+  padding: 6px 12px; margin-bottom: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: .68rem; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .5px;
+}
+
+@media (max-width: 900px) {
+  .config-field { grid-template-columns: 1fr; }
+  .config-header { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Config Reference</span></div>
+
+<h1>Config <em>Reference</em></h1>
+<p class="page-subtitle">All environment variables for mero-kms-phala with types, defaults, and descriptions</p>
+
+<div class="g4" style="margin-bottom:36px;">
+  <div class="stat"><div class="v">14</div><div class="l">env vars</div></div>
+  <div class="stat"><div class="v">6</div><div class="l">config groups</div></div>
+  <div class="stat"><div class="v">1</div><div class="l">file pin</div></div>
+  <div class="stat"><div class="v">2</div><div class="l">store backends</div></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     NETWORK
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Network</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Controls the HTTP server binding and CORS configuration.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">LISTEN_ADDR</div>
+  <div class="cf-type">SocketAddr</div>
+  <div class="cf-default">0.0.0.0:8080</div>
+  <div class="cf-desc">Address and port the HTTP server binds to. In production, typically <span class="code">0.0.0.0:8080</span> behind a load balancer.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">CORS_ALLOWED_ORIGINS</div>
+  <div class="cf-type">String (CSV)</div>
+  <div class="cf-default">*</div>
+  <div class="cf-desc">Comma-separated list of allowed CORS origins. Use <span class="code">*</span> for development or specific domains for production (e.g. <span class="code">https://verify.calimero.network</span>).</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     DSTACK
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>dstack Integration</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Connection to the Phala dstack runtime for key derivation and TDX quote generation.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">DSTACK_SOCKET_PATH</div>
+  <div class="cf-type">PathBuf</div>
+  <div class="cf-default">/var/run/dstack.sock</div>
+  <div class="cf-desc">Unix domain socket path to the dstack daemon. The KMS communicates with dstack over this socket for key derivation (<span class="code">derive_key</span>) and quote generation (<span class="code">get_quote</span>).</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     CHALLENGES
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Challenge Store</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Configuration for the challenge-response protocol&rsquo;s nonce store. Supports in-memory (default) or Redis backends.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">CHALLENGE_TTL_SECS</div>
+  <div class="cf-type">u64</div>
+  <div class="cf-default">300</div>
+  <div class="cf-desc">Time-to-live for challenge nonces in seconds. After expiry, the challenge is automatically removed and cannot be used for key release.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">MAX_PENDING_CHALLENGES</div>
+  <div class="cf-type">usize</div>
+  <div class="cf-default">10</div>
+  <div class="cf-desc">Maximum number of active (unexpired) challenges per peerId. Requests beyond this limit return <span class="code">429 RateLimited</span>. Prevents resource exhaustion from a single node.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">REDIS_URL</div>
+  <div class="cf-type">Option&lt;String&gt;</div>
+  <div class="cf-default"><em>None</em></div>
+  <div class="cf-desc">Redis connection URL (e.g. <span class="code">redis://localhost:6379</span>). When set, the challenge store uses Redis instead of in-memory storage. Required for multi-instance KMS deployments behind a load balancer.</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TRUST
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Trust &amp; Attestation</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Controls attestation verification behavior. <strong>Warning:</strong> disabling enforcement is for development only.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">ACCEPT_MOCK_ATTESTATION</div>
+  <div class="cf-type">bool</div>
+  <div class="cf-default">false</div>
+  <div class="cf-desc">When <span class="code">true</span>, accepts mock/synthetic TDX quotes that don&rsquo;t require real hardware. <strong>Must be false in production.</strong> Only useful for local development without TDX hardware.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">ENFORCE_MEASUREMENT_POLICY</div>
+  <div class="cf-type">bool</div>
+  <div class="cf-default">true</div>
+  <div class="cf-desc">When <span class="code">true</span>, all quote measurements (MRTD, RTMR0&ndash;3, TCB status) must match the attestation policy. When <span class="code">false</span>, quotes are parsed but not validated against policy. <strong>Must be true in production.</strong></div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     POLICY
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Policy Configuration</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Controls how the attestation policy is sourced and validated. The policy defines which TDX measurements are acceptable.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">MERO_KMS_VERSION</div>
+  <div class="cf-type">String</div>
+  <div class="cf-default"><em>required</em></div>
+  <div class="cf-desc">Version tag for fetching the attestation policy from GitHub releases (e.g. <span class="code">v0.3.0</span>). The KMS fetches <span class="code">https://github.com/calimero-network/mero-tee/releases/download/{version}/policy.json</span>.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">MERO_KMS_PROFILE</div>
+  <div class="cf-type">String</div>
+  <div class="cf-default"><em>required</em></div>
+  <div class="cf-desc">The image profile this KMS instance is running. One of <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>. Used to select the correct policy variant and for RTMR3 event matching.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">MERO_KMS_POLICY_SHA256</div>
+  <div class="cf-type">Option&lt;String&gt;</div>
+  <div class="cf-default"><em>None</em></div>
+  <div class="cf-desc">Optional SHA-256 hash of the expected policy file. If set, the fetched policy is verified against this hash before use. Prevents supply-chain attacks on the policy distribution.</div>
+</div>
+<div class="config-field">
+  <div class="cf-key">USE_ENV_POLICY</div>
+  <div class="cf-type">bool</div>
+  <div class="cf-default">false</div>
+  <div class="cf-desc">When <span class="code">true</span>, reads the policy from environment variables instead of fetching from GitHub releases. Useful for testing or air-gapped deployments.</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KEYS
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Key Derivation</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Controls the namespace used for deterministic key derivation via dstack.</p>
+<div class="config-header"><span>Variable</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">KEY_NAMESPACE_PREFIX</div>
+  <div class="cf-type">String</div>
+  <div class="cf-default">calimero/</div>
+  <div class="cf-desc">Prefix for the key derivation path. The full path is <span class="code">{prefix}{peerId}</span>. Different prefixes produce different keys, enabling namespace isolation between environments.</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     IMAGE PIN
+     ═══════════════════════════════════════════════════════════════════ -->
+<details open>
+<summary>Image Profile Pin</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">A filesystem-based configuration baked into the VM image at build time.</p>
+<div class="config-header"><span>Path</span><span>Type</span><span>Default</span><span>Description</span></div>
+<div class="config-field">
+  <div class="cf-key">/etc/mero-kms/image-profile</div>
+  <div class="cf-type">file</div>
+  <div class="cf-default"><em>set at build</em></div>
+  <div class="cf-desc">A plain-text file containing the image profile name (<span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>). Written by Ansible during image build. Read at boot to determine which RTMR3 runtime event to emit. This value is <strong>measured into RTMR3</strong> and cannot be changed without altering the measurement.</div>
+</div>
+</div>
+</details>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     CONFIG STRUCT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga" style="margin-top:28px;">
+<h2>Config Struct</h2>
+<p style="margin-bottom:12px;">All environment variables are parsed into a typed <span class="code">Config</span> struct at startup. Missing required fields cause an immediate exit with a descriptive error.</p>
+
+<div class="typedef">
+<span class="kw">pub struct</span> <span class="ty">Config</span> {<br>
+&nbsp;&nbsp;<span class="comment">// Network</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">listen_addr</span>: SocketAddr,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">cors_allowed_origins</span>: Vec&lt;String&gt;,<br>
+<br>
+&nbsp;&nbsp;<span class="comment">// dstack</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">dstack_socket_path</span>: PathBuf,<br>
+<br>
+&nbsp;&nbsp;<span class="comment">// Challenges</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">challenge_ttl</span>: Duration,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">max_pending_challenges</span>: usize,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">redis_url</span>: Option&lt;String&gt;,<br>
+<br>
+&nbsp;&nbsp;<span class="comment">// Trust</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">accept_mock_attestation</span>: bool,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">enforce_measurement_policy</span>: bool,<br>
+<br>
+&nbsp;&nbsp;<span class="comment">// Policy</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">mero_kms_version</span>: String,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">mero_kms_profile</span>: String,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">mero_kms_policy_sha256</span>: Option&lt;String&gt;,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">use_env_policy</span>: bool,<br>
+<br>
+&nbsp;&nbsp;<span class="comment">// Keys</span><br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">key_namespace_prefix</span>: String,<br>
+}
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     APP STATE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>AppState</h2>
+<p style="margin-bottom:12px;">The Axum application state shared across all request handlers.</p>
+
+<div class="typedef">
+<span class="kw">pub struct</span> <span class="ty">AppState</span> {<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">config</span>: Config,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">challenge_store</span>: Box&lt;<span class="kw">dyn</span> <span class="ty">ChallengeStore</span>&gt;,<br>
+&nbsp;&nbsp;<span class="kw">pub</span> <span class="field">policy</span>: Option&lt;<span class="ty">AttestationPolicy</span>&gt;, <span class="comment">// None until fetched</span><br>
+}
+</div>
+
+<div class="g2" style="margin-top:14px;">
+  <div class="cb">
+    <h4>InMemoryStore</h4>
+    <p>Default backend. Uses <span class="code">DashMap</span> for concurrent access. A background task periodically evicts expired challenges. Suitable for single-instance deployments.</p>
+  </div>
+  <div class="cb">
+    <h4>RedisStore</h4>
+    <p>Activated when <span class="code">REDIS_URL</span> is set. Uses Redis <span class="code">SETEX</span> for automatic TTL-based expiry. Required when running multiple KMS instances behind a load balancer.</p>
+  </div>
+</div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

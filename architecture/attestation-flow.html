@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attestation Flow — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Attestation Flow</span></div>
+
+<h1>Attestation <em>Flow</em></h1>
+<p class="page-subtitle">KMS self-attestation and public verification via Intel Trust Authority</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OVERVIEW
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Two Attestation Paths</h2>
+<p style="margin-bottom:18px;">The system supports two attestation paths: (1) <strong>KMS self-attestation</strong> via <span class="code">POST /attest</span>, used by nodes during Plane 1 verification and by the public verifier; and (2) <strong>public verification</strong> via the Attestation Verifier web app, which chains the KMS attestation through Intel Trust Authority for independent validation.</p>
+
+<div class="g2" style="margin-top:16px;">
+  <div class="stat"><div class="v" style="font-size:1.4rem;">/attest</div><div class="l">KMS self-attestation</div></div>
+  <div class="stat"><div class="v" style="font-size:1.4rem;">/api/verify</div><div class="l">public verification</div></div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS SELF-ATTESTATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>KMS Self-Attestation</h2>
+<p style="margin-bottom:14px;">The <span class="code">POST /attest</span> endpoint lets any caller obtain a fresh TDX quote from the KMS. This is the foundational building block for both node verification (Plane 1) and the public attestation verifier.</p>
+
+<h3>Request</h3>
+<div class="typedef">
+<span class="kw">POST</span> <span class="ty">/attest</span><br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"nonce"</span>: <span class="comment">"hex-encoded-bytes"</span> <span class="comment">// caller-provided freshness nonce</span><br>
+}
+</div>
+
+<h3>Response</h3>
+<div class="typedef">
+<span class="kw">200</span> OK<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"quote"</span>: <span class="comment">"base64-encoded-tdx-quote"</span> <span class="comment">// raw TDX quote from dstack</span><br>
+}
+</div>
+
+<h3>Internal Flow</h3>
+
+<svg viewBox="0 0 800 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Caller -->
+  <rect x="30" y="30" width="150" height="40" rx="8" fill="#3b82f610" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="105" y="55" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="11" font-weight="700">Caller</text>
+  <line x1="105" y1="70" x2="105" y2="240" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- KMS -->
+  <rect x="300" y="30" width="180" height="40" rx="8" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="390" y="55" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="11" font-weight="700">mero-kms-phala</text>
+  <line x1="390" y1="70" x2="390" y2="240" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- dstack -->
+  <rect x="600" y="30" width="150" height="40" rx="8" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="675" y="55" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="11" font-weight="700">dstack</text>
+  <line x1="675" y1="70" x2="675" y2="240" stroke="#10b981" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- POST /attest { nonce } -->
+  <line x1="110" y1="95" x2="385" y2="95" stroke="#3b82f6" stroke-width="1.5"/>
+  <polygon points="385,95 377,91 377,99" fill="#3b82f6"/>
+  <text x="248" y="88" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="9">POST /attest { nonce }</text>
+
+  <!-- KMS builds report_data -->
+  <rect x="330" y="108" width="120" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="390" y="122" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">hash(nonce || binding)</text>
+
+  <!-- KMS → dstack: get quote -->
+  <line x1="395" y1="140" x2="670" y2="140" stroke="#10b981" stroke-width="1.5"/>
+  <polygon points="670,140 662,136 662,144" fill="#10b981"/>
+  <text x="533" y="134" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9">get_quote(report_data)</text>
+
+  <!-- dstack: TDX guest driver -->
+  <rect x="625" y="155" width="100" height="20" rx="4" fill="#10b98110" stroke="#10b981"/>
+  <text x="675" y="169" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="8">TDX driver</text>
+
+  <!-- dstack → KMS: quote -->
+  <line x1="670" y1="185" x2="395" y2="185" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="395,185 403,181 403,189" fill="#10b981"/>
+  <text x="533" y="179" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9">raw TDX quote</text>
+
+  <!-- KMS → Caller: { quote } -->
+  <line x1="385" y1="210" x2="110" y2="210" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="110,210 118,206 118,214" fill="#f59e0b"/>
+  <text x="248" y="204" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="9">{ quote }</text>
+</svg>
+
+<h3>Report Data Construction</h3>
+<p>The KMS constructs <span class="code">report_data = SHA256(nonce || binding_data)</span> before requesting the quote from dstack. The <span class="code">binding_data</span> may include additional context (e.g., KMS version). The caller can verify the nonce is included in the quote&rsquo;s report_data to confirm freshness.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PUBLIC VERIFICATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Public Attestation Verifier</h2>
+<p style="margin-bottom:18px;">The attestation verifier is a public web application that allows anyone to verify a KMS instance is running inside a genuine TDX enclave. It chains the KMS&rsquo;s self-attestation through Intel Trust Authority for independent verification.</p>
+
+<h3>Full Verification Flow</h3>
+
+<svg viewBox="0 0 1000 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Lifelines -->
+  <rect x="30" y="20" width="130" height="40" rx="8" fill="#ec489910" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="95" y="45" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="10" font-weight="700">Browser</text>
+  <line x1="95" y1="60" x2="95" y2="480" stroke="#ec4899" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <rect x="240" y="20" width="160" height="40" rx="8" fill="#8b5cf610" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="320" y="45" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="10" font-weight="700">/api/verify</text>
+  <line x1="320" y1="60" x2="320" y2="480" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <rect x="490" y="20" width="160" height="40" rx="8" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="570" y="45" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="10" font-weight="700">KMS /attest</text>
+  <line x1="570" y1="60" x2="570" y2="480" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <rect x="740" y="20" width="200" height="40" rx="8" fill="#f9731610" stroke="#f97316" stroke-width="1.5"/>
+  <text x="840" y="45" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="10" font-weight="700">Intel Trust Authority</text>
+  <line x1="840" y1="60" x2="840" y2="480" stroke="#f97316" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- Step 1: Browser → /api/verify -->
+  <line x1="100" y1="90" x2="315" y2="90" stroke="#ec4899" stroke-width="1.5"/>
+  <polygon points="315,90 307,86 307,94" fill="#ec4899"/>
+  <text x="208" y="83" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="9">POST { kmsUrl, binding }</text>
+  <text x="30" y="95" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">1</text>
+
+  <!-- Step 2: Generate nonce -->
+  <rect x="270" y="105" width="100" height="20" rx="4" fill="#8b5cf610" stroke="#8b5cf6"/>
+  <text x="320" y="119" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="8">gen nonce</text>
+
+  <!-- Step 3: /api/verify → KMS /attest -->
+  <line x1="325" y1="140" x2="565" y2="140" stroke="#8b5cf6" stroke-width="1.5"/>
+  <polygon points="565,140 557,136 557,144" fill="#8b5cf6"/>
+  <text x="445" y="133" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="9">POST /attest { nonce }</text>
+  <text x="250" y="145" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">2</text>
+
+  <!-- Step 4: KMS produces quote internally -->
+  <rect x="520" y="155" width="100" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="570" y="169" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">dstack quote</text>
+
+  <!-- Step 5: KMS → /api/verify: quote -->
+  <line x1="565" y1="190" x2="325" y2="190" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="325,190 333,186 333,194" fill="#f59e0b"/>
+  <text x="445" y="183" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="9">{ quote }</text>
+  <text x="250" y="195" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">3</text>
+
+  <!-- Step 6: /api/verify → ITA -->
+  <line x1="325" y1="220" x2="835" y2="220" stroke="#f97316" stroke-width="1.5"/>
+  <polygon points="835,220 827,216 827,224" fill="#f97316"/>
+  <text x="580" y="213" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="9">attest(quote, nonce)</text>
+  <text x="250" y="225" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">4</text>
+
+  <!-- Step 7: ITA verifies -->
+  <rect x="790" y="235" width="100" height="35" rx="4" fill="#f9731610" stroke="#f97316"/>
+  <text x="840" y="250" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="8">verify quote</text>
+  <text x="840" y="263" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">sign JWT</text>
+
+  <!-- Step 8: ITA → /api/verify: JWT -->
+  <line x1="835" y1="285" x2="325" y2="285" stroke="#f97316" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="325,285 333,281 333,289" fill="#f97316"/>
+  <text x="580" y="278" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="9">attestation JWT</text>
+  <text x="250" y="290" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">5</text>
+
+  <!-- Step 9: Parse JWT -->
+  <rect x="270" y="300" width="100" height="35" rx="4" fill="#8b5cf610" stroke="#8b5cf6"/>
+  <text x="320" y="315" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="8">validate JWT</text>
+  <text x="320" y="328" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">extract claims</text>
+
+  <!-- Step 10: /api/verify → Browser: results -->
+  <line x1="315" y1="355" x2="100" y2="355" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="100,355 108,351 108,359" fill="#8b5cf6"/>
+  <text x="208" y="348" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="9">verification results</text>
+  <text x="250" y="360" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">6</text>
+
+  <!-- Browser: display -->
+  <rect x="45" y="370" width="100" height="20" rx="4" fill="#ec489910" stroke="#ec4899"/>
+  <text x="95" y="384" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="8">render results</text>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="ld" style="background:#ec4899"></div>Browser</div>
+  <div class="legend-item"><div class="ld" style="background:#8b5cf6"></div>Verifier API</div>
+  <div class="legend-item"><div class="ld" style="background:#f59e0b"></div>KMS</div>
+  <div class="legend-item"><div class="ld" style="background:#f97316"></div>Intel Trust Authority</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     VERIFICATION DETAILS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Verification Details</h2>
+
+<h3>What the Verifier Checks</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>Quote Authenticity</h4>
+    <p>Intel Trust Authority cryptographically verifies the TDX quote was produced by genuine Intel TDX hardware. The ITA signature on the returned JWT is the trust anchor.</p>
+  </div>
+  <div class="cb">
+    <h4>Freshness</h4>
+    <p>The verifier generates a fresh nonce for each request. The nonce appears in the quote&rsquo;s report_data, proving the attestation was produced for this specific verification session.</p>
+  </div>
+  <div class="cb">
+    <h4>Measurements</h4>
+    <p>The JWT contains MRTD, RTMR0&ndash;3 values. The verifier displays these for manual comparison against known-good values published in release notes.</p>
+  </div>
+  <div class="cb">
+    <h4>TCB Status</h4>
+    <p>The JWT includes the TCB (Trusted Computing Base) status: <span class="code">UpToDate</span>, <span class="code">SWHardeningNeeded</span>, <span class="code">OutOfDate</span>, etc. This indicates the platform&rsquo;s security patch level.</p>
+  </div>
+</div>
+
+<h3>JWT Claims Displayed</h3>
+<div class="typedef">
+{<br>
+&nbsp;&nbsp;<span class="field">"attester_tcb_status"</span>: <span class="comment">"UpToDate"</span>,<br>
+&nbsp;&nbsp;<span class="field">"attester_type"</span>: <span class="comment">"TDX"</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_mrtd"</span>: <span class="comment">"a1b2c3..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_rtmr0"</span>: <span class="comment">"d4e5f6..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_rtmr1"</span>: <span class="comment">"..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_rtmr2"</span>: <span class="comment">"..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_rtmr3"</span>: <span class="comment">"..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"tdx_report_data"</span>: <span class="comment">"..."</span>,<br>
+&nbsp;&nbsp;<span class="field">"advisory_ids"</span>: [<span class="comment">"INTEL-SA-..."</span>],<br>
+&nbsp;&nbsp;<span class="field">"iat"</span>: <span class="comment">1700000000</span>,<br>
+&nbsp;&nbsp;<span class="field">"exp"</span>: <span class="comment">1700003600</span><br>
+}
+</div>
+
+<h3>Architecture</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>Frontend</h4>
+    <p>React single-page application. User inputs a KMS URL and optional binding data. Results are displayed in a structured, readable format with color-coded status indicators.</p>
+    <p style="margin-top:6px;"><span class="tag tag-lib">React</span> <span class="tag tag-types">TypeScript</span></p>
+  </div>
+  <div class="cb">
+    <h4>Backend</h4>
+    <p>Serverless API function (<span class="code">/api/verify</span>). Handles nonce generation, KMS communication, ITA integration, and JWT validation. Stateless &mdash; no database required.</p>
+    <p style="margin-top:6px;"><span class="tag tag-cli">serverless</span> <span class="tag tag-types">TypeScript</span></p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     NODE PLANE 1 USAGE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Node Usage (Plane 1)</h2>
+<p style="margin-bottom:14px;">When a merod node boots, it uses the same <span class="code">POST /attest</span> endpoint to verify the KMS before requesting its storage key. The flow is simpler than the public verifier &mdash; the node performs its own quote verification without going through ITA.</p>
+
+<div class="step"><div class="n">1</div><h4>Generate Nonce</h4><p>The node generates a random nonce locally.</p></div>
+<div class="step"><div class="n">2</div><h4>Call POST /attest</h4><p>Send the nonce to the KMS. Receive the raw TDX quote.</p></div>
+<div class="step"><div class="n">3</div><h4>Verify Quote Locally</h4><p>The node verifies the TDX quote signature, checks report_data contains the nonce, and compares MRTD against known-good KMS measurements embedded in its configuration.</p></div>
+<div class="step"><div class="n">4</div><h4>Proceed to Key Release</h4><p>If verification passes, the node proceeds with the <a href="key-release-flow.html">challenge/get-key flow</a>.</p></div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

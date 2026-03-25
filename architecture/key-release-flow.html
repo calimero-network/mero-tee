@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Key Release Flow — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Key Release Flow</span></div>
+
+<h1>Key Release <em>Flow</em></h1>
+<p class="page-subtitle">Challenge-response protocol for storage encryption key release</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OVERVIEW
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Protocol Overview</h2>
+<p style="margin-bottom:14px;">The key release protocol is a two-phase challenge-response flow. In Phase 1, the node obtains a fresh nonce from the KMS. In Phase 2, the node presents its TDX attestation quote with the nonce to prove its identity and integrity. Only after passing all checks does the KMS derive and release the storage encryption key.</p>
+
+<div class="g4" style="margin-bottom:28px;">
+  <div class="stat"><div class="v">2</div><div class="l">phases</div></div>
+  <div class="stat"><div class="v">5</div><div class="l">verification steps</div></div>
+  <div class="stat"><div class="v">1</div><div class="l">key derivation</div></div>
+  <div class="stat"><div class="v">TTL</div><div class="l">bound nonces</div></div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SEQUENCE DIAGRAM
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Sequence Diagram</h2>
+
+<svg viewBox="0 0 960 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Lifelines -->
+  <rect x="80" y="20" width="140" height="40" rx="8" fill="#3b82f610" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="150" y="45" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="11" font-weight="700">merod Node</text>
+  <line x1="150" y1="60" x2="150" y2="680" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <rect x="370" y="20" width="180" height="40" rx="8" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="460" y="45" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="11" font-weight="700">mero-kms-phala</text>
+  <line x1="460" y1="60" x2="460" y2="680" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <rect x="680" y="20" width="140" height="40" rx="8" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="750" y="45" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="11" font-weight="700">dstack</text>
+  <line x1="750" y1="60" x2="750" y2="680" stroke="#10b981" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- Phase 1: Challenge -->
+  <rect x="20" y="85" width="920" height="120" rx="6" fill="#f59e0b04" stroke="#f59e0b" stroke-width="1" stroke-dasharray="6 3"/>
+  <text x="40" y="102" fill="#f59e0b" font-family="JetBrains Mono" font-size="9" font-weight="700">PHASE 1: CHALLENGE</text>
+
+  <!-- Step 1: POST /challenge -->
+  <line x1="155" y1="120" x2="455" y2="120" stroke="#3b82f6" stroke-width="1.5"/>
+  <polygon points="455,120 447,116 447,124" fill="#3b82f6"/>
+  <text x="305" y="114" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="9" font-weight="600">POST /challenge { peerId }</text>
+
+  <!-- Step 2: Store + return -->
+  <rect x="405" y="135" width="110" height="24" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="460" y="151" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">generate nonce</text>
+  <text x="460" y="165" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">store(challengeId, nonce, peerId, expiry)</text>
+
+  <!-- Response -->
+  <line x1="455" y1="180" x2="155" y2="180" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="155,180 163,176 163,184" fill="#f59e0b"/>
+  <text x="305" y="174" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="9">{ challengeId, nonce }</text>
+
+  <!-- Phase 2: Get Key -->
+  <rect x="20" y="215" width="920" height="440" rx="6" fill="#8b5cf604" stroke="#8b5cf6" stroke-width="1" stroke-dasharray="6 3"/>
+  <text x="40" y="232" fill="#8b5cf6" font-family="JetBrains Mono" font-size="9" font-weight="700">PHASE 2: KEY RELEASE</text>
+
+  <!-- Node produces quote -->
+  <rect x="80" y="245" width="140" height="35" rx="4" fill="#3b82f610" stroke="#3b82f6"/>
+  <text x="150" y="260" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="8">produce TDX quote</text>
+  <text x="150" y="273" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">bind nonce to report_data</text>
+
+  <!-- Node signs nonce -->
+  <rect x="80" y="290" width="140" height="25" rx="4" fill="#3b82f610" stroke="#3b82f6"/>
+  <text x="150" y="307" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="8">sign(nonce, peerKey)</text>
+
+  <!-- Step 3: POST /get-key -->
+  <line x1="155" y1="330" x2="455" y2="330" stroke="#8b5cf6" stroke-width="1.5"/>
+  <polygon points="455,330 447,326 447,334" fill="#8b5cf6"/>
+  <text x="305" y="324" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="9" font-weight="600">POST /get-key { challengeId, quote, signature }</text>
+
+  <!-- KMS: Consume challenge -->
+  <rect x="405" y="345" width="110" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="460" y="359" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">consume challenge</text>
+
+  <!-- KMS: Verify signature -->
+  <rect x="405" y="375" width="110" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="460" y="389" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">verify signature</text>
+
+  <!-- KMS: Verify quote -->
+  <rect x="405" y="405" width="110" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="460" y="419" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">verify TDX quote</text>
+
+  <!-- KMS: Policy check -->
+  <rect x="405" y="435" width="110" height="20" rx="4" fill="#f59e0b10" stroke="#f59e0b"/>
+  <text x="460" y="449" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="8">policy check</text>
+  <text x="525" y="449" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">MRTD, RTMR0-3, TCB</text>
+
+  <!-- KMS → dstack: derive key -->
+  <line x1="465" y1="475" x2="745" y2="475" stroke="#10b981" stroke-width="1.5"/>
+  <polygon points="745,475 737,471 737,479" fill="#10b981"/>
+  <text x="605" y="469" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9" font-weight="600">derive_key(namespace, peerId)</text>
+
+  <!-- dstack: key derivation -->
+  <rect x="690" y="490" width="120" height="25" rx="4" fill="#10b98110" stroke="#10b981"/>
+  <text x="750" y="507" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="8">HKDF deterministic</text>
+
+  <!-- dstack → KMS: key material -->
+  <line x1="745" y1="530" x2="465" y2="530" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="465,530 473,526 473,534" fill="#10b981"/>
+  <text x="605" y="524" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9">key material</text>
+
+  <!-- KMS → Node: encrypted key -->
+  <line x1="455" y1="560" x2="155" y2="560" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <polygon points="155,560 163,556 163,564" fill="#f59e0b"/>
+  <text x="305" y="554" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="9" font-weight="600">{ key }</text>
+
+  <!-- Node: unlock storage -->
+  <rect x="80" y="580" width="140" height="25" rx="4" fill="#3b82f610" stroke="#3b82f6"/>
+  <text x="150" y="597" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="8">decrypt storage</text>
+
+  <!-- Error path annotation -->
+  <rect x="560" y="345" width="200" height="110" rx="8" fill="#ef444408" stroke="#ef4444" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="575" y="362" fill="#ef4444" font-family="JetBrains Mono" font-size="8" font-weight="600">Failure exits:</text>
+  <text x="575" y="378" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">challenge expired → 400</text>
+  <text x="575" y="392" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">bad signature → 401</text>
+  <text x="575" y="406" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">invalid quote → 401</text>
+  <text x="575" y="420" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">policy violation → 403</text>
+  <text x="575" y="434" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">rate limited → 429</text>
+  <text x="575" y="448" fill="#6b6b80" font-family="JetBrains Mono" font-size="7">policy not ready → 503</text>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="ld" style="background:#3b82f6"></div>Node</div>
+  <div class="legend-item"><div class="ld" style="background:#f59e0b"></div>KMS</div>
+  <div class="legend-item"><div class="ld" style="background:#10b981"></div>dstack</div>
+  <div class="legend-item"><div class="ld" style="background:#8b5cf6"></div>Key release</div>
+  <div class="legend-item"><div class="ld" style="background:#ef4444"></div>Error paths</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PHASE 1 DETAIL
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Phase 1 &mdash; Challenge</h2>
+
+<h3>Request</h3>
+<div class="typedef">
+<span class="kw">POST</span> <span class="ty">/challenge</span><br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"peerId"</span>: <span class="comment">"12D3KooW..."</span>  <span class="comment">// libp2p peer ID of the requesting node</span><br>
+}
+</div>
+
+<h3>Response</h3>
+<div class="typedef">
+<span class="kw">200</span> OK<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"challengeId"</span>: <span class="comment">"uuid-v4"</span>,      <span class="comment">// opaque challenge identifier</span><br>
+&nbsp;&nbsp;<span class="field">"nonce"</span>: <span class="comment">"hex-encoded-32-bytes"</span> <span class="comment">// cryptographically random nonce</span><br>
+}
+</div>
+
+<h3>Server-Side Logic</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>Nonce Generation</h4>
+    <p>32 bytes from a CSPRNG. The nonce must be unpredictable to prevent pre-computation of TDX quotes.</p>
+  </div>
+  <div class="cb">
+    <h4>Challenge Storage</h4>
+    <p>The <span class="code">ChallengeStore</span> maps <span class="code">challengeId &rarr; (nonce, peerId, expiry)</span>. InMemory uses a <span class="code">DashMap</span>; Redis uses <span class="code">SETEX</span> for automatic TTL cleanup. Max pending challenges are enforced per-peer.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PHASE 2 DETAIL
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Phase 2 &mdash; Key Release</h2>
+
+<h3>Request</h3>
+<div class="typedef">
+<span class="kw">POST</span> <span class="ty">/get-key</span><br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"challengeId"</span>: <span class="comment">"uuid-v4"</span>,<br>
+&nbsp;&nbsp;<span class="field">"quote"</span>: <span class="comment">"base64-encoded-tdx-quote"</span>,<br>
+&nbsp;&nbsp;<span class="field">"signature"</span>: <span class="comment">"base64-encoded-ed25519-sig"</span><br>
+}
+</div>
+
+<h3>Verification Pipeline</h3>
+<div class="step"><div class="n">1</div><h4>Consume Challenge</h4><p>Look up <span class="code">challengeId</span> in the store and remove it atomically (one-time use). If not found or expired, return <span class="code">400 InvalidChallenge</span>.</p></div>
+<div class="step"><div class="n">2</div><h4>Verify Signature</h4><p>Decode the peerId to extract the Ed25519 public key. Verify <span class="code">signature</span> over the original nonce. If invalid, return <span class="code">401 InvalidSignature</span>.</p></div>
+<div class="step"><div class="n">3</div><h4>Parse TDX Quote</h4><p>Decode the base64 quote. Extract MRTD, RTMR0&ndash;3, report_data, and TCB status fields from the TDX quote structure.</p></div>
+<div class="step"><div class="n">4</div><h4>Verify Nonce Binding</h4><p>Check that the quote&rsquo;s <span class="code">report_data</span> field contains the expected hash binding to the original nonce. This ensures the quote was freshly generated for this challenge.</p></div>
+<div class="step"><div class="n">5</div><h4>Policy Evaluation</h4><p>Compare extracted measurements against the attestation policy allowlists:</p>
+<ul>
+  <li>MRTD &isin; <span class="code">allowed_mrtd</span></li>
+  <li>RTMR0 &isin; <span class="code">allowed_rtmr0</span></li>
+  <li>RTMR1 &isin; <span class="code">allowed_rtmr1</span></li>
+  <li>RTMR2 &isin; <span class="code">allowed_rtmr2</span></li>
+  <li>RTMR3 &isin; <span class="code">allowed_rtmr3</span> (profile check)</li>
+  <li>TCB status &isin; <span class="code">allowed_tcb_status</span></li>
+</ul>
+<p>Any mismatch returns <span class="code">403 PolicyViolation</span> with details about which field failed.</p>
+</div>
+<div class="step"><div class="n">6</div><h4>Key Derivation</h4><p>Call dstack via the Unix socket at <span class="code">DSTACK_SOCKET_PATH</span>. The derivation uses <span class="code">KEY_NAMESPACE_PREFIX + peerId</span> as input. dstack&rsquo;s HKDF produces a deterministic 32-byte key &mdash; the same inputs always yield the same key.</p></div>
+
+<h3>Response</h3>
+<div class="typedef">
+<span class="kw">200</span> OK<br>
+Content-Type: application/json<br><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"key"</span>: <span class="comment">"base64-encoded-32-byte-key"</span> <span class="comment">// storage encryption key</span><br>
+}
+</div>
+
+<h3>Security Properties</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>One-Time Use</h4>
+    <p>Each challenge can only be consumed once. Replaying a <span class="code">/get-key</span> request with the same challengeId returns <span class="code">400 InvalidChallenge</span>.</p>
+  </div>
+  <div class="cb">
+    <h4>Deterministic Keys</h4>
+    <p>dstack derives keys deterministically from the namespace + peerId. The node always gets the same key regardless of which KMS instance it contacts (as long as the KMS runs the same dstack root).</p>
+  </div>
+  <div class="cb">
+    <h4>TTL Expiry</h4>
+    <p>Challenges expire after <span class="code">CHALLENGE_TTL_SECS</span> (default: 300s). Slow or stale requests are automatically rejected.</p>
+  </div>
+  <div class="cb">
+    <h4>Rate Limiting</h4>
+    <p><span class="code">MAX_PENDING_CHALLENGES</span> limits how many active challenges a single peerId can have. Excess requests return <span class="code">429 RateLimited</span>.</p>
+  </div>
+</div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>
