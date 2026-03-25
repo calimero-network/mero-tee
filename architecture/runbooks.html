@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operational Runbooks — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.gate { display: grid; grid-template-columns: 80px 1fr; gap: 12px; padding: 14px 16px; background: var(--surface2); border-radius: 10px; margin-bottom: 8px; border: 1px solid var(--border); transition: border-color .15s; align-items: start; }
+.gate:hover { border-color: var(--amber); }
+.gate-id { font-family: 'JetBrains Mono', monospace; font-size: .85rem; font-weight: 700; color: var(--amber); }
+.gate-body h4 { font-size: .85rem; margin-bottom: 4px; }
+.gate-pass { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--green); }
+.gate-fail { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--red); }
+.rollback { background: var(--surface); border: 1px solid #ef444440; border-radius: 8px; padding: 10px 14px; margin-top: 8px; }
+.rollback p { color: var(--red); font-size: .82rem; }
+.env-row { display: grid; grid-template-columns: 260px 1fr; gap: 10px; padding: 6px 12px; background: var(--surface2); border-radius: 6px; margin-bottom: 4px; align-items: start; }
+.env-row .ek { font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--green); font-weight: 600; }
+.env-row .ev { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.mistake { background: var(--surface2); border-left: 3px solid var(--red); padding: 10px 14px; border-radius: 0 8px 8px 0; margin-bottom: 8px; }
+.mistake strong { color: var(--red); font-size: .85rem; }
+.mistake p { font-size: .82rem; }
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Runbooks</span></div>
+
+<h1>Operational <em>Runbooks</em></h1>
+<p class="page-subtitle">Step-by-step procedures for deploying, verifying, and rolling out KMS and node images</p>
+
+<div class="g4" style="margin-bottom:36px;">
+  <div class="stat"><div class="v">3</div><div class="l">runbooks</div></div>
+  <div class="stat"><div class="v">6</div><div class="l">decision gates</div></div>
+  <div class="stat"><div class="v">3</div><div class="l">profiles</div></div>
+  <div class="stat"><div class="v">2</div><div class="l">platforms</div></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PHALA KMS RUNBOOK
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Phala KMS Runbook</h2>
+<p style="margin-bottom:18px;">Deploy and verify <span class="code">mero-kms-phala</span> on Phala Cloud CVMs. Covers release verification, digest-pinned deployment, merod attestation configuration, and runtime health checks.</p>
+
+<details open>
+<summary>Prerequisites</summary>
+<div class="detail-body">
+<ul>
+  <li>GitHub release access to <span class="code">calimero-network/mero-tee</span></li>
+  <li>Phala Cloud account with CVM provisioning permissions</li>
+  <li>CLI tools: <span class="code">jq</span>, <span class="code">curl</span>, <span class="code">sha256sum</span>, <span class="code">docker</span></li>
+  <li>Local clone of the mero-tee repository with verify scripts</li>
+  <li>Target KMS version tag (e.g. <span class="code">v0.3.0</span>)</li>
+  <li>Target profile: <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span></li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary>Step 1 &mdash; Verify Release Assets</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Before deploying anything, verify the integrity and completeness of the release.</p>
+
+<div class="step">
+  <div class="n">1.1</div>
+  <h4>Run the verification script</h4>
+  <div class="typedef">
+<span class="comment"># From the mero-tee repo root</span><br>
+./scripts/release/verify-release-assets.sh v0.3.0
+  </div>
+  <p>This script downloads the release artifacts, checks SHA-256 checksums, verifies cosign signatures, validates the SBOM, and confirms that the attestation policy JSON is well-formed.</p>
+</div>
+
+<div class="step">
+  <div class="n">1.2</div>
+  <h4>Confirm expected artifacts</h4>
+  <p>The release must include:</p>
+  <ul>
+    <li><span class="code">kms-phala-attestation-policy.{profile}.json</span> &mdash; attestation policy for the target profile</li>
+    <li><span class="code">checksums.txt</span> &mdash; SHA-256 hashes of all artifacts</li>
+    <li><span class="code">checksums.txt.sig</span> &mdash; cosign signature over checksums</li>
+    <li><span class="code">sbom.spdx.json</span> &mdash; software bill of materials</li>
+    <li>Docker image digest in the release notes</li>
+  </ul>
+</div>
+
+<div class="step">
+  <div class="n">1.3</div>
+  <h4>Record the image digest</h4>
+  <p>Extract the digest-pinned image reference from the release notes. You will use this in the next step. Format: <span class="code">ghcr.io/calimero-network/mero-kms-phala@sha256:abc123...</span></p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Step 2 &mdash; Deploy Digest-Pinned Image</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Deploy using the exact digest from the verified release. Never use mutable tags in production.</p>
+
+<div class="step">
+  <div class="n">2.1</div>
+  <h4>Docker Compose configuration</h4>
+  <div class="typedef">
+<span class="comment"># docker-compose.yml for Phala Cloud CVM</span><br>
+<span class="kw">version</span>: <span class="ty">"3.8"</span><br>
+<span class="kw">services</span>:<br>
+&nbsp;&nbsp;<span class="field">kms</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">image</span>: ghcr.io/calimero-network/mero-kms-phala@sha256:<span class="ty">&lt;DIGEST&gt;</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">environment</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- <span class="field">MERO_KMS_VERSION</span>=<span class="ty">v0.3.0</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- <span class="field">MERO_KMS_PROFILE</span>=<span class="ty">locked-read-only</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- <span class="field">DSTACK_SOCKET_PATH</span>=<span class="ty">/var/run/dstack.sock</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- <span class="field">ENFORCE_MEASUREMENT_POLICY</span>=<span class="ty">true</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">volumes</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- /var/run/dstack.sock:/var/run/dstack.sock<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">ports</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- <span class="ty">"8080:8080"</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">2.2</div>
+  <h4>Required environment variables</h4>
+  <div class="env-row"><div class="ek">MERO_KMS_VERSION</div><div class="ev">Must match the release tag. Used to fetch the correct attestation policy from GitHub.</div></div>
+  <div class="env-row"><div class="ek">MERO_KMS_PROFILE</div><div class="ev">Must match the profile of the nodes this KMS instance serves. Determines which policy variant is loaded.</div></div>
+  <div class="env-row"><div class="ek">DSTACK_SOCKET_PATH</div><div class="ev">Path to the dstack Unix domain socket. Must be volume-mounted from the CVM host.</div></div>
+  <div class="env-row"><div class="ek">ENFORCE_MEASUREMENT_POLICY</div><div class="ev">Must be <span class="code">true</span> in production. When false, attestation quotes are not validated.</div></div>
+  <div class="env-row"><div class="ek">MERO_KMS_POLICY_SHA256</div><div class="ev">Optional but recommended. Pin the expected SHA-256 of the policy file to prevent supply-chain attacks.</div></div>
+</div>
+
+<div class="step">
+  <div class="n">2.3</div>
+  <h4>Deploy to Phala Cloud</h4>
+  <p>Upload the Compose file to the Phala Cloud CVM dashboard or deploy via CLI. Wait for the container to reach <span class="code">Running</span> state.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Step 3 &mdash; Configure merod Attestation</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">After KMS is running, configure merod nodes to use this KMS for attestation and key release.</p>
+
+<div class="step">
+  <div class="n">3.1</div>
+  <h4>Generate merod KMS configuration</h4>
+  <div class="typedef">
+<span class="comment"># Generate config pointing merod at the new KMS endpoint</span><br>
+./scripts/generate-merod-kms-config.sh \<br>
+&nbsp;&nbsp;--kms-url https://&lt;kms-host&gt;:8080 \<br>
+&nbsp;&nbsp;--profile locked-read-only \<br>
+&nbsp;&nbsp;--output merod-kms.json
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">3.2</div>
+  <h4>Apply configuration to merod</h4>
+  <div class="typedef">
+<span class="comment"># Apply the KMS config to a running merod node</span><br>
+./scripts/apply-merod-kms-config.sh \<br>
+&nbsp;&nbsp;--config merod-kms.json \<br>
+&nbsp;&nbsp;--node &lt;node-id&gt;
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">3.3</div>
+  <h4>Profile compatibility</h4>
+  <p>The KMS enforces <strong>profile-scoped policy</strong>. A KMS instance configured with <span class="code">MERO_KMS_PROFILE=locked-read-only</span> will only release keys to nodes whose RTMR3 measurement matches the <span class="code">locked-read-only</span> profile. This ensures cohort separation: debug nodes cannot obtain keys from a production KMS.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Step 4 &mdash; Runtime Checks</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Verify the deployed KMS is healthy and producing valid attestation quotes.</p>
+
+<div class="step">
+  <div class="n">4.1</div>
+  <h4>Health check</h4>
+  <div class="typedef">
+curl -s https://&lt;kms-host&gt;:8080/health | jq .<br>
+<span class="comment"># Expected: {"status":"ok","version":"v0.3.0","profile":"locked-read-only"}</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">4.2</div>
+  <h4>Attestation endpoint</h4>
+  <div class="typedef">
+curl -s -X POST https://&lt;kms-host&gt;:8080/attest | jq .<br>
+<span class="comment"># Returns TDX quote from the KMS enclave for mutual verification</span>
+  </div>
+  <p>Verify the returned quote against expected measurements. The quote should contain MRTD and RTMR values matching the published policy for this version.</p>
+</div>
+
+<div class="step">
+  <div class="n">4.3</div>
+  <h4>Quote verification</h4>
+  <div class="typedef">
+<span class="comment"># Verify the attestation quote using Intel Trust Authority</span><br>
+./scripts/verify-kms-quote.sh --url https://&lt;kms-host&gt;:8080
+  </div>
+  <p>The script fetches <span class="code">POST /attest</span>, extracts the TDX quote, and submits it to ITA for appraisal. A successful result confirms the KMS is running genuine TEE code.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Common Mistakes</summary>
+<div class="detail-body">
+<div class="mistake">
+  <strong>Wrong profile</strong>
+  <p>Setting <span class="code">MERO_KMS_PROFILE</span> to a profile that doesn&rsquo;t match the node cohort. Nodes will fail key release with a policy mismatch error. Always confirm the profile matches between KMS and the nodes it serves.</p>
+</div>
+<div class="mistake">
+  <strong>Stale policy</strong>
+  <p>Deploying a new KMS binary but using an old <span class="code">MERO_KMS_VERSION</span> tag. The fetched policy won&rsquo;t include measurements for the new binary. Always bump the version tag alongside the image.</p>
+</div>
+<div class="mistake">
+  <strong>Missing environment variables</strong>
+  <p>Omitting <span class="code">MERO_KMS_VERSION</span> or <span class="code">MERO_KMS_PROFILE</span> causes the KMS to fail at startup. These are required variables with no defaults.</p>
+</div>
+<div class="mistake">
+  <strong>Mutable image tag</strong>
+  <p>Using <span class="code">:latest</span> or <span class="code">:v0.3.0</span> instead of a digest-pinned reference. Tags can be overwritten; digests are immutable. Always use <span class="code">@sha256:...</span>.</p>
+</div>
+<div class="mistake">
+  <strong>dstack socket not mounted</strong>
+  <p>Forgetting to volume-mount <span class="code">/var/run/dstack.sock</span> into the container. Without it, key derivation and quote generation fail with a connection error.</p>
+</div>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     GCP NODE IMAGE RUNBOOK
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>GCP Node Image Runbook</h2>
+<p style="margin-bottom:18px;">Deploy and verify Calimero node images on GCP TDX Confidential VMs. Covers release verification, image pinning, runtime measurement validation, and MDMA comparison.</p>
+
+<details open>
+<summary>What Is Released</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Each <span class="code">mero-tee-vX.Y.Z</span> release includes the following artifacts:</p>
+<div class="env-row"><div class="ek">published-mrtds.json</div><div class="ev">Expected MRTD and RTMR values for each image profile. Used to verify runtime measurements of deployed VMs.</div></div>
+<div class="env-row"><div class="ek">checksums.txt</div><div class="ev">SHA-256 hashes of all release artifacts including the MRTD file, provenance records, and SBOM.</div></div>
+<div class="env-row"><div class="ek">checksums.txt.sig</div><div class="ev">Cosign signature over the checksums file. Verifies artifact integrity and publisher identity.</div></div>
+<div class="env-row"><div class="ek">sbom.spdx.json</div><div class="ev">Software Bill of Materials listing all dependencies baked into the image.</div></div>
+<div class="env-row"><div class="ek">provenance.intoto.jsonl</div><div class="ev">SLSA provenance attestation recording the build inputs and environment.</div></div>
+<div class="env-row"><div class="ek">GCP image family/version</div><div class="ev">The image family name and version number published to the GCP project. Referenced in instance templates.</div></div>
+</div>
+</details>
+
+<details>
+<summary>Step 1 &mdash; Verify Release Assets</summary>
+<div class="detail-body">
+<div class="step">
+  <div class="n">1.1</div>
+  <h4>Run the verification script</h4>
+  <div class="typedef">
+./scripts/release/verify-release-assets.sh mero-tee-v0.3.0
+  </div>
+  <p>Validates checksums, signatures, SBOM structure, and confirms <span class="code">published-mrtds.json</span> is well-formed and contains entries for all three profiles.</p>
+</div>
+
+<div class="step">
+  <div class="n">1.2</div>
+  <h4>Inspect the MRTD file</h4>
+  <div class="typedef">
+jq . published-mrtds.json<br>
+<span class="comment"># Expect: per-profile MRTD + RTMR0-3 values</span>
+  </div>
+  <p>Each profile entry contains the expected <span class="code">mrtd</span>, <span class="code">rtmr0</span>, <span class="code">rtmr1</span>, <span class="code">rtmr2</span>, and <span class="code">rtmr3</span> hex values. These are the measurements your deployed VMs must match.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Step 2 &mdash; Deploy Pinned Image</summary>
+<div class="detail-body">
+<div class="step">
+  <div class="n">2.1</div>
+  <h4>GCP instance with image family/version pin</h4>
+  <div class="typedef">
+gcloud compute instances create merod-prod-01 \<br>
+&nbsp;&nbsp;--zone=us-central1-a \<br>
+&nbsp;&nbsp;--machine-type=n2d-standard-4 \<br>
+&nbsp;&nbsp;--confidential-compute-type=TDX \<br>
+&nbsp;&nbsp;--image-family=<span class="ty">mero-tee-locked-read-only</span> \<br>
+&nbsp;&nbsp;--image-project=<span class="ty">calimero-prod</span> \<br>
+&nbsp;&nbsp;--metadata=MERO_TEE_VERSION=<span class="ty">v0.3.0</span>
+  </div>
+  <p>For maximum reproducibility, pin to a specific image version instead of family:</p>
+  <div class="typedef">
+--image=<span class="ty">mero-tee-locked-read-only-v0-3-0</span> \<br>
+--image-project=<span class="ty">calimero-prod</span>
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">2.2</div>
+  <h4>Baked merod binary</h4>
+  <p>The GCP image includes the <span class="code">merod</span> binary baked at build time by the Packer + Ansible pipeline. The binary version is fixed and cannot be changed without rebuilding the image. This ensures the binary hash is part of the measured MRTD.</p>
+</div>
+
+<div class="step">
+  <div class="n">2.3</div>
+  <h4>MERO_TEE_VERSION metadata</h4>
+  <p>The <span class="code">MERO_TEE_VERSION</span> GCP instance metadata key is optional but recommended. It allows operators and automation to identify which release an instance was created from without inspecting the image itself. It has no effect on measurements or attestation.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Step 3 &mdash; Verify Runtime Measurements</summary>
+<div class="detail-body">
+<div class="step">
+  <div class="n">3.1</div>
+  <h4>Extract runtime measurements</h4>
+  <div class="typedef">
+<span class="comment"># SSH into the instance and extract TDX measurements</span><br>
+gcloud compute ssh merod-prod-01 -- \<br>
+&nbsp;&nbsp;"cat /sys/kernel/security/tdx/measurements"
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">3.2</div>
+  <h4>Compare against published-mrtds.json</h4>
+  <div class="typedef">
+<span class="comment"># Compare runtime values with expected values</span><br>
+./scripts/verify-runtime-mrtds.sh \<br>
+&nbsp;&nbsp;--instance merod-prod-01 \<br>
+&nbsp;&nbsp;--expected published-mrtds.json \<br>
+&nbsp;&nbsp;--profile locked-read-only
+  </div>
+  <p>The script compares MRTD and all four RTMR registers. Any mismatch indicates the VM is not running the expected code.</p>
+</div>
+
+<div class="step">
+  <div class="n">3.3</div>
+  <h4>MDMA vs release probe comparison</h4>
+  <p>The <strong>MDMA</strong> (Measurement Data Management Agent) collects measurements from running instances. Compare MDMA-reported values against the release probe values stored in <span class="code">published-mrtds.json</span>. Discrepancies indicate either a different image or unexpected runtime modification.</p>
+  <div class="typedef">
+<span class="comment"># Fetch MDMA measurements and compare</span><br>
+./scripts/compare-mdma-vs-release.sh \<br>
+&nbsp;&nbsp;--instance merod-prod-01 \<br>
+&nbsp;&nbsp;--release mero-tee-v0.3.0
+  </div>
+</div>
+
+<div class="step">
+  <div class="n">3.4</div>
+  <h4>Interaction with core tee-mode</h4>
+  <p>The <span class="code">calimero/core</span> merod binary reads the <span class="code">--tee-mode</span> flag at startup. When set, merod performs a KMS challenge-response to obtain its storage encryption key. The node image profile must match the KMS profile for the key release to succeed. The core tee-mode is configured in the <span class="code">calimero/core</span> repository and is independent of the image build.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Common Mistakes</summary>
+<div class="detail-body">
+<div class="mistake">
+  <strong>Wrong image family</strong>
+  <p>Deploying with <span class="code">--image-family=mero-tee-debug</span> when you intended <span class="code">mero-tee-locked-read-only</span>. The RTMR3 measurement will differ, and the production KMS will reject the node.</p>
+</div>
+<div class="mistake">
+  <strong>Profile mismatch</strong>
+  <p>The node image profile and the KMS <span class="code">MERO_KMS_PROFILE</span> must agree. A debug node connecting to a locked-read-only KMS will fail key release with a policy mismatch.</p>
+</div>
+<div class="mistake">
+  <strong>Stale MRTDs</strong>
+  <p>Verifying against a <span class="code">published-mrtds.json</span> from an older release. Always download the MRTD file corresponding to the exact image version you deployed.</p>
+</div>
+<div class="mistake">
+  <strong>Image family resolution drift</strong>
+  <p>Image families resolve to the latest version. If a new image is published between planning and deployment, the resolved image may differ. Use explicit <span class="code">--image=</span> for reproducible deployments.</p>
+</div>
+<div class="mistake">
+  <strong>Forgetting confidential-compute-type</strong>
+  <p>Omitting <span class="code">--confidential-compute-type=TDX</span> creates a standard VM without TDX. The node will not produce valid attestation quotes and will fail KMS challenges.</p>
+</div>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     BLUE-GREEN KMS ROLLOUT
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Blue-Green KMS Rollout</h2>
+<p style="margin-bottom:18px;">Safe, gated rollout of a new KMS version paired with updated node images. Six decision gates ensure correctness at each stage with rollback branches.</p>
+
+<details open>
+<summary>Scope &amp; Inputs</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">This runbook applies when rolling out a new KMS version that may also require new node images with updated measurements.</p>
+<h3 style="margin-top:0;">Required Inputs</h3>
+<div class="env-row"><div class="ek">New KMS tag</div><div class="ev">The mero-tee release tag for the new KMS version (e.g. <span class="code">v0.4.0</span>).</div></div>
+<div class="env-row"><div class="ek">New node-image tag</div><div class="ev">The mero-tee release tag for the new node image, if changed. May be the same as the KMS tag for coupled releases.</div></div>
+<div class="env-row"><div class="ek">Target profile</div><div class="ev">The profile being rolled out: <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>.</div></div>
+</div>
+</details>
+
+<details open>
+<summary>Decision Tree (6 Gates)</summary>
+<div class="detail-body">
+<p style="margin-bottom:16px;">Each gate is a go/no-go checkpoint. Failing a gate triggers the associated rollback procedure.</p>
+
+<div class="gate">
+  <div class="gate-id">D1</div>
+  <div class="gate-body">
+    <h4>Verify KMS Release Assets</h4>
+    <p>Run <span class="code">verify-release-assets.sh</span> on the new KMS tag. Confirm checksums, signatures, SBOM, and policy files are present and valid.</p>
+    <div class="gate-pass">&#10003; Pass &rarr; proceed to D2</div>
+    <div class="gate-fail">&#10007; Fail &rarr; abort rollout, report to release team</div>
+  </div>
+</div>
+
+<div class="gate">
+  <div class="gate-id">D2</div>
+  <div class="gate-body">
+    <h4>Verify Node Image Release Assets</h4>
+    <p>Run <span class="code">verify-release-assets.sh</span> on the node-image tag. Confirm <span class="code">published-mrtds.json</span>, checksums, and provenance are valid.</p>
+    <div class="gate-pass">&#10003; Pass &rarr; proceed to D3</div>
+    <div class="gate-fail">&#10007; Fail &rarr; abort rollout, report to release team</div>
+  </div>
+</div>
+
+<div class="gate">
+  <div class="gate-id">D3</div>
+  <div class="gate-body">
+    <h4>Deploy Staging KMS</h4>
+    <p>Deploy the new KMS image to the staging environment using the digest-pinned reference. Configure with <span class="code">MERO_KMS_VERSION</span> set to the new tag and the target profile.</p>
+    <div class="gate-pass">&#10003; Pass (healthy + correct version) &rarr; proceed to D4</div>
+    <div class="gate-fail">&#10007; Fail &rarr; tear down staging KMS, investigate logs</div>
+  </div>
+</div>
+
+<div class="gate">
+  <div class="gate-id">D4</div>
+  <div class="gate-body">
+    <h4>Probe Staging KMS</h4>
+    <p>Run the staging probe workflow (<span class="code">kms-phala-staging-probe.yaml</span>). Verify attestation quotes, extract measurements, and compare against the expected policy. Confirm a staging node can complete the full challenge &rarr; get-key flow.</p>
+    <div class="gate-pass">&#10003; Pass (probe green) &rarr; proceed to D5</div>
+    <div class="gate-fail">&#10007; Fail &rarr; tear down staging KMS, analyze probe output, check measurement candidates</div>
+  </div>
+</div>
+
+<div class="gate">
+  <div class="gate-id">D5</div>
+  <div class="gate-body">
+    <h4>Promote Policy</h4>
+    <p>Open a PR promoting the staging probe&rsquo;s measurement candidates to the release policy files. Require two approvals from the security team. Merge only after review.</p>
+    <div class="gate-pass">&#10003; Pass (PR merged) &rarr; proceed to D6</div>
+    <div class="gate-fail">&#10007; Fail (review rejected) &rarr; investigate measurement discrepancies, re-probe if needed</div>
+  </div>
+</div>
+
+<div class="gate">
+  <div class="gate-id">D6</div>
+  <div class="gate-body">
+    <h4>Deploy Production</h4>
+    <p>Deploy the new KMS to production with the merged policy. Perform a production probe: health check, attestation verification, and a canary key-release from a production node. Monitor for 30 minutes.</p>
+    <div class="gate-pass">&#10003; Pass (production stable) &rarr; rollout complete</div>
+    <div class="gate-fail">&#10007; Fail &rarr; execute production rollback (below)</div>
+  </div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Per-Gate Runbook Steps</summary>
+<div class="detail-body">
+<h3>D1 &amp; D2 &mdash; Asset Verification</h3>
+<div class="step">
+  <div class="n">1</div>
+  <h4>Download release artifacts</h4>
+  <p>Use <span class="code">gh release download</span> to fetch all assets for both the KMS and node-image tags into separate directories.</p>
+</div>
+<div class="step">
+  <div class="n">2</div>
+  <h4>Verify checksums and signatures</h4>
+  <p>Run <span class="code">verify-release-assets.sh</span> in each directory. The script exits non-zero on any failure.</p>
+</div>
+<div class="step">
+  <div class="n">3</div>
+  <h4>Spot-check policy contents</h4>
+  <p>Open the attestation policy JSON and confirm the target profile entry exists with non-empty MRTD and RTMR values.</p>
+</div>
+
+<h3>D3 &mdash; Staging Deploy</h3>
+<div class="step">
+  <div class="n">4</div>
+  <h4>Deploy staging Compose</h4>
+  <p>Apply the Docker Compose file from the Phala KMS runbook, pointed at the staging CVM. Use the new digest-pinned image.</p>
+</div>
+<div class="step">
+  <div class="n">5</div>
+  <h4>Confirm health</h4>
+  <p>Poll <span class="code">GET /health</span> until it returns the expected version and profile. Timeout after 120 seconds.</p>
+</div>
+
+<h3>D4 &mdash; Staging Probe</h3>
+<div class="step">
+  <div class="n">6</div>
+  <h4>Trigger probe workflow</h4>
+  <p>Run <span class="code">kms-phala-staging-probe.yaml</span> via GitHub Actions or manually. The probe deploys a test node, performs a full challenge &rarr; get-key cycle, and extracts measurement candidates.</p>
+</div>
+<div class="step">
+  <div class="n">7</div>
+  <h4>Validate probe output</h4>
+  <p>Confirm the probe outputs match the published MRTDs. Any discrepancy blocks progression.</p>
+</div>
+
+<h3>D5 &mdash; Policy Promotion</h3>
+<div class="step">
+  <div class="n">8</div>
+  <h4>Create policy PR</h4>
+  <p>The probe can auto-generate a PR updating <span class="code">kms-phala-attestation-policy.{profile}.json</span>. If manual, copy measurement candidates into the policy file and open the PR.</p>
+</div>
+<div class="step">
+  <div class="n">9</div>
+  <h4>Review and merge</h4>
+  <p>Two security-team approvals required. Verify the diff contains only expected measurement changes.</p>
+</div>
+
+<h3>D6 &mdash; Production Deploy</h3>
+<div class="step">
+  <div class="n">10</div>
+  <h4>Deploy to production</h4>
+  <p>Update the production Compose file with the new digest and version. Rolling restart the KMS container.</p>
+</div>
+<div class="step">
+  <div class="n">11</div>
+  <h4>Canary key-release</h4>
+  <p>Verify at least one production node can complete a challenge &rarr; get-key cycle with the new KMS.</p>
+</div>
+<div class="step">
+  <div class="n">12</div>
+  <h4>Monitor (30 min soak)</h4>
+  <p>Watch health endpoint, error rates, and key-release latency. No elevated errors for 30 minutes confirms stable rollout.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Rollback Procedures</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Each gate has a defined rollback path. Rollbacks are safe because the old KMS and policy remain in place until D6 completes.</p>
+
+<div class="rollback">
+  <p><strong>D1/D2 Rollback:</strong> No deployment has occurred. Simply abort the rollout and investigate the release artifacts.</p>
+</div>
+<div class="rollback">
+  <p><strong>D3 Rollback:</strong> Tear down the staging KMS container. No production impact.</p>
+</div>
+<div class="rollback">
+  <p><strong>D4 Rollback:</strong> Tear down the staging KMS. Discard measurement candidates. Re-run the probe after fixing the issue.</p>
+</div>
+<div class="rollback">
+  <p><strong>D5 Rollback:</strong> Close the policy PR without merging. The existing production policy remains unchanged.</p>
+</div>
+<div class="rollback">
+  <p><strong>D6 Rollback:</strong> Revert the production Compose file to the previous digest-pinned image. Restart the KMS container. Revert the policy file PR if it was the cause. Verify production nodes can still obtain keys.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Guardrails</summary>
+<div class="detail-body">
+<ul>
+  <li><strong>Never skip verification:</strong> D1 and D2 must pass before any deployment. Skipping them risks deploying tampered artifacts.</li>
+  <li><strong>Always probe staging first:</strong> D4 catches measurement mismatches, configuration errors, and policy incompatibilities in a safe environment.</li>
+  <li><strong>Policy promotion requires review:</strong> D5 is a human gate. Automated promotion is blocked; the PR requires manual security review.</li>
+  <li><strong>Production is last:</strong> D6 only executes after all other gates pass. Production KMS stays on the old version until the final step.</li>
+  <li><strong>Rollback before retry:</strong> If a gate fails after partial deployment, complete the rollback before re-attempting.</li>
+  <li><strong>Version coupling:</strong> If the KMS and node image are released together, both must pass verification (D1 + D2) before either is deployed.</li>
+</ul>
+</div>
+</details>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

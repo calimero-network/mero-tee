@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Release Pipeline — mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Release Pipeline</span></div>
+
+<h1>Release <em>Pipeline</em></h1>
+<p class="page-subtitle">Release taxonomy, CI/CD setup, pipeline flows, policy migration, and post-release verification</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     RELEASE CLASSES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Release Classes</h2>
+<p style="margin-bottom:18px;">Every release falls into one of three classes. Each class has distinct operational rules, tagging conventions, and minimum release-note content.</p>
+
+<div class="g3">
+  <div class="cb">
+    <h4 style="color:var(--green)">Stable</h4>
+    <p><strong>Tag:</strong> <span class="code">mero-kms-vX.Y.Z</span> or <span class="code">mero-tee-vX.Y.Z</span></p>
+    <p><strong>Rules:</strong></p>
+    <ul>
+      <li>Must pass all CI checks including E2E</li>
+      <li>Must include full release notes</li>
+      <li>Must include compatibility catalog update</li>
+      <li>Attestation policy must be finalized (not <span class="code">policy_not_ready</span>)</li>
+      <li>Requires release-auditor approval</li>
+    </ul>
+    <p><strong>Release notes must include:</strong> changelog, breaking changes, upgrade path, MRTD/RTMR changes, compatible counterpart versions.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--amber)">Release Candidate (RC)</h4>
+    <p><strong>Tag:</strong> <span class="code">mero-kms-vX.Y.Z-rc.N</span> or <span class="code">mero-tee-vX.Y.Z-rc.N</span></p>
+    <p><strong>Rules:</strong></p>
+    <ul>
+      <li>Must pass CI checks; E2E may be advisory</li>
+      <li>Policy may be <span class="code">policy_not_ready</span></li>
+      <li>Not for production deployment</li>
+      <li>Compatibility catalog update is optional</li>
+      <li>Release notes can be abbreviated</li>
+    </ul>
+    <p><strong>Purpose:</strong> Pre-production testing, measurement collection, integration validation.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Hotfix</h4>
+    <p><strong>Tag:</strong> <span class="code">mero-kms-vX.Y.(Z+1)</span> (patch bump)</p>
+    <p><strong>Rules:</strong></p>
+    <ul>
+      <li>Branches from the stable tag being patched</li>
+      <li>Minimal diff — security/critical fixes only</li>
+      <li>Must pass all CI checks including E2E</li>
+      <li>Must explain why a patch release was necessary</li>
+      <li>If MRTD changes, must update policy and catalog</li>
+    </ul>
+    <p><strong>Release notes must include:</strong> CVE or incident reference, exact change description, rollback instructions.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     CI/CD SETUP
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>CI/CD Setup</h2>
+<p style="margin-bottom:18px;">The release pipelines require specific GitHub repository configuration. Variables are set at the repository or environment level; secrets are stored in GitHub Secrets.</p>
+
+<h3>Required GitHub Variables</h3>
+
+<details>
+<summary>Environment Variables Table</summary>
+<div class="detail-body">
+<div class="fr"><div class="fp">MERO_KMS_VERSION</div><div class="fd">Current KMS release version (e.g., <span class="code">1.2.0</span>). Used by policy generation and compatibility checks.</div></div>
+<div class="fr"><div class="fp">MERO_KMS_PROFILE</div><div class="fd">Target profile for this release: <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>.</div></div>
+<div class="fr"><div class="fp">MERO_TEE_VERSION</div><div class="fd">Current node-image release version. Used for cross-family compatibility validation.</div></div>
+<div class="fr"><div class="fp">GCP_PROJECT_ID</div><div class="fd">Google Cloud project for VM image storage and TDX instance creation.</div></div>
+<div class="fr"><div class="fp">GCP_ZONE</div><div class="fd">Target zone for TDX-capable GCP instances (e.g., <span class="code">us-central1-a</span>).</div></div>
+<div class="fr"><div class="fp">GCP_IMAGE_FAMILY</div><div class="fd">GCP image family prefix for node images.</div></div>
+<div class="fr"><div class="fp">GHCR_REGISTRY</div><div class="fd">GitHub Container Registry path for KMS Docker images.</div></div>
+<div class="fr"><div class="fp">PHALA_DSTACK_URL</div><div class="fd">URL for the Phala dstack instance used in E2E tests.</div></div>
+<div class="fr"><div class="fp">ITA_API_URL</div><div class="fd">Intel Trust Authority API endpoint for attestation verification in tests.</div></div>
+<div class="fr"><div class="fp">COMPATIBILITY_CATALOG_PATH</div><div class="fd">Path in the repo to the compatibility catalog JSON file.</div></div>
+</div>
+</details>
+
+<details>
+<summary>Required Secrets</summary>
+<div class="detail-body">
+<div class="fr"><div class="fp">GCP_SERVICE_ACCOUNT_KEY</div><div class="fd">Service account JSON key for GCP operations (image creation, instance management). Must have <span class="code">compute.images.create</span>, <span class="code">compute.instances.*</span> permissions.</div></div>
+<div class="fr"><div class="fp">GHCR_TOKEN</div><div class="fd">GitHub token with <span class="code">packages:write</span> scope for pushing Docker images to GHCR.</div></div>
+<div class="fr"><div class="fp">ITA_API_KEY</div><div class="fd">Intel Trust Authority API key for quote verification during E2E tests.</div></div>
+<div class="fr"><div class="fp">COSIGN_PASSWORD</div><div class="fd">Password for Sigstore keyless signing (used by cosign in OIDC mode).</div></div>
+</div>
+</details>
+
+<h3>Base Image Notes</h3>
+<p>Node images are built on top of a GCP-provided TDX-capable base image. The base image version determines RTMR0 (firmware) and RTMR1 (kernel). When Google updates the base image, RTMR0/RTMR1 values change and a new release is needed to publish updated measurements.</p>
+<div class="typedef">
+<span class="comment">// Base image selection in Packer config:</span><br>
+<span class="field">source_image_family</span> = <span class="ty">"ubuntu-2404-tdx"</span><br>
+<span class="field">source_image_project</span> = <span class="ty">"confidential-vm-images"</span><br>
+<br>
+<span class="comment">// Pin to a specific image for reproducibility:</span><br>
+<span class="field">source_image</span> = <span class="ty">"ubuntu-2404-tdx-v20250101"</span>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TRIGGERS AND GUARDS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Triggers &amp; Guards</h2>
+<p style="margin-bottom:18px;">Multiple guards prevent broken or inconsistent releases from being published. Guards run as required status checks or as early steps in the release workflows.</p>
+
+<div class="step"><div class="n">1</div><h4>PR Doc Guard</h4>
+<p>Runs on every PR that modifies release-related files. Ensures that changes to attestation policy, compatibility catalog, or measurement files include corresponding documentation updates. Blocks merge if docs are missing.</p>
+<div class="typedef">
+<span class="comment"># Triggered by changes to:</span><br>
+<span class="field">paths:</span><br>
+&nbsp;&nbsp;- 'attestation-policy-*.json'<br>
+&nbsp;&nbsp;- 'published-mrtds.json'<br>
+&nbsp;&nbsp;- 'compatibility-catalog.json'<br>
+&nbsp;&nbsp;- 'scripts/release-*.sh'
+</div>
+</div>
+
+<div class="step"><div class="n">2</div><h4>Release Version Sync Guard</h4>
+<p>Runs at the start of every release workflow. Validates that the tag version matches <span class="code">MERO_KMS_VERSION</span> or <span class="code">MERO_TEE_VERSION</span> in the repository variables. Prevents releasing with stale version references.</p>
+<div class="typedef">
+<span class="comment"># Fails if:</span><br>
+<span class="comment"># tag = mero-kms-v1.3.0 but MERO_KMS_VERSION = 1.2.0</span><br>
+<span class="comment"># tag = mero-tee-v2.0.0 but MERO_TEE_VERSION = 1.9.0</span>
+</div>
+</div>
+
+<div class="step"><div class="n">3</div><h4>KMS ↔ Node Dependency Guard</h4>
+<p>Validates cross-family compatibility. When a KMS release is triggered, verifies the referenced node-image version exists and is compatible. When a node-image release is triggered, verifies the KMS version compatibility.</p>
+<div class="typedef">
+<span class="comment"># The guard checks:</span><br>
+<span class="comment"># 1. The counterpart release tag exists</span><br>
+<span class="comment"># 2. The compatibility catalog lists the pair</span><br>
+<span class="comment"># 3. The attestation policy references valid MRTDs for the counterpart</span>
+</div>
+</div>
+
+<div class="step"><div class="n">4</div><h4>ALLOWED_* Forbidden in Release</h4>
+<p>Release workflows <strong>must not</strong> set <span class="code">ALLOWED_MRTD</span>, <span class="code">ALLOWED_RTMR0</span>, etc. as environment variables. These are generated from the release process, not hardcoded. The guard scans workflow env for any <span class="code">ALLOWED_*</span> variable and fails if found.</p>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS RELEASE PIPELINE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>KMS Release Pipeline</h2>
+<p style="margin-bottom:18px;">Workflow: <span class="code">release-kms-phala.yaml</span>. Triggered by pushing a tag matching <span class="code">mero-kms-v*</span>.</p>
+
+<svg viewBox="0 0 960 620" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="480" y="25" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="13" font-weight="700">release-kms-phala.yaml</text>
+
+  <!-- Step 1: Version Sync -->
+  <rect x="20" y="50" width="200" height="55" rx="10" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="120" y="72" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="10" font-weight="700">1. Version Sync</text>
+  <text x="120" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Validate tag == MERO_KMS_VERSION</text>
+
+  <!-- Step 2: Build Image -->
+  <rect x="250" y="50" width="200" height="55" rx="10" fill="#3b82f610" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="350" y="72" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="10" font-weight="700">2. Build Docker</text>
+  <text x="350" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Build + push to GHCR</text>
+
+  <!-- Step 3: Generate Policy -->
+  <rect x="480" y="50" width="200" height="55" rx="10" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="580" y="72" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="10" font-weight="700">3. Gen Policy</text>
+  <text x="580" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Per-profile attestation JSON</text>
+
+  <!-- Step 4: Compute Measurements -->
+  <rect x="710" y="50" width="230" height="55" rx="10" fill="#8b5cf610" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="825" y="72" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="10" font-weight="700">4. Compute Measurements</text>
+  <text x="825" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">published-mrtds.json + compose hash</text>
+
+  <!-- Arrows row 1 -->
+  <line x1="220" y1="77" x2="245" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="245,77 239,73 239,81" fill="#6b6b80"/>
+  <line x1="450" y1="77" x2="475" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="475,77 469,73 469,81" fill="#6b6b80"/>
+  <line x1="680" y1="77" x2="705" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="705,77 699,73 699,81" fill="#6b6b80"/>
+
+  <!-- Row 2 -->
+  <!-- Step 5: SBOM -->
+  <rect x="20" y="140" width="200" height="55" rx="10" fill="#ec489910" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="120" y="162" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="10" font-weight="700">5. Generate SBOM</text>
+  <text x="120" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">sbom.spdx.json</text>
+
+  <!-- Step 6: Checksums -->
+  <rect x="250" y="140" width="200" height="55" rx="10" fill="#06b6d410" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="350" y="162" text-anchor="middle" fill="#06b6d4" font-family="JetBrains Mono" font-size="10" font-weight="700">6. Checksums</text>
+  <text x="350" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">SHA-256 of all assets</text>
+
+  <!-- Step 7: Sign -->
+  <rect x="480" y="140" width="200" height="55" rx="10" fill="#84cc1610" stroke="#84cc16" stroke-width="1.5"/>
+  <text x="580" y="162" text-anchor="middle" fill="#84cc16" font-family="JetBrains Mono" font-size="10" font-weight="700">7. Sigstore Sign</text>
+  <text x="580" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">cosign sign-blob (keyless)</text>
+
+  <!-- Step 8: Publish -->
+  <rect x="710" y="140" width="230" height="55" rx="10" fill="#f9731610" stroke="#f97316" stroke-width="1.5"/>
+  <text x="825" y="162" text-anchor="middle" fill="#f97316" font-family="JetBrains Mono" font-size="10" font-weight="700">8. Publish Release</text>
+  <text x="825" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">GitHub Release + assets</text>
+
+  <!-- Arrows row 1→2 -->
+  <line x1="825" y1="105" x2="825" y2="120" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="825" y1="120" x2="120" y2="120" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="120" y1="120" x2="120" y2="135" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="120,135 116,129 124,129" fill="#6b6b80"/>
+
+  <line x1="220" y1="167" x2="245" y2="167" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="245,167 239,163 239,171" fill="#6b6b80"/>
+  <line x1="450" y1="167" x2="475" y2="167" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="475,167 469,163 469,171" fill="#6b6b80"/>
+  <line x1="680" y1="167" x2="705" y2="167" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="705,167 699,163 699,171" fill="#6b6b80"/>
+
+  <!-- Row 3: Post-release -->
+  <!-- Step 9: Release Auditor -->
+  <rect x="20" y="230" width="200" height="55" rx="10" fill="#ef444410" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="120" y="252" text-anchor="middle" fill="#ef4444" font-family="JetBrains Mono" font-size="10" font-weight="700">9. Release Auditor</text>
+  <text x="120" y="270" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Verify all assets present + signed</text>
+
+  <!-- Step 10: Compatibility Update -->
+  <rect x="250" y="230" width="200" height="55" rx="10" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="350" y="252" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="10" font-weight="700">10. Compat Catalog</text>
+  <text x="350" y="270" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Update compatibility-catalog.json</text>
+
+  <!-- Step 11: E2E -->
+  <rect x="480" y="230" width="200" height="55" rx="10" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="580" y="252" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="10" font-weight="700">11. E2E Test</text>
+  <text x="580" y="270" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">KMS-node attestation E2E</text>
+
+  <!-- Arrows row 2→3 -->
+  <line x1="825" y1="195" x2="825" y2="210" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="825" y1="210" x2="120" y2="210" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="120" y1="210" x2="120" y2="225" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="120,225 116,219 124,219" fill="#6b6b80"/>
+
+  <line x1="220" y1="257" x2="245" y2="257" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="245,257 239,253 239,261" fill="#6b6b80"/>
+  <line x1="450" y1="257" x2="475" y2="257" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="475,257 469,253 469,261" fill="#6b6b80"/>
+
+  <!-- Legend -->
+  <rect x="20" y="310" width="920" height="30" rx="6" fill="#0f0f16" stroke="#252538"/>
+  <circle cx="50" cy="325" r="5" fill="#10b981"/>
+  <text x="62" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Guard</text>
+  <circle cx="130" cy="325" r="5" fill="#3b82f6"/>
+  <text x="142" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Build</text>
+  <circle cx="200" cy="325" r="5" fill="#f59e0b"/>
+  <text x="212" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Policy</text>
+  <circle cx="275" cy="325" r="5" fill="#8b5cf6"/>
+  <text x="287" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Measure</text>
+  <circle cx="365" cy="325" r="5" fill="#ec4899"/>
+  <text x="377" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">SBOM</text>
+  <circle cx="430" cy="325" r="5" fill="#06b6d4"/>
+  <text x="442" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Checksum</text>
+  <circle cx="520" cy="325" r="5" fill="#84cc16"/>
+  <text x="532" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Sign</text>
+  <circle cx="585" cy="325" r="5" fill="#f97316"/>
+  <text x="597" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Publish</text>
+  <circle cx="660" cy="325" r="5" fill="#ef4444"/>
+  <text x="672" y="329" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Audit</text>
+</svg>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     NODE-IMAGE RELEASE PIPELINE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Node-Image Release Pipeline</h2>
+<p style="margin-bottom:18px;">Workflow: <span class="code">release-node-image-gcp.yaml</span>. Triggered by pushing a tag matching <span class="code">mero-tee-v*</span>.</p>
+
+<svg viewBox="0 0 960 380" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Title -->
+  <text x="480" y="25" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="13" font-weight="700">release-node-image-gcp.yaml</text>
+
+  <!-- Step 1: Version Sync -->
+  <rect x="20" y="50" width="180" height="55" rx="10" fill="#10b98110" stroke="#10b981" stroke-width="1.5"/>
+  <text x="110" y="72" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="10" font-weight="700">1. Version Sync</text>
+  <text x="110" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">tag == MERO_TEE_VERSION</text>
+
+  <!-- Step 2: Packer Build -->
+  <rect x="220" y="50" width="180" height="55" rx="10" fill="#ec489910" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="310" y="72" text-anchor="middle" fill="#ec4899" font-family="JetBrains Mono" font-size="10" font-weight="700">2. Packer Build</text>
+  <text x="310" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Per-profile GCP image</text>
+
+  <!-- Step 3: Measure -->
+  <rect x="420" y="50" width="180" height="55" rx="10" fill="#8b5cf610" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="510" y="72" text-anchor="middle" fill="#8b5cf6" font-family="JetBrains Mono" font-size="10" font-weight="700">3. Measure</text>
+  <text x="510" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Boot TDX VM → collect MRTDs</text>
+
+  <!-- Step 4: Publish MRTDs -->
+  <rect x="620" y="50" width="160" height="55" rx="10" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="700" y="72" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="10" font-weight="700">4. Publish MRTDs</text>
+  <text x="700" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">published-mrtds.json</text>
+
+  <!-- Step 5: Sign + Release -->
+  <rect x="800" y="50" width="140" height="55" rx="10" fill="#84cc1610" stroke="#84cc16" stroke-width="1.5"/>
+  <text x="870" y="72" text-anchor="middle" fill="#84cc16" font-family="JetBrains Mono" font-size="10" font-weight="700">5. Sign</text>
+  <text x="870" y="90" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Sigstore + release</text>
+
+  <!-- Arrows -->
+  <line x1="200" y1="77" x2="215" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="215,77 209,73 209,81" fill="#6b6b80"/>
+  <line x1="400" y1="77" x2="415" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="415,77 409,73 409,81" fill="#6b6b80"/>
+  <line x1="600" y1="77" x2="615" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="615,77 609,73 609,81" fill="#6b6b80"/>
+  <line x1="780" y1="77" x2="795" y2="77" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="795,77 789,73 789,81" fill="#6b6b80"/>
+
+  <!-- Row 2 -->
+  <rect x="20" y="140" width="180" height="55" rx="10" fill="#ef444410" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="110" y="162" text-anchor="middle" fill="#ef4444" font-family="JetBrains Mono" font-size="10" font-weight="700">6. Release Auditor</text>
+  <text x="110" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Verify completeness</text>
+
+  <rect x="220" y="140" width="180" height="55" rx="10" fill="#06b6d410" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="310" y="162" text-anchor="middle" fill="#06b6d4" font-family="JetBrains Mono" font-size="10" font-weight="700">7. E2E Test</text>
+  <text x="310" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Node boot → KMS attest</text>
+
+  <rect x="420" y="140" width="180" height="55" rx="10" fill="#f59e0b10" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="510" y="162" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="10" font-weight="700">8. Compat Catalog</text>
+  <text x="510" y="180" text-anchor="middle" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">Update + commit</text>
+
+  <!-- Arrows row 1→2 -->
+  <line x1="870" y1="105" x2="870" y2="120" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="870" y1="120" x2="110" y2="120" stroke="#6b6b80" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="110" y1="120" x2="110" y2="135" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="110,135 106,129 114,129" fill="#6b6b80"/>
+
+  <line x1="200" y1="167" x2="215" y2="167" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="215,167 209,163 209,171" fill="#6b6b80"/>
+  <line x1="400" y1="167" x2="415" y2="167" stroke="#6b6b80" stroke-width="1"/>
+  <polygon points="415,167 409,163 409,171" fill="#6b6b80"/>
+</svg>
+
+<h3>Key Difference: Measurement Collection</h3>
+<p>Unlike the KMS pipeline (where measurements come from Docker image inspection), the node-image pipeline must <strong>boot an actual TDX VM</strong> to collect measurements. Step 3 creates an ephemeral GCP Confidential VM instance from the newly built image, extracts MRTD/RTMR values from a TDX quote, then terminates the instance.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     RELEASE AUDITOR
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Release Auditor</h2>
+<p style="margin-bottom:18px;">The release-auditor is a post-publish workflow step that validates the completeness and integrity of a published release. It runs automatically after assets are uploaded.</p>
+
+<h3>Auditor Checks</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>Asset Completeness</h4>
+    <p>Verifies all expected files are present in the GitHub release. Missing files fail the audit. Expected file list varies by release family (KMS vs node-image).</p>
+  </div>
+  <div class="cb">
+    <h4>Signature Validity</h4>
+    <p>Re-verifies every Sigstore bundle in the release. Confirms the signing identity matches the expected workflow and repository.</p>
+  </div>
+  <div class="cb">
+    <h4>Checksum Consistency</h4>
+    <p>Downloads each asset and verifies its SHA-256 hash against <span class="code">checksums.sha256</span>. Catches upload corruption or partial uploads.</p>
+  </div>
+  <div class="cb">
+    <h4>Policy Validation</h4>
+    <p>For KMS releases: parses each <span class="code">attestation-policy-{profile}.json</span> and validates the JSON schema, ensures all MRTD/RTMR fields are present, and checks that <span class="code">allowed_tcb_status</span> is not empty.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     POST-RELEASE E2E
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Post-Release E2E</h2>
+<p style="margin-bottom:18px;">End-to-end tests verify the full attestation and key-release flow using the actual released artifacts. Two test suites run independently.</p>
+
+<div class="g2">
+  <div>
+    <h3 style="color:var(--pink)">mero-tee-node E2E</h3>
+    <div class="step"><div class="n">1</div><h4>Deploy Node</h4><p>Create a GCP Confidential VM using the newly released image.</p></div>
+    <div class="step"><div class="n">2</div><h4>Boot Verification</h4><p>Wait for the node to boot and verify it can produce a TDX quote.</p></div>
+    <div class="step"><div class="n">3</div><h4>KMS Attestation</h4><p>Node verifies the KMS (Plane 1) using <span class="code">POST /attest</span>.</p></div>
+    <div class="step"><div class="n">4</div><h4>Key Release</h4><p>Node completes the challenge/get-key flow and verifies it receives a valid encryption key.</p></div>
+    <div class="step"><div class="n">5</div><h4>Cleanup</h4><p>Terminate the ephemeral VM instance.</p></div>
+  </div>
+  <div>
+    <h3 style="color:var(--amber)">KMS-Node E2E Guardrails</h3>
+    <div class="step"><div class="n">A</div><h4>Cross-Version Test</h4><p>If the release includes a compatibility catalog update, test the new KMS version against all listed compatible node-image versions (and vice versa).</p></div>
+    <div class="step"><div class="n">B</div><h4>Profile Isolation Test</h4><p>Deploy a debug-profile node and a locked-read-only KMS policy. Verify the key release is <strong>rejected</strong> with <span class="code">403 PolicyViolation</span>.</p></div>
+    <div class="step"><div class="n">C</div><h4>Stale Policy Test</h4><p>Deploy the new node-image with an old KMS policy. Verify it fails (MRTD mismatch). Then update the policy and verify it succeeds.</p></div>
+    <div class="step"><div class="n">D</div><h4>Measurement Consistency</h4><p>Compare the MRTD/RTMR values observed during E2E against <span class="code">published-mrtds.json</span> from the release. Any mismatch is a release blocker.</p></div>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     COMPATIBILITY CATALOG
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Compatibility Catalog</h2>
+<p style="margin-bottom:18px;">The compatibility catalog is a version-controlled JSON file that records which KMS versions work with which node-image versions. It is the source of truth for deployment compatibility.</p>
+
+<h3>Structure</h3>
+<div class="typedef">
+{<br>
+&nbsp;&nbsp;<span class="field">"schema_version"</span>: <span class="ty">"1"</span>,<br>
+&nbsp;&nbsp;<span class="field">"entries"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"kms"</span>: <span class="ty">"1.2.0"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"node_image"</span>: <span class="ty">"1.2.0"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"profiles"</span>: [<span class="ty">"debug"</span>, <span class="ty">"debug-read-only"</span>, <span class="ty">"locked-read-only"</span>],<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"tested"</span>: <span class="ty">true</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"notes"</span>: <span class="ty">"Initial paired release"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;},<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"kms"</span>: <span class="ty">"1.2.0"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"node_image"</span>: <span class="ty">"1.1.0"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"profiles"</span>: [<span class="ty">"locked-read-only"</span>],<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"tested"</span>: <span class="ty">true</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"notes"</span>: <span class="ty">"Backward compat — node 1.1.0 MRTDs in KMS 1.2.0 policy"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;]<br>
+}
+</div>
+
+<h3>Update Process</h3>
+<div class="step"><div class="n">1</div><h4>New Release Triggers Update</h4><p>When a new KMS or node-image release passes E2E, the pipeline adds entries to the catalog for all tested version pairs.</p></div>
+<div class="step"><div class="n">2</div><h4>PR with Catalog Change</h4><p>The pipeline opens a PR updating <span class="code">compatibility-catalog.json</span>. The PR doc guard ensures release notes mention the new compatibility entries.</p></div>
+<div class="step"><div class="n">3</div><h4>Manual Review</h4><p>A maintainer reviews the compatibility entries, verifies E2E results, and merges.</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS POLICY OPERATIONS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>KMS Policy Operations</h2>
+<p style="margin-bottom:18px;">Attestation policy files control which nodes can obtain keys from the KMS. They are profile-scoped and follow a strict promotion path.</p>
+
+<h3>Profile-Scoped Policy Files</h3>
+<div class="typedef">
+<span class="comment">// Policy files in a KMS release:</span><br>
+attestation-policy-<span class="ty">debug</span>.json<br>
+attestation-policy-<span class="ty">debug-read-only</span>.json<br>
+attestation-policy-<span class="ty">locked-read-only</span>.json<br>
+<br>
+<span class="comment">// Each contains allowed measurements for ONE profile only.</span><br>
+<span class="comment">// A KMS instance loads exactly one policy file at startup.</span>
+</div>
+
+<h3>Promotion Path</h3>
+<div class="step"><div class="n">1</div><h4>RC Release</h4><p>Policy files are generated but may be marked <span class="code">policy_not_ready</span>. This is expected — measurements may not be finalized.</p></div>
+<div class="step"><div class="n">2</div><h4>Measurement Stabilization</h4><p>Once E2E tests confirm stable MRTD/RTMR values, the policy is updated with actual measurements. The <span class="code">policy_not_ready</span> flag is removed.</p></div>
+<div class="step"><div class="n">3</div><h4>Stable Release</h4><p>The finalized policy is included in the stable release tag. It contains only verified measurements from successful E2E runs.</p></div>
+<div class="step"><div class="n">4</div><h4>Production Deployment</h4><p>Operators deploy the stable KMS with the <span class="code">locked-read-only</span> policy. The policy URL and optional SHA-256 pin are set in the KMS environment.</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     RELEASE ARTIFACTS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Release Artifacts</h2>
+<p style="margin-bottom:18px;">Every stable release includes the following artifacts, produced by modular scripts within the pipeline.</p>
+
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--cyan)">SBOM</h4>
+    <p>Software Bill of Materials in SPDX JSON format. Generated by <span class="code">syft</span> from the Docker image (KMS) or Packer manifest (node-image). Lists all packages, libraries, and their versions.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--green)">Auto-Generated Release Notes</h4>
+    <p>Git changelog since the last release tag. Includes commit messages, PR references, and contributor attributions. Supplemented with manually written breaking changes and upgrade instructions.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--amber)">Checksums</h4>
+    <p><span class="code">checksums.sha256</span> — SHA-256 hashes of every release asset. The checksum file itself is signed by Sigstore, creating a single file that anchors integrity of all assets.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--violet)">Sigstore Signatures</h4>
+    <p>Keyless signing via Fulcio + Rekor. Each <span class="code">.sigstore.json</span> bundle contains the certificate (with embedded OIDC claims), signature, and Rekor transparency log entry. Verification uses <span class="code">cosign verify-blob</span>.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MODULAR SCRIPTS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Modular Scripts</h2>
+<p style="margin-bottom:18px;">Release workflows delegate work to focused bash scripts under <span class="code">scripts/</span>. Each script has a single responsibility and follows shared conventions.</p>
+
+<h3>Script Organization</h3>
+<div class="g2">
+  <div>
+    <h4>KMS Scripts</h4>
+    <div class="fr"><div class="fp">build-kms-image.sh</div><div class="fd">Build and tag the KMS Docker image. Accepts version and registry args.</div></div>
+    <div class="fr"><div class="fp">generate-attestation-policy.sh</div><div class="fd">Generate per-profile attestation policy JSON from MRTD inputs.</div></div>
+    <div class="fr"><div class="fp">compute-compose-hash.sh</div><div class="fd">Normalize and hash the Docker Compose file.</div></div>
+    <div class="fr"><div class="fp">publish-kms-release.sh</div><div class="fd">Upload all assets to a GitHub release tag.</div></div>
+    <div class="fr"><div class="fp">verify-release-assets.sh</div><div class="fd">Post-publish verification of signatures and checksums.</div></div>
+  </div>
+  <div>
+    <h4>Node-Image Scripts</h4>
+    <div class="fr"><div class="fp">build-node-image.sh</div><div class="fd">Run Packer with Ansible provisioner for the target profile.</div></div>
+    <div class="fr"><div class="fp">collect-measurements.sh</div><div class="fd">Boot ephemeral TDX VM, extract quote, parse MRTD/RTMRs.</div></div>
+    <div class="fr"><div class="fp">publish-node-release.sh</div><div class="fd">Upload measurements and SBOM to a GitHub release tag.</div></div>
+    <div class="fr"><div class="fp">generate-merod-kms-phala-attestation-config.sh</div><div class="fd">Generate client-side attestation config for merod.</div></div>
+  </div>
+</div>
+
+<h3>Logging Conventions</h3>
+<div class="typedef">
+<span class="comment"># All scripts use structured log output:</span><br>
+<span class="field">[INFO]</span>  Informational messages (progress, status)<br>
+<span class="field">[WARN]</span>  Non-fatal issues (missing optional files, retries)<br>
+<span style="color:var(--red)">[ERROR]</span> Fatal errors (script exits with non-zero)<br>
+<span class="ty">[PASS]</span>  Verification passed<br>
+<span style="color:var(--red)">[FAIL]</span>  Verification failed<br>
+<br>
+<span class="comment"># Scripts exit with meaningful codes:</span><br>
+<span class="ty">0</span>  = success<br>
+<span class="ty">1</span>  = general error<br>
+<span class="ty">2</span>  = usage error (bad args)<br>
+<span class="ty">10</span> = verification failure<br>
+<span class="ty">11</span> = missing required asset
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS POLICY MIGRATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>KMS Policy Migration</h2>
+<p style="margin-bottom:18px;">When upgrading the KMS or changing profiles, the attestation policy must be updated. This section covers the required environment variables and migration constraints.</p>
+
+<h3>Required Environment Variables</h3>
+<div class="fr"><div class="fp">MERO_KMS_VERSION</div><div class="fd">The KMS version this policy targets. Must match the release tag exactly (e.g., <span class="code">1.2.0</span>, not <span class="code">v1.2.0</span>).</div></div>
+<div class="fr"><div class="fp">MERO_KMS_PROFILE</div><div class="fd">The profile this KMS instance serves: <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>. Determines which policy file is loaded.</div></div>
+<div class="fr"><div class="fp">MERO_KMS_POLICY_URL</div><div class="fd">URL to the attestation policy JSON. Typically a GitHub release asset URL. The KMS fetches this on startup.</div></div>
+<div class="fr"><div class="fp">MERO_KMS_POLICY_SHA256</div><div class="fd">Optional. SHA-256 hash of the policy file for pinning. If set, the KMS rejects any policy file that doesn't match this hash.</div></div>
+
+<h3>Forbidden: ALLOWED_* in Release Workflows</h3>
+<p style="margin-bottom:12px;">Release workflows <strong>must never</strong> set <span class="code">ALLOWED_MRTD</span>, <span class="code">ALLOWED_RTMR0</span>, <span class="code">ALLOWED_RTMR1</span>, <span class="code">ALLOWED_RTMR2</span>, <span class="code">ALLOWED_RTMR3</span>, or <span class="code">ALLOWED_TCB_STATUS</span> as environment variables. These are legacy overrides that bypass the structured policy file.</p>
+<div class="typedef">
+<span class="comment"># FORBIDDEN in any release workflow:</span><br>
+<span style="color:var(--red)">ALLOWED_MRTD=...</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// Use attestation-policy-{profile}.json instead</span><br>
+<span style="color:var(--red)">ALLOWED_RTMR0=...</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// Measurements come from the release process</span><br>
+<span style="color:var(--red)">ALLOWED_TCB_STATUS=...</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// TCB allowlist is in the policy file</span><br>
+<br>
+<span class="comment"># The release guard scans for these and fails the workflow if found.</span>
+</div>
+
+<h3><span class="code">policy_not_ready</span> Behavior</h3>
+<p style="margin-bottom:12px;">During RC releases, the policy file may contain a <span class="code">"status": "policy_not_ready"</span> flag. When the KMS loads a policy with this flag:</p>
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--amber)">RC Behavior</h4>
+    <p>The KMS starts but logs a warning on every key request. Attestation verification is <strong>relaxed</strong> — all MRTD/RTMR values are accepted. This allows testing the key-release flow before measurements are finalized.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Stable Must Not Have This</h4>
+    <p>A stable release with <span class="code">policy_not_ready</span> is a release blocker. The release auditor checks for this flag and fails if present in any stable release's policy file.</p>
+  </div>
+</div>
+
+<h3>Migration Steps</h3>
+<div class="step"><div class="n">1</div><h4>Identify Target Versions</h4><p>Determine the KMS version and node-image version pair. Verify they appear in the compatibility catalog.</p></div>
+<div class="step"><div class="n">2</div><h4>Download New Policy</h4><p>Fetch the <span class="code">attestation-policy-{profile}.json</span> from the target KMS release. Verify its Sigstore signature.</p></div>
+<div class="step"><div class="n">3</div><h4>Update KMS Config</h4><p>Set <span class="code">MERO_KMS_VERSION</span>, <span class="code">MERO_KMS_PROFILE</span>, and <span class="code">MERO_KMS_POLICY_URL</span> to point to the new policy. Optionally set <span class="code">MERO_KMS_POLICY_SHA256</span>.</p></div>
+<div class="step"><div class="n">4</div><h4>Rolling Restart</h4><p>Restart the KMS. On startup it fetches the new policy and applies it. Existing node connections are unaffected until they re-attest.</p></div>
+<div class="step"><div class="n">5</div><h4>Verify Post-Migration</h4><p>Run <span class="code">POST /attest</span> against the restarted KMS and verify it returns a valid quote. Then test a key release from a node running the compatible image.</p></div>
+</div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

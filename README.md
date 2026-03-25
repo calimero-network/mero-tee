@@ -2,152 +2,70 @@
 
 TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP node-image build** (Packer-based merod node images with TDX attestation).
 
-## Contents
+> **Full documentation**: [Architecture Reference](https://calimero-network.github.io/mero-tee/)
+
+## Components
 
 | Component | Description |
 |-----------|-------------|
-| **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVM |
+| **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVMs |
 | **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
-| **Releases** | mero-kms-phala binaries, MRTDs, attestation artifacts, provenance |
+| **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
-## Documentation
+## Quick Start
 
-Start from the [Documentation Portal](docs/README.md), then follow the role-based path.
-
-### Quick links by task
-
-**Get started**
-
-- [Platform runbooks](docs/runbooks/platforms/README.md)
-- [Phala KMS lane](docs/runbooks/platforms/phala-kms.md)
-- [GCP node lane](docs/runbooks/platforms/gcp-merod.md)
-
-**Understand architecture**
-
-- [Architecture graph](docs/DOCS_GRAPH.md)
-- [Diagram index](docs/diagrams/README.md)
-- [Trust boundaries](docs/architecture/trust-boundaries.md)
-
-**Operate and verify**
-
-- [Trust, verification, and measurements](docs/release/trust-and-verification.md)
-- [Verification examples](docs/release/verification-examples.md)
-- [KMS blue/green rollout runbook](docs/runbooks/operations/kms-blue-green-rollout.md)
-
-**Release and policy**
-
-- [Release workflow setup](docs/release/workflow-setup.md)
-- [Release sequence diagrams](docs/release/pipeline-sequence-diagrams.md)
-- [Release taxonomy](docs/release/taxonomy.md)
-- [KMS staging probe workflow](docs/policies/kms-phala-staging-probe.md)
-
-**Maintainer references**
-
-- [Documentation source index](docs/DOCS_INDEX.md)
-- [Docs navigation map](docs/DOCS_NAVIGATION_MAP.md)
-- [Terminology glossary](docs/GLOSSARY.md)
-- [Architecture decision records (ADRs)](docs/adr/README.md)
-- [Repo restructure proposal](docs/REPO_RESTRUCTURE_PROPOSAL.md)
-
-### Project docs
-
-- [Attestation Verifier](attestation-verifier/) ([GitHub Pages](https://calimero-network.github.io/mero-tee/attestation-verifier/))
-- [mero-kms-phala README](mero-kms/README.md)
-- [mero-tee image build README](mero-tee/README.md)
-- [Security policy](SECURITY.md)
-- [Contributing guide](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Changelog](CHANGELOG.md)
-
-## Building mero-kms-phala
+### Build mero-kms-phala
 
 ```bash
 cargo build --release
 ```
 
-Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` are satisfied via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
+Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
 
-## Building GCP Images
+### Build GCP Images
 
 See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP credentials.
 
-## Releases
-
-- **mero-kms-vX.Y.Z**: KMS binaries and trust assets (including profile policies for `debug`, `debug-read-only`, `locked-read-only`)
-- **mero-kms-phala release trust bundle**:
-  - `MANIFEST.txt` (canonical inventory + SHA-256 for files inside the bundle),
-  - `kms-phala-checksums.txt` (SHA-256 for binary archives),
-  - `kms-phala-release-manifest.json` (commit SHA, binary hashes, container digest/tags, `/attest` verification metadata, and per-asset purpose labels such as operator-required/auditor-required),
-  - `kms-phala-container-metadata.json` (standalone signed container image metadata for auditors/operators),
-  - `kms-phala-attestation-policy.json` (signed KMS attestation allowlists for `core` TEE config),
-  - Sigstore keyless signatures/certificates for binary archives, checksums, manifest, and policy (`*.sig`, `*.pem`)
-- **Compatibility map artifact**:
-  - `kms-phala-compatibility-map.json` (version mapping between KMS and `merod` releases plus profile-specific policy URLs/hashes and profile-specific KMS image tags/digests),
-  - Sigstore keyless signature/certificate sidecars (`kms-phala-compatibility-map.json.sig`, `kms-phala-compatibility-map.json.pem`)
-- **mero-tee-vX.Y.Z**: `published-mrtds.json` (MRTDs + measurement policy), `release-provenance.json`, SBOM, and `node-image-gcp-checksums.txt`
-  - Sigstore signature/certificate sidecars for node-image-gcp trust artifacts (`*.sig`, `*.pem`)
-
-### What signatures prove (and do not prove)
-
-- **Proves**: the artifact was produced by the expected release workflow identity and was not modified in transit.
-- **Does NOT prove**: that the source code is non-malicious or that behavior is correct for your use case.
-- **Attestation nuance**: runtime attestation (MRTD/RTMR policy checks in `merod`/KMS) can prove measured TEE state matches policy. The build injects `calimero.role=node`, `calimero.profile`, and `calimero.root_hash` into the kernel cmdline (RTMR[2]). At boot, calimero-init extends RTMR[3] with role+profile+root_hash (kernel 6.16+). Each image produces unique measurements; cannot be forged without an identical image. Still does not cover every environment/control-plane risk outside the attested boundary.
-- **Operational guidance**: combine signature verification with policy review and quote/reproducibility checks.
-
-Operators use `published-mrtds.json` to verify that deployed GCP nodes match the expected image. See [Trust, verification, and measurements](docs/release/trust-and-verification.md#runtime-node-measurement-verification-mrtdrtmr) for the concrete workflow.
-
-For a consolidated trust model and verification entry point, see [Trust & Verification](docs/release/trust-and-verification.md).
-
-Verify KMS release assets:
+### Verify Release Assets
 
 ```bash
-scripts/release/verify-kms-phala-release-assets.sh X.Y.Z
-```
-
-Verify all available release trust assets for a tag (KMS and/or node-image-gcp):
-
-```bash
+# Verify all release trust assets for a tag
 scripts/release/verify-release-assets.sh X.Y.Z
+
+# Generate pinned merod KMS config from signed release policy
+scripts/policy/generate-merod-kms-phala-attestation-config.sh \
+  --profile locked-read-only X.Y.Z https://<kms-url>/
 ```
 
-Need an explicit artifact list for air-gapped or bandwidth-limited environments? See [Minimal download sets](docs/release/minimal-download-sets.md) for quick-verify vs full-audit bundles.
+## Documentation
 
-Generate a pinned `core` TEE config snippet from signed release policy:
+All detailed documentation lives in the **[Architecture Reference](https://calimero-network.github.io/mero-tee/)**:
 
-```bash
-scripts/policy/generate-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/
-```
+| Topic | Page |
+|-------|------|
+| High-level architecture & system map | [System Overview](https://calimero-network.github.io/mero-tee/system-overview.html) |
+| KMS, node images, attestation verifier | [Components](https://calimero-network.github.io/mero-tee/components.html) |
+| Mutual attestation & trust boundaries | [Trust Model](https://calimero-network.github.io/mero-tee/trust-model.html) |
+| Challenge/get-key protocol | [Key Release Flow](https://calimero-network.github.io/mero-tee/key-release-flow.html) |
+| KMS self-attestation & public verifier | [Attestation Flow](https://calimero-network.github.io/mero-tee/attestation-flow.html) |
+| MRTD/RTMR, compose hash, operator verify | [Verification](https://calimero-network.github.io/mero-tee/verification.html) |
+| Release classes, CI/CD, pipeline flows | [Release Pipeline](https://calimero-network.github.io/mero-tee/release-pipeline.html) |
+| Staging probes, policy promotion, ADRs | [Policy Management](https://calimero-network.github.io/mero-tee/policy-management.html) |
+| Phala KMS, GCP nodes, blue-green rollout | [Runbooks](https://calimero-network.github.io/mero-tee/runbooks.html) |
+| All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/config-reference.html) |
+| ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/error-handling.html) |
+| TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/glossary.html) |
 
-Apply signed policy directly to an existing `merod` node config:
+## Release Process
 
-```bash
-scripts/policy/apply-merod-kms-phala-attestation-config.sh --profile locked-read-only X.Y.Z https://<kms-url>/ /path/to/merod-home default
-```
+1. Merge version bump PR (`Cargo.toml` and `versions.json` aligned)
+2. Node release runs first; KMS release waits, then creates draft
+3. Human reviews and publishes KMS draft release
+4. `update-compatibility-catalog` workflow updates `compatibility-catalog.json`
 
-KMS release flow (draft release + human approval):
-
-- On version bump (Cargo.toml), `release-kms-phala.yaml` builds three KMS profile images (`debug`, `debug-read-only`, `locked-read-only`) as distinct container digests, runs staged probing to collect profile measurements, fetches node policy from the mero-tee release, and creates a **draft** release with all assets.
-- The generated KMS release notes include all three profile image references (tag + digest-pinned pull refs) so operators can pin the exact image per cohort.
-- Human reviews the draft release (including attestation policy) and publishes when ready.
-- Policy is built from probe output + node release assets; no policy files in repo.
-
-Node release flow:
-
-- On version bump (versions.json), `release-node-image-gcp.yaml` builds node images and publishes. Policy is embedded in `published-mrtds.json`.
-- KMS and merod fetch policy from each other's releases at runtime (KMS uses build version; merod uses MERO_TEE_VERSION).
-- `post-release-kms-node-e2e.yaml` runs strict KMS↔node compatibility checks after a successful `Release mero-tee` run on `master`, and also evaluates on `master` push. The verify job probes all three KMS profile images, probes all three released GCP node images, validates full MRTD/RTMR allowlists for every profile, and then checks the strict node↔KMS allow/deny matrix.
-- A lightweight smoke job also runs on relevant push/PR changes so wiring regressions show up in commit checks.
-- Released KMS images are profile-pinned: startup reads the image profile marker and rejects `KMS_POLICY_PROFILE` env overrides, preventing deploy-time profile switching.
-- KMS startup attempts to emit `calimero.kms.profile=<profile>` as an RTMR3 runtime event (outside mock mode) so profile cohorts get attestation-visible separation; if runtime extension is unavailable, startup continues with a warning.
-- Staging probes are dispatched with unique probe labels so CI can deterministically map each profile to its own probe run artifact.
-- Release and post-release probes now pass a deterministic deployment name per version/profile to reduce run-context drift in measured RTMR values.
-
-Recommended release order:
-
-1. Merge version bump PR (Cargo.toml and versions.json aligned).
-2. Node release runs first; KMS release waits for it, then creates draft.
-3. Human reviews and publishes KMS draft release.
-4. `update-compatibility-catalog` workflow runs on release publish and updates `compatibility-catalog.json` (used by MDMA).
+Two artifact families per version:
+- **mero-kms-vX.Y.Z**: KMS binaries, attestation policies, compatibility map, Sigstore signatures
+- **mero-tee-vX.Y.Z**: published-mrtds.json, release provenance, SBOM, checksums, Sigstore signatures
 
 ## Related Repositories
 

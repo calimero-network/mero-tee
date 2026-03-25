@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Components — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.endpoint { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 10px; transition: border-color .15s; }
+.endpoint:hover { border-color: var(--amber); }
+.endpoint-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.method { font-family: 'JetBrains Mono', monospace; font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 5px; }
+.method-post { background: #3b82f620; color: var(--blue); }
+.method-get { background: #10b98120; color: var(--green); }
+.endpoint-path { font-family: 'JetBrains Mono', monospace; font-size: .85rem; color: var(--text-bright); font-weight: 600; }
+.endpoint-desc { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.req-res { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
+@media (max-width: 900px) { .req-res { grid-template-columns: 1fr; } }
+.req-res .rr-block { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.rr-label { font-family: 'JetBrains Mono', monospace; font-size: .68rem; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+.rr-label.req { color: var(--blue); }
+.rr-label.res { color: var(--green); }
+.env-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.env-table th { font-family: 'JetBrains Mono', monospace; font-size: .68rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.env-table td { padding: 8px 12px; font-size: .82rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.env-table td:first-child { font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--green); font-weight: 600; white-space: nowrap; }
+.env-table td:nth-child(2) { font-family: 'JetBrains Mono', monospace; font-size: .74rem; color: var(--violet); }
+.env-table td:nth-child(3) { font-family: 'JetBrains Mono', monospace; font-size: .74rem; color: var(--amber); }
+.env-table td:last-child { color: var(--text-dim); line-height: 1.5; }
+.env-table tr:hover { background: var(--surface2); }
+.profile-row { display: grid; grid-template-columns: 200px 1fr; gap: 12px; padding: 10px 14px; background: var(--surface2); border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--border); transition: border-color .15s; align-items: start; }
+.profile-row:hover { border-color: var(--amber); }
+.profile-name { font-family: 'JetBrains Mono', monospace; font-size: .82rem; font-weight: 700; }
+.profile-desc { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.security-note { background: var(--surface2); border-left: 3px solid var(--red); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+.security-note strong { color: var(--red); }
+.flow-step { display: grid; grid-template-columns: 40px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.flow-step:last-child { border-bottom: none; }
+.flow-step .fn { font-family: 'JetBrains Mono', monospace; font-size: .82rem; font-weight: 700; color: var(--cyan); text-align: center; padding-top: 2px; }
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Components</span></div>
+
+<h1>Component <em>Reference</em></h1>
+<p class="page-subtitle">Detailed documentation for mero-kms-phala, GCP node images, and the attestation verifier</p>
+
+<div class="g3" style="margin-bottom:36px;">
+  <a href="#kms" class="hero-card">
+    <span class="card-icon" style="color:var(--amber);">&#9670;</span>
+    <h3 style="color:var(--amber)">mero-kms-phala</h3>
+    <p>Rust HTTP service for attestation-gated key release via Phala dstack. 4 endpoints, profile-scoped policy.</p>
+  </a>
+  <a href="#node-images" class="hero-card">
+    <span class="card-icon" style="color:var(--pink);">&#9670;</span>
+    <h3 style="color:var(--pink)">Node Images</h3>
+    <p>Packer + Ansible builds for GCP TDX Confidential VMs. Three security profiles with measured boot.</p>
+  </a>
+  <a href="#verifier" class="hero-card">
+    <span class="card-icon" style="color:var(--cyan);">&#9670;</span>
+    <h3 style="color:var(--cyan)">Attestation Verifier</h3>
+    <p>React + serverless API for public attestation verification via Intel Trust Authority.</p>
+  </a>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MERO-KMS-PHALA
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga" id="kms">
+<h2>mero-kms-phala (KMS Service)</h2>
+<p style="margin-bottom:18px;">Rust HTTP service that validates TDX attestation quotes and releases storage encryption keys. Runs inside a Phala Cloud CVM with access to the dstack key derivation runtime.</p>
+
+<details open>
+<summary>API Endpoints</summary>
+<div class="detail-body">
+
+<div class="endpoint">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/challenge</span>
+  </div>
+  <p class="endpoint-desc">Generates a cryptographic challenge (nonce) for a node to include in its TDX attestation quote. The challenge binds the quote to this specific key-release request, preventing replay attacks.</p>
+  <div class="req-res">
+    <div class="rr-block">
+      <div class="rr-label req">Request</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"peerId"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;<span class="field">"namespace"</span>: <span class="ty">string</span><br>
+}
+      </div>
+    </div>
+    <div class="rr-block">
+      <div class="rr-label res">Response 200</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"challenge"</span>: <span class="ty">string (hex)</span>,<br>
+&nbsp;&nbsp;<span class="field">"expiresAt"</span>: <span class="ty">string (ISO 8601)</span><br>
+}
+      </div>
+    </div>
+  </div>
+  <p style="margin-top:8px;font-size:.8rem;color:var(--text-dim);">Rate limited per peerId (<span class="code">MAX_PENDING_CHALLENGES</span>). Challenge expires after <span class="code">CHALLENGE_TTL_SECS</span>.</p>
+</div>
+
+<div class="endpoint">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/get-key</span>
+  </div>
+  <p class="endpoint-desc">Releases a storage encryption key after validating the node&rsquo;s TDX attestation quote against the loaded policy. This is the core key-release endpoint.</p>
+  <div class="req-res">
+    <div class="rr-block">
+      <div class="rr-label req">Request</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"peerId"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;<span class="field">"namespace"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;<span class="field">"challenge"</span>: <span class="ty">string (hex)</span>,<br>
+&nbsp;&nbsp;<span class="field">"quote"</span>: <span class="ty">string (base64)</span>,<br>
+&nbsp;&nbsp;<span class="field">"signature"</span>: <span class="ty">string (hex)</span><br>
+}
+      </div>
+    </div>
+    <div class="rr-block">
+      <div class="rr-label res">Response 200</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"key"</span>: <span class="ty">string (hex)</span>,<br>
+&nbsp;&nbsp;<span class="field">"derivationPath"</span>: <span class="ty">string</span><br>
+}
+      </div>
+    </div>
+  </div>
+  <p style="margin-top:8px;font-size:.8rem;color:var(--text-dim);">Validates: challenge freshness, signature over challenge, TDX quote integrity, MRTD/RTMR policy match, TCB status. Returns 403 on policy violation.</p>
+</div>
+
+<div class="endpoint">
+  <div class="endpoint-header">
+    <span class="method method-post">POST</span>
+    <span class="endpoint-path">/attest</span>
+  </div>
+  <p class="endpoint-desc">Returns the KMS&rsquo;s own TDX attestation quote. Used by nodes for mutual verification &mdash; the node can verify the KMS is running in a genuine TEE before trusting it with key material.</p>
+  <div class="req-res">
+    <div class="rr-block">
+      <div class="rr-label req">Request</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"nonce"</span>: <span class="ty">string (hex, optional)</span><br>
+}
+      </div>
+    </div>
+    <div class="rr-block">
+      <div class="rr-label res">Response 200</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"quote"</span>: <span class="ty">string (base64)</span>,<br>
+&nbsp;&nbsp;<span class="field">"measurements"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"mrtd"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"rtmr0"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"rtmr1"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"rtmr2"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"rtmr3"</span>: <span class="ty">string</span><br>
+&nbsp;&nbsp;}<br>
+}
+      </div>
+    </div>
+  </div>
+  <p style="margin-top:8px;font-size:.8rem;color:var(--text-dim);">Optional nonce is included in the quote&rsquo;s report data for freshness binding. Used by the attestation verifier and by nodes during mutual verification.</p>
+</div>
+
+<div class="endpoint">
+  <div class="endpoint-header">
+    <span class="method method-get">GET</span>
+    <span class="endpoint-path">/health</span>
+  </div>
+  <p class="endpoint-desc">Health check endpoint for load balancers and monitoring. Returns the running version, profile, and policy status.</p>
+  <div class="req-res">
+    <div class="rr-block">
+      <div class="rr-label req">Request</div>
+      <p style="font-size:.82rem;color:var(--text-dim);margin:0;">No request body. Simple GET request.</p>
+    </div>
+    <div class="rr-block">
+      <div class="rr-label res">Response 200</div>
+      <div class="typedef" style="margin:0;">
+{<br>
+&nbsp;&nbsp;<span class="field">"status"</span>: <span class="ty">"ok"</span>,<br>
+&nbsp;&nbsp;<span class="field">"version"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;<span class="field">"profile"</span>: <span class="ty">string</span>,<br>
+&nbsp;&nbsp;<span class="field">"policyLoaded"</span>: <span class="ty">boolean</span><br>
+}
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</details>
+
+<details>
+<summary>Configuration</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">Release Policy Fetch (Production)</h3>
+<p style="margin-bottom:12px;">In production, the KMS fetches its attestation policy from GitHub releases at startup. This is the default and recommended mode.</p>
+<div class="typedef">
+<span class="comment">// Policy fetch flow</span><br>
+<span class="field">MERO_KMS_VERSION</span> + <span class="field">MERO_KMS_PROFILE</span><br>
+&nbsp;&nbsp;&rarr; GitHub release: mero-tee-{version}<br>
+&nbsp;&nbsp;&rarr; Download: kms-phala-attestation-policy.{profile}.json<br>
+&nbsp;&nbsp;&rarr; Optional: verify SHA-256 against <span class="field">MERO_KMS_POLICY_SHA256</span><br>
+&nbsp;&nbsp;&rarr; Load into AppState.policy
+</div>
+
+<h3>Env Policy (Development)</h3>
+<p style="margin-bottom:12px;">For development and testing, the policy can be loaded from environment variables instead of GitHub.</p>
+<div class="typedef">
+<span class="comment">// Env policy mode — development only</span><br>
+<span class="field">USE_ENV_POLICY</span>=true<br>
+<span class="field">ALLOWED_MRTD</span>=&lt;hex&gt;<br>
+<span class="field">ALLOWED_RTMR0</span>=&lt;hex&gt;<br>
+<span class="field">ALLOWED_RTMR1</span>=&lt;hex&gt;<br>
+<span class="field">ALLOWED_RTMR2</span>=&lt;hex&gt;<br>
+<span class="field">ALLOWED_RTMR3</span>=&lt;hex&gt;<br>
+<span class="field">ALLOWED_TCB_STATUS</span>=UpToDate,SWHardeningNeeded
+</div>
+<div class="security-note">
+  <strong>Warning:</strong> <span class="code">USE_ENV_POLICY=true</span> bypasses the release policy fetch and SHA-256 verification. Never use in production. CI checks block deployment with this flag enabled on production targets.
+</div>
+
+<h3>Full Environment Variable Reference</h3>
+<div style="overflow-x:auto;">
+<table class="env-table">
+<thead><tr><th>Variable</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>LISTEN_ADDR</td><td>SocketAddr</td><td>0.0.0.0:8080</td><td>HTTP server bind address and port.</td></tr>
+<tr><td>CORS_ALLOWED_ORIGINS</td><td>String (CSV)</td><td>*</td><td>Comma-separated CORS allowed origins.</td></tr>
+<tr><td>DSTACK_SOCKET_PATH</td><td>PathBuf</td><td>/var/run/dstack.sock</td><td>Unix socket path to the dstack daemon for key derivation and quote generation.</td></tr>
+<tr><td>CHALLENGE_TTL_SECS</td><td>u64</td><td>300</td><td>Challenge nonce TTL in seconds.</td></tr>
+<tr><td>MAX_PENDING_CHALLENGES</td><td>usize</td><td>10</td><td>Max active challenges per peerId before rate-limiting.</td></tr>
+<tr><td>REDIS_URL</td><td>Option&lt;String&gt;</td><td>None</td><td>Redis URL for distributed challenge store. Required for multi-instance deployments.</td></tr>
+<tr><td>ACCEPT_MOCK_ATTESTATION</td><td>bool</td><td>false</td><td>Accept synthetic TDX quotes without hardware. <strong>Dev only.</strong></td></tr>
+<tr><td>ENFORCE_MEASUREMENT_POLICY</td><td>bool</td><td>true</td><td>Validate quote measurements against policy. <strong>Must be true in production.</strong></td></tr>
+<tr><td>MERO_KMS_VERSION</td><td>String</td><td><em>required</em></td><td>Release tag for policy fetch (e.g. <span class="code">v0.3.0</span>).</td></tr>
+<tr><td>MERO_KMS_PROFILE</td><td>String</td><td><em>required</em></td><td>Image profile: debug, debug-read-only, or locked-read-only.</td></tr>
+<tr><td>MERO_KMS_POLICY_SHA256</td><td>Option&lt;String&gt;</td><td>None</td><td>Expected SHA-256 of the policy file for supply-chain protection.</td></tr>
+<tr><td>USE_ENV_POLICY</td><td>bool</td><td>false</td><td>Read policy from env vars instead of GitHub releases. <strong>Dev only.</strong></td></tr>
+<tr><td>KEY_NAMESPACE_PREFIX</td><td>String</td><td>calimero/</td><td>Prefix for dstack key derivation paths. Different prefixes yield different keys.</td></tr>
+<tr><td>ALLOWED_MRTD</td><td>String</td><td>&mdash;</td><td>Hex-encoded expected MRTD value. Only used when <span class="code">USE_ENV_POLICY=true</span>.</td></tr>
+<tr><td>ALLOWED_RTMR0</td><td>String</td><td>&mdash;</td><td>Hex-encoded expected RTMR0. Only with env policy.</td></tr>
+<tr><td>ALLOWED_RTMR1</td><td>String</td><td>&mdash;</td><td>Hex-encoded expected RTMR1. Only with env policy.</td></tr>
+<tr><td>ALLOWED_RTMR2</td><td>String</td><td>&mdash;</td><td>Hex-encoded expected RTMR2. Only with env policy.</td></tr>
+<tr><td>ALLOWED_RTMR3</td><td>String</td><td>&mdash;</td><td>Hex-encoded expected RTMR3. Only with env policy.</td></tr>
+<tr><td>ALLOWED_TCB_STATUS</td><td>String (CSV)</td><td>&mdash;</td><td>Comma-separated acceptable TCB statuses. Only with env policy.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Production Guidance</h3>
+<ul>
+  <li><strong>Always use release-fetch mode</strong> &mdash; set <span class="code">MERO_KMS_VERSION</span> and <span class="code">MERO_KMS_PROFILE</span>, leave <span class="code">USE_ENV_POLICY</span> as false.</li>
+  <li><strong>Pin the policy hash</strong> &mdash; set <span class="code">MERO_KMS_POLICY_SHA256</span> to the SHA-256 of the expected policy file. This prevents MITM or supply-chain attacks on the policy download.</li>
+  <li><strong>Enforce measurements</strong> &mdash; <span class="code">ENFORCE_MEASUREMENT_POLICY=true</span> is the default and must not be overridden.</li>
+  <li><strong>Disable mock attestation</strong> &mdash; <span class="code">ACCEPT_MOCK_ATTESTATION=false</span> is the default. Production CI checks fail if set to true.</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary>Development Mode</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">For local development without TDX hardware:</p>
+<div class="typedef">
+<span class="comment"># Development environment</span><br>
+<span class="field">ACCEPT_MOCK_ATTESTATION</span>=true<br>
+<span class="field">ENFORCE_MEASUREMENT_POLICY</span>=false<br>
+<span class="field">USE_ENV_POLICY</span>=true<br>
+<span class="field">ALLOWED_MRTD</span>=0000...0000<br>
+<span class="field">ALLOWED_RTMR0</span>=0000...0000<br>
+<span class="field">ALLOWED_RTMR1</span>=0000...0000<br>
+<span class="field">ALLOWED_RTMR2</span>=0000...0000<br>
+<span class="field">ALLOWED_RTMR3</span>=0000...0000<br>
+<span class="field">ALLOWED_TCB_STATUS</span>=UpToDate,SWHardeningNeeded,OutOfDate
+</div>
+<p style="margin-top:10px;">In mock mode, the KMS accepts synthetic quotes with zeroed measurements. The challenge-response flow still executes but quote validation is skipped. This allows testing the full API contract without TDX hardware.</p>
+<p style="margin-top:8px;">Use <span class="code">docker compose -f docker-compose.dev.yml up</span> from the mero-kms directory for a pre-configured development stack.</p>
+</div>
+</details>
+
+<details>
+<summary>Deployment Links</summary>
+<div class="detail-body">
+<ul>
+  <li><a href="runbooks.html">Phala KMS Runbook</a> &mdash; full deployment procedure for Phala Cloud CVMs</li>
+  <li><a href="runbooks.html#blue-green">Blue-Green Rollout</a> &mdash; safe production rollout with decision gates</li>
+  <li><a href="config-reference.html">Config Reference</a> &mdash; detailed environment variable documentation</li>
+  <li><a href="policy-management.html">Policy Management</a> &mdash; attestation policy promotion workflows</li>
+</ul>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MERO-TEE (GCP NODE IMAGES)
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb" id="node-images">
+<h2>mero-tee (GCP Node Images)</h2>
+<p style="margin-bottom:18px;">Packer + Ansible pipeline that builds GCP TDX Confidential VM images containing the merod binary, runtime configuration, and profile-specific security policies.</p>
+
+<details open>
+<summary>What It Builds</summary>
+<div class="detail-body">
+<p style="margin-bottom:14px;">The image builder produces bootable GCP Confidential VM images with Intel TDX enabled. Each image includes:</p>
+<ul>
+  <li>The <span class="code">merod</span> binary (baked at build time, version-locked)</li>
+  <li>A profile pin file at <span class="code">/etc/mero-kms/image-profile</span></li>
+  <li>RTMR3 runtime event configuration matching the profile</li>
+  <li>System hardening via Ansible roles (firewall, sshd, kernel params)</li>
+  <li>Cloud-init configuration for first-boot setup</li>
+</ul>
+<p style="margin-top:10px;">The resulting image is published to a GCP project as an image family, allowing instances to be created from the latest or a pinned version.</p>
+</div>
+</details>
+
+<details open>
+<summary>Security Profiles</summary>
+<div class="detail-body">
+<p style="margin-bottom:14px;">Three profiles define the security posture of the built image. Each profile writes a distinct RTMR3 runtime event, creating cryptographic cohort separation.</p>
+
+<div class="profile-row">
+  <div class="profile-name" style="color:var(--amber);">debug</div>
+  <div class="profile-desc">Full access for development. SSH enabled, debug logging, no filesystem restrictions. Nodes using this profile can only obtain keys from a KMS configured with <span class="code">MERO_KMS_PROFILE=debug</span>. Not suitable for production data.</div>
+</div>
+<div class="profile-row">
+  <div class="profile-name" style="color:var(--blue);">debug-read-only</div>
+  <div class="profile-desc">Read-only root filesystem with SSH enabled for debugging. Provides stronger integrity than debug while still allowing operator access. Suitable for staging environments.</div>
+</div>
+<div class="profile-row">
+  <div class="profile-name" style="color:var(--green);">locked-read-only</div>
+  <div class="profile-desc">Production hardened. Read-only root filesystem, SSH disabled, minimal attack surface. Strongest security posture. Required for production nodes handling real user data.</div>
+</div>
+
+<div class="security-note">
+  <strong>Cohort separation is cryptographic:</strong> Each profile produces a different RTMR3 value. A debug node cannot impersonate a locked-read-only node because the TDX quote would contain the wrong RTMR3 measurement. The KMS rejects any quote that doesn&rsquo;t match its configured profile&rsquo;s expected RTMR3.
+</div>
+</div>
+</details>
+
+<details>
+<summary>Prerequisites</summary>
+<div class="detail-body">
+<ul>
+  <li><strong>Packer</strong> &ge; 1.9 &mdash; for building GCP images from templates</li>
+  <li><strong>Ansible</strong> &ge; 2.15 &mdash; for provisioning and hardening the image</li>
+  <li><strong>GCP access</strong> &mdash; service account with <span class="code">compute.images.create</span>, <span class="code">compute.instances.create</span> permissions in the target project</li>
+  <li><strong>merod binary</strong> &mdash; built from the <span class="code">calimero/core</span> repository. The binary hash is recorded in the image metadata.</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary>Configuration Variables</summary>
+<div class="detail-body">
+<div style="overflow-x:auto;">
+<table class="env-table">
+<thead><tr><th>Variable</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>profile</td><td>string</td><td><em>required</em></td><td>Image profile: debug, debug-read-only, or locked-read-only.</td></tr>
+<tr><td>gcp_project</td><td>string</td><td><em>required</em></td><td>GCP project ID to publish the image to.</td></tr>
+<tr><td>gcp_zone</td><td>string</td><td>us-central1-a</td><td>GCP zone for the build instance.</td></tr>
+<tr><td>source_image_family</td><td>string</td><td>ubuntu-2404-lts</td><td>Base image family to build on.</td></tr>
+<tr><td>merod_binary_path</td><td>string</td><td><em>required</em></td><td>Local path to the merod binary to bake into the image.</td></tr>
+<tr><td>merod_version</td><td>string</td><td><em>required</em></td><td>Version string for the merod binary (recorded in image metadata).</td></tr>
+<tr><td>image_family_prefix</td><td>string</td><td>mero-tee</td><td>Prefix for the GCP image family name. Final name: {prefix}-{profile}.</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Build Command</summary>
+<div class="detail-body">
+<div class="typedef">
+<span class="comment"># Build a locked-read-only production image</span><br>
+packer build \<br>
+&nbsp;&nbsp;-var "profile=locked-read-only" \<br>
+&nbsp;&nbsp;-var "gcp_project=calimero-prod" \<br>
+&nbsp;&nbsp;-var "merod_binary_path=./merod" \<br>
+&nbsp;&nbsp;-var "merod_version=v0.8.0" \<br>
+&nbsp;&nbsp;mero-tee.pkr.hcl
+</div>
+<p style="margin-top:10px;">The build takes approximately 10&ndash;15 minutes. Packer creates a temporary GCP instance, runs Ansible provisioning, captures the disk as an image, and destroys the instance.</p>
+</div>
+</details>
+
+<details>
+<summary>Release Workflow</summary>
+<div class="detail-body">
+<p>The release workflow automates the full build-probe-publish cycle:</p>
+<div class="flow-step">
+  <div class="fn">1</div>
+  <div><h4>Build images</h4><p>Packer builds all three profile images in parallel.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">2</div>
+  <div><h4>Launch probe VMs</h4><p>Creates temporary instances from each image to extract TDX measurements.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">3</div>
+  <div><h4>Extract measurements</h4><p>Reads MRTD and RTMRs from probe VMs, generates <span class="code">published-mrtds.json</span>.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">4</div>
+  <div><h4>Publish images</h4><p>Promotes images to the production GCP project and updates image families.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">5</div>
+  <div><h4>Create release</h4><p>Tags the release, uploads MRTD file, checksums, SBOM, and provenance to GitHub.</p></div>
+</div>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     ATTESTATION VERIFIER
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc" id="verifier">
+<h2>Attestation Verifier</h2>
+<p style="margin-bottom:18px;">React (Vite) single-page application with a serverless API backend for public, independent verification of KMS attestation quotes via Intel Trust Authority.</p>
+
+<details open>
+<summary>Architecture</summary>
+<div class="detail-body">
+<p style="margin-bottom:14px;">The verifier enables anyone to independently confirm that a Calimero KMS instance is running genuine TEE code. It acts as an external auditor, separate from the node-KMS trust relationship.</p>
+
+<div class="g2">
+  <div class="cb">
+    <h4>Frontend (React + Vite)</h4>
+    <p>SPA that accepts a KMS URL, sends it to the serverless API, and displays the verification result. Built with Vite for fast development and optimized production builds.</p>
+  </div>
+  <div class="cb">
+    <h4>Serverless API (/api/verify)</h4>
+    <p>Vercel serverless function that performs the actual verification. Fetches the KMS attestation quote, submits it to ITA, and returns the appraisal result. Keeps ITA credentials server-side.</p>
+  </div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Deployment</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">Deployed on Vercel with the following environment variables:</p>
+<div style="overflow-x:auto;">
+<table class="env-table">
+<thead><tr><th>Variable</th><th>Type</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td>ITA_API_KEY</td><td>string (secret)</td><td>Intel Trust Authority API key for submitting quote appraisal requests.</td></tr>
+<tr><td>ITA_APPRAISAL_URL</td><td>string</td><td>ITA endpoint URL for TDX quote verification (e.g. <span class="code">https://api.trustauthority.intel.com/appraisal/v2/attest</span>).</td></tr>
+<tr><td>KMS_ALLOWED_HOSTS</td><td>string (CSV)</td><td>Allowlist of KMS hostnames the verifier is permitted to contact. SSRF protection.</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+</details>
+
+<details>
+<summary>MDMA Integration</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">The verifier uses <span class="code">compatibility-catalog.json</span> to map KMS versions to expected measurements. This enables the UI to show whether a KMS instance&rsquo;s measurements match a known-good release.</p>
+<div class="typedef">
+<span class="comment">// compatibility-catalog.json structure</span><br>
+{<br>
+&nbsp;&nbsp;<span class="field">"v0.3.0"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"locked-read-only"</span>: {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"mrtd"</span>: <span class="ty">"abc123..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"rtmr0"</span>: <span class="ty">"def456..."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="field">"composeHash"</span>: <span class="ty">"789abc..."</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;}<br>
+}
+</div>
+<p style="margin-top:10px;">The catalog is updated alongside each release. The verifier fetches it at load time and uses it for measurement comparison in the verification result UI.</p>
+</div>
+</details>
+
+<details open>
+<summary>Verification Flow</summary>
+<div class="detail-body">
+<div class="flow-step">
+  <div class="fn">1</div>
+  <div><h4>User enters KMS URL</h4><p>The browser UI accepts a KMS endpoint URL (e.g. <span class="code">https://kms.calimero.network</span>).</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">2</div>
+  <div><h4>Browser &rarr; /api/verify</h4><p>The frontend sends the KMS URL to the serverless API with a freshly generated nonce.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">3</div>
+  <div><h4>API &rarr; POST /attest on KMS</h4><p>The serverless function validates the URL against <span class="code">KMS_ALLOWED_HOSTS</span>, then fetches the KMS attestation quote via <span class="code">POST /attest</span> with the nonce.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">4</div>
+  <div><h4>API &rarr; ITA verification</h4><p>The raw TDX quote is submitted to Intel Trust Authority for appraisal. ITA returns a signed JWT with the verification result.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">5</div>
+  <div><h4>API processes ITA response</h4><p>The serverless function validates the ITA JWT signature, checks the appraisal result, compares measurements against the compatibility catalog, and verifies the nonce binding.</p></div>
+</div>
+<div class="flow-step">
+  <div class="fn">6</div>
+  <div><h4>Result displayed in browser</h4><p>The UI shows the verification status, measurement values, ITA appraisal details, compose hash comparison, and profile matching result.</p></div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>What It Checks</summary>
+<div class="detail-body">
+<div class="g2">
+  <div class="cb">
+    <h4>ITA Appraisal</h4>
+    <p>The Intel Trust Authority JWT confirms the TDX quote is genuine hardware-generated and the TCB level is acceptable. The verifier checks the JWT signature, issuer, and expiry.</p>
+  </div>
+  <div class="cb">
+    <h4>Compose Hash</h4>
+    <p>The Docker Compose hash from the KMS quote&rsquo;s report data is compared against the known hash in the compatibility catalog. A mismatch indicates the KMS is running a different configuration.</p>
+  </div>
+  <div class="cb">
+    <h4>Profile Matching</h4>
+    <p>The RTMR3 value in the quote is compared against known profile values. This confirms the KMS is running the expected profile (e.g. locked-read-only for production).</p>
+  </div>
+  <div class="cb">
+    <h4>Nonce Binding</h4>
+    <p>The nonce sent in the verification request must appear in the quote&rsquo;s report data. This prevents replay attacks where an old valid quote is reused.</p>
+  </div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Security</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">SSRF Protection</h3>
+<p style="margin-bottom:12px;">The <span class="code">KMS_ALLOWED_HOSTS</span> environment variable contains a CSV allowlist of hostnames the verifier may contact. The serverless function validates the requested KMS URL against this list before making any outbound request. This prevents attackers from using the verifier as a proxy to reach internal services.</p>
+
+<h3>Nonce Binding</h3>
+<p style="margin-bottom:12px;">Each verification request generates a fresh random nonce. The nonce is included in the <span class="code">POST /attest</span> request to the KMS and must appear in the resulting TDX quote&rsquo;s report data. This binds the quote to the specific verification session, preventing replay of previously valid quotes.</p>
+
+<h3>JWT Verification</h3>
+<p style="margin-bottom:12px;">The ITA appraisal JWT is verified against Intel&rsquo;s published signing keys. The verifier checks:</p>
+<ul>
+  <li>JWT signature validity using ITA&rsquo;s JWKS endpoint</li>
+  <li>Issuer claim matches the expected ITA issuer</li>
+  <li>Token is not expired</li>
+  <li>Appraisal result indicates a valid TDX quote</li>
+</ul>
+
+<h3>Node Verification (Planned)</h3>
+<p>Future versions will extend the verifier to also verify individual merod node attestation quotes, in addition to KMS quotes. This requires integration with the GCP <span class="code">published-mrtds.json</span> measurements for node image verification.</p>
+</div>
+</details>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

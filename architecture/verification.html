@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verification — mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Verification</span></div>
+
+<h1>Verification &amp; <em>Measurement</em></h1>
+<p class="page-subtitle">Release signatures, runtime attestation, MRTD/RTMR enforcement, and operator verification paths</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     WHAT GETS RELEASED
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>What Gets Released</h2>
+<p style="margin-bottom:18px;">Every release produces artifacts in exactly <strong>two families</strong>. Each family lives on its own GitHub release tag and carries its own signatures, checksums, and SBOM.</p>
+
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--amber)">KMS Family</h4>
+    <p>Tag pattern: <span class="code">mero-kms-vX.Y.Z</span></p>
+    <p>Contains the mero-kms-phala Docker image, attestation policy JSON, compose hash file, SBOM, SHA-256 checksums, and Sigstore signatures. Built by <span class="code">release-kms-phala.yaml</span>.</p>
+    <p style="margin-top:8px;">Artifacts:</p>
+    <ul>
+      <li>Docker image (GHCR)</li>
+      <li><span class="code">attestation-policy-{profile}.json</span> per profile</li>
+      <li><span class="code">published-mrtds.json</span></li>
+      <li><span class="code">compose-hash.txt</span></li>
+      <li><span class="code">checksums.sha256</span></li>
+      <li>Sigstore bundle (<span class="code">.sigstore.json</span>)</li>
+      <li>SBOM (<span class="code">sbom.spdx.json</span>)</li>
+    </ul>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--pink)">Node-Image Family</h4>
+    <p>Tag pattern: <span class="code">mero-tee-vX.Y.Z</span></p>
+    <p>Contains the GCP TDX confidential VM image built by Packer + Ansible, plus the published MRTD/RTMR reference values, checksums, and Sigstore signatures. Built by <span class="code">release-node-image-gcp.yaml</span>.</p>
+    <p style="margin-top:8px;">Artifacts:</p>
+    <ul>
+      <li>GCP VM image (per profile)</li>
+      <li><span class="code">published-mrtds.json</span></li>
+      <li><span class="code">checksums.sha256</span></li>
+      <li>Sigstore bundle (<span class="code">.sigstore.json</span>)</li>
+      <li>SBOM (<span class="code">sbom.spdx.json</span>)</li>
+      <li>Auto-generated release notes</li>
+    </ul>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SIGNATURES: WHAT THEY PROVE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Release Signatures</h2>
+<p style="margin-bottom:18px;">Every release asset is signed with Sigstore keyless signing (Fulcio + Rekor). Signatures prove two things — and critically fail to prove a third.</p>
+
+<div class="g3">
+  <div class="cb">
+    <h4 style="color:var(--green)">Proves: Provenance</h4>
+    <p>The artifact was produced by a specific GitHub Actions workflow run, from a specific commit, in the <span class="code">calimero-network/mero-tee</span> repository. The OIDC identity chain is: GitHub → Fulcio certificate → Rekor transparency log.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--green)">Proves: Integrity</h4>
+    <p>The artifact has not been modified since it was signed. Any bit flip in the file invalidates the Sigstore bundle. SHA-256 checksums provide a second independent integrity check.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Does NOT Prove: Runtime State</h4>
+    <p>Signatures say nothing about whether a <em>running</em> instance loaded the signed artifact or whether it was tampered with after deployment. That is the job of <strong>runtime attestation</strong> (TDX quotes, MRTD/RTMR verification).</p>
+  </div>
+</div>
+
+<p style="margin-top:16px;">Operators must perform <strong>both</strong> release verification (signatures + checksums) <strong>and</strong> runtime attestation (TDX quote + measurement comparison) to establish full trust. Neither alone is sufficient.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     VERIFICATION MATRIX
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Verification Matrix</h2>
+<p style="margin-bottom:18px;">Three actors verify three different things. Each row is a distinct trust relationship with its own protocol.</p>
+
+<div class="step"><div class="n">A</div><h4>merod verifies KMS</h4>
+<p><strong>Protocol:</strong> <span class="code">POST /attest</span> with a fresh nonce → receive raw TDX quote → verify quote signature → confirm report_data contains nonce binding → compare MRTD against known-good KMS measurement from config.</p>
+<p><strong>When:</strong> Every node boot, before requesting any key. This is "Plane 1" in the trust model.</p>
+<p><strong>Rejects if:</strong> Quote signature invalid, nonce mismatch, MRTD not in expected set, report_data tampered.</p>
+</div>
+
+<div class="step"><div class="n">B</div><h4>KMS verifies merod</h4>
+<p><strong>Protocol:</strong> Node calls <span class="code">POST /challenge</span> → receives nonce → produces TDX quote binding nonce + peerId → calls <span class="code">POST /get-key</span> with quote + signature → KMS verifies signature, quote, and policy.</p>
+<p><strong>When:</strong> Every key release request. This is "Plane 2" in the trust model.</p>
+<p><strong>Rejects if:</strong> Signature invalid, challenge expired/consumed, quote invalid, MRTD/RTMR0-3/TCB not in policy allowlist.</p>
+</div>
+
+<div class="step"><div class="n">C</div><h4>Operator verifies releases</h4>
+<p><strong>Protocol:</strong> Download release assets → run <span class="code">verify-release-assets.sh</span> → confirms Sigstore signatures against expected OIDC issuer and workflow identity → validates SHA-256 checksums → inspects <span class="code">published-mrtds.json</span> and compatibility catalog.</p>
+<p><strong>When:</strong> Before deploying any new release. Before updating attestation policy.</p>
+<p><strong>Rejects if:</strong> Sigstore verification fails, checksum mismatch, unexpected workflow identity, MRTD values differ from expected.</p>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     PROFILE COMPATIBILITY
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Profile Compatibility</h2>
+<p style="margin-bottom:18px;">Node images are built in one of three <strong>profiles</strong>. Each profile produces distinct RTMR3 values, creating cryptographic trust cohorts. The KMS attestation policy is scoped per-profile — a policy for <span class="code">locked-read-only</span> will never accept a <span class="code">debug</span> node.</p>
+
+<div class="g3">
+  <div class="stat">
+    <div class="v" style="font-size:1rem;color:var(--red)">debug</div>
+    <div class="l">Full shell access, SSH enabled, serial console. For development only. Never in production.</div>
+  </div>
+  <div class="stat">
+    <div class="v" style="font-size:1rem;color:var(--amber)">debug-read-only</div>
+    <div class="l">Read-only root filesystem, SSH enabled. For staging / pre-production testing.</div>
+  </div>
+  <div class="stat">
+    <div class="v" style="font-size:1rem;color:var(--green)">locked-read-only</div>
+    <div class="l">Read-only root, no SSH, no serial. Hardened for production.</div>
+  </div>
+</div>
+
+<h3>Profile-Isolated Trust Cohorts</h3>
+<p style="margin-bottom:12px;">Each profile writes a unique event to RTMR3 at boot. Because RTMR extension is hardware-enforced and one-way (SHA-384 extend), a node cannot change its RTMR3 after boot. The KMS policy contains a per-profile allowlist.</p>
+
+<div class="typedef">
+<span class="comment">// Each profile's policy file only allows its own RTMR3 value:</span><br>
+<span class="field">attestation-policy-debug.json</span>         → allowed_rtmr3: [<span class="ty">"aabbcc..."</span>]<br>
+<span class="field">attestation-policy-debug-read-only.json</span> → allowed_rtmr3: [<span class="ty">"ddeeff..."</span>]<br>
+<span class="field">attestation-policy-locked-read-only.json</span> → allowed_rtmr3: [<span class="ty">"112233..."</span>]<br>
+<br>
+<span class="comment">// NEVER mix debug RTMR3 values into a production policy.</span><br>
+<span class="comment">// Doing so allows debug nodes to obtain production keys.</span>
+</div>
+
+<p style="margin-top:12px;"><strong>Rule:</strong> Never add debug profile RTMR3 values to a production KMS policy. Profile isolation is a security boundary, not a convenience flag.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     OPERATOR QUICK PATH
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Operator Quick Path</h2>
+<p style="margin-bottom:18px;">For operators who need to verify a release before deployment. This is the fast path — for full audit, see the "Minimal Download Sets" section below.</p>
+
+<h3>Step 1: Run verify-release-assets.sh</h3>
+<div class="typedef">
+<span class="comment"># Verify KMS release</span><br>
+<span class="kw">$</span> ./scripts/verify-release-assets.sh <span class="ty">mero-kms-v1.2.0</span><br>
+<br>
+<span class="comment"># Verify node-image release</span><br>
+<span class="kw">$</span> ./scripts/verify-release-assets.sh <span class="ty">mero-tee-v1.2.0</span><br>
+<br>
+<span class="comment"># The script:</span><br>
+<span class="comment"># 1. Downloads release assets from GitHub</span><br>
+<span class="comment"># 2. Verifies Sigstore signatures (cosign verify-blob)</span><br>
+<span class="comment"># 3. Checks SHA-256 checksums</span><br>
+<span class="comment"># 4. Validates OIDC issuer = https://token.actions.githubusercontent.com</span><br>
+<span class="comment"># 5. Validates workflow identity matches expected release workflow</span><br>
+<span class="comment"># 6. Prints PASS/FAIL for each asset</span>
+</div>
+
+<h3>Step 2: Inspect Compatibility Map</h3>
+<p>Each release includes a compatibility catalog linking KMS versions to compatible node-image versions. Verify the version pair you intend to deploy is listed.</p>
+<div class="typedef">
+<span class="comment"># In the release assets:</span><br>
+<span class="kw">$</span> cat compatibility-catalog.json | jq '.entries[] | select(.kms == "<span class="ty">1.2.0</span>")'<br>
+<br>
+<span class="comment"># Confirms which node-image versions are compatible with this KMS</span>
+</div>
+
+<h3>Step 3: Confirm Profile &amp; Policy URL</h3>
+<p>Before deploying, verify the KMS is configured with the correct profile's policy URL:</p>
+<div class="typedef">
+<span class="comment"># The KMS fetches policy from this URL pattern:</span><br>
+<span class="field">MERO_KMS_POLICY_URL</span>=https://github.com/calimero-network/mero-tee/releases/download/<span class="ty">mero-kms-v1.2.0</span>/attestation-policy-<span class="ty">locked-read-only</span>.json<br>
+<br>
+<span class="comment"># Optionally pin by hash:</span><br>
+<span class="field">MERO_KMS_POLICY_SHA256</span>=<span class="ty">e3b0c44298fc1c149afbf4c8996fb924...</span>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     CLIENT CONFIG GENERATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>Client Attestation Config</h2>
+<p style="margin-bottom:18px;">Nodes need attestation configuration to know which KMS measurements to expect (Plane 1 verification). Two scripts handle generation and application.</p>
+
+<h3>generate-merod-kms-phala-attestation-config.sh</h3>
+<div class="typedef">
+<span class="comment"># Generate attestation config for a specific KMS release + profile</span><br>
+<span class="kw">$</span> ./scripts/generate-merod-kms-phala-attestation-config.sh \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;--kms-version <span class="ty">1.2.0</span> \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;--profile <span class="ty">locked-read-only</span> \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;--output <span class="ty">merod-attestation.json</span><br>
+<br>
+<span class="comment"># The script:</span><br>
+<span class="comment"># 1. Fetches published-mrtds.json from the KMS release</span><br>
+<span class="comment"># 2. Extracts MRTD for the given KMS version</span><br>
+<span class="comment"># 3. Generates a config block with expected_mrtd, kms_url, nonce_binding</span><br>
+<span class="comment"># 4. Writes JSON config suitable for merod's --attestation-config flag</span>
+</div>
+
+<h3>Applying Config</h3>
+<div class="typedef">
+<span class="comment"># Apply generated config to a running merod instance</span><br>
+<span class="kw">$</span> ./scripts/apply-merod-attestation-config.sh \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;--config <span class="ty">merod-attestation.json</span> \<br>
+&nbsp;&nbsp;&nbsp;&nbsp;--node-data-dir <span class="ty">/var/lib/merod</span><br>
+<br>
+<span class="comment"># Or pass at boot:</span><br>
+<span class="kw">$</span> merod run --attestation-config <span class="ty">merod-attestation.json</span>
+</div>
+
+<p style="margin-top:12px;">The generated config ties the node to a specific KMS release. When the KMS is upgraded, re-run the generation script with the new version and redeploy the config.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     COMPOSE HASH
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Compose Hash</h2>
+<p style="margin-bottom:18px;">The compose hash proves the Docker Compose configuration used to run the KMS has not been modified. It is a SHA-256 digest of the normalized <span class="code">docker-compose.yml</span> file.</p>
+
+<h3>What It Proves</h3>
+<p>The compose hash binds the KMS deployment configuration (image tag, environment variables, volume mounts, network config) to a specific hash. If any field in the compose file changes, the hash changes.</p>
+
+<h3>Trust Path</h3>
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--green)">Trusted: From Verified Attestation</h4>
+    <p>The compose hash is meaningful only when obtained through the verified attestation path. The KMS embeds the compose hash in its TDX quote report_data. A verified TDX quote proves the compose file was loaded at boot time.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">NOT Trusted: From Provisioning Metadata</h4>
+    <p>Do not trust compose hash values obtained from instance metadata, operator-provided config, or any non-attested source. Only the TDX-attested value is authoritative.</p>
+  </div>
+</div>
+
+<h3>Extracting from Release Assets</h3>
+<div class="typedef">
+<span class="comment"># The compose hash is included in signed release assets:</span><br>
+<span class="kw">$</span> cat compose-hash.txt<br>
+<span class="ty">sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</span><br>
+<br>
+<span class="comment"># Compare against the value in a verified TDX quote:</span><br>
+<span class="comment"># 1. Obtain quote via POST /attest</span><br>
+<span class="comment"># 2. Parse report_data to extract compose hash</span><br>
+<span class="comment"># 3. Compare: quote_compose_hash == release_compose_hash</span>
+</div>
+
+<p style="margin-top:12px;">If the values differ, the running KMS is not using the expected configuration. Investigate before trusting key releases from that instance.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MRTD / RTMR VERIFICATION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>MRTD / RTMR Verification</h2>
+<p style="margin-bottom:18px;">The core measurement verification flow: compare observed values from a verified TDX quote against the reference values published in <span class="code">published-mrtds.json</span> for a given release + profile combination.</p>
+
+<h3>Step-by-Step</h3>
+<div class="step"><div class="n">1</div><h4>Get Observed Values</h4>
+<p>Obtain a TDX quote from the target instance via <span class="code">POST /attest</span> (for KMS) or from the node's local TDX guest driver. Parse the quote to extract MRTD, RTMR0, RTMR1, RTMR2, RTMR3.</p>
+</div>
+
+<div class="step"><div class="n">2</div><h4>Verify the Quote</h4>
+<p>Before trusting any values, verify the TDX quote cryptographic signature. Either verify locally or submit to Intel Trust Authority. An unverified quote is meaningless.</p>
+</div>
+
+<div class="step"><div class="n">3</div><h4>Fetch Reference Values</h4>
+<p>Download <span class="code">published-mrtds.json</span> from the appropriate GitHub release tag. For KMS: <span class="code">mero-kms-vX.Y.Z</span>. For node images: <span class="code">mero-tee-vX.Y.Z</span>.</p>
+<div class="typedef">
+<span class="kw">$</span> gh release download <span class="ty">mero-kms-v1.2.0</span> -p 'published-mrtds.json'<br>
+<span class="kw">$</span> cat published-mrtds.json | jq '.'
+</div>
+</div>
+
+<div class="step"><div class="n">4</div><h4>Compare by Release + Profile</h4>
+<p>Look up the entry in <span class="code">published-mrtds.json</span> matching your target release version and profile. Compare each register:</p>
+<div class="typedef">
+<span class="field">observed.mrtd</span>  == published[version][profile].<span class="ty">mrtd</span>   <span class="comment">// VM image identity</span><br>
+<span class="field">observed.rtmr0</span> == published[version][profile].<span class="ty">rtmr0</span>  <span class="comment">// firmware</span><br>
+<span class="field">observed.rtmr1</span> == published[version][profile].<span class="ty">rtmr1</span>  <span class="comment">// kernel</span><br>
+<span class="field">observed.rtmr2</span> == published[version][profile].<span class="ty">rtmr2</span>  <span class="comment">// application</span><br>
+<span class="field">observed.rtmr3</span> == published[version][profile].<span class="ty">rtmr3</span>  <span class="comment">// profile event</span>
+</div>
+</div>
+
+<div class="step"><div class="n">5</div><h4>Full Policy Tuple Enforcement</h4>
+<p>For KMS policy verification, all five registers <strong>plus</strong> the TCB status must match the policy. The full tuple is: <span class="code">(mrtd, rtmr0, rtmr1, rtmr2, rtmr3, tcb_status)</span>. Any single mismatch is a policy violation.</p>
+</div>
+
+<h3>Why RTMRs May Match Across Profiles</h3>
+<p style="margin-bottom:12px;">It is normal for some RTMR values to be identical between profiles of the same release. The key discriminator is RTMR3.</p>
+<div class="g2">
+  <div class="cb">
+    <h4>MRTD</h4>
+    <p>Changes when the VM image changes. Different images → different MRTD. Within the same release, MRTD may differ per profile if the image differs, or match if the base image is shared.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR0 / RTMR1</h4>
+    <p>Measure firmware and kernel. If all profiles use the same firmware and kernel (common), RTMR0 and RTMR1 will be <strong>identical</strong> across profiles. This is expected — profile differentiation is not their job.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR2</h4>
+    <p>Measures the application layer. May diverge across profiles if the application config or binary differs, or match if the same app is loaded with different runtime params.</p>
+  </div>
+  <div class="cb">
+    <h4>RTMR3 (Discriminator)</h4>
+    <p>Always differs between profiles within the same release. Each profile writes a unique boot event to RTMR3. This is the <strong>definitive</strong> profile separator. If RTMR3 matches the policy allowlist, the profile is confirmed.</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     RTMR0 TROUBLESHOOTING
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>RTMR0 Troubleshooting</h2>
+<p style="margin-bottom:18px;">A common operator issue: the RTMR0 value published in GitHub release assets does not match the RTMR0 observed on a live node. Here's why and how to fix it.</p>
+
+<h3>Why GitHub Expected ≠ Live Node</h3>
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--red)">Different Image / Boot Chain</h4>
+    <p>The live node booted a different VM image than the one from the release. This can happen if the cloud provider updated the base image, the image was rebuilt with a different firmware version, or the wrong image family was selected.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Stale Release Asset</h4>
+    <p>The <span class="code">published-mrtds.json</span> in the release was generated from a build that used a different firmware than the currently deployed image. This can happen if the image was rebuilt without cutting a new release.</p>
+  </div>
+</div>
+
+<h3>How to Fix</h3>
+<div class="step"><div class="n">1</div><h4>Confirm Image Provenance</h4>
+<p>Verify the live node is running the exact image from the release. Check the GCP image name, family, and project against the release notes.</p>
+<div class="typedef">
+<span class="kw">$</span> gcloud compute instances describe <span class="ty">NODE_NAME</span> --format='get(disks[0].source)'<br>
+<span class="comment"># Compare against image name in release notes</span>
+</div>
+</div>
+
+<div class="step"><div class="n">2</div><h4>Check Firmware Version</h4>
+<p>If the image matches but RTMR0 differs, the firmware (TDVF) may have been updated by the cloud provider. Compare the firmware hash in the quote against the expected value.</p>
+</div>
+
+<div class="step"><div class="n">3</div><h4>Re-Measure or Re-Release</h4>
+<p>If the deployed image is correct but measurements drifted (firmware update), either: (a) rebuild and re-release the image to pick up new measurements, or (b) update the attestation policy to include the new RTMR0 value after verifying the firmware change is legitimate.</p>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     RTMR3 IMAGE LEGITIMACY
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>RTMR3 Image Legitimacy</h2>
+<p style="margin-bottom:18px;">RTMR3 is the per-profile runtime measurement register. Understanding how it's generated is critical for verifying image legitimacy and detecting binary-swap attacks.</p>
+
+<h3>Generation Formula</h3>
+<div class="typedef">
+<span class="comment">// RTMR3 is an extend-only register. Each extend operation:</span><br>
+<span class="ty">RTMR3_new</span> = SHA384(<span class="ty">RTMR3_old</span> || <span class="ty">event_data</span>)<br>
+<br>
+<span class="comment">// Initial state (before any extensions):</span><br>
+<span class="ty">RTMR3_initial</span> = 0x000...000 <span class="comment">// 48 bytes of zeros</span><br>
+<br>
+<span class="comment">// At boot, the image writes a profile-specific event:</span><br>
+<span class="ty">event_data</span> = SHA384(<span class="field">"mero-tee:profile:{profile_name}"</span>)<br>
+<br>
+<span class="comment">// Final RTMR3 (single extension from zero):</span><br>
+<span class="ty">RTMR3</span> = SHA384(0x000...000 || SHA384(<span class="field">"mero-tee:profile:locked-read-only"</span>))
+</div>
+
+<h3>Release Artifacts</h3>
+<p>Each release computes and publishes the expected RTMR3 per profile in <span class="code">published-mrtds.json</span>. The CI pipeline extends from the known initial state using the profile string, so the published value is deterministic and reproducible.</p>
+
+<h3>Client Verification Paths</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>Path A: Compare Against Published</h4>
+    <p>Download <span class="code">published-mrtds.json</span> from the verified release. Look up the RTMR3 for your profile. Compare against the RTMR3 in a verified TDX quote. Match = legitimate.</p>
+  </div>
+  <div class="cb">
+    <h4>Path B: Recompute Locally</h4>
+    <p>Compute the expected RTMR3 yourself using the formula above with the profile string. Compare against the quote. This verifies the published value itself is correct.</p>
+  </div>
+</div>
+
+<h3>Binary-Swap Mitigation</h3>
+<p style="margin-bottom:12px;">An attacker who replaces the merod binary inside the VM changes MRTD (the image hash changes). But could they create a malicious image that extends the same RTMR3? No — RTMR3 is extended during early boot by trusted firmware code before the application binary runs. The application cannot control what gets extended to RTMR3 unless it controls the boot chain, which would change RTMR0/RTMR1.</p>
+
+<h3>Safety Improvements</h3>
+<ul>
+  <li><strong>Multi-register binding:</strong> The KMS policy checks all five registers simultaneously. A swap that preserves RTMR3 will fail on MRTD or RTMR2.</li>
+  <li><strong>Kernel command-line in RTMR2/3:</strong> Some configurations extend the kernel cmdline into RTMRs. Changing boot parameters (to disable security) changes RTMR values.</li>
+  <li><strong>Profile event is early-boot:</strong> The profile string is written to RTMR3 during initramfs, before any user-space code executes.</li>
+</ul>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MINIMAL DOWNLOAD SETS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Minimal Download Sets</h2>
+<p style="margin-bottom:18px;">You don't need every release asset to verify. Two modes: <strong>quick verify</strong> (operator confidence) and <strong>full audit</strong> (complete reproducibility check).</p>
+
+<div class="g2">
+  <div>
+    <h3 style="color:var(--amber)">KMS Family</h3>
+    <h4>Quick Verify</h4>
+    <ul>
+      <li><span class="code">checksums.sha256</span></li>
+      <li><span class="code">checksums.sha256.sigstore.json</span></li>
+      <li><span class="code">published-mrtds.json</span></li>
+    </ul>
+    <div class="typedef" style="margin-top:8px;">
+<span class="kw">$</span> ./scripts/verify-release-assets.sh <span class="ty">mero-kms-v1.2.0</span> --quick
+    </div>
+
+    <h4 style="margin-top:16px;">Full Audit</h4>
+    <ul>
+      <li>All of the above, plus:</li>
+      <li><span class="code">attestation-policy-{profile}.json</span></li>
+      <li><span class="code">compose-hash.txt</span></li>
+      <li><span class="code">sbom.spdx.json</span></li>
+      <li>Docker image digest verification</li>
+    </ul>
+  </div>
+  <div>
+    <h3 style="color:var(--pink)">Node-Image Family</h3>
+    <h4>Quick Verify</h4>
+    <ul>
+      <li><span class="code">checksums.sha256</span></li>
+      <li><span class="code">checksums.sha256.sigstore.json</span></li>
+      <li><span class="code">published-mrtds.json</span></li>
+    </ul>
+    <div class="typedef" style="margin-top:8px;">
+<span class="kw">$</span> ./scripts/verify-release-assets.sh <span class="ty">mero-tee-v1.2.0</span> --quick
+    </div>
+
+    <h4 style="margin-top:16px;">Full Audit</h4>
+    <ul>
+      <li>All of the above, plus:</li>
+      <li><span class="code">sbom.spdx.json</span></li>
+      <li>GCP image metadata verification</li>
+      <li>Packer manifest comparison</li>
+    </ul>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     VERIFICATION EXAMPLES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Verification Examples</h2>
+<p style="margin-bottom:18px;">Expected script output and common failure patterns. Expand each section for detailed examples.</p>
+
+<details>
+<summary>KMS Release Verification — Expected Output</summary>
+<div class="detail-body">
+<div class="typedef">
+<span class="kw">$</span> ./scripts/verify-release-assets.sh mero-kms-v1.2.0<br>
+<br>
+<span class="field">[INFO]</span> Downloading release assets for mero-kms-v1.2.0...<br>
+<span class="field">[INFO]</span> Verifying Sigstore signature for checksums.sha256...<br>
+<span class="ty">[PASS]</span> Sigstore signature valid<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Issuer: https://token.actions.githubusercontent.com<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Workflow: .github/workflows/release-kms-phala.yaml<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Repository: calimero-network/mero-tee<br>
+<span class="field">[INFO]</span> Verifying SHA-256 checksums...<br>
+<span class="ty">[PASS]</span> attestation-policy-locked-read-only.json: OK<br>
+<span class="ty">[PASS]</span> published-mrtds.json: OK<br>
+<span class="ty">[PASS]</span> compose-hash.txt: OK<br>
+<span class="ty">[PASS]</span> sbom.spdx.json: OK<br>
+<br>
+<span class="ty">✓ All 4 assets verified successfully</span>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Node-Image Release Verification — Expected Output</summary>
+<div class="detail-body">
+<div class="typedef">
+<span class="kw">$</span> ./scripts/verify-release-assets.sh mero-tee-v1.2.0<br>
+<br>
+<span class="field">[INFO]</span> Downloading release assets for mero-tee-v1.2.0...<br>
+<span class="field">[INFO]</span> Verifying Sigstore signature for checksums.sha256...<br>
+<span class="ty">[PASS]</span> Sigstore signature valid<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Issuer: https://token.actions.githubusercontent.com<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Workflow: .github/workflows/release-node-image-gcp.yaml<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Repository: calimero-network/mero-tee<br>
+<span class="field">[INFO]</span> Verifying SHA-256 checksums...<br>
+<span class="ty">[PASS]</span> published-mrtds.json: OK<br>
+<span class="ty">[PASS]</span> sbom.spdx.json: OK<br>
+<br>
+<span class="ty">✓ All 2 assets verified successfully</span>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Common Failure Patterns</summary>
+<div class="detail-body">
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--red)">Sigstore Verification Failed</h4>
+    <div class="typedef">
+<span style="color:var(--red)">[FAIL]</span> Sigstore signature invalid for checksums.sha256<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Error: certificate identity mismatch<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Expected: .github/workflows/release-kms-phala.yaml<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Got: .github/workflows/build-dev.yaml
+    </div>
+    <p style="margin-top:8px;">The asset was signed by a different workflow than expected. This could indicate a tampered release or an incorrect release tag. Do not deploy.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Checksum Mismatch</h4>
+    <div class="typedef">
+<span style="color:var(--red)">[FAIL]</span> attestation-policy-locked-read-only.json: FAILED<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Expected: a1b2c3d4...<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Got: e5f6a7b8...
+    </div>
+    <p style="margin-top:8px;">The downloaded file differs from the signed checksum. Re-download the asset. If it persists, the release may have been tampered with.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">OIDC Issuer Mismatch</h4>
+    <div class="typedef">
+<span style="color:var(--red)">[FAIL]</span> Unexpected OIDC issuer<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Expected: https://token.actions.githubusercontent.com<br>
+&nbsp;&nbsp;&nbsp;&nbsp;Got: https://other-issuer.example.com
+    </div>
+    <p style="margin-top:8px;">The certificate was not issued by GitHub Actions. This is a critical failure — the signing identity cannot be trusted.</p>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--red)">Missing Assets</h4>
+    <div class="typedef">
+<span style="color:var(--red)">[FAIL]</span> Release mero-kms-v1.2.0 is missing expected assets:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;- checksums.sha256.sigstore.json<br>
+&nbsp;&nbsp;&nbsp;&nbsp;- published-mrtds.json
+    </div>
+    <p style="margin-top:8px;">The release is incomplete. Do not deploy. Check if the release workflow completed successfully.</p>
+  </div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Operator Troubleshooting Checklist</summary>
+<div class="detail-body">
+<ol>
+  <li><strong>Verify you have the right release tag.</strong> KMS uses <span class="code">mero-kms-vX.Y.Z</span>, node images use <span class="code">mero-tee-vX.Y.Z</span>. Mixing them up is a common mistake.</li>
+  <li><strong>Check cosign is installed.</strong> The verification script requires <span class="code">cosign</span> v2+. Run <span class="code">cosign version</span> to verify.</li>
+  <li><strong>Check network access.</strong> Sigstore verification requires access to <span class="code">rekor.sigstore.dev</span> and <span class="code">fulcio.sigstore.dev</span>. Ensure these are not blocked by firewall rules.</li>
+  <li><strong>Re-download assets.</strong> Partial downloads or network corruption can cause checksum failures. Delete and re-download.</li>
+  <li><strong>Inspect the Sigstore bundle.</strong> If signature verification fails, inspect the <span class="code">.sigstore.json</span> file to check the embedded certificate and verify the signing time.</li>
+  <li><strong>Compare MRTD values.</strong> If measurements don't match, compare <span class="code">published-mrtds.json</span> across releases to see when the value changed.</li>
+  <li><strong>Check compatibility catalog.</strong> Ensure the KMS + node-image version pair is listed as compatible before diagnosing measurement mismatches.</li>
+</ol>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     WORKFLOW IDENTITY
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>Workflow Identity</h2>
+<p style="margin-bottom:18px;">Release signatures embed the GitHub Actions workflow identity. This is the strongest anchor tying a release to its source. Operators should verify the workflow identity matches expectations.</p>
+
+<div class="g2">
+  <div class="cb">
+    <h4 style="color:var(--amber)">KMS Releases</h4>
+    <div class="typedef">
+<span class="field">Workflow:</span> .github/workflows/<span class="ty">release-kms-phala.yaml</span><br>
+<span class="field">Repository:</span> calimero-network/mero-tee<br>
+<span class="field">OIDC Issuer:</span> https://token.actions.githubusercontent.com<br>
+<span class="field">Trigger:</span> release tag matching mero-kms-v*
+    </div>
+  </div>
+  <div class="cb">
+    <h4 style="color:var(--pink)">Node-Image Releases</h4>
+    <div class="typedef">
+<span class="field">Workflow:</span> .github/workflows/<span class="ty">release-node-image-gcp.yaml</span><br>
+<span class="field">Repository:</span> calimero-network/mero-tee<br>
+<span class="field">OIDC Issuer:</span> https://token.actions.githubusercontent.com<br>
+<span class="field">Trigger:</span> release tag matching mero-tee-v*
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:14px;">Any release signed by a different workflow or repository is not legitimate, even if the Sigstore signature is technically valid. The <span class="code">verify-release-assets.sh</span> script checks this automatically.</p>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

@@ -102,6 +102,20 @@
   </div>
 </div>
 
+<div class="term-row" data-term="compatibility-catalog.json">
+  <div class="term-name">compatibility-catalog.json</div>
+  <div class="term-body">
+    A release artifact that maps compatible combinations of mero-kms-phala and merod image versions. Used by the release pipeline to determine which KMS builds can serve keys to which node builds. Published alongside <strong>published-mrtds.json</strong> in GitHub releases.
+  </div>
+</div>
+
+<div class="term-row" data-term="compose_hash">
+  <div class="term-name">compose_hash</div>
+  <div class="term-body">
+    A SHA-256 digest of the Docker Compose file used to deploy a CVM workload. Recorded during image build and included in attestation artifacts, allowing verifiers to confirm the exact orchestration configuration that was launched.
+  </div>
+</div>
+
 <div class="term-row" data-term="cvm">
   <div class="term-name">CVM (Confidential VM)</div>
   <div class="term-body">
@@ -112,10 +126,34 @@
 <!-- ─── D ─── -->
 <div class="term-letter" data-letter="D">D</div>
 
+<div class="term-row" data-term="debug profile">
+  <div class="term-name">debug (profile)</div>
+  <div class="term-body">
+    The most permissive image profile. Enables SSH access and a read-write filesystem, intended for development and troubleshooting only. Writes a unique RTMR3 runtime event so that debug nodes are cryptographically separated from production cohorts and cannot obtain production keys.
+  </div>
+</div>
+
+<div class="term-row" data-term="debug-read-only profile">
+  <div class="term-name">debug-read-only (profile)</div>
+  <div class="term-body">
+    An intermediate image profile that permits SSH access for inspection but enforces a read-only root filesystem. Provides observability without allowing runtime modification of binaries or configuration. Writes a distinct RTMR3 event for cohort separation.
+  </div>
+</div>
+
 <div class="term-row" data-term="dstack">
   <div class="term-name">dstack</div>
   <div class="term-body">
     Phala Network&rsquo;s TEE runtime that provides deterministic key derivation and TDX quote generation. The KMS communicates with dstack via a Unix domain socket. dstack seals a root key to the hardware, enabling repeatable key derivation.
+  </div>
+</div>
+
+<!-- ─── G ─── -->
+<div class="term-letter" data-letter="G">G</div>
+
+<div class="term-row" data-term="gcp node-image lane">
+  <div class="term-name">GCP Node-Image Lane</div>
+  <div class="term-body">
+    The release lane that produces merod node images for GCP TDX Confidential VMs. Builds are measured at image creation time, and the resulting MRTD values are published in <strong>published-mrtds.json</strong> so the KMS can verify nodes at key-release time.
   </div>
 </div>
 
@@ -153,6 +191,23 @@
   <div class="term-name">KMS (mero-kms-phala)</div>
   <div class="term-body">
     The Key Management Service &mdash; a Rust HTTP service running inside a TDX enclave. Validates node attestations and releases storage encryption keys via Phala dstack. See <a href="system-overview.html">System Overview</a>.
+  </div>
+</div>
+
+<div class="term-row" data-term="kms-phala-attestation-policy.{profile}.json">
+  <div class="term-name">kms-phala-attestation-policy.{profile}.json</div>
+  <div class="term-body">
+    Per-profile attestation policy files published in GitHub releases (e.g. <span class="code">kms-phala-attestation-policy.locked-read-only.json</span>). Each file lists the MRTD and RTMR0&ndash;3 values and acceptable TCB statuses for that profile. The KMS fetches and applies the policy matching the requesting node&rsquo;s profile.
+  </div>
+</div>
+
+<!-- ─── L ─── -->
+<div class="term-letter" data-letter="L">L</div>
+
+<div class="term-row" data-term="locked-read-only profile">
+  <div class="term-name">locked-read-only (profile)</div>
+  <div class="term-body">
+    The most restrictive (production) image profile. Disables SSH entirely and enforces a read-only root filesystem, minimising the attack surface. This is the only profile intended for production workloads. Its unique RTMR3 event ensures it receives a distinct key cohort.
   </div>
 </div>
 
@@ -200,10 +255,31 @@
   </div>
 </div>
 
+<div class="term-row" data-term="phala kms lane">
+  <div class="term-name">Phala KMS Lane</div>
+  <div class="term-body">
+    The release lane that builds and deploys mero-kms-phala on Phala Cloud CVMs. Produces a <strong>compose_hash</strong> that is recorded in attestation artifacts, allowing nodes and the attestation-verifier to confirm the exact KMS deployment.
+  </div>
+</div>
+
+<div class="term-row" data-term="policy promotion">
+  <div class="term-name">Policy Promotion</div>
+  <div class="term-body">
+    The governance process for moving an attestation policy from staging to production. A new policy is first deployed behind a <strong>staging probe</strong> for validation; once the probe confirms successful key release, the policy is promoted to the production KMS configuration.
+  </div>
+</div>
+
 <div class="term-row" data-term="profile">
   <div class="term-name">Profile</div>
   <div class="term-body">
     One of three image build configurations: <strong>debug</strong> (full access), <strong>debug-read-only</strong> (SSH + RO filesystem), or <strong>locked-read-only</strong> (no SSH, RO, minimal surface). Each writes a unique RTMR3 runtime event for cohort separation.
+  </div>
+</div>
+
+<div class="term-row" data-term="published-mrtds.json">
+  <div class="term-name">published-mrtds.json</div>
+  <div class="term-body">
+    A JSON artifact published in each GitHub release containing the MRTD values of all images built in that release. The KMS references this file (by URL and optional SHA-256 pin) to know which node image measurements are legitimate. See <a href="config-reference.html">Config Reference</a>.
   </div>
 </div>
 
@@ -269,6 +345,13 @@
   <div class="term-name">ServiceError</div>
   <div class="term-body">
     The centralized error enum in the KMS codebase. Variants: InvalidInput (400), InvalidChallenge (400/401), InvalidSignature (401), PolicyViolation (403), RateLimited (429), PolicyNotReady (503), InternalError (500). See <a href="error-handling.html">Error Handling</a>.
+  </div>
+</div>
+
+<div class="term-row" data-term="staging probe">
+  <div class="term-name">Staging Probe</div>
+  <div class="term-body">
+    An automated validation step in the release pipeline that deploys a candidate attestation policy to a staging KMS instance and attempts a full key-release cycle against it. If the probe succeeds, the policy is eligible for <strong>policy promotion</strong> to production.
   </div>
 </div>
 

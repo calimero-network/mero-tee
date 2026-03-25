@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Policy Management — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+.flow-row { display: grid; grid-template-columns: 40px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: start; }
+.flow-row:last-child { border-bottom: none; }
+.flow-n { font-family: 'JetBrains Mono', monospace; font-size: .85rem; font-weight: 700; color: var(--amber); text-align: center; padding-top: 2px; }
+.flow-body h4 { font-size: .85rem; margin-bottom: 4px; }
+.flow-body p { font-size: .82rem; }
+.adr-id { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: var(--violet); background: #8b5cf615; padding: 2px 8px; border-radius: 4px; margin-right: 8px; }
+.file-touch { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--blue); margin: 4px 4px 4px 0; }
+.secret-row { display: grid; grid-template-columns: 240px 1fr; gap: 10px; padding: 6px 12px; background: var(--surface2); border-radius: 6px; margin-bottom: 4px; align-items: start; }
+.secret-row .sk { font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--red); font-weight: 600; }
+.secret-row .sv { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.input-row { display: grid; grid-template-columns: 240px 1fr; gap: 10px; padding: 6px 12px; background: var(--surface2); border-radius: 6px; margin-bottom: 4px; align-items: start; }
+.input-row .ik { font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--green); font-weight: 600; }
+.input-row .iv { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.output-row { display: grid; grid-template-columns: 240px 1fr; gap: 10px; padding: 6px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; align-items: start; }
+.output-row .ok { font-family: 'JetBrains Mono', monospace; font-size: .76rem; color: var(--amber); font-weight: 600; }
+.output-row .ov { font-size: .82rem; color: var(--text-dim); line-height: 1.5; }
+.decision { background: var(--surface2); border-left: 3px solid var(--violet); padding: 12px 16px; border-radius: 0 8px 8px 0; margin-bottom: 10px; }
+.decision strong { color: var(--violet); font-size: .88rem; }
+</style>
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>Policy Management</span></div>
+
+<h1>Policy <em>Management</em></h1>
+<p class="page-subtitle">Attestation policy promotion workflows, staging probes, and architecture decision records</p>
+
+<div class="g4" style="margin-bottom:36px;">
+  <div class="stat"><div class="v">3</div><div class="l">workflows</div></div>
+  <div class="stat"><div class="v">3</div><div class="l">ADRs</div></div>
+  <div class="stat"><div class="v">3</div><div class="l">profiles</div></div>
+  <div class="stat"><div class="v">PR</div><div class="l">promotion gate</div></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS STAGING PROBE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>KMS Staging Probe</h2>
+<p style="margin-bottom:6px;">Workflow: <span class="code">kms-phala-staging-probe.yaml</span></p>
+<p style="margin-bottom:18px;">Deploys a staging KMS instance, runs an attestation probe, extracts measurements, and generates policy candidates for promotion.</p>
+
+<details open>
+<summary>What It Does</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">The staging probe is the first step in any KMS policy change. It creates a controlled environment to extract and validate measurements before they reach production.</p>
+<div class="flow-row">
+  <div class="flow-n">1</div>
+  <div class="flow-body">
+    <h4>Deploy staging KMS</h4>
+    <p>Spins up a digest-pinned KMS container on a Phala Cloud staging CVM. Waits for the health endpoint to report the expected version.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">2</div>
+  <div class="flow-body">
+    <h4>Run attestation probe</h4>
+    <p>Sends <span class="code">POST /attest</span> to the staging KMS and captures the returned TDX quote.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">3</div>
+  <div class="flow-body">
+    <h4>Extract measurements</h4>
+    <p>Parses the TDX quote to extract MRTD, RTMR0&ndash;3, and TCB status. These become the measurement candidates.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">4</div>
+  <div class="flow-body">
+    <h4>Compute compose hash</h4>
+    <p>Calculates the SHA-256 hash of the Docker Compose configuration used for deployment. This hash is included in the attestation artifacts for reproducibility.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">5</div>
+  <div class="flow-body">
+    <h4>Generate policy candidates</h4>
+    <p>Writes the extracted measurements into a <span class="code">measurement-policy-candidates.json</span> file formatted for direct promotion into the release policy.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">6</div>
+  <div class="flow-body">
+    <h4>Tear down staging</h4>
+    <p>Destroys the staging KMS container. The measurement candidates and attestation artifacts are uploaded as workflow artifacts.</p>
+  </div>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Required Secrets &amp; Inputs</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">Secrets</h3>
+<div class="secret-row"><div class="sk">PHALA_CLOUD_API_KEY</div><div class="sv">API key for provisioning/managing staging CVMs on Phala Cloud.</div></div>
+<div class="secret-row"><div class="sk">GH_RELEASE_TOKEN</div><div class="sv">GitHub token with read access to the mero-tee releases for fetching policy files.</div></div>
+<div class="secret-row"><div class="sk">COSIGN_KEY</div><div class="sv">Cosign private key for signing probe output artifacts.</div></div>
+
+<h3>Inputs</h3>
+<div class="input-row"><div class="ik">kms_version</div><div class="iv">The KMS release tag to probe (e.g. <span class="code">v0.4.0</span>).</div></div>
+<div class="input-row"><div class="ik">kms_image_digest</div><div class="iv">Full digest-pinned image reference for the KMS container.</div></div>
+<div class="input-row"><div class="ik">profile</div><div class="iv">Target profile: <span class="code">debug</span>, <span class="code">debug-read-only</span>, or <span class="code">locked-read-only</span>.</div></div>
+<div class="input-row"><div class="ik">staging_cvm_id</div><div class="iv">Optional. Reuse an existing staging CVM instead of provisioning a new one.</div></div>
+</div>
+</details>
+
+<details>
+<summary>Running the Probe Manually</summary>
+<div class="detail-body">
+<div class="step">
+  <div class="n">1</div>
+  <h4>Trigger via GitHub Actions</h4>
+  <div class="typedef">
+gh workflow run kms-phala-staging-probe.yaml \<br>
+&nbsp;&nbsp;-f kms_version=v0.4.0 \<br>
+&nbsp;&nbsp;-f kms_image_digest="ghcr.io/calimero-network/mero-kms-phala@sha256:abc123..." \<br>
+&nbsp;&nbsp;-f profile=locked-read-only
+  </div>
+</div>
+<div class="step">
+  <div class="n">2</div>
+  <h4>Monitor execution</h4>
+  <div class="typedef">
+gh run watch
+  </div>
+  <p>The workflow typically completes in 5&ndash;8 minutes. Watch for the &ldquo;Probe Results&rdquo; step output.</p>
+</div>
+<div class="step">
+  <div class="n">3</div>
+  <h4>Download artifacts</h4>
+  <div class="typedef">
+gh run download &lt;run-id&gt; -n probe-artifacts
+  </div>
+  <p>The artifact bundle contains <span class="code">measurement-policy-candidates.json</span>, the compose hash, and signed attestation quotes.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Outputs</summary>
+<div class="detail-body">
+<div class="output-row"><div class="ok">measurement-policy-candidates.json</div><div class="ov">Extracted MRTD, RTMR0&ndash;3 values and TCB status for the probed KMS instance. Formatted for direct insertion into the release policy file.</div></div>
+<div class="output-row"><div class="ok">compose-hash.txt</div><div class="ov">SHA-256 hash of the Docker Compose configuration used. Enables reproducibility verification.</div></div>
+<div class="output-row"><div class="ok">attestation-quote.bin</div><div class="ov">Raw TDX attestation quote from the staging KMS. Can be independently verified via ITA.</div></div>
+<div class="output-row"><div class="ok">attestation-quote.json</div><div class="ov">Parsed attestation quote in JSON format with human-readable fields.</div></div>
+<div class="output-row"><div class="ok">probe-report.md</div><div class="ov">Human-readable summary of the probe run including pass/fail status, timing, and measurement comparison.</div></div>
+</div>
+</details>
+
+<details>
+<summary>Promotion Path to Release</summary>
+<div class="detail-body">
+<p style="margin-bottom:12px;">After a successful probe, the measurement candidates follow this promotion path:</p>
+<div class="flow-row">
+  <div class="flow-n">1</div>
+  <div class="flow-body">
+    <h4>Probe completes successfully</h4>
+    <p>Measurement candidates are extracted and uploaded as artifacts.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">2</div>
+  <div class="flow-body">
+    <h4>Policy promotion PR</h4>
+    <p>Candidates are copied into <span class="code">kms-phala-attestation-policy.{profile}.json</span>. A PR is opened (automatically by the probe workflow or manually).</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">3</div>
+  <div class="flow-body">
+    <h4>Security review</h4>
+    <p>Two approvals from the security team. Reviewers verify the diff matches expected measurement changes.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">4</div>
+  <div class="flow-body">
+    <h4>Merge &amp; release</h4>
+    <p>The merged policy is consumed by the next release build. The release workflow bundles the policy into the GitHub release assets.</p>
+  </div>
+</div>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     KMS POLICY PROMOTION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>KMS Policy Promotion</h2>
+<p style="margin-bottom:18px;">PR-based promotion of measurement candidates from the staging probe into the release attestation policy. The policy files are the source of truth for which TDX measurements the KMS will accept.</p>
+
+<details open>
+<summary>Purpose &amp; Flow</summary>
+<div class="detail-body">
+<p style="margin-bottom:14px;">The attestation policy defines which MRTD, RTMR, and TCB values are acceptable. Policy changes are <strong>always</strong> PR-governed &mdash; there is no backdoor for policy updates.</p>
+
+<h3 style="margin-top:0;">Files Touched</h3>
+<p style="margin-bottom:12px;">Each profile has its own policy file:</p>
+<div class="file-touch">kms-phala-attestation-policy.debug.json</div>
+<div class="file-touch">kms-phala-attestation-policy.debug-read-only.json</div>
+<div class="file-touch">kms-phala-attestation-policy.locked-read-only.json</div>
+
+<h3>Automatic Flow (from staging probe)</h3>
+<div class="flow-row">
+  <div class="flow-n">1</div>
+  <div class="flow-body">
+    <h4>Staging probe generates candidates</h4>
+    <p>The <span class="code">kms-phala-staging-probe.yaml</span> workflow extracts measurements and produces <span class="code">measurement-policy-candidates.json</span>.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">2</div>
+  <div class="flow-body">
+    <h4>Workflow opens a PR</h4>
+    <p>A follow-up job creates a branch, copies candidates into the profile-specific policy file, and opens a PR with the <span class="code">policy-promotion</span> label.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">3</div>
+  <div class="flow-body">
+    <h4>CI validates the PR</h4>
+    <p>A CI check verifies the policy JSON is syntactically valid, contains the required fields, and the measurements are well-formed hex strings of the correct length.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">4</div>
+  <div class="flow-body">
+    <h4>Human review &amp; merge</h4>
+    <p>Two security-team approvals required. After merge, the policy is picked up by the next release.</p>
+  </div>
+</div>
+
+<h3>Manual Flow</h3>
+<p style="margin-bottom:10px;">When the automatic flow is unavailable or a manual override is needed:</p>
+<div class="step">
+  <div class="n">1</div>
+  <h4>Download probe artifacts</h4>
+  <p>Fetch <span class="code">measurement-policy-candidates.json</span> from the probe run artifacts.</p>
+</div>
+<div class="step">
+  <div class="n">2</div>
+  <h4>Update policy file</h4>
+  <p>Copy the measurement values into the appropriate <span class="code">kms-phala-attestation-policy.{profile}.json</span> file. Ensure the JSON structure matches the existing format.</p>
+</div>
+<div class="step">
+  <div class="n">3</div>
+  <h4>Open PR with policy-promotion label</h4>
+  <p>The label triggers the CI validation check. Without the label, the policy-specific checks do not run.</p>
+</div>
+<div class="step">
+  <div class="n">4</div>
+  <h4>Obtain reviews and merge</h4>
+  <p>Same review requirements as the automatic flow: two security-team approvals.</p>
+</div>
+</div>
+</details>
+
+<details>
+<summary>Review Requirements</summary>
+<div class="detail-body">
+<ul>
+  <li><strong>Two approvals</strong> from members of the <span class="code">@calimero-network/security</span> team.</li>
+  <li>Reviewers must verify the measurement values in the diff match those in the probe report.</li>
+  <li>Any modification to the policy JSON structure (not just values) requires an additional architecture review.</li>
+  <li>The <span class="code">policy-promotion</span> label must be present for CI checks to run.</li>
+  <li>Merge is blocked until all CI checks pass and reviews are obtained.</li>
+</ul>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     NODE IMAGE GCP POLICY PROMOTION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc">
+<h2>Node Image GCP Policy Promotion</h2>
+<p style="margin-bottom:18px;">Publishes measured MRTD and RTMR values from probe VMs to the release, enabling runtime verification of deployed GCP confidential VMs.</p>
+
+<details open>
+<summary>Purpose</summary>
+<div class="detail-body">
+<p>When a new GCP node image is built, a probe VM is launched from the image, and its TDX measurements are extracted. These measurements are the canonical reference for verifying that production VMs are running the expected code. The promotion workflow publishes these measurements as <span class="code">published-mrtds.json</span> in the GitHub release.</p>
+</div>
+</details>
+
+<details>
+<summary>Promotion Inputs</summary>
+<div class="detail-body">
+<div class="input-row"><div class="ik">measurement-policy-candidates</div><div class="iv">JSON file containing MRTD and RTMR0&ndash;3 values extracted from the probe VM, keyed by profile. Generated by the release pipeline&rsquo;s probe stage.</div></div>
+<div class="input-row"><div class="ik">release_tag</div><div class="iv">The mero-tee release tag (e.g. <span class="code">mero-tee-v0.3.0</span>) to attach the MRTD file to.</div></div>
+<div class="input-row"><div class="ik">image_family</div><div class="iv">The GCP image family name that was probed (e.g. <span class="code">mero-tee-locked-read-only</span>).</div></div>
+</div>
+</details>
+
+<details>
+<summary>What It Does</summary>
+<div class="detail-body">
+<div class="flow-row">
+  <div class="flow-n">1</div>
+  <div class="flow-body">
+    <h4>Validate measurement candidates</h4>
+    <p>Checks the input JSON for required fields, correct hex encoding, and expected lengths (MRTD: 48 bytes, RTMRs: 48 bytes each).</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">2</div>
+  <div class="flow-body">
+    <h4>Assemble published-mrtds.json</h4>
+    <p>Merges per-profile measurements into a single <span class="code">published-mrtds.json</span> file with metadata (release tag, timestamp, image family).</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">3</div>
+  <div class="flow-body">
+    <h4>Upload to GitHub release</h4>
+    <p>Attaches <span class="code">published-mrtds.json</span> to the specified release tag using <span class="code">gh release upload</span>. Also updates the checksums file.</p>
+  </div>
+</div>
+<div class="flow-row">
+  <div class="flow-n">4</div>
+  <div class="flow-body">
+    <h4>Sign the updated checksums</h4>
+    <p>Re-signs <span class="code">checksums.txt</span> with cosign to include the hash of the newly uploaded MRTD file.</p>
+  </div>
+</div>
+</div>
+</details>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     ADRs
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Architecture Decision Records</h2>
+<p style="margin-bottom:18px;">Key architectural decisions governing attestation policy management, versioning, and release processes.</p>
+
+<details open>
+<summary><span class="adr-id">ADR-0001</span> KMS Profile Pinning</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">Context</h3>
+<p style="margin-bottom:12px;">The KMS must serve exactly one profile at a time. Misconfiguring the profile breaks cohort separation &mdash; a debug KMS could accidentally release keys to production nodes, or vice versa.</p>
+
+<h3>Decision</h3>
+<div class="decision">
+  <strong>Pinned profile file + reject KMS_POLICY_PROFILE override</strong>
+  <p style="margin-top:6px;">The KMS reads its profile from a pinned file (<span class="code">/etc/mero-kms/image-profile</span>) baked into the container image at build time. The <span class="code">MERO_KMS_PROFILE</span> environment variable is validated against the pinned file. If they disagree, the KMS refuses to start. This prevents accidental profile mismatches in deployment configurations.</p>
+</div>
+
+<h3>Consequences</h3>
+<ul>
+  <li>Each profile requires a separate KMS container image (already the case for measurement integrity).</li>
+  <li>Operators cannot override the profile at runtime &mdash; they must deploy the correct image.</li>
+  <li>Startup fails loudly on mismatch, preventing silent policy violations.</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary><span class="adr-id">ADR-0002</span> Release Policy Source of Truth</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">Context</h3>
+<p style="margin-bottom:12px;">Attestation policy must be versioned, auditable, and tamper-evident. Multiple sources of truth (environment variables, config files, hardcoded values) create confusion and risk.</p>
+
+<h3>Decision</h3>
+<div class="decision">
+  <strong>PR-governed policy files consumed at release</strong>
+  <p style="margin-top:6px;">The canonical attestation policy lives in version-controlled JSON files (<span class="code">kms-phala-attestation-policy.{profile}.json</span>) in the mero-tee repository. Changes require a PR with security-team review. The release workflow bundles these files into GitHub release assets, which the KMS fetches at startup.</p>
+</div>
+
+<h3>Consequences</h3>
+<ul>
+  <li>Policy changes are auditable via git history and PR reviews.</li>
+  <li>No out-of-band policy updates &mdash; all changes go through the PR process.</li>
+  <li>The <span class="code">USE_ENV_POLICY</span> escape hatch exists for development but is blocked in production by CI checks.</li>
+  <li>Policy is immutable once released &mdash; changing it requires a new release.</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary><span class="adr-id">ADR-0003</span> Version Sync Guard</summary>
+<div class="detail-body">
+<h3 style="margin-top:0;">Context</h3>
+<p style="margin-bottom:12px;">KMS and node image versions are tightly coupled. A KMS update may change measurements, requiring a corresponding policy update. Deploying one without the other creates a window where attestation fails.</p>
+
+<h3>Decision</h3>
+<div class="decision">
+  <strong>Coupled KMS/node version bumps with CI guard</strong>
+  <p style="margin-top:6px;">A CI check enforces that when the KMS version or node image version is bumped, the other is either bumped simultaneously or explicitly marked as unchanged. The check inspects the PR diff for version-related files and blocks merge if coupling constraints are violated.</p>
+</div>
+
+<h3>Consequences</h3>
+<ul>
+  <li>Prevents accidental partial rollouts where KMS and node versions are mismatched.</li>
+  <li>Adds friction to version bumps &mdash; both components must be considered even for single-component changes.</li>
+  <li>The CI guard can be overridden with a <span class="code">skip-version-sync</span> label for genuine single-component updates, requiring a justification comment.</li>
+  <li>Release notes must document the version coupling for each release.</li>
+</ul>
+</div>
+</details>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>
