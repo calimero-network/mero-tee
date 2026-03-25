@@ -13,6 +13,12 @@ import {
   mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
 
+const logWarn = (...args) => {
+  if (import.meta.env.DEV) {
+    console.warn(...args);
+  }
+};
+
 export function useNodeVerification() {
   const [state, setState] = useState({
     status: 'idle',
@@ -37,9 +43,12 @@ export function useNodeVerification() {
       const latestTag = (await fetchNodeReleases(1))[0];
       const tagToUse = releaseTag?.trim() || latestTag;
       let policiesByProfile = {};
+      let policyWarning = null;
       try {
         policiesByProfile = await fetchNodePolicy(tagToUse);
-      } catch {
+      } catch (err) {
+        policyWarning = `Policy fetch failed for ${tagToUse}; showing observed quote values only.`;
+        logWarn('Failed to fetch node policy for release', tagToUse, err);
         // Policy fetch failed; continue without expected values
       }
 
@@ -59,6 +68,7 @@ export function useNodeVerification() {
           eventCount: 0,
           tagToUse,
           policiesByProfile,
+          warnings: policyWarning ? [policyWarning] : [],
         },
       });
     } catch (e) {

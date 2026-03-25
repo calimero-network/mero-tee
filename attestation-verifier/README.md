@@ -1,6 +1,6 @@
 # Calimero Attestation Verifier
 
-A public, open-source web tool to verify Phala KMS instances against official release policy. Supports ITA (Intel Trust Authority) quote verification via backend.
+A public, open-source web tool to verify Phala KMS and mero-tee node attestations against official release policy. Supports ITA (Intel Trust Authority) quote verification via backend.
 
 ## Deploy on Vercel
 
@@ -16,11 +16,18 @@ A public, open-source web tool to verify Phala KMS instances against official re
 1. Open a KMS deployment (with KMS URL set) → Attestation section.
 2. Click **"Verify in verifier"** — opens the verifier in a new tab with ITA verification + compose_hash comparison.
 
-### Direct (paste or fetch)
+### KMS verification (paste or fetch)
 
 1. Open the verifier URL (optionally with `?kms_url=...`).
 2. Enter KMS URL and click "Fetch attestation", or paste attestation JSON.
 3. Click "Verify KMS".
+
+### Node verification
+
+1. Open the **Mero TEE Verification** tab.
+2. Enter node URL (for example `http://<public-ip>:80`).
+3. Optionally set a release tag (`mero-tee-vX.Y.Z`) to compare against a specific published policy.
+4. Click **Verify node**.
 
 ### Flow
 
@@ -39,9 +46,13 @@ A public, open-source web tool to verify Phala KMS instances against official re
 ## Security
 
 - **SSRF protection**: `kms_url` restricted to HTTPS and allowed hosts (default: `*.phala.network`, localhost). Override with `KMS_ALLOWED_HOSTS`.
-- **Nonce verification**: For `kms_url` flow, backend verifies `reportDataHex[0..32]` matches the nonce sent to KMS (prevents replay).
+- **Node URL allowlist**: `node_url` is restricted to allowed host regexes (default allows IPv4 + localhost). Override with `NODE_ALLOWED_HOSTS`.
+- **Nonce verification**: For `kms_url` flow, backend verifies `reportDataHex[0..32]` matches the nonce sent to KMS (prevents replay). Node flow performs the same check when report-data fields are present.
 - **Client-side JWT verification**: Token signature verified against Intel JWKS (`portal.trustauthority.intel.com/certs`) before display.
+- **No secrets in logs**: verifier utility code avoids unconditional debug logging of event payloads.
 
-## Node verification
+## Operations runbook
 
-mero-tee (GCP TDX node) verification is planned. For now, use `scripts/release/verify-node-image-gcp-release-assets.sh`.
+For operational guidance (key rotation, incident response, and deployment checks), see:
+
+- `docs/runbooks/platforms/attestation-verifier.md`

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/**"
+      - "mero-kms/**"
+      - "attestation-verifier/**"
       - "scripts/release/**"
       - "scripts/policy/**"
       - "scripts/attestation/**"
@@ -47,7 +49,7 @@ jobs:
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
+            if [[ "${file}" == .github/workflows/* || "${file}" == mero-kms/* || "${file}" == attestation-verifier/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 
@@ -57,7 +59,7 @@ jobs:
           done
 
           if [[ "${requires_docs_update}" == "true" && "${has_docs_update}" != "true" ]]; then
-            ci_fail "DOCS_UPDATE_REQUIRED" "This PR changes workflows/scripts/node-image-gcp but does not update docs."
+            ci_fail "DOCS_UPDATE_REQUIRED" "This PR changes workflows/services/verifier/scripts/node-image-gcp but does not update docs."
             ci_next "Please update at least one of: docs/** or README.md."
             exit 1
           fi

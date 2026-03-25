@@ -18,15 +18,8 @@ export async function sha384Hex(data) {
 function buildEventDigestInput(event) {
   const eventType = event.event_type ?? event.eventType ?? 0;
   const eventName = (event.event || '').toString();
-  const hasEventPayload = 'event_payload' in event;
-  const hasEventPayloadCamel = 'eventPayload' in event;
   let payload = event.event_payload ?? event.eventPayload ?? '';
   if (typeof payload === 'string') payload = payload.trim();
-
-  if (eventName === 'compose-hash') {
-    const source = hasEventPayload ? 'event_payload' : hasEventPayloadCamel ? 'eventPayload' : 'none';
-    console.log(`[crypto] compose-hash digest input: source=${source} event_payload=${JSON.stringify(event.event_payload)} eventPayload=${JSON.stringify(event.eventPayload)}`);
-  }
   let payloadBytes;
   if (typeof payload === 'string' && /^[a-fA-F0-9]+$/.test(payload)) {
     payloadBytes = hexToBytes(payload);

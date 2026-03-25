@@ -5,6 +5,12 @@
 
 import { RTMR_HEX_RE, COMPOSE_HASH_RE } from './hex.js';
 
+function debugLog(...args) {
+  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+    console.warn(...args);
+  }
+}
+
 // TDX quote binary layout (Intel TDX DCAP)
 const QUOTE_HEADER_LEN = 48;
 const MRTD_LEN = 48;
@@ -88,8 +94,12 @@ export function extractComposeHashAndAppId(eventLog) {
 
     if (name === 'compose-hash' || name === 'app-id') {
       const source = hasEventPayload ? 'event_payload' : hasEventPayloadCamel ? 'eventPayload' : 'none';
-      const payloadPreview = typeof payload === 'string' ? payload.slice(0, 24) + (payload.length > 24 ? '...' : '') : payload;
-      console.log(`[attestation] ${name}: source=${source} event_payload=${JSON.stringify(event.event_payload)} eventPayload=${JSON.stringify(event.eventPayload)} -> payload=${JSON.stringify(payloadPreview)}`);
+      const payloadPreview = typeof payload === 'string'
+        ? payload.slice(0, 24) + (payload.length > 24 ? '...' : '')
+        : payload;
+      debugLog(
+        `[attestation] ${name}: source=${source} event_payload=${JSON.stringify(event.event_payload)} eventPayload=${JSON.stringify(event.eventPayload)} -> payload=${JSON.stringify(payloadPreview)}`
+      );
     }
 
     if (name === 'compose-hash' && payload && COMPOSE_HASH_RE.test(payload)) {

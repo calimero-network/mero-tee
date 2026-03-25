@@ -1,0 +1,80 @@
+name: CI attestation verifier
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "attestation-verifier/**"
+      - ".github/workflows/ci-attestation-verifier.yaml"
+  pull_request:
+    paths:
+      - "attestation-verifier/**"
+      - ".github/workflows/ci-attestation-verifier.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-attestation-verifier-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test-build:
+    name: lint + test + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: attestation-verifier
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: attestation-verifier/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+
+      - name: Test
+        id: test
+        run: npm run test
+
+      - name: Build
+        id: build
+        run: npm run build
+
+      - name: Upload build artifact
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: attestation-verifier-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: attestation-verifier/dist
+          if-no-files-found: error
+
+      - name: Summarize verifier CI outcomes
+        if: ${{ always() }}
+        working-directory: .
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "ci-attestation-verifier" "${{ job.status }}" "LINT_TEST_BUILD" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
+            --checks-line "- lint: ${{ steps.lint.outcome }}" \
+            --checks-line "- test: ${{ steps.test.outcome }}" \
+            --checks-line "- build: ${{ steps.build.outcome }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- dist artifact uploaded on success" \
+            --next-line "- Fix first failing check above and rerun workflow."

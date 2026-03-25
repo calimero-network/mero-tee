@@ -18,6 +18,7 @@ This repository contains TEE infrastructure for Calimero, including:
 - `cargo`
 - `jq`
 - `bash`
+- Node.js 20+ and `npm` (for `attestation-verifier`)
 
 Some workflows/scripts also rely on:
 
@@ -35,7 +36,19 @@ cargo build --release
 
 ```bash
 cargo check
+cargo fmt --all --check
+cargo clippy -p mero-kms-phala --all-targets -- -D warnings
 cargo test
+```
+
+Verifier checks:
+
+```bash
+cd attestation-verifier
+npm ci
+npm run lint
+npm run test
+npm run build
 ```
 
 ## Pull requests

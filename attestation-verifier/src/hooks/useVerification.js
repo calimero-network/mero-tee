@@ -20,6 +20,11 @@ import {
 } from '../utils/composeHashPolicy.js';
 
 const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
+const logWarn = (...args) => {
+  if (import.meta.env.DEV) {
+    console.warn(...args);
+  }
+};
 
 async function fetchPoliciesForTag(tag) {
   const results = {};
@@ -27,7 +32,8 @@ async function fetchPoliciesForTag(tag) {
     try {
       const policy = await fetchAttestationPolicy(tag, profile);
       results[profile] = policy;
-    } catch {
+    } catch (err) {
+      logWarn(`[verifier] Failed to fetch policy for profile '${profile}' and tag '${tag}'`, err);
       results[profile] = null;
     }
   }
@@ -61,7 +67,10 @@ export function useVerification() {
         tagToUse = releaseTag;
         try {
           compatMap = await fetchCompatibilityMap(releaseTag);
-        } catch { compatMap = null; }
+        } catch (err) {
+          logWarn(`[verifier] Failed to fetch compatibility map for tag '${releaseTag}'`, err);
+          compatMap = null;
+        }
         matches = [];
         if (composeHash && compatMap?.compatibility?.profiles) {
           for (const [profile, p] of Object.entries(compatMap.compatibility.profiles)) {
@@ -103,7 +112,8 @@ export function useVerification() {
           } else {
             replayedRtmrs[i] = await replayRTMR(events, i);
           }
-        } catch {
+        } catch (err) {
+          logWarn(`[verifier] Failed to replay RTMR${i}`, err);
           replayedRtmrs[i] = null;
         }
       }

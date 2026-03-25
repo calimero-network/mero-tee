@@ -69,6 +69,13 @@ export function VerificationResults({ result }) {
           {result.matches?.length > 0 ? ' (matched)' : ''}
         </p>
       )}
+      {result.warnings?.length > 0 && (
+        <div className="result-warn" role="status" aria-live="polite">
+          {result.warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
