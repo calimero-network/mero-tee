@@ -1,47 +1,25 @@
-# Calimero Attestation Verifier
+# Attestation Verifier
 
-A public, open-source web tool to verify Phala KMS instances against official release policy. Supports ITA (Intel Trust Authority) quote verification via backend.
+Public web tool for verifying KMS and node attestations via Intel Trust Authority (ITA).
 
-## Deploy on Vercel
+> **Full documentation**: [Components — Attestation Verifier](https://calimero-network.github.io/mero-tee/components.html)
 
-1. **Connect repo** to Vercel (or deploy from `attestation-verifier/` as root directory).
-2. **Add env vars**:
-   - `ITA_API_KEY` — Intel Trust Authority API key
-3. **Deploy**. No Redis or other storage required.
+## Deploy
 
-## Usage
+Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `KMS_ALLOWED_HOSTS`, `NODE_ALLOWED_HOSTS`.
 
-### From MDMA
+## Flow
 
-1. Open a KMS deployment (with KMS URL set) → Attestation section.
-2. Click **"Verify in verifier"** — opens the verifier in a new tab with ITA verification + compose_hash comparison.
+1. User provides KMS URL or pastes attestation
+2. API fetches `/attest` from KMS
+3. Quote sent to ITA for verification
+4. Nonce binding and JWT verification
+5. Results displayed with measurement comparison
 
-### Direct (paste or fetch)
+## Development
 
-1. Open the verifier URL (optionally with `?kms_url=...`).
-2. Enter KMS URL and click "Fetch attestation", or paste attestation JSON.
-3. Click "Verify KMS".
-
-### Flow
-
-1. Client opens verifier with `?kms_url=...` (or enters KMS URL and triggers verify).
-2. Frontend POSTs `{ kms_url }` to `/api/verify`.
-3. Backend fetches attestation from KMS `/attest`, calls ITA with the quote.
-4. Backend returns `{ attestation, ita_response, ita_token }` in the same response.
-5. Page displays ITA verification + compose_hash match. No storage required.
-
-## What it does
-
-- **ITA verification**: Quote verified by Intel Trust Authority; signed token returned for client verification.
-- **Compose hash**: Extracted from event log, compared with `kms-phala-compatibility-map.json`.
-- **Policy match**: Shows which profile (debug, debug-read-only, locked-read-only) matches.
-
-## Security
-
-- **SSRF protection**: `kms_url` restricted to HTTPS and allowed hosts (default: `*.phala.network`, localhost). Override with `KMS_ALLOWED_HOSTS`.
-- **Nonce verification**: For `kms_url` flow, backend verifies `reportDataHex[0..32]` matches the nonce sent to KMS (prevents replay).
-- **Client-side JWT verification**: Token signature verified against Intel JWKS (`portal.trustauthority.intel.com/certs`) before display.
-
-## Node verification
-
-mero-tee (GCP TDX node) verification is planned. For now, use `scripts/release/verify-node-image-gcp-release-assets.sh`.
+```bash
+cd attestation-verifier
+npm install
+npm run dev
+```
