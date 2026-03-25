@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _SHARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shared")
 if _SHARED_DIR not in sys.path:
     sys.path.insert(0, _SHARED_DIR)
-from extract_tdx_policy_candidates import measurements_from_quote
+from extract_tdx_policy_candidates import measurements_from_quote  # noqa: E402
 
 INIT_MR = "0" * 96  # 48 bytes hex = 96 chars
 COMPOSE_HASH_RE = re.compile(r"^[a-fA-F0-9]{64}$")
