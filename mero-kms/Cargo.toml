@@ -22,7 +22,7 @@ eyre = "0.6"
 hex = "0.4"
 libp2p-identity = "0.2"
 rand = "0.9"
-redis = { version = "1.0", features = ["tokio-comp"] }
+redis = { version = "1.1", features = ["tokio-comp"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
