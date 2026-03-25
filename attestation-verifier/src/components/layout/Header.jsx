@@ -8,14 +8,6 @@ export function Header() {
       <Link to="/" className="header-brand">
         <img src={calimeroLogo} alt="Calimero" className="header-logo" />
       </Link>
-      <a
-        href="https://cloud.calimero.network"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="header-cta"
-      >
-        Open Mero Cloud <span className="header-cta-arrow">→</span>
-      </a>
     </header>
   );
 }
