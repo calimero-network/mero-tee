@@ -44,7 +44,10 @@ export function MeroTeeVerificationPage() {
         Verify mero-tee node attestations (GCP TDX nodes) or KMS instances. Enter a node URL (e.g.{' '}
         <code>http://public-ip:80</code>) or KMS URL.
       </p>
-      <MeroTeeVerifierForm status={status === 'loading' || nodeStatus === 'loading' ? 'loading' : status} onVerifyByUrl={handleVerifyByUrl} />
+      <MeroTeeVerifierForm
+        status={status === 'loading' || nodeStatus === 'loading' ? 'loading' : status}
+        onVerifyByUrl={handleVerifyByUrl}
+      />
       <div className="verifier-form" style={{ marginTop: '1.5rem' }}>
         <h3>Node (merod) verification</h3>
         <p className="hint">
@@ -76,7 +79,7 @@ export function MeroTeeVerificationPage() {
               {nodeStatus === 'loading' ? 'Verifying…' : 'Verify node'}
             </button>
           </div>
-          <div className="input-row" style={{ marginTop: '0.5rem' }}>
+          <div className="input-row input-row--col" style={{ marginTop: '0.5rem' }}>
             <label htmlFor="node_release_tag" className="hint">
               Release tag (optional, e.g. mero-tee-v2.2.4)
             </label>
@@ -87,7 +90,7 @@ export function MeroTeeVerificationPage() {
               placeholder="mero-tee-v2.2.4"
               disabled={nodeStatus === 'loading' || status === 'loading'}
               defaultValue={nodeReleaseTagParam || ''}
-              style={{ maxWidth: '16rem' }}
+              style={{ width: '100%', maxWidth: '16rem' }}
             />
           </div>
         </form>

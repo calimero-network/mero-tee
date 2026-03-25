@@ -37,7 +37,7 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           {status === 'loading' ? 'Verifying…' : 'Verify KMS'}
         </button>
       </div>
-      <div className="input-row">
+      <div className="input-row input-row--col">
         <label htmlFor="release_tag" className="hint">Release tag (optional, e.g. mero-kms-v1.2.3)</label>
         <input
           id="release_tag"
