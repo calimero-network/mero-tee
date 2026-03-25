@@ -2,6 +2,7 @@
 
 use axum::extract::State;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use dstack_sdk::dstack_client::DstackClient;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ pub(crate) async fn attest_kms_handler(
         })?;
 
     Ok(Json(KmsAttestResponse {
-        quote_b64: base64::engine::general_purpose::STANDARD.encode(quote_bytes),
+        quote_b64: BASE64.encode(quote_bytes),
         report_data_hex: hex::encode(report_data),
         event_log: parsed_event_log,
         vm_config: quote_response.vm_config,
@@ -77,7 +78,7 @@ pub(crate) async fn attest_kms_handler(
 }
 
 pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], ServiceError> {
-    let decoded = base64::engine::general_purpose::STANDARD
+    let decoded = BASE64
         .decode(value)
         .map_err(|e| ServiceError::InvalidAttestationRequest(format!("{}: {}", field_name, e)))?;
     decoded.try_into().map_err(|_| {

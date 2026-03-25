@@ -38,6 +38,29 @@ impl Default for AttestationPolicy {
 }
 
 impl AttestationPolicy {
+    /// Check a raw measurement value against the allowlist for a named register.
+    /// Returns `Ok(())` if it matches any entry, `Err(label, normalized)` otherwise.
+    pub fn check_measurement(
+        allowlist: &[HexMeasurement],
+        label: &str,
+        raw_value: &str,
+    ) -> Result<(), (String, String)> {
+        if allowlist.is_empty() {
+            return Err((label.to_string(), format!("{} allowlist is empty", label)));
+        }
+        if allowlist.iter().any(|m| m.matches_raw(raw_value)) {
+            return Ok(());
+        }
+        let normalized = raw_value
+            .trim()
+            .trim_start_matches("0x")
+            .to_ascii_lowercase();
+        Err((
+            label.to_string(),
+            format!("{} '{}' is not in allowlist", label, normalized),
+        ))
+    }
+
     /// Parse a release-fetched or inline JSON policy document into an `AttestationPolicy`.
     pub fn from_json(
         json_str: &str,

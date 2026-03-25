@@ -35,8 +35,7 @@ use eyre::{bail, Result as EyreResult};
 use crate::policy::{validate_policy_requirements, AttestationPolicy};
 
 use self::env::{
-    normalize_hash_pin, parse_bool_env, parse_csv_env, parse_csv_env_raw,
-    parse_measurement_list_env, read_env_utf8,
+    normalize_hash_pin, parse_bool_env, parse_csv_env, parse_measurement_list_env, read_env_utf8,
 };
 use self::policy_loader::fetch_policy_from_release;
 
@@ -136,7 +135,7 @@ impl Config {
             .map(|v| normalize_hash_pin(&v))
             .transpose()?;
 
-        let cors_allowed_origins = parse_csv_env_raw("CORS_ALLOWED_ORIGINS").unwrap_or_default();
+        let cors_allowed_origins = parse_csv_env("CORS_ALLOWED_ORIGINS", false).unwrap_or_default();
 
         let enforce_measurement_policy = parse_bool_env("ENFORCE_MEASUREMENT_POLICY", true)?;
         let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
@@ -147,33 +146,14 @@ impl Config {
             Self::release_version_from_env()?
         };
 
-        let (mut attestation_policy, policy_ready, policy_unavailable_reason) = if use_env_policy {
-            (Self::load_policy_from_env()?, true, None::<String>)
-        } else if let Some(version) = release_version.as_deref() {
-            match fetch_policy_from_release(version, &kms_profile, policy_sha256.as_deref()).await {
-                Ok(policy) => {
-                    tracing::info!(
-                        "Loaded attestation policy from release mero-kms-v{} profile {}",
-                        version,
-                        kms_profile
-                    );
-                    (policy, true, None::<String>)
-                }
-                Err(err) => {
-                    let reason = format!(
-                        "Failed to load release policy for version '{}' profile '{}': {}",
-                        version, kms_profile, err
-                    );
-                    tracing::warn!("{reason}");
-                    (AttestationPolicy::default(), false, Some(reason))
-                }
-            }
-        } else {
-            let reason =
-                "MERO_KMS_VERSION is not set; release policy is not available yet".to_string();
-            tracing::warn!("{reason}");
-            (AttestationPolicy::default(), false, Some(reason))
-        };
+        let (mut attestation_policy, policy_ready, policy_unavailable_reason) =
+            resolve_attestation_policy(
+                use_env_policy,
+                release_version.as_deref(),
+                &kms_profile,
+                policy_sha256.as_deref(),
+            )
+            .await?;
         attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
         if policy_ready {
             validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
@@ -215,19 +195,54 @@ impl Config {
             Err(std::env::VarError::NotUnicode(_)) => bail!("MERO_KMS_VERSION must be valid UTF-8"),
         }
     }
+}
 
-    fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
-        Ok(AttestationPolicy {
-            enforce_measurement_policy: true,
-            allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES")
-                .unwrap_or_else(|| vec!["uptodate".to_string()]),
-            allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD")?,
-            allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0")?,
-            allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1")?,
-            allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
-            allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
-        })
+async fn resolve_attestation_policy(
+    use_env_policy: bool,
+    release_version: Option<&str>,
+    kms_profile: &str,
+    policy_sha256: Option<&str>,
+) -> EyreResult<(AttestationPolicy, bool, Option<String>)> {
+    if use_env_policy {
+        return Ok((load_policy_from_env()?, true, None));
     }
+    if let Some(version) = release_version {
+        match fetch_policy_from_release(version, kms_profile, policy_sha256).await {
+            Ok(policy) => {
+                tracing::info!(
+                    "Loaded attestation policy from release mero-kms-v{} profile {}",
+                    version,
+                    kms_profile
+                );
+                Ok((policy, true, None))
+            }
+            Err(err) => {
+                let reason = format!(
+                    "Failed to load release policy for version '{}' profile '{}': {}",
+                    version, kms_profile, err
+                );
+                tracing::warn!("{reason}");
+                Ok((AttestationPolicy::default(), false, Some(reason)))
+            }
+        }
+    } else {
+        let reason = "MERO_KMS_VERSION is not set; release policy is not available yet".to_string();
+        tracing::warn!("{reason}");
+        Ok((AttestationPolicy::default(), false, Some(reason)))
+    }
+}
+
+fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
+    Ok(AttestationPolicy {
+        enforce_measurement_policy: true,
+        allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES", true)
+            .unwrap_or_else(|| vec!["uptodate".to_string()]),
+        allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD")?,
+        allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0")?,
+        allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1")?,
+        allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
+        allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
+    })
 }
 
 fn profile_override_from_env() -> EyreResult<Option<String>> {

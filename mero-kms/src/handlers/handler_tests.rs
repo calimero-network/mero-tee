@@ -7,7 +7,7 @@ use calimero_tee_attestation::verify_mock_attestation;
 use libp2p_identity::Keypair;
 use tower::util::ServiceExt;
 
-use crate::test_util::read_json_body;
+use crate::test_util::{create_mock_quote, read_json_body};
 use crate::AttestationPolicy;
 
 use super::errors::ServiceError;
@@ -59,12 +59,7 @@ fn test_policy_not_ready_blocks_key_release() {
 #[test]
 fn test_policy_rejects_tcb_status() {
     let nonce = [0x11; 32];
-    let mut mock_quote = b"MOCK_TDX_QUOTE_V1".to_vec();
-    let mut report_data = [0u8; 64];
-    report_data[..32].copy_from_slice(&nonce);
-    mock_quote.extend_from_slice(&report_data);
-    mock_quote.resize(256, 0);
-
+    let mock_quote = create_mock_quote(&nonce);
     let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
     verification.tcb_status = Some("OutOfDate".to_owned());
 
@@ -86,12 +81,7 @@ fn test_policy_rejects_untrusted_mrtd() {
     use crate::measurement::HexMeasurement;
 
     let nonce = [0x22; 32];
-    let mut mock_quote = b"MOCK_TDX_QUOTE_V1".to_vec();
-    let mut report_data = [0u8; 64];
-    report_data[..32].copy_from_slice(&nonce);
-    mock_quote.extend_from_slice(&report_data);
-    mock_quote.resize(256, 0);
-
+    let mock_quote = create_mock_quote(&nonce);
     let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
     verification.tcb_status = Some("UpToDate".to_owned());
 
@@ -117,12 +107,7 @@ fn test_policy_accepts_allowlisted_measurements() {
     use crate::measurement::HexMeasurement;
 
     let nonce = [0x33; 32];
-    let mut mock_quote = b"MOCK_TDX_QUOTE_V1".to_vec();
-    let mut report_data = [0u8; 64];
-    report_data[..32].copy_from_slice(&nonce);
-    mock_quote.extend_from_slice(&report_data);
-    mock_quote.resize(256, 0);
-
+    let mock_quote = create_mock_quote(&nonce);
     let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
     verification.tcb_status = Some("UpToDate".to_owned());
     let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();

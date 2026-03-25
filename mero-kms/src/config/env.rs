@@ -4,7 +4,7 @@ use eyre::{bail, Result as EyreResult};
 
 use crate::util::SHA256_HEX_LEN;
 
-pub fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
+fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
@@ -20,19 +20,18 @@ pub fn parse_bool_env(name: &str, default: bool) -> EyreResult<bool> {
     }
 }
 
-pub fn parse_csv_env(name: &str) -> Option<Vec<String>> {
+/// Parse a comma-separated env var, optionally lowercasing entries.
+pub fn parse_csv_env(name: &str, lowercase: bool) -> Option<Vec<String>> {
     std::env::var(name).ok().map(|v| {
         v.split(',')
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect()
-    })
-}
-
-pub fn parse_csv_env_raw(name: &str) -> Option<Vec<String>> {
-    std::env::var(name).ok().map(|v| {
-        v.split(',')
-            .map(|s| s.trim().to_string())
+            .map(|s| {
+                let trimmed = s.trim();
+                if lowercase {
+                    trimmed.to_ascii_lowercase()
+                } else {
+                    trimmed.to_string()
+                }
+            })
             .filter(|s| !s.is_empty())
             .collect()
     })

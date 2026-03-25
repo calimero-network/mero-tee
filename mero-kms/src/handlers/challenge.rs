@@ -2,6 +2,7 @@
 
 use axum::extract::State;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rand::random;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ pub(crate) async fn challenge_handler(
 
     Ok(Json(ChallengeResponse {
         challenge_id,
-        nonce_b64: base64::engine::general_purpose::STANDARD.encode(nonce),
+        nonce_b64: BASE64.encode(nonce),
         expires_at,
     }))
 }

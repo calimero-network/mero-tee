@@ -2,6 +2,7 @@
 
 use axum::extract::State;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use calimero_tee_attestation::{
     is_mock_quote, verify_attestation, verify_mock_attestation, VerificationResult,
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
-use crate::measurement::HexMeasurement;
+use crate::policy::AttestationPolicy;
 use crate::util::CHALLENGE_ID_HEX_LEN;
 use crate::Config;
 
@@ -48,7 +49,7 @@ pub(crate) async fn get_key_handler(
     ensure_policy_ready_for_key_release(&state.config)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
-    let quote_bytes = base64::engine::general_purpose::STANDARD
+    let quote_bytes = BASE64
         .decode(&request.quote_b64)
         .map_err(|e| ServiceError::InvalidBase64(e.to_string()))?;
     debug!(quote_len = quote_bytes.len(), "Decoded quote");
@@ -185,10 +186,10 @@ pub(crate) fn verify_peer_signature(
     challenge_nonce: &[u8; 32],
     quote_bytes: &[u8],
 ) -> Result<(), ServiceError> {
-    let public_key_bytes = base64::engine::general_purpose::STANDARD
+    let public_key_bytes = BASE64
         .decode(peer_public_key_b64)
         .map_err(|e| ServiceError::InvalidPeerPublicKey(e.to_string()))?;
-    let signature_bytes = base64::engine::general_purpose::STANDARD
+    let signature_bytes = BASE64
         .decode(signature_b64)
         .map_err(|e| ServiceError::InvalidSignature(e.to_string()))?;
 
@@ -233,26 +234,10 @@ pub(crate) fn enforce_attestation_policy(
         return Ok(());
     }
 
-    let actual_tcb_status = verification_result.tcb_status.clone().ok_or_else(|| {
-        ServiceError::TcbStatusRejected(
-            "Quote verification did not provide a TCB status".to_owned(),
-        )
-    })?;
-    let normalized_tcb_status = actual_tcb_status.to_ascii_lowercase();
-    if !policy
-        .allowed_tcb_statuses
-        .iter()
-        .any(|allowed| allowed == &normalized_tcb_status)
-    {
-        return Err(ServiceError::TcbStatusRejected(format!(
-            "TCB status '{}' is not allowed. Allowed values: {}",
-            actual_tcb_status,
-            policy.allowed_tcb_statuses.join(", ")
-        )));
-    }
+    enforce_tcb_status(policy, verification_result)?;
 
     let body = &verification_result.quote.body;
-    let register_checks: [(&str, &str, &[HexMeasurement]); 5] = [
+    let register_checks: [(&str, &str, &[crate::measurement::HexMeasurement]); 5] = [
         ("MRTD", &body.mrtd, &policy.allowed_mrtd),
         ("RTMR0", &body.rtmr0, &policy.allowed_rtmr0),
         ("RTMR1", &body.rtmr1, &policy.allowed_rtmr1),
@@ -261,21 +246,34 @@ pub(crate) fn enforce_attestation_policy(
     ];
 
     for (label, actual, allowlist) in register_checks {
-        if allowlist.is_empty() {
-            return Err(ServiceError::MeasurementPolicyRejected(format!(
-                "{} allowlist is empty",
-                label
-            )));
-        }
-        if !allowlist.iter().any(|m| m.matches_raw(actual)) {
-            return Err(ServiceError::MeasurementPolicyRejected(format!(
-                "{} '{}' is not in allowlist",
-                label,
-                actual.trim().trim_start_matches("0x").to_ascii_lowercase()
-            )));
-        }
+        AttestationPolicy::check_measurement(allowlist, label, actual)
+            .map_err(|(_, msg)| ServiceError::MeasurementPolicyRejected(msg))?;
     }
 
+    Ok(())
+}
+
+fn enforce_tcb_status(
+    policy: &AttestationPolicy,
+    verification_result: &VerificationResult,
+) -> Result<(), ServiceError> {
+    let actual_tcb_status = verification_result.tcb_status.clone().ok_or_else(|| {
+        ServiceError::TcbStatusRejected(
+            "Quote verification did not provide a TCB status".to_owned(),
+        )
+    })?;
+    let normalized = actual_tcb_status.to_ascii_lowercase();
+    if !policy
+        .allowed_tcb_statuses
+        .iter()
+        .any(|allowed| allowed == &normalized)
+    {
+        return Err(ServiceError::TcbStatusRejected(format!(
+            "TCB status '{}' is not allowed. Allowed values: {}",
+            actual_tcb_status,
+            policy.allowed_tcb_statuses.join(", ")
+        )));
+    }
     Ok(())
 }
 
