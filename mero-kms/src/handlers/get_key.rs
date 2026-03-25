@@ -39,7 +39,12 @@ pub struct GetKeyResponse {
     pub key: String,
 }
 
-/// Handler for the get-key endpoint.
+/// Key release flow: validate inputs → consume single-use challenge → verify
+/// peer signature → verify TDX attestation → enforce measurement policy → derive key via dstack.
+///
+/// The challenge is consumed *before* signature/attestation checks so that a
+/// replayed request always fails on the second attempt regardless of where
+/// the first attempt errored.
 pub(crate) async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
@@ -151,6 +156,8 @@ pub(crate) async fn get_key_handler(
     }))
 }
 
+/// SHA-256 hash of the peer ID string, used as the `application_data` binding
+/// in the TDX quote so the attestation is tied to a specific node identity.
 pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(peer_id.as_bytes());
@@ -169,6 +176,8 @@ pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceErr
     Ok(())
 }
 
+/// Build the dstack key derivation path: `{namespace}/{profile}/{peerId}`.
+/// This ensures each profile+peer combination gets a unique deterministic key.
 fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
     format!(
         "{}/{}/{}",
@@ -178,6 +187,9 @@ fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
     )
 }
 
+/// Verify that the claimed peer ID owns the supplied public key and that the
+/// signature covers a deterministic payload binding the challenge, quote, and peer ID.
+/// This prevents a node from requesting keys for a different peer ID.
 pub(crate) fn verify_peer_signature(
     peer_id: &str,
     peer_public_key_b64: &str,
@@ -209,6 +221,9 @@ pub(crate) fn verify_peer_signature(
     Ok(())
 }
 
+/// Canonical JSON payload that the node must sign. Includes the challenge ID,
+/// nonce, SHA-256 of the quote (not the quote itself, to keep the payload small),
+/// and the peer ID. Deterministic serialization via `serde_json::to_vec`.
 pub(crate) fn build_signature_payload(
     challenge_id: &str,
     challenge_nonce: &[u8; 32],
@@ -225,6 +240,9 @@ pub(crate) fn build_signature_payload(
     .map_err(|e| ServiceError::InvalidSignature(format!("failed to serialize payload: {}", e)))
 }
 
+/// Verify that the quote's TCB status and all five TDX measurement registers
+/// (MRTD, RTMR0-3) match the loaded attestation policy. Skipped entirely when
+/// `enforce_measurement_policy` is false (dev/debug only).
 pub(crate) fn enforce_attestation_policy(
     config: &Config,
     verification_result: &VerificationResult,

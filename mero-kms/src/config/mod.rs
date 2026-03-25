@@ -197,6 +197,9 @@ impl Config {
     }
 }
 
+/// Determine the attestation policy source (env vars vs. GitHub release) and load it.
+/// Returns a default empty policy with `policy_ready=false` when the version is not
+/// yet set, allowing the service to start in degraded mode (/attest works, /get-key is blocked).
 async fn resolve_attestation_policy(
     use_env_policy: bool,
     release_version: Option<&str>,
@@ -245,6 +248,9 @@ fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
     })
 }
 
+/// Read the KMS profile from env, handling the deprecated `KMS_POLICY_PROFILE`
+/// alias. If both are set they must agree; if only the legacy name is set a
+/// deprecation warning is emitted.
 fn profile_override_from_env() -> EyreResult<Option<String>> {
     let modern = read_env_utf8("MERO_KMS_PROFILE")?;
     let legacy = read_env_utf8("KMS_POLICY_PROFILE")?;
@@ -323,6 +329,8 @@ fn resolve_kms_profile(
     )
 }
 
+/// Normalize and validate a KMS profile name against the known set.
+/// Used both at config load time and when parsing policy JSON.
 pub fn parse_profile(raw: &str) -> EyreResult<String> {
     let value = raw.trim().to_ascii_lowercase();
     if value.is_empty() {

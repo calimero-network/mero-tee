@@ -37,6 +37,7 @@ pub fn parse_csv_env(name: &str, lowercase: bool) -> Option<Vec<String>> {
     })
 }
 
+/// Validate and normalize a SHA-256 hex pin (exactly 64 hex chars, lowercase, no `0x`).
 pub fn normalize_hash_pin(raw: &str) -> EyreResult<String> {
     let normalized = raw.trim().trim_start_matches("0x").to_ascii_lowercase();
     if normalized.len() != SHA256_HEX_LEN {

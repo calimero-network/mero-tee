@@ -1,4 +1,9 @@
-//! Runtime-event helpers for profile measurement separation.
+//! Runtime-event helpers for KMS profile measurement separation.
+//!
+//! Emits a dstack runtime event that extends RTMR3, binding the KMS instance
+//! to a specific profile (e.g. `locked-read-only`). This lets the attestation
+//! policy distinguish between KMS images built for different profiles even
+//! when the base image is identical.
 
 use dstack_attest::{ccel::RuntimeEvent, emit_runtime_event};
 use eyre::{bail, Result as EyreResult};
@@ -10,6 +15,9 @@ pub fn kms_profile_runtime_event_payload(profile: &str) -> Vec<u8> {
     format!("calimero.kms.profile={}", profile).into_bytes()
 }
 
+/// Emit the profile runtime event if not already present, or verify the
+/// existing event matches the selected profile. Fails hard if a *different*
+/// profile event exists, preventing mixed-profile key derivation.
 pub fn ensure_kms_profile_runtime_event(profile: &str) -> EyreResult<()> {
     let expected_payload = kms_profile_runtime_event_payload(profile);
     let events = RuntimeEvent::read_all()

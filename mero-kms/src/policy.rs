@@ -61,7 +61,12 @@ impl AttestationPolicy {
         ))
     }
 
-    /// Parse a release-fetched or inline JSON policy document into an `AttestationPolicy`.
+    /// Parse a policy JSON document, validating the `tag`, `role`, and `profile`
+    /// envelope fields before extracting measurement allowlists.
+    ///
+    /// `allow_legacy_missing_profile` supports older policy files that omit the
+    /// `role` and `profile` fields — only accepted for `locked-read-only` to
+    /// maintain backward compatibility with pre-profile releases.
     pub fn from_json(
         json_str: &str,
         expected_tag: &str,
@@ -135,6 +140,9 @@ impl AttestationPolicy {
     }
 }
 
+/// Fail-fast check at startup: when enforcement is on, every measurement
+/// register must have at least one allowed value. This catches misconfiguration
+/// before the first key-release request arrives.
 pub fn validate_policy_requirements(
     policy: &AttestationPolicy,
     accept_mock_attestation: bool,
@@ -224,6 +232,8 @@ fn parse_json_hex_array(
     Ok(Some(parsed))
 }
 
+/// Try `preferred_key` first (e.g. `node_allowed_mrtd`), fall back to
+/// `fallback_key` (e.g. `allowed_mrtd`) for backward-compatible policy files.
 fn parse_policy_hex_allowlist(
     policy: &serde_json::Map<String, serde_json::Value>,
     preferred_key: &str,

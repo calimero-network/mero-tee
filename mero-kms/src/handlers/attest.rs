@@ -86,6 +86,8 @@ pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 
     })
 }
 
+/// Domain-separated default binding when the caller doesn't supply one.
+/// Ensures the second half of report_data is never all-zeros.
 fn default_attestation_binding() -> [u8; 32] {
     Sha256::digest(b"mero-kms-phala-attest-v1").into()
 }
@@ -99,6 +101,8 @@ pub(crate) fn resolve_attestation_binding(
     }
 }
 
+/// Pack nonce (bytes 0..32) and binding (bytes 32..64) into the 64-byte
+/// TDX report_data field. The verifier reconstructs this to check the quote.
 pub(crate) fn build_attestation_report_data(nonce: &[u8; 32], binding: &[u8; 32]) -> [u8; 64] {
     let mut report_data = [0u8; 64];
     report_data[..32].copy_from_slice(nonce);

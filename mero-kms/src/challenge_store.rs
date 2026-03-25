@@ -42,6 +42,9 @@ pub enum ChallengeStoreError {
     Expired,
 }
 
+/// Atomic insert with capacity check. Prunes expired entries from the sorted-set
+/// index first, then checks pending count against `max_pending`. Returns the new
+/// count on success or -1 if capacity is exceeded.
 const REDIS_INSERT_SCRIPT: &str = r#"
 local challenge_key = KEYS[1]
 local index_key = KEYS[2]
@@ -60,6 +63,9 @@ redis.call('ZADD', index_key, expires_at, challenge_key)
 return pending + 1
 "#;
 
+/// Atomic consume (get + delete). Prunes expired entries, then fetches and
+/// removes the challenge in a single round-trip to guarantee single-use semantics
+/// even under concurrent requests.
 const REDIS_CONSUME_SCRIPT: &str = r#"
 local challenge_key = KEYS[1]
 local index_key = KEYS[2]
