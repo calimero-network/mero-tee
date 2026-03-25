@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Overview — Calimero mero-tee Architecture</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="main">
+<div class="content">
+<div class="breadcrumb"><a href="index.html">Home</a><span class="sep">/</span><span>System Overview</span></div>
+
+<h1>System <em>Overview</em></h1>
+<p class="page-subtitle">mero-tee TEE infrastructure — 3 components, 6 endpoints, mutual attestation</p>
+
+<div class="g4" style="margin-bottom:36px;">
+  <div class="stat"><div class="v">3</div><div class="l">components</div></div>
+  <div class="stat"><div class="v">6</div><div class="l">API endpoints</div></div>
+  <div class="stat"><div class="v">3</div><div class="l">image profiles</div></div>
+  <div class="stat"><div class="v">2</div><div class="l">trust planes</div></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     1. HIGH-LEVEL ARCHITECTURE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card ga">
+<h2>High-Level Architecture</h2>
+<p style="margin-bottom:18px;">The mero-tee system secures Calimero node storage through hardware-attested key management. merod nodes run inside TDX confidential VMs. On boot, each node contacts the KMS to obtain its storage encryption key. The KMS validates the node&rsquo;s TDX attestation before releasing the key via Phala dstack&rsquo;s deterministic key derivation.</p>
+
+<svg viewBox="0 0 1060 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="glow-amber"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#f59e0b" flood-opacity="0.3"/></filter>
+    <filter id="glow-blue"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#3b82f6" flood-opacity="0.3"/></filter>
+    <filter id="glow-green"><feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#10b981" flood-opacity="0.3"/></filter>
+  </defs>
+
+  <!-- ── merod Nodes (TDX CVM) ── -->
+  <rect x="30" y="30" width="300" height="150" rx="14" fill="#3b82f608" stroke="#3b82f6" stroke-width="1.8" filter="url(#glow-blue)"/>
+  <text x="50" y="58" fill="#3b82f6" font-family="JetBrains Mono" font-size="14" font-weight="700">merod Nodes</text>
+  <rect x="185" y="42" width="130" height="20" rx="4" fill="#3b82f620"/>
+  <text x="250" y="56" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="9" font-weight="600">GCP TDX CVM</text>
+  <text x="50" y="82" fill="#6b6b80" font-family="DM Sans" font-size="11">Calimero peer-to-peer nodes</text>
+  <text x="50" y="100" fill="#6b6b80" font-family="DM Sans" font-size="11">Encrypted storage at rest</text>
+  <text x="50" y="118" fill="#6b6b80" font-family="DM Sans" font-size="11">TDX attestation on boot</text>
+  <text x="50" y="140" fill="#3b82f680" font-family="JetBrains Mono" font-size="8">Built by Packer + Ansible</text>
+  <text x="50" y="155" fill="#3b82f680" font-family="JetBrains Mono" font-size="8">Image profiles: debug | debug-ro | locked-ro</text>
+
+  <!-- ── mero-kms-phala ── -->
+  <rect x="420" y="30" width="300" height="150" rx="14" fill="#f59e0b08" stroke="#f59e0b" stroke-width="1.8" filter="url(#glow-amber)"/>
+  <text x="440" y="58" fill="#f59e0b" font-family="JetBrains Mono" font-size="14" font-weight="700">mero-kms-phala</text>
+  <rect x="610" y="42" width="95" height="20" rx="4" fill="#f59e0b20"/>
+  <text x="658" y="56" text-anchor="middle" fill="#f59e0b" font-family="JetBrains Mono" font-size="9" font-weight="600">TDX CVM</text>
+  <text x="440" y="82" fill="#6b6b80" font-family="DM Sans" font-size="11">Validates TDX attestations</text>
+  <text x="440" y="100" fill="#6b6b80" font-family="DM Sans" font-size="11">Challenge-response key release</text>
+  <text x="440" y="118" fill="#6b6b80" font-family="DM Sans" font-size="11">Policy enforcement (MRTD, RTMRs)</text>
+  <text x="440" y="140" fill="#f59e0b80" font-family="JetBrains Mono" font-size="8">Endpoints: /health /challenge /get-key /attest</text>
+  <text x="440" y="155" fill="#f59e0b80" font-family="JetBrains Mono" font-size="8">mero-kms-phala/ &middot; Rust &middot; Axum</text>
+
+  <!-- ── Phala dstack ── -->
+  <rect x="800" y="30" width="230" height="150" rx="14" fill="#10b98108" stroke="#10b981" stroke-width="1.8" filter="url(#glow-green)"/>
+  <text x="820" y="58" fill="#10b981" font-family="JetBrains Mono" font-size="14" font-weight="700">Phala dstack</text>
+  <rect x="940" y="42" width="75" height="20" rx="4" fill="#10b98120"/>
+  <text x="977" y="56" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9" font-weight="600">HW root</text>
+  <text x="820" y="82" fill="#6b6b80" font-family="DM Sans" font-size="11">Deterministic key derivation</text>
+  <text x="820" y="100" fill="#6b6b80" font-family="DM Sans" font-size="11">TDX quote generation</text>
+  <text x="820" y="118" fill="#6b6b80" font-family="DM Sans" font-size="11">Sealed storage root</text>
+  <text x="820" y="140" fill="#10b98180" font-family="JetBrains Mono" font-size="8">Unix socket at DSTACK_SOCKET_PATH</text>
+
+  <!-- Connection: merod → KMS -->
+  <line x1="330" y1="80" x2="415" y2="80" stroke="#3b82f6" stroke-width="2"/>
+  <polygon points="415,80 407,76 407,84" fill="#3b82f6"/>
+  <text x="373" y="72" text-anchor="middle" fill="#3b82f6" font-family="JetBrains Mono" font-size="8" font-weight="600">HTTPS</text>
+
+  <!-- Connection: KMS → dstack -->
+  <line x1="720" y1="80" x2="795" y2="80" stroke="#10b981" stroke-width="2"/>
+  <polygon points="795,80 787,76 787,84" fill="#10b981"/>
+  <text x="758" y="72" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="8" font-weight="600">socket</text>
+
+  <!-- ── Row 2: Supporting Services ── -->
+
+  <!-- GitHub Releases -->
+  <rect x="420" y="240" width="300" height="80" rx="12" fill="#8b5cf610" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="440" y="268" fill="#8b5cf6" font-family="JetBrains Mono" font-size="13" font-weight="700">GitHub Releases</text>
+  <text x="440" y="288" fill="#6b6b80" font-family="DM Sans" font-size="10">Attestation policy JSON</text>
+  <text x="440" y="304" fill="#6b6b80" font-family="DM Sans" font-size="10">Versioned by MERO_KMS_VERSION tag</text>
+
+  <line x1="570" y1="240" x2="570" y2="185" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="570,185 566,193 574,193" fill="#8b5cf6"/>
+  <text x="600" y="215" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">fetch policy on boot</text>
+
+  <!-- Image Builder -->
+  <rect x="30" y="240" width="300" height="80" rx="12" fill="#ec489910" stroke="#ec4899" stroke-width="1.5"/>
+  <text x="50" y="268" fill="#ec4899" font-family="JetBrains Mono" font-size="13" font-weight="700">Image Builder</text>
+  <text x="50" y="288" fill="#6b6b80" font-family="DM Sans" font-size="10">Packer (GCP) + Ansible provisioning</text>
+  <text x="50" y="304" fill="#6b6b80" font-family="DM Sans" font-size="10">Profiles set RTMR3 runtime events</text>
+
+  <line x1="180" y1="240" x2="180" y2="185" stroke="#ec4899" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="180,185 176,193 184,193" fill="#ec4899"/>
+  <text x="215" y="215" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">builds CVM image</text>
+
+  <!-- Attestation Verifier -->
+  <rect x="800" y="240" width="230" height="80" rx="12" fill="#06b6d410" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="820" y="268" fill="#06b6d4" font-family="JetBrains Mono" font-size="12" font-weight="700">Attestation Verifier</text>
+  <text x="820" y="288" fill="#6b6b80" font-family="DM Sans" font-size="10">React SPA + /api/verify</text>
+  <text x="820" y="304" fill="#6b6b80" font-family="DM Sans" font-size="10">Public verification portal</text>
+
+  <line x1="800" y1="270" x2="725" y2="150" stroke="#06b6d4" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="780" y="202" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">POST /attest</text>
+
+  <!-- Intel Trust Authority -->
+  <rect x="800" y="380" width="230" height="65" rx="12" fill="#f9731610" stroke="#f97316" stroke-width="1.5"/>
+  <text x="820" y="408" fill="#f97316" font-family="JetBrains Mono" font-size="12" font-weight="700">Intel Trust Authority</text>
+  <text x="820" y="428" fill="#6b6b80" font-family="DM Sans" font-size="10">Quote verification &amp; JWT issuance</text>
+
+  <line x1="915" y1="320" x2="915" y2="375" stroke="#f97316" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <polygon points="915,375 911,367 919,367" fill="#f97316"/>
+  <text x="945" y="350" fill="#6b6b80" font-family="JetBrains Mono" font-size="8">verify</text>
+
+  <!-- ── Row 3: Trust flow labels ── -->
+  <rect x="30" y="380" width="300" height="65" rx="12" fill="#84cc1608" stroke="#84cc16" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="180" y="405" text-anchor="middle" fill="#84cc16" font-family="JetBrains Mono" font-size="11" font-weight="600">Peer-to-Peer Network</text>
+  <text x="180" y="425" text-anchor="middle" fill="#6b6b80" font-family="DM Sans" font-size="10">Other merod nodes &middot; gossipsub &middot; sync</text>
+
+  <line x1="180" y1="180" x2="180" y2="375" stroke="#84cc16" stroke-width="1" stroke-dasharray="3 3" opacity=".4"/>
+</svg>
+
+<div class="legend">
+  <div class="legend-item"><div class="ld" style="background:#3b82f6"></div>merod Nodes</div>
+  <div class="legend-item"><div class="ld" style="background:#f59e0b"></div>KMS</div>
+  <div class="legend-item"><div class="ld" style="background:#10b981"></div>dstack</div>
+  <div class="legend-item"><div class="ld" style="background:#8b5cf6"></div>Policy</div>
+  <div class="legend-item"><div class="ld" style="background:#ec4899"></div>Image Builder</div>
+  <div class="legend-item"><div class="ld" style="background:#06b6d4"></div>Verifier</div>
+  <div class="legend-item"><div class="ld" style="background:#f97316"></div>ITA</div>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     2. KMS DEEP DIVE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gb">
+<h2>mero-kms-phala Deep Dive</h2>
+<p style="margin-bottom:18px;">The KMS is a stateless Rust HTTP service (Axum) that runs inside a TDX enclave alongside Phala dstack. Its sole purpose is to validate remote attestations and release deterministic storage encryption keys.</p>
+
+<h3>API Endpoints</h3>
+<div style="margin-bottom:16px;">
+  <div class="fr"><div class="fp">GET /health</div><div class="fd">Readiness probe. Returns 200 when policy is loaded and service is ready.</div></div>
+  <div class="fr"><div class="fp">POST /challenge</div><div class="fd">Accepts <span class="code">{ peerId }</span>. Returns <span class="code">{ challengeId, nonce }</span>. Nonce is cryptographically random, TTL-bound.</div></div>
+  <div class="fr"><div class="fp">POST /get-key</div><div class="fd">Accepts <span class="code">{ challengeId, quote, signature }</span>. Validates signature, verifies TDX quote against policy, derives key via dstack. Returns encrypted key material.</div></div>
+  <div class="fr"><div class="fp">POST /attest</div><div class="fd">Accepts <span class="code">{ nonce }</span>. Requests a TDX quote from dstack with <span class="code">nonce || report_data</span>, returns the raw quote for remote verification.</div></div>
+</div>
+
+<h3>Internal Architecture</h3>
+<div class="g2">
+  <div class="cb">
+    <h4>AppState</h4>
+    <p>Shared Axum state holding <span class="code">Config</span> (from env) and <span class="code">ChallengeStore</span> (InMemory or Redis). The store maps challengeId &rarr; (nonce, peerId, expiry).</p>
+  </div>
+  <div class="cb">
+    <h4>Policy Engine</h4>
+    <p>On startup, fetches attestation policy from GitHub releases (or env). Policy specifies allowed MRTD, RTMR0&ndash;3 values, TCB status allowlists, and profile constraints.</p>
+  </div>
+</div>
+
+<h3>Key Modules</h3>
+<div class="fr"><div class="fp">config.rs</div><div class="fd">Parses all environment variables into a typed <span class="code">Config</span> struct. Validates required fields at startup.</div></div>
+<div class="fr"><div class="fp">policy.rs</div><div class="fd">Fetches, parses, and validates attestation policy JSON. Supports SHA-256 pinning via <span class="code">MERO_KMS_POLICY_SHA256</span>.</div></div>
+<div class="fr"><div class="fp">challenge_store.rs</div><div class="fd">Trait-based challenge storage. <span class="code">InMemoryStore</span> (default) or <span class="code">RedisStore</span> when <span class="code">REDIS_URL</span> is set.</div></div>
+<div class="fr"><div class="fp">runtime_event.rs</div><div class="fd">RTMR3 runtime event encoding for profile cohort separation.</div></div>
+<div class="fr"><div class="fp">handlers/challenge.rs</div><div class="fd">POST /challenge handler: generates nonce, stores challenge, returns response.</div></div>
+<div class="fr"><div class="fp">handlers/get_key.rs</div><div class="fd">POST /get-key handler: consumes challenge, verifies signature, checks quote, derives key.</div></div>
+<div class="fr"><div class="fp">handlers/attest.rs</div><div class="fd">POST /attest handler: self-attestation for the KMS itself.</div></div>
+<div class="fr"><div class="fp">handlers/errors.rs</div><div class="fd">Centralized <span class="code">ServiceError</span> enum with Into&lt;Response&gt; for all error types.</div></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     3. NODE IMAGES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gc" id="node-images">
+<h2>Node Images</h2>
+<p style="margin-bottom:18px;">The <span class="code">mero-tee/</span> subfolder contains infrastructure-as-code for building GCP TDX confidential VM images. Packer defines the image, Ansible provisions the OS and merod binary.</p>
+
+<h3>Build Profiles</h3>
+<div class="g3">
+  <div class="cb">
+    <h4>debug</h4>
+    <p>Full SSH access, verbose logging, no read-only filesystem. For local development and testing. Writes a <strong>debug</strong> RTMR3 event.</p>
+    <span class="tag tag-gap">development</span>
+  </div>
+  <div class="cb">
+    <h4>debug-read-only</h4>
+    <p>SSH access but read-only root filesystem. For staging validation. Writes a <strong>debug-read-only</strong> RTMR3 event.</p>
+    <span class="tag tag-partial">staging</span>
+  </div>
+  <div class="cb">
+    <h4>locked-read-only</h4>
+    <p>No SSH, read-only filesystem, minimal attack surface. For production. Writes a <strong>locked-read-only</strong> RTMR3 event.</p>
+    <span class="tag tag-done">production</span>
+  </div>
+</div>
+
+<p style="margin-top:16px;">Each profile writes a distinct RTMR3 runtime event during boot. The KMS attestation policy specifies which RTMR3 values are acceptable, creating <strong>cryptographic cohort separation</strong> &mdash; a debug node can never obtain production keys.</p>
+
+<h3>Build Pipeline</h3>
+<div class="step"><div class="n">1</div><h4>Packer Init</h4><p>GCP image builder provisions a Confidential VM instance with TDX guest support enabled.</p></div>
+<div class="step"><div class="n">2</div><h4>Ansible Provision</h4><p>Installs merod binary, systemd units, network config, and TDX guest tools. Sets profile marker at <span class="code">/etc/mero-kms/image-profile</span>.</p></div>
+<div class="step"><div class="n">3</div><h4>Image Seal</h4><p>Captures the GCP image. The image hash becomes the MRTD measurement &mdash; any tampering changes the measurement and attestation fails.</p></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     4. ATTESTATION VERIFIER
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="card gd">
+<h2>Attestation Verifier</h2>
+<p style="margin-bottom:18px;">A public-facing web application that allows anyone to verify the attestation status of a Calimero KMS instance. Built with React and a serverless API backend.</p>
+
+<div class="g2">
+  <div class="cb">
+    <h4>Frontend (React SPA)</h4>
+    <p>User enters a KMS URL. The app calls the verifier API which fetches a quote from the KMS and submits it to Intel Trust Authority for verification. Results are displayed with detailed attestation claims.</p>
+  </div>
+  <div class="cb">
+    <h4>Backend (/api/verify)</h4>
+    <p>Serverless function that: (1) calls <span class="code">POST /attest</span> on the target KMS with a fresh nonce, (2) forwards the quote to Intel Trust Authority, (3) validates the ITA JWT response, (4) returns structured verification results.</p>
+  </div>
+</div>
+
+<h3>Verification Chain</h3>
+<div class="step"><div class="n">1</div><h4>Browser &rarr; /api/verify</h4><p>User submits KMS URL with binding data. Serverless function generates a nonce.</p></div>
+<div class="step"><div class="n">2</div><h4>Verifier &rarr; KMS /attest</h4><p>Serverless function calls the KMS <span class="code">POST /attest</span> with the nonce.</p></div>
+<div class="step"><div class="n">3</div><h4>KMS &rarr; dstack</h4><p>KMS asks dstack to produce a TDX quote binding <span class="code">nonce || report_data</span>.</p></div>
+<div class="step"><div class="n">4</div><h4>Verifier &rarr; ITA</h4><p>Quote is forwarded to Intel Trust Authority for cryptographic verification.</p></div>
+<div class="step"><div class="n">5</div><h4>ITA &rarr; JWT</h4><p>ITA returns a signed JWT with attestation claims (measurements, TCB level, advisory IDs).</p></div>
+<div class="step"><div class="n">6</div><h4>Browser ← Results</h4><p>Parsed JWT claims are returned to the browser and displayed in a human-readable format.</p></div>
+</div>
+
+</div>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>
