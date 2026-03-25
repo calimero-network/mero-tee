@@ -73,8 +73,10 @@ jobs:
           bash -n scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
           bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
+          pip install "ruff==0.14.0"
           python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py
           python3 -m py_compile scripts/attestation/shared/extract_tdx_policy_candidates.py
+          ruff check scripts/attestation/shared scripts/ci scripts/kms/phala
 
       - name: Validate version manifest shape
         id: version_manifest

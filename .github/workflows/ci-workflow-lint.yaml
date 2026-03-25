@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/attestation/**/*.sh scripts/kms/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh .github/workflows/deps/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0

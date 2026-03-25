@@ -69,6 +69,8 @@ jobs:
 
       - name: Validate release helper scripts
         run: |
+          set -euo pipefail
+          pip install --disable-pip-version-check --quiet ruff
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/verify-kms-phala-release-assets.sh
           bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
@@ -80,6 +82,7 @@ jobs:
           bash -n scripts/release/kms-phala/verify-generated-signatures.sh
           bash -n scripts/release/kms-phala/upsert-umbrella-release-links.sh
           python3 -m py_compile scripts/attestation/kms/verify_dstack_compose_hash.py
+          ruff check scripts/attestation/kms/verify_dstack_compose_hash.py
 
       - name: Get version info
         id: version_info

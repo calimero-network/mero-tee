@@ -6,56 +6,10 @@
  */
 import crypto from 'node:crypto';
 import * as jose from 'jose';
+import { validateKmsUrl, validateNodeUrl } from './url-validation.js';
 
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
 const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
-
-// SSRF protection: allowed host patterns (regex). Default: phala.network, localhost.
-const KMS_ALLOWED_HOSTS = (process.env.KMS_ALLOWED_HOSTS || 'phala\\.network$|^localhost$|^127\\.0\\.0\\.1$')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-// Node (merod) URLs: allow http for IPs and localhost. Pattern: ^\d+\.\d+\.\d+\.\d+$ for IPv4.
-const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$|^localhost$|^127\\.0\\.0\\.1$')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-function validateKmsUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('Invalid KMS URL');
-  }
-  if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
-    throw new Error('KMS URL must use HTTPS (except localhost)');
-  }
-  const host = parsed.hostname.toLowerCase();
-  const allowed = KMS_ALLOWED_HOSTS.some((re) => new RegExp(re, 'i').test(host));
-  if (!allowed) {
-    throw new Error('KMS URL host not in allowed list (phala.network, localhost). Set KMS_ALLOWED_HOSTS to override.');
-  }
-}
-
-function validateNodeUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('Invalid node URL');
-  }
-  // Nodes typically use HTTP; allow for IPs and localhost
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Node URL must use HTTP or HTTPS');
-  }
-  const host = parsed.hostname.toLowerCase();
-  const allowed = NODE_ALLOWED_HOSTS.some((re) => new RegExp(re).test(host));
-  if (!allowed) {
-    throw new Error('Node URL host not in allowed list (IP addresses, localhost). Set NODE_ALLOWED_HOSTS to override.');
-  }
-}
 
 function verifyNonceInAttestation(attestation, nonceBytes) {
   const reportDataHex = attestation.reportDataHex ?? attestation.report_data_hex;

@@ -9,6 +9,8 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
+      - "mero-kms/tests/**"
+      - rust-toolchain.toml
       - ".github/workflows/ci-kms-phala.yaml"
   pull_request:
     paths:
@@ -16,6 +18,8 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
+      - "mero-kms/tests/**"
+      - rust-toolchain.toml
       - ".github/workflows/ci-kms-phala.yaml"
 
 permissions:
@@ -36,7 +40,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.91.0
+          toolchain: ${{ vars.RUST_TOOLCHAIN_VERSION || '1.91.0' }}
           components: rustfmt, clippy
 
       - name: Setup rust cache

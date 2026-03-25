@@ -129,9 +129,9 @@ jobs:
       - name: Install probe dependencies
         run: |
           set -euo pipefail
-          pip install requests
+          pip install requests==2.32.5
           python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py scripts/attestation/shared/extract_tdx_policy_candidates.py scripts/kms/phala/provision_prod.py
-          npm install -g phala@latest
+          npm install -g phala@0.5.7
           phala --version
           jq --version
 

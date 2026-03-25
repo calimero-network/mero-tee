@@ -19,6 +19,7 @@ guides causes confusion.
 
 - [Phala: deploy and operate `mero-kms-phala` (KMS plane)](phala-kms.md)
 - [GCP: deploy `merod` node-image-gcp artifacts (node plane)](gcp-merod.md)
+- [Attestation verifier: operate web verifier service](attestation-verifier.md)
 
 ## Related cross-cutting docs
 

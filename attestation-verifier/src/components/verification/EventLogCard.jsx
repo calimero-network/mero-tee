@@ -57,7 +57,7 @@ function Rtmr3StepRow({ step, index }) {
   );
 }
 
-function EventSummary({ event, index }) {
+function EventSummary({ event }) {
   const name = (event.event || event.event_type) ?? '—';
   const payload = event.event_payload ?? event.eventPayload ?? '';
   const imr = event.imr ?? '—';
@@ -90,7 +90,6 @@ export function EventLogCard({
   eventCount,
   eventLog,
   composeHash,
-  appId,
   expectedComposeHashes,
   expectedPolicyComposeHashes,
   rtmr3ReplaySteps,

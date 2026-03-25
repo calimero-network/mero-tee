@@ -43,7 +43,7 @@ export function MeroTeeVerificationPage() {
         Verify mero-tee node attestations (GCP TDX nodes) or KMS instances. Enter a node URL (e.g.{' '}
         <code>http://public-ip:80</code>) or KMS URL.
       </p>
-      <MeroTeeVerifierForm status={status} onVerifyByUrl={handleVerifyByUrl} />
+      <MeroTeeVerifierForm status={activeStatus} onVerifyByUrl={handleVerifyByUrl} />
       <div className="verifier-form" style={{ marginTop: '1.5rem' }}>
         <h3>Node (merod) verification</h3>
         <p className="hint">
@@ -92,6 +92,9 @@ export function MeroTeeVerificationPage() {
       </div>
       {(nodeStatus === 'loading' || status === 'loading') && (
         <p className="result-warn">Verifying…</p>
+      )}
+      {nodeStatus === 'success' && nodeResult?.policyWarning && (
+        <p className="result-warn">{nodeResult.policyWarning}</p>
       )}
       {(activeError || nodeError || error) && (
         <p className="result-err">{activeError || nodeError || error}</p>

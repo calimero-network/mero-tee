@@ -36,10 +36,10 @@ export async function verifyNodeAttestation(nodeUrl) {
   return data;
 }
 
-export async function fetchKmsReleases(limit = 10) {
+async function fetchReleasesByPrefix(prefix, emptyMessage, limit = 10) {
   const perPage = 100;
   const maxPages = 3;
-  const kmsReleases = [];
+  const matching = [];
   for (let page = 1; page <= maxPages; page++) {
     const res = await fetch(
       `https://api.github.com/repos/${REPO}/releases?per_page=${perPage}&page=${page}`
@@ -48,38 +48,23 @@ export async function fetchKmsReleases(limit = 10) {
     const releases = await res.json();
     if (!releases.length) break;
     for (const r of releases) {
-      if (r.tag_name && r.tag_name.startsWith('mero-kms-v')) {
-        kmsReleases.push(r);
+      if (r.tag_name && r.tag_name.startsWith(prefix)) {
+        matching.push(r);
       }
     }
-    if (kmsReleases.length >= limit) break;
+    if (matching.length >= limit) break;
   }
-  if (kmsReleases.length === 0) throw new Error('No mero-kms releases found');
-  kmsReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-  return kmsReleases.slice(0, limit).map((r) => r.tag_name);
+  if (matching.length === 0) throw new Error(emptyMessage);
+  matching.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+  return matching.slice(0, limit).map((r) => r.tag_name);
+}
+
+export async function fetchKmsReleases(limit = 10) {
+  return fetchReleasesByPrefix('mero-kms-v', 'No mero-kms releases found', limit);
 }
 
 export async function fetchNodeReleases(limit = 10) {
-  const perPage = 100;
-  const maxPages = 3;
-  const nodeReleases = [];
-  for (let page = 1; page <= maxPages; page++) {
-    const res = await fetch(
-      `https://api.github.com/repos/${REPO}/releases?per_page=${perPage}&page=${page}`
-    );
-    if (!res.ok) break;
-    const releases = await res.json();
-    if (!releases.length) break;
-    for (const r of releases) {
-      if (r.tag_name && r.tag_name.startsWith('mero-tee-v')) {
-        nodeReleases.push(r);
-      }
-    }
-    if (nodeReleases.length >= limit) break;
-  }
-  if (nodeReleases.length === 0) throw new Error('No mero-tee node releases found');
-  nodeReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
-  return nodeReleases.slice(0, limit).map((r) => r.tag_name);
+  return fetchReleasesByPrefix('mero-tee-v', 'No mero-tee node releases found', limit);
 }
 
 /**
