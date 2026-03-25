@@ -25,10 +25,15 @@ use super::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyRequest {
+    /// Hex-encoded challenge ID previously obtained from `/challenge`.
     pub challenge_id: String,
+    /// Base64-encoded raw TDX quote bytes with the challenge nonce in report_data.
     pub quote_b64: String,
+    /// Base58-encoded libp2p peer ID of the requesting merod node.
     pub peer_id: String,
+    /// Base64-encoded protobuf-serialized libp2p public key corresponding to `peer_id`.
     pub peer_public_key_b64: String,
+    /// Base64-encoded signature over the canonical challenge+quote+peer payload.
     pub signature_b64: String,
 }
 
@@ -36,6 +41,7 @@ pub struct GetKeyRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
+    /// Derived storage encryption key for the requesting peer.
     pub key: String,
 }
 
@@ -76,41 +82,67 @@ pub(crate) async fn get_key_handler(
         &quote_bytes,
     )?;
 
-    let is_mock = is_mock_quote(&quote_bytes);
+    verify_and_enforce_attestation(
+        &state.config,
+        &quote_bytes,
+        &challenge_nonce,
+        &request.peer_id,
+    )
+    .await?;
+
+    let key_path = key_path_for_peer(&state.config, &request.peer_id);
+    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
+    let key_response = client
+        .get_key(Some(key_path), None)
+        .await
+        .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
+
+    info!(peer_id = %request.peer_id, "Key derived successfully");
+    Ok(Json(GetKeyResponse {
+        key: key_response.key,
+    }))
+}
+
+/// Verify the TDX attestation quote and enforce measurement policy.
+///
+/// Handles mock vs. real attestations, validates the quote cryptographically,
+/// checks nonce/peer-ID bindings, and enforces the register-level measurement
+/// policy (skipped for accepted mock quotes).
+async fn verify_and_enforce_attestation(
+    config: &Config,
+    quote_bytes: &[u8],
+    challenge_nonce: &[u8; 32],
+    peer_id: &str,
+) -> Result<(), ServiceError> {
+    let is_mock = is_mock_quote(quote_bytes);
     if is_mock {
-        if state.config.accept_mock_attestation {
-            warn!(
-                peer_id = %request.peer_id,
-                "Accepting mock attestation (development mode)"
-            );
+        if config.accept_mock_attestation {
+            warn!(peer_id = %peer_id, "Accepting mock attestation (development mode)");
         } else {
-            error!(
-                peer_id = %request.peer_id,
-                "Mock attestation rejected (production mode)"
-            );
+            error!(peer_id = %peer_id, "Mock attestation rejected (production mode)");
             return Err(ServiceError::MockAttestationRejected);
         }
     }
 
-    let peer_id_hash = hash_peer_id(&request.peer_id);
+    let peer_id_hash = hash_peer_id(peer_id);
     debug!(
-        peer_id = %request.peer_id,
+        peer_id = %peer_id,
         peer_id_hash = %hex::encode(peer_id_hash),
         "Created peer ID hash for verification"
     );
 
     let verification_result = if is_mock {
-        verify_mock_attestation(&quote_bytes, &challenge_nonce, Some(&peer_id_hash))
+        verify_mock_attestation(quote_bytes, challenge_nonce, Some(&peer_id_hash))
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
     } else {
-        verify_attestation(&quote_bytes, &challenge_nonce, Some(&peer_id_hash))
+        verify_attestation(quote_bytes, challenge_nonce, Some(&peer_id_hash))
             .await
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
     };
 
     if !verification_result.is_valid() {
         error!(
-            peer_id = %request.peer_id,
+            peer_id = %peer_id,
             quote_verified = verification_result.quote_verified,
             nonce_verified = verification_result.nonce_verified,
             app_hash_verified = ?verification_result.application_hash_verified,
@@ -132,28 +164,15 @@ pub(crate) async fn get_key_handler(
         ));
     }
 
-    info!(
-        peer_id = %request.peer_id,
-        "Attestation verified successfully"
-    );
+    info!(peer_id = %peer_id, "Attestation verified successfully");
 
     if !is_mock {
-        enforce_attestation_policy(&state.config, &verification_result)?;
+        enforce_attestation_policy(config, &verification_result)?;
     } else {
         warn!("Skipping measurement policy checks for accepted mock attestation");
     }
 
-    let key_path = key_path_for_peer(&state.config, &request.peer_id);
-    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
-    let key_response = client
-        .get_key(Some(key_path), None)
-        .await
-        .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
-
-    info!(peer_id = %request.peer_id, "Key derived successfully");
-    Ok(Json(GetKeyResponse {
-        key: key_response.key,
-    }))
+    Ok(())
 }
 
 /// SHA-256 hash of the peer ID string, used as the `application_data` binding
@@ -178,7 +197,7 @@ pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceErr
 
 /// Build the dstack key derivation path: `{namespace}/{profile}/{peerId}`.
 /// This ensures each profile+peer combination gets a unique deterministic key.
-fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
+pub(crate) fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
     format!(
         "{}/{}/{}",
         config.key_namespace_prefix.trim_matches('/'),
@@ -255,15 +274,15 @@ pub(crate) fn enforce_attestation_policy(
     enforce_tcb_status(policy, verification_result)?;
 
     let body = &verification_result.quote.body;
-    let register_checks: [(&str, &str, &[crate::measurement::HexMeasurement]); 5] = [
-        ("MRTD", &body.mrtd, &policy.allowed_mrtd),
-        ("RTMR0", &body.rtmr0, &policy.allowed_rtmr0),
-        ("RTMR1", &body.rtmr1, &policy.allowed_rtmr1),
-        ("RTMR2", &body.rtmr2, &policy.allowed_rtmr2),
-        ("RTMR3", &body.rtmr3, &policy.allowed_rtmr3),
+    let quote_registers: [(&str, &str); 5] = [
+        ("MRTD", &body.mrtd),
+        ("RTMR0", &body.rtmr0),
+        ("RTMR1", &body.rtmr1),
+        ("RTMR2", &body.rtmr2),
+        ("RTMR3", &body.rtmr3),
     ];
 
-    for (label, actual, allowlist) in register_checks {
+    for ((label, allowlist), (_, actual)) in policy.register_fields().iter().zip(quote_registers) {
         AttestationPolicy::check_measurement(allowlist, label, actual)
             .map_err(|(_, msg)| ServiceError::MeasurementPolicyRejected(msg))?;
     }
@@ -295,12 +314,17 @@ fn enforce_tcb_status(
     Ok(())
 }
 
+const DEFAULT_POLICY_NOT_READY_MSG: &str =
+    "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, \
+     or use explicit USE_ENV_POLICY mode.";
+
 pub(crate) fn ensure_policy_ready_for_key_release(config: &Config) -> Result<(), ServiceError> {
     if config.policy_ready {
         return Ok(());
     }
-    let details = config.policy_unavailable_reason.clone().unwrap_or_else(|| {
-        "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, or use explicit USE_ENV_POLICY mode.".to_string()
-    });
+    let details = config
+        .policy_unavailable_reason
+        .clone()
+        .unwrap_or_else(|| DEFAULT_POLICY_NOT_READY_MSG.to_string());
     Err(ServiceError::PolicyNotReady(details))
 }

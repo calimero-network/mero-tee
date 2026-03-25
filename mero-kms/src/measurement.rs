@@ -15,6 +15,7 @@ impl HexMeasurement {
         normalize_hex(raw, MEASUREMENT_BYTES).map(Self)
     }
 
+    /// Return the normalized hex string (lowercase, no `0x` prefix).
     pub fn as_str(&self) -> &str {
         &self.0
     }

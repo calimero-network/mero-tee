@@ -29,11 +29,14 @@ pub use crate::config::Config;
 pub use crate::measurement::HexMeasurement;
 pub use crate::policy::AttestationPolicy;
 
+const DEFAULT_LOG_FILTER: &str = "info";
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER)),
         )
         .with_target(true)
         .with_level(true)

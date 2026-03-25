@@ -9,6 +9,12 @@
 # KMS package
 /mero-kms/ @chefsale
 
+# Node image infrastructure (Packer + Ansible)
+/mero-tee/ @chefsale
+
+# Attestation verifier web app
+/attestation-verifier/ @chefsale
+
 # Attestation/release scripts
 /scripts/release/ @chefsale
 /scripts/policy/ @chefsale

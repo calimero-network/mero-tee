@@ -18,7 +18,9 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
   return (
     <form onSubmit={handleSubmit} className="verifier-form">
       <div className="input-row">
+        <label htmlFor="kms_url" className="sr-only">KMS URL</label>
         <input
+          id="kms_url"
           type="url"
           name="kms_url"
           placeholder="https://your-kms.phala.network"
@@ -29,9 +31,10 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           {status === 'loading' ? 'Verifying…' : 'Verify KMS'}
         </button>
       </div>
-      <p className="hint">Release tag for compose_hash check (optional, e.g. mero-kms-v1.2.3)</p>
       <div className="input-row">
+        <label htmlFor="release_tag" className="hint">Release tag for compose_hash check (optional, e.g. mero-kms-v1.2.3)</label>
         <input
+          id="release_tag"
           type="text"
           name="release_tag"
           placeholder="mero-kms-v1.2.3"
@@ -39,9 +42,9 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           disabled={status === 'loading'}
         />
       </div>
-      <p className="hint">Profile to verify against (optional): compare compose_hash to a specific image profile</p>
       <div className="input-row">
-        <select name="profile" defaultValue={initialProfile || ''} disabled={status === 'loading'}>
+        <label htmlFor="profile" className="hint">Profile to verify against (optional): compare compose_hash to a specific image profile</label>
+        <select id="profile" name="profile" defaultValue={initialProfile || ''} disabled={status === 'loading'}>
           {PROFILES.map(({ value, label }) => (
             <option key={value || 'all'} value={value}>
               {label}

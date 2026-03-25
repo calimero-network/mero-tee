@@ -15,10 +15,12 @@ use crate::Config;
 
 const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 
-/// Shared application state.
+/// Shared application state injected into all handlers via Axum's `State` extractor.
 #[derive(Clone)]
 pub struct AppState {
+    /// Service configuration and attestation policy.
     pub config: Config,
+    /// Backend for storing and consuming single-use challenges.
     pub challenge_store: ChallengeStore,
 }
 

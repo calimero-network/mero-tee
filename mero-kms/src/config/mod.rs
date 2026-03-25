@@ -45,19 +45,33 @@ const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
 /// Configuration for the key releaser service.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// HTTP listen address (default `0.0.0.0:8080`).
     pub listen_addr: SocketAddr,
+    /// Path to the dstack Unix socket for key derivation and quote generation.
     pub dstack_socket_path: String,
+    /// How long a challenge nonce remains valid (seconds).
     pub challenge_ttl_secs: u64,
+    /// Maximum number of concurrent pending challenges before rate-limiting.
     pub max_pending_challenges: usize,
+    /// Accept mock TDX quotes (development only, **never** in production).
     pub accept_mock_attestation: bool,
+    /// Optional Redis URL for shared challenge storage across instances.
     pub redis_url: Option<String>,
+    /// KMS profile cohort (e.g. `locked-read-only`, `debug`).
     pub kms_profile: String,
+    /// Namespace prefix for dstack key derivation paths.
     pub key_namespace_prefix: String,
+    /// Optional SHA-256 hex pin for the fetched policy file.
     pub policy_sha256: Option<String>,
+    /// Comma-separated allowed CORS origins; empty means CORS is disabled.
     pub cors_allowed_origins: Vec<String>,
+    /// Loaded attestation policy with measurement allowlists and TCB status rules.
     pub attestation_policy: AttestationPolicy,
+    /// Whether the attestation policy is loaded and ready for key release.
     pub policy_ready: bool,
+    /// Human-readable reason when `policy_ready` is `false`.
     pub policy_unavailable_reason: Option<String>,
+    /// Release version used for policy fetch (e.g. `"2.3.4"`).
     pub kms_version: Option<String>,
 }
 

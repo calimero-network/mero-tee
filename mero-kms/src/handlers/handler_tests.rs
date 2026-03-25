@@ -13,6 +13,21 @@ use crate::AttestationPolicy;
 use super::errors::ServiceError;
 use super::*;
 
+fn post_json_request(uri: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request should build")
+}
+
+fn mock_verification_result(nonce_seed: u8) -> calimero_tee_attestation::VerificationResult {
+    let nonce = [nonce_seed; 32];
+    let mock_quote = create_mock_quote(&nonce);
+    verify_mock_attestation(&mock_quote, &nonce, None).unwrap()
+}
+
 #[test]
 fn test_hash_peer_id() {
     let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
@@ -45,6 +60,24 @@ fn test_error_response_serialization() {
 }
 
 #[test]
+fn test_error_response_display_with_details() {
+    let error = errors::ErrorResponse {
+        error: "rate_limited".to_string(),
+        details: Some("Too many requests".to_string()),
+    };
+    assert_eq!(error.to_string(), "rate_limited: Too many requests");
+}
+
+#[test]
+fn test_error_response_display_without_details() {
+    let error = errors::ErrorResponse {
+        error: "not_found".to_string(),
+        details: None,
+    };
+    assert_eq!(error.to_string(), "not_found");
+}
+
+#[test]
 fn test_policy_not_ready_blocks_key_release() {
     let config = Config {
         policy_ready: false,
@@ -58,9 +91,7 @@ fn test_policy_not_ready_blocks_key_release() {
 
 #[test]
 fn test_policy_rejects_tcb_status() {
-    let nonce = [0x11; 32];
-    let mock_quote = create_mock_quote(&nonce);
-    let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
+    let mut verification = mock_verification_result(0x11);
     verification.tcb_status = Some("OutOfDate".to_owned());
 
     let config = Config {
@@ -80,9 +111,7 @@ fn test_policy_rejects_tcb_status() {
 fn test_policy_rejects_untrusted_mrtd() {
     use crate::measurement::HexMeasurement;
 
-    let nonce = [0x22; 32];
-    let mock_quote = create_mock_quote(&nonce);
-    let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
+    let mut verification = mock_verification_result(0x22);
     verification.tcb_status = Some("UpToDate".to_owned());
 
     let config = Config {
@@ -106,9 +135,7 @@ fn test_policy_rejects_untrusted_mrtd() {
 fn test_policy_accepts_allowlisted_measurements() {
     use crate::measurement::HexMeasurement;
 
-    let nonce = [0x33; 32];
-    let mock_quote = create_mock_quote(&nonce);
-    let mut verification = verify_mock_attestation(&mock_quote, &nonce, None).unwrap();
+    let mut verification = mock_verification_result(0x33);
     verification.tcb_status = Some("UpToDate".to_owned());
     let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();
 
@@ -127,6 +154,17 @@ fn test_policy_accepts_allowlisted_measurements() {
 
     let result = get_key::enforce_attestation_policy(&config, &verification);
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_key_path_for_peer_includes_namespace_profile_and_peer_id() {
+    let config = Config {
+        key_namespace_prefix: "merod/storage".to_string(),
+        kms_profile: "locked-read-only".to_string(),
+        ..Config::default()
+    };
+    let path = get_key::key_path_for_peer(&config, "12D3KooWTestPeer");
+    assert_eq!(path, "merod/storage/locked-read-only/12D3KooWTestPeer");
 }
 
 #[test]
@@ -151,6 +189,19 @@ fn test_decode_fixed_b64_32_rejects_invalid_length() {
 #[test]
 fn test_validate_peer_id_shape_rejects_non_base58() {
     let err = challenge::validate_peer_id_shape("not-valid-peer-id-0OIl").unwrap_err();
+    assert!(matches!(err, ServiceError::InvalidPeerId(_)));
+}
+
+#[test]
+fn test_validate_peer_id_shape_accepts_valid_base58_peer_id() {
+    let keypair = Keypair::generate_ed25519();
+    let peer_id = keypair.public().to_peer_id().to_base58();
+    assert!(challenge::validate_peer_id_shape(&peer_id).is_ok());
+}
+
+#[test]
+fn test_validate_peer_id_shape_rejects_empty() {
+    let err = challenge::validate_peer_id_shape("").unwrap_err();
     assert!(matches!(err, ServiceError::InvalidPeerId(_)));
 }
 
@@ -266,14 +317,7 @@ async fn test_attest_endpoint_rejects_invalid_nonce_length() {
     });
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/attest")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .expect("request should build"),
-        )
+        .oneshot(post_json_request("/attest", &body))
         .await
         .expect("request should succeed");
 
@@ -301,14 +345,7 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
 
     let challenge_response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/challenge")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(challenge_body.to_string()))
-                .expect("request should build"),
-        )
+        .oneshot(post_json_request("/challenge", &challenge_body))
         .await
         .expect("request should succeed");
     assert_eq!(challenge_response.status(), StatusCode::OK);
@@ -331,14 +368,7 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
 
     let first = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/get-key")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body.to_string()))
-                .expect("request should build"),
-        )
+        .oneshot(post_json_request("/get-key", &request_body))
         .await
         .expect("request should succeed");
 
@@ -347,14 +377,7 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
     assert_eq!(first_payload["error"], "invalid_peer_public_key");
 
     let second = app
-        .oneshot(
-            Request::builder()
-                .uri("/get-key")
-                .method("POST")
-                .header("content-type", "application/json")
-                .body(Body::from(request_body.to_string()))
-                .expect("request should build"),
-        )
+        .oneshot(post_json_request("/get-key", &request_body))
         .await
         .expect("request should succeed");
 

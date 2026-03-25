@@ -38,6 +38,20 @@ impl Default for AttestationPolicy {
 }
 
 impl AttestationPolicy {
+    /// Return the five TDX measurement register allowlists as `(label, allowlist)` pairs.
+    ///
+    /// This centralizes the MRTD + RTMR0–3 iteration order so callers don't
+    /// repeat the same five-element array construction.
+    pub fn register_fields(&self) -> [(&'static str, &[HexMeasurement]); 5] {
+        [
+            ("MRTD", &self.allowed_mrtd),
+            ("RTMR0", &self.allowed_rtmr0),
+            ("RTMR1", &self.allowed_rtmr1),
+            ("RTMR2", &self.allowed_rtmr2),
+            ("RTMR3", &self.allowed_rtmr3),
+        ]
+    }
+
     /// Check a raw measurement value against the allowlist for a named register.
     /// Returns `Ok(())` if it matches any entry, `Err(label, normalized)` otherwise.
     pub fn check_measurement(
@@ -157,38 +171,16 @@ pub fn validate_policy_requirements(
         );
     }
 
-    let register_checks: [(&str, &[HexMeasurement], &str); 5] = [
-        (
-            "allowed_mrtd",
-            &policy.allowed_mrtd,
-            "Provide policy via MERO_KMS_VERSION + MERO_KMS_PROFILE, or use USE_ENV_POLICY=true for explicit air-gapped mode.",
-        ),
-        (
-            "allowed_rtmr0",
-            &policy.allowed_rtmr0,
-            "Configure at least one trusted RTMR0 value.",
-        ),
-        (
-            "allowed_rtmr1",
-            &policy.allowed_rtmr1,
-            "Configure at least one trusted RTMR1 value.",
-        ),
-        (
-            "allowed_rtmr2",
-            &policy.allowed_rtmr2,
-            "Configure at least one trusted RTMR2 value.",
-        ),
-        (
-            "allowed_rtmr3",
-            &policy.allowed_rtmr3,
-            "Configure at least one trusted RTMR3 value.",
-        ),
-    ];
-    for (name, values, guidance) in register_checks {
-        if values.is_empty() {
+    for (label, allowlist) in policy.register_fields() {
+        if allowlist.is_empty() {
+            let guidance = if label == "MRTD" {
+                "Provide policy via MERO_KMS_VERSION + MERO_KMS_PROFILE, or use USE_ENV_POLICY=true for explicit air-gapped mode."
+            } else {
+                "Configure at least one trusted value."
+            };
             bail!(
-                "Measurement policy is enforced, but {} is empty. {}",
-                name,
+                "Measurement policy is enforced, but allowed_{} is empty. {}",
+                label.to_ascii_lowercase(),
                 guidance
             );
         }

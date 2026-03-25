@@ -56,6 +56,12 @@ jobs:
         id: tests
         run: cargo test -p mero-kms-phala
 
+      - name: Doc warnings
+        id: docs
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p mero-kms-phala --no-deps
+
       - name: Summarize CI outcomes
         if: ${{ always() }}
         run: |
@@ -69,6 +75,7 @@ jobs:
             --checks-line "- fmt: ${{ steps.fmt.outcome }}" \
             --checks-line "- clippy: ${{ steps.clippy.outcome }}" \
             --checks-line "- tests: ${{ steps.tests.outcome }}" \
+            --checks-line "- docs: ${{ steps.docs.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

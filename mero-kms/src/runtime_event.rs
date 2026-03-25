@@ -11,6 +11,9 @@ use tracing::info;
 
 const KMS_PROFILE_RUNTIME_EVENT_NAME: &str = "calimero.kms.profile";
 
+/// Build the runtime event payload bytes for the given KMS profile name.
+///
+/// The resulting byte string has the form `calimero.kms.profile=<profile>`.
 pub fn kms_profile_runtime_event_payload(profile: &str) -> Vec<u8> {
     format!("calimero.kms.profile={}", profile).into_bytes()
 }

@@ -11,13 +11,18 @@ use thiserror::Error;
 
 use crate::util::unix_now_secs;
 
+/// A pending challenge awaiting consumption by a `/get-key` request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingChallenge {
+    /// Cryptographically random 32-byte nonce that the caller must embed in its TDX quote.
     pub nonce: [u8; 32],
+    /// The peer ID that requested this challenge; must match the `/get-key` caller.
     pub peer_id: String,
+    /// Unix timestamp (seconds) after which this challenge is considered expired.
     pub expires_at: u64,
 }
 
+/// Errors that can occur during challenge store operations.
 #[derive(Debug, Error)]
 pub enum ChallengeStoreError {
     #[error("invalid redis url: {0}")]
@@ -79,9 +84,15 @@ end
 return v
 "#;
 
+/// Backend-agnostic challenge storage with single-use consumption semantics.
+///
+/// Supports an in-memory [`HashMap`] for local/dev use and a Redis-backed
+/// mode for multi-instance production deployments.
 #[derive(Clone)]
 pub enum ChallengeStore {
+    /// Single-process in-memory store behind an `Arc<Mutex<_>>`.
     InMemory(Arc<Mutex<HashMap<String, PendingChallenge>>>),
+    /// Shared Redis-backed store using Lua scripts for atomic operations.
     Redis(redis::Client),
 }
 
@@ -204,27 +215,37 @@ fn validate_challenge(
     Ok(challenge.nonce)
 }
 
+const REDIS_KEY_PREFIX: &str = "mero-kms-phala:challenge";
+
 fn redis_challenge_key(challenge_id: &str) -> String {
-    format!("mero-kms-phala:challenge:{}", challenge_id)
+    format!("{}:{}", REDIS_KEY_PREFIX, challenge_id)
 }
 
-fn redis_challenge_index_key() -> &'static str {
-    "mero-kms-phala:challenge:index"
+fn redis_challenge_index_key() -> String {
+    format!("{}:index", REDIS_KEY_PREFIX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn new_store() -> ChallengeStore {
+        ChallengeStore::from_redis_url(None).expect("store should initialize")
+    }
+
+    fn challenge_for(peer_id: &str, expires_at: u64) -> PendingChallenge {
+        PendingChallenge {
+            nonce: [1u8; 32],
+            peer_id: peer_id.to_string(),
+            expires_at,
+        }
+    }
+
     #[tokio::test]
     async fn in_memory_insert_respects_max_pending_capacity() {
-        let store = ChallengeStore::from_redis_url(None).expect("store should initialize");
+        let store = new_store();
         let now = unix_now_secs().expect("clock should be available");
-        let challenge = PendingChallenge {
-            nonce: [1u8; 32],
-            peer_id: "12D3KooWPeer".to_string(),
-            expires_at: now + 60,
-        };
+        let challenge = challenge_for("12D3KooWPeer", now + 60);
 
         store
             .insert("challenge-1".to_string(), challenge.clone(), 60, 1)
@@ -235,5 +256,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ChallengeStoreError::CapacityExceeded));
+    }
+
+    #[tokio::test]
+    async fn consume_returns_nonce_for_valid_challenge() {
+        let store = new_store();
+        let now = unix_now_secs().expect("clock should be available");
+        let challenge = challenge_for("12D3KooWPeer", now + 60);
+        let expected_nonce = challenge.nonce;
+
+        store
+            .insert("chal-1".to_string(), challenge, 60, 10)
+            .await
+            .expect("insert should succeed");
+
+        let nonce = store
+            .consume("chal-1", "12D3KooWPeer")
+            .await
+            .expect("consume should succeed");
+        assert_eq!(nonce, expected_nonce);
+    }
+
+    #[tokio::test]
+    async fn consume_rejects_peer_mismatch() {
+        let store = new_store();
+        let now = unix_now_secs().expect("clock should be available");
+        let challenge = challenge_for("12D3KooWPeerA", now + 60);
+
+        store
+            .insert("chal-2".to_string(), challenge, 60, 10)
+            .await
+            .expect("insert should succeed");
+
+        let err = store.consume("chal-2", "12D3KooWPeerB").await.unwrap_err();
+        assert!(matches!(err, ChallengeStoreError::PeerMismatch));
+    }
+
+    #[tokio::test]
+    async fn consume_rejects_already_consumed_challenge() {
+        let store = new_store();
+        let now = unix_now_secs().expect("clock should be available");
+        let challenge = challenge_for("12D3KooWPeer", now + 60);
+
+        store
+            .insert("chal-3".to_string(), challenge, 60, 10)
+            .await
+            .expect("insert should succeed");
+
+        store
+            .consume("chal-3", "12D3KooWPeer")
+            .await
+            .expect("first consume should succeed");
+
+        let err = store.consume("chal-3", "12D3KooWPeer").await.unwrap_err();
+        assert!(matches!(err, ChallengeStoreError::NotFoundOrExpired));
+    }
+
+    #[tokio::test]
+    async fn expired_challenges_are_pruned_on_insert() {
+        let store = new_store();
+        let now = unix_now_secs().expect("clock should be available");
+        let expired = challenge_for("12D3KooWPeer", now.saturating_sub(1));
+
+        store
+            .insert("expired-1".to_string(), expired, 0, 1)
+            .await
+            .expect("insert expired challenge");
+
+        let fresh = challenge_for("12D3KooWPeer", now + 60);
+        store
+            .insert("fresh-1".to_string(), fresh, 60, 1)
+            .await
+            .expect("fresh challenge should fit after expired one is pruned");
     }
 }

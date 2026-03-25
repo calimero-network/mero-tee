@@ -6,13 +6,25 @@ use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
 
-/// Error response body.
+/// JSON error response body returned by all handler error paths.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
+    /// Machine-readable error tag (e.g. `"invalid_request"`, `"rate_limited"`).
     pub error: String,
+    /// Optional human-readable details about the error, omitted from JSON when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+}
+
+impl std::fmt::Display for ErrorResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        if let Some(details) = &self.details {
+            write!(f, ": {}", details)?;
+        }
+        Ok(())
+    }
 }
 
 /// Service-level errors with automatic `Display` and `std::error::Error` via thiserror.
@@ -52,49 +64,33 @@ pub enum ServiceError {
 
 impl ServiceError {
     /// Map each variant to its HTTP status code, machine-readable error tag,
-    /// and human-readable details string (preserving the original API format
-    /// where details contain only the inner message, not the thiserror prefix).
-    fn status_tag_details(&self) -> (StatusCode, &'static str, Option<String>) {
+    /// and human-readable details string. Consumes `self` to avoid cloning
+    /// the inner `String` payloads.
+    fn into_parts(self) -> (StatusCode, &'static str, Option<String>) {
         match self {
-            Self::InvalidBase64(msg) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                Some(msg.clone()),
-            ),
-            Self::InvalidPeerId(msg) => (
-                StatusCode::BAD_REQUEST,
-                "invalid_peer_id",
-                Some(msg.clone()),
-            ),
+            Self::InvalidBase64(msg) => (StatusCode::BAD_REQUEST, "invalid_request", Some(msg)),
+            Self::InvalidPeerId(msg) => (StatusCode::BAD_REQUEST, "invalid_peer_id", Some(msg)),
             Self::InvalidAttestationRequest(msg) => (
                 StatusCode::BAD_REQUEST,
                 "invalid_attestation_request",
-                Some(msg.clone()),
+                Some(msg),
             ),
-            Self::RateLimited(msg) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                Some(msg.clone()),
-            ),
-            Self::InvalidChallenge(msg) => (
-                StatusCode::UNAUTHORIZED,
-                "invalid_challenge",
-                Some(msg.clone()),
-            ),
+            Self::RateLimited(msg) => (StatusCode::TOO_MANY_REQUESTS, "rate_limited", Some(msg)),
+            Self::InvalidChallenge(msg) => {
+                (StatusCode::UNAUTHORIZED, "invalid_challenge", Some(msg))
+            }
             Self::InvalidPeerPublicKey(msg) => (
                 StatusCode::BAD_REQUEST,
                 "invalid_peer_public_key",
-                Some(msg.clone()),
+                Some(msg),
             ),
-            Self::InvalidSignature(msg) => (
-                StatusCode::UNAUTHORIZED,
-                "invalid_signature",
-                Some(msg.clone()),
-            ),
+            Self::InvalidSignature(msg) => {
+                (StatusCode::UNAUTHORIZED, "invalid_signature", Some(msg))
+            }
             Self::AttestationVerificationFailed(msg) => (
                 StatusCode::UNAUTHORIZED,
                 "attestation_verification_failed",
-                Some(msg.clone()),
+                Some(msg),
             ),
             Self::MockAttestationRejected => (
                 StatusCode::UNAUTHORIZED,
@@ -116,25 +112,23 @@ impl ServiceError {
                     "The peer ID in the attestation does not match the claimed peer ID".to_string(),
                 ),
             ),
-            Self::TcbStatusRejected(msg) => (
-                StatusCode::FORBIDDEN,
-                "tcb_status_rejected",
-                Some(msg.clone()),
-            ),
+            Self::TcbStatusRejected(msg) => {
+                (StatusCode::FORBIDDEN, "tcb_status_rejected", Some(msg))
+            }
             Self::MeasurementPolicyRejected(msg) => (
                 StatusCode::FORBIDDEN,
                 "measurement_policy_rejected",
-                Some(msg.clone()),
+                Some(msg),
             ),
             Self::PolicyNotReady(msg) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "policy_not_ready",
-                Some(msg.clone()),
+                Some(msg),
             ),
             Self::KeyDerivationFailed(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "key_derivation_failed",
-                Some(msg.clone()),
+                Some(msg),
             ),
         }
     }
@@ -142,7 +136,7 @@ impl ServiceError {
 
 impl IntoResponse for ServiceError {
     fn into_response(self) -> axum::response::Response {
-        let (status, tag, details) = self.status_tag_details();
+        let (status, tag, details) = self.into_parts();
         let error_response = ErrorResponse {
             error: tag.to_string(),
             details,
