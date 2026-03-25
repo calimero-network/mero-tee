@@ -6,7 +6,7 @@ const LINKS = [
     heading: 'Product',
     items: [
       { label: 'Calimero Network', href: 'https://calimero.network' },
-      { label: 'Mero Cloud', href: 'https://app.calimero.network' },
+      { label: 'Mero Cloud', href: 'https://manager.cloud.calimero.network/' },
     ],
   },
   {
