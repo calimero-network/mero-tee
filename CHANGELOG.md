@@ -6,6 +6,14 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.30] - 2026-03-30
+
+### Changed
+
+- Bump `merodVersion` to `0.10.1-rc.10` (TEE admission policy governance ops, attestation-based auto-admission)
+- Bump KMS core dependencies (`calimero-server-primitives`, `calimero-tee-attestation`) to `0.10.1-rc.10`
+- Synchronized release version to `2.3.30` across `mero-kms/Cargo.toml`, `Cargo.lock`, and `mero-tee/versions.json`
+
 ## [2.3.27] - 2026-03-26
 
 ### Changed
