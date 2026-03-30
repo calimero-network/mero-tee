@@ -140,27 +140,6 @@
       "node_image_tag": "mero-tee-v2.3.29",
       "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.29/kms-phala-attestation-policy.json",
       "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.29/published-mrtds.json"
-    },
-    {
-      "version": "2.3.30",
-      "kms_tag": "mero-kms-v2.3.30",
-      "node_image_tag": "mero-tee-v2.3.30",
-      "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.30/kms-phala-attestation-policy.json",
-      "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.30/published-mrtds.json"
-    },
-    {
-      "version": "2.3.31",
-      "kms_tag": "mero-kms-v2.3.31",
-      "node_image_tag": "mero-tee-v2.3.31",
-      "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.31/kms-phala-attestation-policy.json",
-      "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.31/published-mrtds.json"
-    },
-    {
-      "version": "2.3.32",
-      "kms_tag": "mero-kms-v2.3.32",
-      "node_image_tag": "mero-tee-v2.3.32",
-      "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.32/kms-phala-attestation-policy.json",
-      "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.32/published-mrtds.json"
     }
   ]
 }
