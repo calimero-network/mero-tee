@@ -1,7 +1,14 @@
 ---
-# - name: Install libssl # Required for merod
-#   apt:
-#     deb: "{{ libssl_deb_url }}"
+- name: Ensure archive extraction tools are installed
+  apt:
+    name:
+      - bzip2
+      - xz-utils
+      - unzip
+      - gzip
+    state: present
+    update_cache: yes
+
 - name: Download merod binary from GitHub releases
   unarchive:
     src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/merod_{{ cpu_platform }}-unknown-linux-gnu.tar.gz

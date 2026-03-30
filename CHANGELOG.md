@@ -6,6 +6,12 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.31] - 2026-03-30
+
+### Fixed
+
+- Install archive extraction tools (`bzip2`, `xz-utils`, `unzip`) in Ansible role before downloading core binaries
+
 ## [2.3.30] - 2026-03-30
 
 ### Changed
