@@ -3888,7 +3888,7 @@ dependencies = [
 
 [[package]]
 name = "mero-kms-phala"
-version = "2.3.34"
+version = "2.3.35"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4820,7 +4820,7 @@ dependencies = [
 name = "protobuf-codegen"
 version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d3976825c0014bbd2f3b34f0001876604fe87e0c86cd8fa54251530f1544ace"
+checksum = "5d3976825c0014bbd2.3.35f0001876604fe87e0c86cd8fa54251530f1544ace"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -5212,7 +5212,7 @@ dependencies = [
 name = "rlp"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb919243f34364b6bd2fc10ef797edbfa75f33c252e7998527479c6d6b47e1ec"
+checksum = "bb9192.3.35364b6bd2fc10ef797edbfa75f33c252e7998527479c6d6b47e1ec"
 dependencies = [
  "bytes",
  "rustc-hex",
