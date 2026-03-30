@@ -72,7 +72,7 @@ pub fn read_env_utf8(name: &str) -> EyreResult<Option<String>> {
 }
 
 /// Parse a comma-separated env var into validated hex measurement values.
-/// Each entry must be a valid [`HexMeasurement`] (48-byte / 96-hex-char TDX register value).
+/// Each entry must be a valid [`crate::measurement::HexMeasurement`] (48-byte / 96-hex-char TDX register value).
 pub fn parse_measurement_list_env(
     name: &str,
 ) -> EyreResult<Vec<crate::measurement::HexMeasurement>> {
