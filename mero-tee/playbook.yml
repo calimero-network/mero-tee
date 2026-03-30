@@ -10,6 +10,16 @@
       apt:
         update_cache: yes
         cache_valid_time: 3600
+
+    - name: Ensure archive extraction tools are installed
+      apt:
+        name:
+          - bzip2
+          - xz-utils
+          - unzip
+          - gzip
+          - tar
+        state: present
   roles:
     - role: ansible/roles/mero-traefik
       vars:

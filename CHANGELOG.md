@@ -12,6 +12,12 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 - Install archive extraction tools (`bzip2`, `xz-utils`, `unzip`) in Ansible role before downloading core binaries
 
+## [2.3.32] - 2026-03-30
+
+### Fixed
+
+- Move archive tools install to playbook `pre_tasks` so they're available before any role (including `mero-traefik`) runs `unarchive`
+
 ## [2.3.30] - 2026-03-30
 
 ### Changed
