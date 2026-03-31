@@ -155,3 +155,37 @@
         [Install]
         WantedBy=multi-user.target
     dest: /etc/systemd/system/merod.service
+
+- name: Copy fleet sidecar script
+  copy:
+    src: fleet-sidecar.sh
+    dest: /usr/local/lib/calimero/fleet-sidecar.sh
+    owner: root
+    group: root
+    mode: "0755"
+  when: merod_mode == "read-only"
+
+- name: Create fleet sidecar systemd service
+  copy:
+    content: |
+        [Unit]
+        Description=Fleet HA sidecar (polls MDMA for group assignments)
+        After=calimero-init.service merod.service
+        Wants=merod.service
+
+        [Service]
+        ExecStart=/usr/local/lib/calimero/fleet-sidecar.sh
+        Restart=always
+        RestartSec=5
+
+        [Install]
+        WantedBy=multi-user.target
+    dest: /etc/systemd/system/fleet-sidecar.service
+  when: merod_mode == "read-only"
+
+- name: Enable fleet sidecar at boot
+  systemd:
+    name: fleet-sidecar.service
+    enabled: true
+    daemon_reload: true
+  when: merod_mode == "read-only"
