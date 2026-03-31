@@ -2,3 +2,5 @@
 # defaults file for merotee
 lockdown_profile: "debug"
 merod_mode: "{{ 'read-only' if lockdown_profile in ['debug-read-only', 'locked-read-only'] else 'full' }}"
+fleet_mdma_url: "https://manager.cloud.calimero.network"
+fleet_auth_token: ""

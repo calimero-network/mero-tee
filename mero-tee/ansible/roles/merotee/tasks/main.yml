@@ -156,9 +156,9 @@
         WantedBy=multi-user.target
     dest: /etc/systemd/system/merod.service
 
-- name: Copy fleet sidecar script
-  copy:
-    src: fleet-sidecar.sh
+- name: Render fleet sidecar script (bakes MDMA URL into image)
+  template:
+    src: fleet-sidecar.sh.j2
     dest: /usr/local/lib/calimero/fleet-sidecar.sh
     owner: root
     group: root

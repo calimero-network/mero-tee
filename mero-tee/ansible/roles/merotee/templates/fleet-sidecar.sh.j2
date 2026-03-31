@@ -1,0 +1,138 @@
+#!/bin/bash
+# Fleet HA sidecar: polls MDMA for group assignments and drives merod via meroctl.
+# Runs as a systemd service alongside merod on ReadOnly TEE fleet nodes.
+#
+# MDMA_URL and FLEET_TOKEN are baked at image build time via Ansible (measured into MRTD).
+# TLS is always verified.
+set -euo pipefail
+
+LOG="/var/log/fleet-sidecar.log"
+STATE_FILE="/var/lib/calimero/fleet-assignments.json"
+POLL_INTERVAL=1
+MEROCTL="meroctl --home /mnt/data/calimero --node default"
+
+log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
+
+mkdir -p "$(dirname "$STATE_FILE")"
+[[ -f "$STATE_FILE" ]] || echo '[]' > "$STATE_FILE"
+
+# Baked at image build time by Ansible (not from instance metadata)
+MDMA_URL="{{ fleet_mdma_url }}"
+FLEET_TOKEN="{{ fleet_auth_token | default('') }}"
+
+if [[ -z "${MDMA_URL:-}" ]]; then
+  log "ERROR: fleet_mdma_url not set at build time. Fleet sidecar cannot start."
+  exit 1
+fi
+
+log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
+
+wait_for_merod() {
+  log "Waiting for merod..."
+  while ! $MEROCTL --output-format json health 2>/dev/null | grep -q "ok"; do
+    sleep 1
+  done
+  log "merod is ready"
+}
+
+get_peer_id() {
+  $MEROCTL --output-format json peers list 2>/dev/null \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('peer_id',''))" 2>/dev/null || true
+}
+
+poll_mdma() {
+  local peer_id="$1"
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  curl -sf --max-time 10 "${headers[@]}" \
+    -d "{\"peer_id\":\"$peer_id\"}" \
+    "${MDMA_URL}/api/fleet/should-join" 2>/dev/null || echo '{"assignments":[]}'
+}
+
+confirm_assignment() {
+  local peer_id="$1"
+  local group_id="$2"
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  curl -sf --max-time 10 "${headers[@]}" \
+    -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\"}" \
+    "${MDMA_URL}/api/fleet/confirm" 2>/dev/null || true
+}
+
+join_group() {
+  local group_id="$1"
+  log "Joining group $group_id..."
+
+  # TODO: needs `meroctl tee fleet-join --group-id <id>` or
+  # POST /admin-api/tee/fleet-join in core. Placeholder until implemented.
+  local result
+  result=$($MEROCTL tee fleet-join --group-id "$group_id" 2>&1) || true
+
+  if [[ $? -eq 0 && -n "$result" ]]; then
+    log "Joined group $group_id: $result"
+    return 0
+  else
+    log "WARN: fleet-join not available yet (core upgrade needed): $result"
+    return 1
+  fi
+}
+
+load_current() {
+  cat "$STATE_FILE" 2>/dev/null || echo '[]'
+}
+
+save_current() {
+  echo "$1" > "$STATE_FILE"
+}
+
+# --- Main loop ---
+
+wait_for_merod
+
+PEER_ID=$(get_peer_id)
+if [[ -z "$PEER_ID" ]]; then
+  sleep 5
+  PEER_ID=$(get_peer_id)
+fi
+if [[ -z "$PEER_ID" ]]; then
+  log "ERROR: Could not get peer_id from merod."
+  exit 1
+fi
+log "Fleet node peer_id: $PEER_ID"
+
+while true; do
+  response=$(poll_mdma "$PEER_ID")
+
+  new_assignments=$(echo "$response" | python3 -c "
+import sys, json
+try:
+  data = json.load(sys.stdin)
+  assignments = data.get('assignments', [])
+  print(json.dumps(sorted([a['group_id'] for a in assignments])))
+except:
+  print('[]')
+" 2>/dev/null || echo '[]')
+
+  current=$(load_current)
+
+  to_join=$(python3 -c "
+import json
+new = set(json.loads('''$new_assignments'''))
+cur = set(json.loads('''$current'''))
+print(json.dumps(list(new - cur)))
+" 2>/dev/null || echo '[]')
+
+  for group_id in $(echo "$to_join" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    if join_group "$group_id"; then
+      confirm_assignment "$PEER_ID" "$group_id"
+      log "Joined and confirmed group $group_id"
+    fi
+  done
+
+  save_current "$new_assignments"
+  sleep "$POLL_INTERVAL"
+done
