@@ -849,9 +849,22 @@ jobs:
       - name: Verify generated signatures
         run: bash scripts/release/node-image-gcp/verify-generated-signatures.sh
 
-      # If 403: add RELEASE_TOKEN or GHCR_PUSH_TOKEN (PAT with repo scope). If 404 "discussion category mismatch":
-      # disable "Create a discussion for each release" in repo Settings → General → Releases.
+      - name: Check if release assets already exist
+        id: check_assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="mero-tee-v${{ needs.preflight.outputs.image_version }}"
+          count=$(gh release view "$tag" --repo "${{ github.repository }}" --json assets --jq '.assets | length' 2>/dev/null || echo "0")
+          if [[ "$count" -gt 0 ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release $tag already has $count assets — skipping upload to avoid immutable-release conflict."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload MRTD release assets
+        if: steps.check_assets.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
