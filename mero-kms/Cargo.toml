@@ -31,9 +31,9 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# From calimero-network/core (git dependency; 0.10.1-rc.26)
-calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "1e206000" }
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "1e206000" }
+# From calimero-network/core (git dependency; 0.10.1-rc.34)
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "1a418f46" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "1a418f46" }
 thiserror = "2.0"
 
 [dev-dependencies]
