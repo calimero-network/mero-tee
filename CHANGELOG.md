@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.42] - 2026-05-16
+
+### Fixed
+
+- Fleet HA sidecar `wait_for_merod()`: poll `meroctl --output-format json peers` instead of the nonexistent `meroctl health` subcommand (the old probe never exited 0, so the sidecar hung forever at "Waiting for merod..." and never polled `/api/fleet/should-join`)
+- Fleet HA sidecar `get_peer_id()`: read the node PeerId from `/mnt/data/calimero/default/config.toml` under `[identity].peer_id` instead of the invalid `meroctl peers list` (`peers` takes no args and returns only a count)
+
+### Changed
+
+- Synchronized release version to `2.3.42` across `mero-kms/Cargo.toml`, `Cargo.lock`, and `mero-tee/versions.json` to force a node-image + KMS rebuild carrying the fixed sidecar (`merodVersion` unchanged at `0.10.1-rc.34`)
+
 ## [2.3.41] - 2026-05-16
 
 ### Fixed
