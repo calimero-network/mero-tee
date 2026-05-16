@@ -3,4 +3,19 @@ ignore = [
   # Transitive through calimero-tee-attestation/dcap stack.
   # No patched rsa release is available yet.
   "RUSTSEC-2023-0071",
+  # The following are transitive through the calimero-network/core git
+  # dependency (pinned rev 1a418f46 / 0.10.1-rc.34) and the dstack SDK.
+  # The fixed crate versions are pulled in by the upstream core lockfile;
+  # bumping them here is not possible without bumping the pinned core rev
+  # (which must stay reproducible for the release pin). Newly published
+  # into the RustSec DB after 2026-05-06; tracked for the next core bump.
+  # hickory-proto: NSEC3 closest-encloser unbounded loop ("No fixed
+  # upgrade is available!" per advisory).
+  "RUSTSEC-2026-0118",
+  # hickory-proto: O(n^2) name-compression CPU exhaustion (fix in
+  # hickory-proto >=0.26.1, gated by the pinned core rev).
+  "RUSTSEC-2026-0119",
+  # rustls-webpki: reachable panic in CRL parsing (fix in rustls-webpki
+  # >=0.103.13, gated by the pinned core rev).
+  "RUSTSEC-2026-0104",
 ]
