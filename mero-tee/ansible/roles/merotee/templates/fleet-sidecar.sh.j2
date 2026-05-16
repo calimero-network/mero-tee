@@ -67,16 +67,16 @@ join_group() {
   local group_id="$1"
   log "Joining group $group_id..."
 
-  # TODO: needs `meroctl tee fleet-join --group-id <id>` or
-  # POST /admin-api/tee/fleet-join in core. Placeholder until implemented.
+  # Drives core's `meroctl tee fleet-join <GROUP_ID>` (positional arg), which
+  # in turn calls POST /admin-api/tee/fleet-join on the local merod.
   local result
-  result=$($MEROCTL tee fleet-join --group-id "$group_id" 2>&1) || true
+  result=$($MEROCTL tee fleet-join "$group_id" 2>&1) || true
 
   if [[ $? -eq 0 && -n "$result" ]]; then
     log "Joined group $group_id: $result"
     return 0
   else
-    log "WARN: fleet-join not available yet (core upgrade needed): $result"
+    log "WARN: fleet-join failed for group $group_id: $result"
     return 1
   fi
 }
