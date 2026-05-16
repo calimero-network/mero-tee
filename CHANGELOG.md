@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.43] - 2026-05-16
+
+### Fixed
+
+- Fleet HA sidecar `poll_mdma()`: include this node's own MRTD in the `/api/fleet/should-join` request body (`{"peer_id":...,"mrtd":...}`). MDMA's `should_join` handler skips every MRTD-allowlisted HA request whose `body.mrtd` does not match, and the sidecar previously sent `peer_id` only (`body.mrtd=""`), so no MRTD-gated group was ever assigned and fleet nodes never joined
+- Added `get_mrtd()` helper: reads the kernel-exposed TDX measurement at `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` (48 raw bytes, hex-encoded lowercase, no `0x`) — the same value the QE embeds as `quote.mrtd()`, obtained read-only without generating a quote. Verified to return the expected per-image MRTD on a live 2.3.42 fleet node
+
+### Changed
+
+- Synchronized release version to `2.3.43` across `mero-kms/Cargo.toml`, `Cargo.lock`, and `mero-tee/versions.json` to force a node-image + KMS rebuild carrying the fixed sidecar (`merodVersion` unchanged at `0.10.1-rc.34`)
+
 ## [2.3.42] - 2026-05-16
 
 ### Fixed
