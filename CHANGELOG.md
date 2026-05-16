@@ -6,6 +6,18 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+## [2.3.41] - 2026-05-16
+
+### Fixed
+
+- Fleet HA sidecar `join_group()`: pass `group_id` positionally to `meroctl tee fleet-join` (core `0.10.1-rc.34` defines it as a positional `GROUP_ID` arg; the previous `--group-id` flag form always failed clap parsing)
+- Fleet HA sidecar `join_group()`: capture `rc=$?` immediately instead of `result=$(...) || true` followed by `if [[ $? -eq 0 ]]` (which zeroed `$?` and made every join report success, calling `/api/fleet/confirm` even on failure)
+- Removed stale "fleet-join not available yet (core upgrade needed)" `TODO`/`WARN` text — the subcommand ships in the pinned merod `0.10.1-rc.34`
+
+### Changed
+
+- Synchronized release version to `2.3.41` across `mero-kms/Cargo.toml`, `Cargo.lock`, and `mero-tee/versions.json` to force a node-image + KMS rebuild carrying the fixed sidecar (`merodVersion` unchanged at `0.10.1-rc.34`)
+
 ## [2.3.31] - 2026-03-30
 
 ### Fixed
