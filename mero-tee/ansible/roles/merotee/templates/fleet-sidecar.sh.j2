@@ -41,14 +41,31 @@ get_peer_id() {
     || grep -A5 '^\[identity\]' "$cfg" 2>/dev/null | grep -E '^[[:space:]]*peer_id[[:space:]]*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
+# Read this TDX guest's own MRTD (Measurement Register of Trust Domain) from
+# the kernel-exposed sysfs attribute. This is the same 48-byte value the Intel
+# QE writes into a TDX quote (quote.mrtd()); the kernel surfaces it directly so
+# no quote generation / configfs-tsm round-trip is required. Output is 96-hex
+# lowercase, no "0x" prefix -- exactly what mdma's MRTD allowlist compares.
+get_mrtd() {
+  local f="/sys/class/misc/tdx_guest/measurements/mrtd:sha384"
+  [[ -r "$f" ]] || return 1
+  # xxd is in the image (vim-common); od is the coreutils fallback.
+  if command -v xxd >/dev/null 2>&1; then
+    xxd -p -c 48 "$f" 2>/dev/null | tr -d '\n' | tr 'A-F' 'a-f'
+  else
+    od -An -v -tx1 "$f" 2>/dev/null | tr -d ' \n' | tr 'A-F' 'a-f'
+  fi
+}
+
 poll_mdma() {
   local peer_id="$1"
+  local mrtd="$2"
 
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
 
   curl -sf --max-time 10 "${headers[@]}" \
-    -d "{\"peer_id\":\"$peer_id\"}" \
+    -d "{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}" \
     "${MDMA_URL}/api/fleet/should-join" 2>/dev/null || echo '{"assignments":[]}'
 }
 
@@ -108,8 +125,19 @@ if [[ -z "$PEER_ID" ]]; then
 fi
 log "Fleet node peer_id: $PEER_ID"
 
+# Compute MRTD once: it is fixed for the life of the (immutable) node image.
+# mdma's /api/fleet/should-join gates HA assignments on this value; without it
+# every MRTD-allowlisted request is skipped and the node is never assigned.
+MRTD=$(get_mrtd || true)
+if [[ -z "$MRTD" ]]; then
+  log "ERROR: could not read MRTD from /sys/class/misc/tdx_guest/measurements/mrtd:sha384; \
+posting peer-id only (mdma will not assign MRTD-gated groups until this is resolved)"
+else
+  log "Fleet node MRTD: $MRTD"
+fi
+
 while true; do
-  response=$(poll_mdma "$PEER_ID")
+  response=$(poll_mdma "$PEER_ID" "$MRTD")
 
   new_assignments=$(echo "$response" | python3 -c "
 import sys, json
