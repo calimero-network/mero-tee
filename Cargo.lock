@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "mero-kms-phala"
-version = "2.3.41"
+version = "2.3.42"
 dependencies = [
  "axum",
  "base64 0.22.1",

@@ -29,15 +29,16 @@ log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
 
 wait_for_merod() {
   log "Waiting for merod..."
-  while ! $MEROCTL --output-format json health 2>/dev/null | grep -q "ok"; do
+  while ! $MEROCTL --output-format json peers >/dev/null 2>&1; do
     sleep 1
   done
   log "merod is ready"
 }
 
 get_peer_id() {
-  $MEROCTL --output-format json peers list 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('peer_id',''))" 2>/dev/null || true
+  local cfg="/mnt/data/calimero/default/config.toml"
+  python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["peer_id"])' "$cfg" 2>/dev/null \
+    || grep -A5 '^\[identity\]' "$cfg" 2>/dev/null | grep -E '^[[:space:]]*peer_id[[:space:]]*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 poll_mdma() {

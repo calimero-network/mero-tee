@@ -10,7 +10,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 |-----------|-------------|
 | **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVMs |
 | **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
-| **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); polls MDMA for group assignments and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. |
+| **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`), polls MDMA for group assignments and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start
