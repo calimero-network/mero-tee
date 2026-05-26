@@ -29,25 +29,43 @@ log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
 
 wait_for_merod() {
   log "Waiting for merod..."
-  while ! $MEROCTL --output-format json health 2>/dev/null | grep -q "ok"; do
+  while ! $MEROCTL --output-format json peers >/dev/null 2>&1; do
     sleep 1
   done
   log "merod is ready"
 }
 
 get_peer_id() {
-  $MEROCTL --output-format json peers list 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('peer_id',''))" 2>/dev/null || true
+  local cfg="/mnt/data/calimero/default/config.toml"
+  python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["identity"]["peer_id"])' "$cfg" 2>/dev/null \
+    || grep -A5 '^\[identity\]' "$cfg" 2>/dev/null | grep -E '^[[:space:]]*peer_id[[:space:]]*=' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
+# Read this TDX guest's own MRTD (Measurement Register of Trust Domain) from
+# the kernel-exposed sysfs attribute. This is the same 48-byte value the Intel
+# QE writes into a TDX quote (quote.mrtd()); the kernel surfaces it directly so
+# no quote generation / configfs-tsm round-trip is required. Output is 96-hex
+# lowercase, no "0x" prefix -- exactly what mdma's MRTD allowlist compares.
+get_mrtd() {
+  local f="/sys/class/misc/tdx_guest/measurements/mrtd:sha384"
+  [[ -r "$f" ]] || return 1
+  # xxd is in the image (vim-common); od is the coreutils fallback.
+  if command -v xxd >/dev/null 2>&1; then
+    xxd -p -c 48 "$f" 2>/dev/null | tr -d '\n' | tr 'A-F' 'a-f'
+  else
+    od -An -v -tx1 "$f" 2>/dev/null | tr -d ' \n' | tr 'A-F' 'a-f'
+  fi
 }
 
 poll_mdma() {
   local peer_id="$1"
+  local mrtd="$2"
 
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
 
   curl -sf --max-time 10 "${headers[@]}" \
-    -d "{\"peer_id\":\"$peer_id\"}" \
+    -d "{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}" \
     "${MDMA_URL}/api/fleet/should-join" 2>/dev/null || echo '{"assignments":[]}'
 }
 
@@ -67,16 +85,19 @@ join_group() {
   local group_id="$1"
   log "Joining group $group_id..."
 
-  # TODO: needs `meroctl tee fleet-join --group-id <id>` or
-  # POST /admin-api/tee/fleet-join in core. Placeholder until implemented.
-  local result
-  result=$($MEROCTL tee fleet-join --group-id "$group_id" 2>&1) || true
+  # `meroctl tee fleet-join` (core >= 0.10.1-rc.27) generates the TDX
+  # quote locally, broadcasts TeeAttestationAnnounce on the namespace
+  # topic, polls for admission up to 30s, and auto-joins every context
+  # in the group once admitted.
+  local result rc
+  result=$($MEROCTL tee fleet-join "$group_id" 2>&1)
+  rc=$?
 
-  if [[ $? -eq 0 && -n "$result" ]]; then
+  if [[ $rc -eq 0 ]]; then
     log "Joined group $group_id: $result"
     return 0
   else
-    log "WARN: fleet-join not available yet (core upgrade needed): $result"
+    log "ERROR: fleet-join failed for $group_id (rc=$rc): $result"
     return 1
   fi
 }
@@ -104,8 +125,19 @@ if [[ -z "$PEER_ID" ]]; then
 fi
 log "Fleet node peer_id: $PEER_ID"
 
+# Compute MRTD once: it is fixed for the life of the (immutable) node image.
+# mdma's /api/fleet/should-join gates HA assignments on this value; without it
+# every MRTD-allowlisted request is skipped and the node is never assigned.
+MRTD=$(get_mrtd || true)
+if [[ -z "$MRTD" ]]; then
+  log "ERROR: could not read MRTD from /sys/class/misc/tdx_guest/measurements/mrtd:sha384; \
+posting peer-id only (mdma will not assign MRTD-gated groups until this is resolved)"
+else
+  log "Fleet node MRTD: $MRTD"
+fi
+
 while true; do
-  response=$(poll_mdma "$PEER_ID")
+  response=$(poll_mdma "$PEER_ID" "$MRTD")
 
   new_assignments=$(echo "$response" | python3 -c "
 import sys, json
