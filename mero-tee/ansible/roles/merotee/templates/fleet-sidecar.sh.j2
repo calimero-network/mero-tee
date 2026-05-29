@@ -7,14 +7,19 @@
 set -euo pipefail
 
 LOG="/var/log/fleet-sidecar.log"
-STATE_FILE="/var/lib/calimero/fleet-assignments.json"
+# CONFIRMED_FILE tracks the groups for which mdma's /confirm has been
+# called AFTER the local `fleet-join` returned admitted=true. Semantics
+# differ from the pre-retry STATE_FILE (which only tracked "we tried"
+# — and that's exactly what made the old design fire-once-and-give-up).
+# Different path so any pre-upgrade legacy state is ignored on first boot.
+CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
 POLL_INTERVAL=1
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
-mkdir -p "$(dirname "$STATE_FILE")"
-[[ -f "$STATE_FILE" ]] || echo '[]' > "$STATE_FILE"
+mkdir -p "$(dirname "$CONFIRMED_FILE")"
+[[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
@@ -76,38 +81,81 @@ confirm_assignment() {
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
 
-  curl -sf --max-time 10 "${headers[@]}" \
-    -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\"}" \
-    "${MDMA_URL}/api/fleet/confirm" 2>/dev/null || true
-}
-
-join_group() {
-  local group_id="$1"
-  log "Joining group $group_id..."
-
-  # `meroctl tee fleet-join` (core >= 0.10.1-rc.27) generates the TDX
-  # quote locally, broadcasts TeeAttestationAnnounce on the namespace
-  # topic, polls for admission up to 30s, and auto-joins every context
-  # in the group once admitted.
-  local result rc
-  result=$($MEROCTL tee fleet-join "$group_id" 2>&1)
-  rc=$?
-
-  if [[ $rc -eq 0 ]]; then
-    log "Joined group $group_id: $result"
+  # Return curl's actual exit code so the caller can decide whether to
+  # mark the group confirmed-locally or leave it for retry. The pre-
+  # retry version swallowed errors with `|| true`, which meant a
+  # transient mdma blip (restart, network glitch) caused the sidecar
+  # to permanently mark the group confirmed even though mdma never
+  # heard about it — re-creating the original fire-once bug on the
+  # confirm step. stderr goes to the log so ops still see what failed.
+  if curl -sf --max-time 10 "${headers[@]}" \
+      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\"}" \
+      "${MDMA_URL}/api/fleet/confirm" 2>>"$LOG"; then
     return 0
   else
-    log "ERROR: fleet-join failed for $group_id (rc=$rc): $result"
+    log "WARN: POST /api/fleet/confirm failed for $group_id; will retry next cycle"
     return 1
   fi
 }
 
-load_current() {
-  cat "$STATE_FILE" 2>/dev/null || echo '[]'
+join_group() {
+  local group_id="$1"
+  log "Attempting fleet-join for group $group_id..."
+
+  # `meroctl tee fleet-join` generates a TDX quote, broadcasts
+  # TeeAttestationAnnounce on the namespace topic, and polls for
+  # admission for up to MAX_ADMISSION_WAIT (~30s, core's
+  # fleet_join.rs:169). The handler returns HTTP 200 with
+  # `admitted: true|false` on completion — and meroctl exits 0 in
+  # BOTH cases (process success != admission success). So we MUST
+  # inspect the response payload, not the exit code, to know
+  # whether we're a member.
+  local result rc admitted
+  # Redirect meroctl's stderr to the sidecar log instead of merging it
+  # into stdout. Any tracing spans / warnings / connection diagnostics
+  # meroctl emits would otherwise prepend the JSON object in $result
+  # and break `json.loads` below, silently forcing admitted=false and
+  # an infinite retry loop. Keeping stderr in the log preserves ops
+  # diagnostics without corrupting parse.
+  result=$($MEROCTL --output-format json tee fleet-join "$group_id" 2>>"$LOG")
+  rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    log "ERROR: fleet-join command failed for $group_id (rc=$rc): $result"
+    return 1
+  fi
+
+  # Parse `admitted` from the JSON. Tolerant to either a flat shape
+  # ({"admitted": ..., ...}) or a wrapper ({"data": {...}}). On parse
+  # failure, log the error (don't swallow silently) so a future
+  # output-shape regression is loud — silent fall-through to
+  # admitted=false would re-create the previous fire-and-forget bug
+  # in a new disguise.
+  admitted=$(echo "$result" | python3 -c '
+import sys, json
+try:
+  obj = json.loads(sys.stdin.read())
+  print(bool(obj.get("admitted") or obj.get("data", {}).get("admitted")))
+except Exception as exc:
+  print(f"sidecar: failed to parse meroctl fleet-join JSON: {exc}", file=sys.stderr)
+  print(False)
+' 2>>"$LOG" || echo 'False')
+
+  if [[ "$admitted" == "True" ]]; then
+    log "Admitted into group $group_id"
+    return 0
+  else
+    log "fleet-join completed but not yet admitted for $group_id; will retry next cycle"
+    return 1
+  fi
 }
 
-save_current() {
-  echo "$1" > "$STATE_FILE"
+load_confirmed() {
+  cat "$CONFIRMED_FILE" 2>/dev/null || echo '[]'
+}
+
+save_confirmed() {
+  echo "$1" > "$CONFIRMED_FILE"
 }
 
 # --- Main loop ---
@@ -139,7 +187,9 @@ fi
 while true; do
   response=$(poll_mdma "$PEER_ID" "$MRTD")
 
-  new_assignments=$(echo "$response" | python3 -c "
+  # Desired state: every group mdma currently assigns this fleet node
+  # to (returns existing 'assigned' + 'active' assignments via heartbeat).
+  desired=$(echo "$response" | python3 -c "
 import sys, json
 try:
   data = json.load(sys.stdin)
@@ -149,22 +199,53 @@ except:
   print('[]')
 " 2>/dev/null || echo '[]')
 
-  current=$(load_current)
+  confirmed=$(load_confirmed)
 
-  to_join=$(python3 -c "
-import json
-new = set(json.loads('''$new_assignments'''))
-cur = set(json.loads('''$current'''))
-print(json.dumps(list(new - cur)))
-" 2>/dev/null || echo '[]')
-
-  for group_id in $(echo "$to_join" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
-    if join_group "$group_id"; then
-      confirm_assignment "$PEER_ID" "$group_id"
-      log "Joined and confirmed group $group_id"
+  # Reconcile: for every desired group, retry fleet-join until our local
+  # core admits us (response.admitted=true), then POST /confirm to mdma.
+  # This is the convergence loop the prior `to_join = desired - STATE_FILE`
+  # design lacked — if the owner was offline during the first 30s window,
+  # the old code marked the assignment "tried" and never retried, so the
+  # node stayed forever an `assigned` non-member. fleet-join is idempotent
+  # in core (returns admitted=true immediately for an already-admitted
+  # group), so re-running is cheap.
+  for group_id in $(echo "$desired" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    # Skip groups we've already confirmed. Membership is stable until
+    # mdma drops the assignment (handled by the prune below).
+    if echo "$confirmed" | python3 -c "import sys,json; sys.exit(0 if '$group_id' in json.load(sys.stdin) else 1)" 2>/dev/null; then
+      continue
     fi
+    if join_group "$group_id"; then
+      # Only mark confirmed-locally when BOTH local admission AND mdma's
+      # /confirm POST succeed. If /confirm fails (transient mdma blip),
+      # leave the group out of CONFIRMED_FILE so the next cycle's
+      # join_group returns admitted=true immediately (idempotent in
+      # core) and we re-try /confirm — eventually consistent.
+      if confirm_assignment "$PEER_ID" "$group_id"; then
+        log "Confirmed group $group_id with mdma"
+        confirmed=$(echo "$confirmed" | python3 -c "
+import sys, json
+c = json.load(sys.stdin)
+c.append('$group_id')
+print(json.dumps(sorted(set(c))))
+" 2>>"$LOG" || echo "$confirmed")
+      fi
+    fi
+    # No `break`: keep iterating to give other assignments a fair shot
+    # in this same poll cycle. fleet-join's 30s window is per-group.
   done
 
-  save_current "$new_assignments"
+  # Prune confirmed: if mdma no longer assigns us to a group (HA
+  # disabled, namespace deleted, slot reclaimed), drop it from the
+  # confirmed set so a future re-add is recognised as new on the
+  # next cycle.
+  confirmed=$(python3 -c "
+import json
+des = set(json.loads('''$desired'''))
+con = set(json.loads('''$confirmed'''))
+print(json.dumps(sorted(con & des)))
+" 2>/dev/null || echo '[]')
+
+  save_confirmed "$confirmed"
   sleep "$POLL_INTERVAL"
 done
