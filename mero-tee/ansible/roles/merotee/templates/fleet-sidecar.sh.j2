@@ -154,8 +154,13 @@ join_group() {
   # and break `json.loads` below, silently forcing admitted=false and
   # an infinite retry loop. Keeping stderr in the log preserves ops
   # diagnostics without corrupting parse.
-  result=$($MEROCTL --output-format json tee fleet-join "$group_id" 2>>"$LOG")
-  rc=$?
+  #
+  # Guard the command substitution under `set -e`: a standalone
+  # `result=$(...)` assignment aborts the shell on a non-zero exit BEFORE
+  # the next-line `rc=$?` can run. fleet-join is documented to exit 0, but
+  # capture rc via `|| rc=$?` so a future non-zero exit can't kill the loop.
+  rc=0
+  result=$($MEROCTL --output-format json tee fleet-join "$group_id" 2>>"$LOG") || rc=$?
 
   if [[ $rc -ne 0 ]]; then
     log "ERROR: fleet-join command failed for $group_id (rc=$rc): $result"
@@ -201,9 +206,16 @@ leave_group() {
   # member"). That is benign — the post-condition (we are not a member) already
   # holds. Capture rc explicitly and CONTINUE either way; never abort the loop
   # or exit the sidecar. stderr goes to the log so ops keep diagnostics.
+  #
+  # Guard the command substitution under `set -e`: a standalone
+  # `result=$(...)` assignment aborts the shell on the command's non-zero
+  # exit BEFORE the next-line `rc=$?` runs, which would kill the sidecar on
+  # the FIRST disable that hits an already-left namespace (the common case).
+  # `|| rc=$?` captures the non-zero exit into rc so the benign-error branch
+  # below stays reachable and leave remains non-fatal.
   local result rc
-  result=$($MEROCTL --output-format json namespace leave "$group_id" 2>>"$LOG")
-  rc=$?
+  rc=0
+  result=$($MEROCTL --output-format json namespace leave "$group_id" 2>>"$LOG") || rc=$?
 
   if [[ $rc -eq 0 ]]; then
     log "Left namespace $group_id (HA disabled/dropped)"
