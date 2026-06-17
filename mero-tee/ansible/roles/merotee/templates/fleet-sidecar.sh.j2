@@ -69,9 +69,46 @@ poll_mdma() {
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
 
-  curl -sf --max-time 10 "${headers[@]}" \
+  # SAFETY-CRITICAL: distinguish a real "no assignments" answer from a poll
+  # failure. The pre-leave version swallowed ANY curl error into
+  # `{"assignments":[]}`, which made a transient mdma outage indistinguishable
+  # from "all namespaces disabled". Now that a missing assignment triggers
+  # `namespace leave` (which IRREVERSIBLY PURGES KEYS), that conflation would
+  # let a single network blip evict + shred keys on every healthy replica.
+  #
+  # So we mirror confirm_assignment's 0/1 contract: capture curl's body AND
+  # its exit status separately, validate the body parses as an assignments
+  # object, and ONLY then print the body and return 0. Any curl error
+  # (non-2xx via -f, timeout, DNS) OR an unparseable body returns 1 with NO
+  # stdout, so the caller can leave `confirmed` state untouched and skip the
+  # entire reconcile/leave/prune cycle this round.
+  local response rc
+  response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}" \
-    "${MDMA_URL}/api/fleet/should-join" 2>/dev/null || echo '{"assignments":[]}'
+    "${MDMA_URL}/api/fleet/should-join" 2>>"$LOG")
+  rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    log "WARN: POST /api/fleet/should-join failed (rc=$rc); skipping reconcile this cycle (state preserved)"
+    return 1
+  fi
+
+  # Validate the body is JSON with an 'assignments' array before trusting it.
+  # An HTTP 200 that returns a non-JSON / wrong-shape body (proxy error page,
+  # truncated response) must NOT be read as "no assignments" — that would
+  # trigger leaves just like a swallowed error. Reject it as a poll failure.
+  if ! echo "$response" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+if not isinstance(data.get('assignments'), list):
+    sys.exit(1)
+" 2>>"$LOG"; then
+    log "WARN: /api/fleet/should-join returned an unparseable/unexpected body; skipping reconcile this cycle (state preserved)"
+    return 1
+  fi
+
+  echo "$response"
+  return 0
 }
 
 confirm_assignment() {
@@ -150,6 +187,33 @@ except Exception as exc:
   fi
 }
 
+leave_group() {
+  local group_id="$1"
+  log "Leaving namespace $group_id (HA disabled/dropped by mdma)..."
+
+  # `meroctl namespace leave <hex_namespace_id>` publishes MemberLeft at the
+  # namespace root and cascades through every descendant group where this node
+  # has a direct row, so core evicts us from the namespace + all subgroups and
+  # purges our local data + keys (key deletion lands with core #2776 / Part 1).
+  #
+  # IDEMPOTENT / NON-FATAL: leaving a namespace we already left (or were never
+  # a direct member of) returns an error ("nothing to leave" / "not a direct
+  # member"). That is benign — the post-condition (we are not a member) already
+  # holds. Capture rc explicitly and CONTINUE either way; never abort the loop
+  # or exit the sidecar. stderr goes to the log so ops keep diagnostics.
+  local result rc
+  result=$($MEROCTL --output-format json namespace leave "$group_id" 2>>"$LOG")
+  rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    log "Left namespace $group_id (HA disabled/dropped)"
+  else
+    # Benign on a node that already left; log and move on (do not fail the loop).
+    log "namespace leave for $group_id returned rc=$rc (likely already left / not a member): $result"
+  fi
+  return 0
+}
+
 load_confirmed() {
   cat "$CONFIRMED_FILE" 2>/dev/null || echo '[]'
 }
@@ -185,7 +249,18 @@ else
 fi
 
 while true; do
-  response=$(poll_mdma "$PEER_ID" "$MRTD")
+  # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
+  # poll_mdma returns 0 + a valid assignments body on HTTP 200, or 1 on any
+  # curl error / non-2xx / timeout / unparseable body. On failure we do NOT
+  # compute desired, do NOT join, do NOT leave, do NOT prune — we leave the
+  # `confirmed` file untouched and continue. Preserving `confirmed` across a
+  # failed poll is load-bearing for the leave logic: if a failed poll pruned
+  # `confirmed`, a genuine disable on the next good poll would no longer show
+  # up in `confirmed − desired` and the node would never leave.
+  if ! response=$(poll_mdma "$PEER_ID" "$MRTD"); then
+    sleep "$POLL_INTERVAL"
+    continue
+  fi
 
   # Desired state: every group mdma currently assigns this fleet node
   # to (returns existing 'assigned' + 'active' assignments via heartbeat).
@@ -233,6 +308,27 @@ print(json.dumps(sorted(set(c))))
     fi
     # No `break`: keep iterating to give other assignments a fair shot
     # in this same poll cycle. fleet-join's 30s window is per-group.
+  done
+
+  # Leave dropped namespaces: to_leave = confirmed − desired. These are
+  # namespaces we had confirmed membership in but which mdma no longer
+  # assigns — HA disabled, slot reclaimed, or MRTD distrust. All mean "no
+  # longer entitled", so we self-leave to make core evict us from the
+  # namespace + all subgroups and purge our data + keys.
+  #
+  # This runs ONLY after a successful poll (gated at the top of the loop), and
+  # BEFORE the intersection-prune below — we need the `confirmed − desired`
+  # diff while `confirmed` still contains the dropped entries; the prune then
+  # persists their removal. leave_group is idempotent / non-fatal.
+  to_leave=$(python3 -c "
+import json
+des = set(json.loads('''$desired'''))
+con = set(json.loads('''$confirmed'''))
+print(json.dumps(sorted(con - des)))
+" 2>>"$LOG" || echo '[]')
+
+  for group_id in $(echo "$to_leave" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    leave_group "$group_id"
   done
 
   # Prune confirmed: if mdma no longer assigns us to a group (HA
