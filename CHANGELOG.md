@@ -6,6 +6,24 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `merodVersion` `0.10.1-rc.44` → `0.11.0-rc.5` in `mero-tee/versions.json` so the GCP node image bakes the core merod carrying the TEE-lifecycle work (core #2793: #2772 admission, #2776 key-deletion / Part-1 purge, #2792 emit-after-persist). Couples the new leave-on-disable sidecar (2.3.46) with the new merod into one image for the disable→leave→purge e2e. `imageVersion` stays at `2.3.46` (the image-source change is the baked merod tag, no sidecar/asset change). The build downloads `merod_<arch>-unknown-linux-gnu.tar.gz` directly from `github.com/calimero-network/core/releases/download/0.11.0-rc.5/` with no sha256 pin, so no post-release checksum step is required — but the node-image release gate verifies the `0.11.0-rc.5` core tag + its three required tarball assets exist, so the image build is BLOCKED until core `0.11.0-rc.5` (PR #2793) is actually released.
+
+## [2.3.46] - 2026-06-17
+
+### Added
+
+- Fleet HA sidecar `leave_group()`: when mdma stops assigning a namespace to this node (HA disabled, slot reclaimed, MRTD distrust), the sidecar now runs `meroctl namespace leave <hex_namespace_id>` so core evicts the node from the namespace + all subgroups and purges its local data + keys. Computed as `to_leave = confirmed − desired`, run BEFORE the intersection-prune so the diff is taken while `confirmed` still holds the dropped entries. The call is idempotent / non-fatal: leaving a namespace already left (`nothing to leave` / `not a direct member`) is logged and the loop continues. (Part 2 of 3; the AES key deletion that makes the purge actually shred keys lands in core #2776 / Part 1.)
+
+### Fixed
+
+- Fleet HA sidecar `poll_mdma()`: SAFETY-CRITICAL — no longer swallows curl failures into `{"assignments":[]}`. It now returns 0 + a validated assignments body on HTTP 200, or 1 on any curl error / non-2xx / timeout / unparseable or wrong-shape body (mirrors the `confirm_assignment` 0/1 contract; captures the body and exit status separately). The main loop gates the entire reconcile cycle on a successful poll: on failure it does NOT compute desired, join, leave, or prune, and leaves the `confirmed` file untouched. This prevents a transient mdma outage from looking like "all namespaces disabled" and triggering `namespace leave` (which irreversibly purges keys) on every healthy replica. Preserving `confirmed` across a failed poll is also required for the leave logic: a pruned `confirmed` would hide a genuine disable from the next good poll's `confirmed − desired` diff.
+
+### Changed
+
+- Synchronized release version to `2.3.46` across `mero-tee/versions.json` (`imageVersion`), `mero-kms/Cargo.toml`, and `Cargo.lock` to force a node-image + KMS rebuild carrying the leave-on-disable sidecar. `merodVersion` unchanged at `0.10.1-rc.44` — the merod build carrying core #2776 / Part-1 key deletion is a release-time bump once that core change ships.
+
 ## [2.3.43] - 2026-05-16
 
 ### Fixed

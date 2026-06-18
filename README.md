@@ -10,7 +10,7 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 |-----------|-------------|
 | **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVMs |
 | **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
-| **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`) and its own MRTD from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`, polls MDMA for group assignments (sending `peer_id` + `mrtd` so MDMA's MRTD-gated `should_join` can match) and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. |
+| **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`) and its own MRTD from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`, polls MDMA for group assignments (sending `peer_id` + `mrtd` so MDMA's MRTD-gated `should_join` can match) and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. See [Fleet HA sidecar lifecycle](#fleet-ha-sidecar-lifecycle) for the join + leave-on-disable reconcile loop. |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start
@@ -56,6 +56,41 @@ All detailed documentation lives in the **[Architecture Reference](https://calim
 | All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/config-reference.html) |
 | ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/error-handling.html) |
 | TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/glossary.html) |
+
+## Fleet HA sidecar lifecycle
+
+The fleet HA sidecar (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`) runs a
+one-second reconcile loop on each ReadOnly TEE fleet node. Every cycle it polls MDMA's
+`POST /api/fleet/should-join` with the node's `peer_id` + `mrtd`, then drives merod toward the
+namespace set MDMA currently assigns to it.
+
+**Join (converge toward `desired`).** For each assigned namespace not yet confirmed, the sidecar
+retries `meroctl tee fleet-join <GROUP_ID>` until core reports `admitted: true`, then `POST`s
+`/api/fleet/confirm` back to MDMA. A namespace is only recorded in the local
+`fleet-confirmed.json` once both local admission and the MDMA confirm succeed, so a transient
+MDMA blip on the confirm step is retried (fleet-join is idempotent in core) rather than lost.
+
+**Leave on disable (converge away from dropped namespaces).** When a namespace the node had
+previously confirmed (`confirmed`) is no longer in MDMA's assignment set (`desired`) — i.e. HA
+disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar self-leaves it
+with `meroctl namespace leave <hex_namespace_id>`. That publishes `MemberLeft` at the namespace
+root and cascades through every descendant subgroup, so **core** evicts the node from the
+namespace and all subgroups and purges its local data and keys. `namespace leave` is idempotent
+and non-fatal: leaving a namespace the node already left (or was never a direct member of) is
+treated as benign and never aborts the loop.
+
+**Poll-success safety gate.** The entire reconcile — join, leave, and prune — runs **only** after
+a successful poll: HTTP 200 with a body that parses as an `{"assignments": [...]}` object. Any
+curl error, non-2xx, timeout, or unparseable/wrong-shape 200 body causes the cycle to skip
+reconcile and preserve `fleet-confirmed.json` untouched. This is safety-critical: because a
+missing assignment now triggers an irreversible leave + key purge, a transient MDMA outage must
+never be conflated with "all namespaces disabled" and shred keys on healthy replicas.
+
+> **Note:** this is the mero-tee side — the sidecar is the trigger. The actual eviction and
+> data/key purge are performed by **core** in response to `MemberLeft`. The key-deletion half of
+> that purge requires core ≥ `0.11.0-rc.5` (the `merodVersion` baked into these node images;
+> see `mero-tee/versions.json`), which carries the leave→purge and transparent subgroup admission
+> changes. On older merod the sidecar will still issue the leave, but keys may not be purged.
 
 ## Release Process
 
