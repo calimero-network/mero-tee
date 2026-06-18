@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `merodVersion` `0.10.1-rc.44` → `0.11.0-rc.5` in `mero-tee/versions.json` so the GCP node image bakes the core merod carrying the TEE-lifecycle work (core #2793: #2772 admission, #2776 key-deletion / Part-1 purge, #2792 emit-after-persist). Couples the new leave-on-disable sidecar (2.3.46) with the new merod into one image for the disable→leave→purge e2e. `imageVersion` stays at `2.3.46` (the image-source change is the baked merod tag, no sidecar/asset change). The build downloads `merod_<arch>-unknown-linux-gnu.tar.gz` directly from `github.com/calimero-network/core/releases/download/0.11.0-rc.5/` with no sha256 pin, so no post-release checksum step is required — but the node-image release gate verifies the `0.11.0-rc.5` core tag + its three required tarball assets exist, so the image build is BLOCKED until core `0.11.0-rc.5` (PR #2793) is actually released.
+
 ## [2.3.46] - 2026-06-17
 
 ### Added
