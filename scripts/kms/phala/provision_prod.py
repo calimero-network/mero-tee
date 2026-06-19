@@ -68,6 +68,10 @@ def _request(
     )
     _log(f"{method.upper()} {path} <- {resp.status_code}")
     if resp.status_code >= 400:
+        # Log the FULL response body — Phala 4xx errors are not always under
+        # `detail`, so the detail-only message can read as `None` and hide the
+        # real cause.
+        _log(f"{method.upper()} {path} error body: {resp.text!r}")
         detail = None
         try:
             body = resp.json()
