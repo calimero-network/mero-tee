@@ -88,9 +88,10 @@ never be conflated with "all namespaces disabled" and shred keys on healthy repl
 
 > **Note:** this is the mero-tee side — the sidecar is the trigger. The actual eviction and
 > data/key purge are performed by **core** in response to `MemberLeft`. The key-deletion half of
-> that purge requires core ≥ `0.11.0-rc.5` (the `merodVersion` baked into these node images;
-> see `mero-tee/versions.json`), which carries the leave→purge and transparent subgroup admission
-> changes. On older merod the sidecar will still issue the leave, but keys may not be purged.
+> that purge requires core ≥ `0.11.0-rc.6` (the `merodVersion` baked into these node images;
+> see `mero-tee/versions.json`), which carries the leave→purge, transparent subgroup admission,
+> and the Open-subgroup replication fix (core #2809). On older merod the sidecar will still issue
+> the leave, but keys may not be purged.
 
 ## Release Process
 
