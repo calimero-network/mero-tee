@@ -32,8 +32,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # From calimero-network/core (git dependency; 0.11.0-rc.7)
-calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "6c83289fe5f35bf0915c369c42d5c8881625a43c" }
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "6c83289fe5f35bf0915c369c42d5c8881625a43c" }
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "6f50416c02d81b2c9090256536f7e550b989717e" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "6f50416c02d81b2c9090256536f7e550b989717e" }
 thiserror = "2.0"
 
 [dev-dependencies]

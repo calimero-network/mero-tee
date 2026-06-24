@@ -1224,7 +1224,7 @@ dependencies = [
 [[package]]
 name = "calimero-blobstore"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "async-stream",
  "calimero-primitives",
@@ -1242,7 +1242,7 @@ dependencies = [
 [[package]]
 name = "calimero-context-client"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "actix",
  "async-stream",
@@ -1271,7 +1271,7 @@ dependencies = [
 [[package]]
 name = "calimero-context-config"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "bs58",
@@ -1284,7 +1284,7 @@ dependencies = [
 [[package]]
 name = "calimero-crypto"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "calimero-primitives",
  "curve25519-dalek",
@@ -1296,7 +1296,7 @@ dependencies = [
 [[package]]
 name = "calimero-governance-types"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "blake3",
  "borsh",
@@ -1311,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "calimero-network-primitives"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "actix",
  "async-trait",
@@ -1335,7 +1335,7 @@ dependencies = [
 [[package]]
 name = "calimero-node-primitives"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "actix",
  "async-stream",
@@ -1378,7 +1378,7 @@ dependencies = [
 [[package]]
 name = "calimero-prelude"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "calimero-primitives",
@@ -1389,7 +1389,7 @@ dependencies = [
 [[package]]
 name = "calimero-primitives"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "bs58",
@@ -1408,7 +1408,7 @@ dependencies = [
 [[package]]
 name = "calimero-sdk"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "calimero-prelude",
@@ -1424,7 +1424,7 @@ dependencies = [
 [[package]]
 name = "calimero-sdk-macros"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -1437,7 +1437,7 @@ dependencies = [
 [[package]]
 name = "calimero-server-primitives"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "calimero-context-client",
  "calimero-context-config",
@@ -1455,7 +1455,7 @@ dependencies = [
 [[package]]
 name = "calimero-storage"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "calimero-prelude",
@@ -1477,7 +1477,7 @@ dependencies = [
 [[package]]
 name = "calimero-storage-macros"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1486,7 +1486,7 @@ dependencies = [
 [[package]]
 name = "calimero-store"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "borsh",
  "calimero-primitives",
@@ -1502,7 +1502,7 @@ dependencies = [
 [[package]]
 name = "calimero-sys"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "cfg-if",
 ]
@@ -1510,7 +1510,7 @@ dependencies = [
 [[package]]
 name = "calimero-tee-attestation"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "base64 0.22.1",
  "calimero-server-primitives",
@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "calimero-utils-actix"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "actix",
  "async-stream",
@@ -1542,7 +1542,7 @@ dependencies = [
 [[package]]
 name = "calimero-wasm-abi"
 version = "0.0.0"
-source = "git+https://github.com/calimero-network/core?rev=6c83289fe5f35bf0915c369c42d5c8881625a43c#6c83289fe5f35bf0915c369c42d5c8881625a43c"
+source = "git+https://github.com/calimero-network/core?rev=6f50416c02d81b2c9090256536f7e550b989717e#6f50416c02d81b2c9090256536f7e550b989717e"
 dependencies = [
  "proc-macro2",
  "serde",
@@ -1997,7 +1997,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
