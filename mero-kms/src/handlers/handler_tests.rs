@@ -25,7 +25,12 @@ fn post_json_request(uri: &str, body: &serde_json::Value) -> Request<Body> {
 fn mock_verification_result(nonce_seed: u8) -> calimero_tee_attestation::VerificationResult {
     let nonce = [nonce_seed; 32];
     let mock_quote = create_mock_quote(&nonce);
-    verify_mock_attestation(&mock_quote, &nonce, None).unwrap()
+    // rc.13 made app-hash verification mandatory (was Option<_> / skippable).
+    // `create_mock_quote` leaves report_data[32..64] zeroed, so the quote's
+    // embedded app-hash is all zeros; passing it back keeps
+    // `application_hash_verified == true`, matching the prior `None` semantics.
+    let expected_app_hash = [0u8; 32];
+    verify_mock_attestation(&mock_quote, &nonce, &expected_app_hash).unwrap()
 }
 
 #[test]
