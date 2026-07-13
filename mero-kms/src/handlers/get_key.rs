@@ -132,10 +132,10 @@ async fn verify_and_enforce_attestation(
     );
 
     let verification_result = if is_mock {
-        verify_mock_attestation(quote_bytes, challenge_nonce, Some(&peer_id_hash))
+        verify_mock_attestation(quote_bytes, challenge_nonce, &peer_id_hash)
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
     } else {
-        verify_attestation(quote_bytes, challenge_nonce, Some(&peer_id_hash))
+        verify_attestation(quote_bytes, challenge_nonce, &peer_id_hash)
             .await
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
     };
@@ -155,7 +155,7 @@ async fn verify_and_enforce_attestation(
             ));
         }
 
-        if verification_result.application_hash_verified == Some(false) {
+        if !verification_result.application_hash_verified {
             return Err(ServiceError::PeerIdMismatch);
         }
 
