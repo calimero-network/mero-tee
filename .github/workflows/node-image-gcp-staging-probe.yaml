@@ -408,7 +408,9 @@ jobs:
         id: verify_anti_fake
         env:
           ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
-          BASE_URL: ${{ steps.endpoint.outputs.base_url }}
+          INSTANCE_NAME: ${{ steps.params.outputs.instance_name }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
         run: |
           bash scripts/ci/probes/node_verify_anti_fake.sh
 
