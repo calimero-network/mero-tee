@@ -8,7 +8,7 @@
 //! | `DSTACK_SOCKET_PATH` | `String` | `/var/run/dstack.sock` | Path to dstack Unix socket |
 //! | `CHALLENGE_TTL_SECS` | `u64` | `60` | Challenge nonce time-to-live in seconds |
 //! | `MAX_PENDING_CHALLENGES` | `usize` | `10000` | Maximum concurrent pending challenges |
-//! | `ACCEPT_MOCK_ATTESTATION` | `bool` | `false` | Accept mock quotes (dev only, **never** in production) |
+//! | `ACCEPT_MOCK_ATTESTATION` | `bool` | `false` | Accept mock quotes (dev only, **never** in production). Only read when built with the default-off `mock-attestation` feature; ignored otherwise. |
 //! | `REDIS_URL` | `String` | *(none — in-memory)* | Redis URL for shared challenge store |
 //! | `MERO_KMS_VERSION` | `String` | *(none)* | Release version for policy fetch (e.g. `2.3.4` or `mero-kms-v2.3.4`) |
 //! | `MERO_KMS_PROFILE` | `String` | `locked-read-only` | KMS profile cohort (overrides `KMS_POLICY_PROFILE`) |
@@ -54,6 +54,10 @@ pub struct Config {
     /// Maximum number of concurrent pending challenges before rate-limiting.
     pub max_pending_challenges: usize,
     /// Accept mock TDX quotes (development only, **never** in production).
+    ///
+    /// Only present under the default-off `mock-attestation` feature; the
+    /// production build has no such knob.
+    #[cfg(feature = "mock-attestation")]
     pub accept_mock_attestation: bool,
     /// Optional Redis URL for shared challenge storage across instances.
     pub redis_url: Option<String>,
@@ -82,6 +86,7 @@ impl Default for Config {
             dstack_socket_path: "/var/run/dstack.sock".to_string(),
             challenge_ttl_secs: 60,
             max_pending_challenges: 10_000,
+            #[cfg(feature = "mock-attestation")]
             accept_mock_attestation: false,
             redis_url: None,
             kms_profile: "locked-read-only".to_string(),
@@ -124,6 +129,7 @@ impl Config {
             bail!("MAX_PENDING_CHALLENGES must be greater than 0");
         }
 
+        #[cfg(feature = "mock-attestation")]
         let accept_mock_attestation = parse_bool_env("ACCEPT_MOCK_ATTESTATION", false)?;
 
         let redis_url = std::env::var("REDIS_URL")
@@ -170,7 +176,11 @@ impl Config {
             .await?;
         attestation_policy.enforce_measurement_policy = enforce_measurement_policy;
         if policy_ready {
-            validate_policy_requirements(&attestation_policy, accept_mock_attestation)?;
+            validate_policy_requirements(
+                &attestation_policy,
+                #[cfg(feature = "mock-attestation")]
+                accept_mock_attestation,
+            )?;
         }
 
         Ok(Self {
@@ -178,6 +188,7 @@ impl Config {
             dstack_socket_path,
             challenge_ttl_secs,
             max_pending_challenges,
+            #[cfg(feature = "mock-attestation")]
             accept_mock_attestation,
             redis_url,
             kms_profile,
@@ -370,6 +381,7 @@ pub fn log_startup_config(config: &Config) {
     info!("Dstack socket: {}", config.dstack_socket_path);
     info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
     info!("Max pending challenges: {}", config.max_pending_challenges);
+    #[cfg(feature = "mock-attestation")]
     info!(
         "Accept mock attestation: {}",
         config.accept_mock_attestation

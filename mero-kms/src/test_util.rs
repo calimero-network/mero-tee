@@ -33,16 +33,6 @@ pub fn valid_measurement_hex() -> String {
     "ab".repeat(MEASUREMENT_BYTES)
 }
 
-/// Build a minimal mock TDX quote with the given nonce embedded in report_data.
-pub fn create_mock_quote(nonce: &[u8; 32]) -> Vec<u8> {
-    let mut quote = b"MOCK_TDX_QUOTE_V1".to_vec();
-    let mut report_data = [0u8; 64];
-    report_data[..32].copy_from_slice(nonce);
-    quote.extend_from_slice(&report_data);
-    quote.resize(256, 0);
-    quote
-}
-
 /// Read the full body of an Axum response and parse it as JSON.
 ///
 /// Panics if the body cannot be read or is not valid JSON.

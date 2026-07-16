@@ -12,6 +12,11 @@ publish = false
 name = "mero-kms-phala"
 path = "src/main.rs"
 
+[features]
+# DEV/TEST ONLY. Compiles the mock attestation path. Default OFF so the
+# production KMS binary contains no mock-attestation code.
+mock-attestation = ["calimero-tee-attestation/mock-attestation"]
+
 [dependencies]
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -32,8 +37,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # From calimero-network/core (git dependency; 0.11.0-rc.13)
-calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "64c17161102cc68c226c5c051315802b95583143" }
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "64c17161102cc68c226c5c051315802b95583143" }
+# rev 3ab6ee9d is core master's tip. It contains #3269, which feature-gates the
+# mock attestation path in calimero-tee-attestation behind that crate's
+# default-off `mock-attestation` feature (see [features] above).
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "3ab6ee9d6c69bb20e5a43083eb1b46d920751b98" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "3ab6ee9d6c69bb20e5a43083eb1b46d920751b98" }
 thiserror = "2.0"
 
 [dev-dependencies]

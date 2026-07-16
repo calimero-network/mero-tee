@@ -4,14 +4,17 @@ use axum::extract::State;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use calimero_tee_attestation::{
-    is_mock_quote, verify_attestation, verify_mock_attestation, VerificationResult,
-};
+#[cfg(feature = "mock-attestation")]
+use calimero_tee_attestation::{is_mock_quote, verify_mock_attestation};
+use calimero_tee_attestation::{verify_attestation, VerificationResult};
 use dstack_sdk::dstack_client::DstackClient;
 use libp2p_identity::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
+// `warn!` is only reachable from the mock-attestation paths below.
+#[cfg(feature = "mock-attestation")]
+use tracing::warn;
 
 use crate::policy::AttestationPolicy;
 use crate::util::CHALLENGE_ID_HEX_LEN;
@@ -105,16 +108,22 @@ pub(crate) async fn get_key_handler(
 
 /// Verify the TDX attestation quote and enforce measurement policy.
 ///
-/// Handles mock vs. real attestations, validates the quote cryptographically,
-/// checks nonce/peer-ID bindings, and enforces the register-level measurement
-/// policy (skipped for accepted mock quotes).
+/// Validates the quote cryptographically, checks nonce/peer-ID bindings, and
+/// enforces the register-level measurement policy.
+///
+/// Under the default-off `mock-attestation` feature this additionally handles
+/// mock quotes (skipping the measurement policy for accepted mocks). Without
+/// the feature, real attestation is the only compiled path and the measurement
+/// policy is always enforced — no skip path exists.
 async fn verify_and_enforce_attestation(
     config: &Config,
     quote_bytes: &[u8],
     challenge_nonce: &[u8; 32],
     peer_id: &str,
 ) -> Result<(), ServiceError> {
+    #[cfg(feature = "mock-attestation")]
     let is_mock = is_mock_quote(quote_bytes);
+    #[cfg(feature = "mock-attestation")]
     if is_mock {
         if config.accept_mock_attestation {
             warn!(peer_id = %peer_id, "Accepting mock attestation (development mode)");
@@ -131,6 +140,7 @@ async fn verify_and_enforce_attestation(
         "Created peer ID hash for verification"
     );
 
+    #[cfg(feature = "mock-attestation")]
     let verification_result = if is_mock {
         verify_mock_attestation(quote_bytes, challenge_nonce, &peer_id_hash)
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
@@ -139,6 +149,10 @@ async fn verify_and_enforce_attestation(
             .await
             .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
     };
+    #[cfg(not(feature = "mock-attestation"))]
+    let verification_result = verify_attestation(quote_bytes, challenge_nonce, &peer_id_hash)
+        .await
+        .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?;
 
     if !verification_result.is_valid() {
         error!(
@@ -166,11 +180,14 @@ async fn verify_and_enforce_attestation(
 
     info!(peer_id = %peer_id, "Attestation verified successfully");
 
-    if !is_mock {
-        enforce_attestation_policy(config, &verification_result)?;
-    } else {
+    #[cfg(feature = "mock-attestation")]
+    if is_mock {
         warn!("Skipping measurement policy checks for accepted mock attestation");
+    } else {
+        enforce_attestation_policy(config, &verification_result)?;
     }
+    #[cfg(not(feature = "mock-attestation"))]
+    enforce_attestation_policy(config, &verification_result)?;
 
     Ok(())
 }

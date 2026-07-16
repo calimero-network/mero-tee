@@ -157,11 +157,18 @@ impl AttestationPolicy {
 /// Fail-fast check at startup: when enforcement is on, every measurement
 /// register must have at least one allowed value. This catches misconfiguration
 /// before the first key-release request arrives.
+///
+/// The `accept_mock_attestation` short-circuit exists only under the default-off
+/// `mock-attestation` feature; the production build cannot bypass this check.
 pub fn validate_policy_requirements(
     policy: &AttestationPolicy,
-    accept_mock_attestation: bool,
+    #[cfg(feature = "mock-attestation")] accept_mock_attestation: bool,
 ) -> EyreResult<()> {
-    if !policy.enforce_measurement_policy || accept_mock_attestation {
+    #[cfg(feature = "mock-attestation")]
+    if accept_mock_attestation {
+        return Ok(());
+    }
+    if !policy.enforce_measurement_policy {
         return Ok(());
     }
     if policy.allowed_tcb_statuses.is_empty() {
@@ -259,8 +266,12 @@ mod tests {
     fn validate_policy_requirements_rejects_missing_rtmr3() {
         let mut policy = strict_policy();
         policy.allowed_rtmr3.clear();
-        let err =
-            validate_policy_requirements(&policy, false).expect_err("missing RTMR3 should fail");
+        let err = validate_policy_requirements(
+            &policy,
+            #[cfg(feature = "mock-attestation")]
+            false,
+        )
+        .expect_err("missing RTMR3 should fail");
         assert!(err.to_string().contains("allowed_rtmr3"));
     }
 
@@ -268,11 +279,16 @@ mod tests {
     fn validate_policy_requirements_rejects_missing_tcb_statuses() {
         let mut policy = strict_policy();
         policy.allowed_tcb_statuses.clear();
-        let err = validate_policy_requirements(&policy, false)
-            .expect_err("missing TCB status allowlist should fail");
+        let err = validate_policy_requirements(
+            &policy,
+            #[cfg(feature = "mock-attestation")]
+            false,
+        )
+        .expect_err("missing TCB status allowlist should fail");
         assert!(err.to_string().contains("allowed_tcb_statuses"));
     }
 
+    #[cfg(feature = "mock-attestation")]
     #[test]
     fn validate_policy_requirements_allows_when_mock_enabled() {
         let policy = AttestationPolicy {

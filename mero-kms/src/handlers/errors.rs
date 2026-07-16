@@ -46,6 +46,10 @@ pub enum ServiceError {
     InvalidSignature(String),
     #[error("attestation verification failed: {0}")]
     AttestationVerificationFailed(String),
+    /// Unreachable without the `mock-attestation` feature: with no mock path
+    /// compiled in, a mock quote is just an unparseable quote and fails
+    /// ordinary attestation verification.
+    #[cfg(feature = "mock-attestation")]
     #[error("mock attestation rejected: mock attestations are not accepted in production mode")]
     MockAttestationRejected,
     #[error("peer identity mismatch: the provided peer public key does not correspond to the claimed peer ID")]
@@ -92,6 +96,7 @@ impl ServiceError {
                 "attestation_verification_failed",
                 Some(msg),
             ),
+            #[cfg(feature = "mock-attestation")]
             Self::MockAttestationRejected => (
                 StatusCode::UNAUTHORIZED,
                 "mock_attestation_rejected",

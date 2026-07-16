@@ -46,7 +46,14 @@ async fn main() -> eyre::Result<()> {
 
     log_startup_config(&config);
 
-    if config.accept_mock_attestation {
+    // Without the `mock-attestation` feature the RTMR3 runtime marker can never
+    // be skipped: there is no mock mode to skip it for.
+    #[cfg(feature = "mock-attestation")]
+    let skip_runtime_marker = config.accept_mock_attestation;
+    #[cfg(not(feature = "mock-attestation"))]
+    let skip_runtime_marker = false;
+
+    if skip_runtime_marker {
         warn!(
             "WARNING: Mock attestation acceptance is enabled. This should NEVER be used in production!"
         );
