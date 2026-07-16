@@ -270,14 +270,12 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Create ephemeral firewall rule for admin API
-        env:
-          KMS_PROBE_EXPECTED_OUTCOME: ${{ inputs.kms_probe_expected_outcome }}
         run: |
           set -euo pipefail
-          firewall_rules="tcp:${{ steps.params.outputs.admin_api_port }}"
-          if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" != "skip" ]]; then
-            firewall_rules="${firewall_rules},tcp:22"
-          fi
+          # tcp:22 is always opened: the anti-fake probe SSHes into the node
+          # unconditionally (merod tee probe), and the optional node->KMS probe
+          # also SSHes when enabled. Both are torn down with the named rule below.
+          firewall_rules="tcp:${{ steps.params.outputs.admin_api_port }},tcp:22"
           gcloud compute firewall-rules create "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --network "${{ steps.params.outputs.vm_network }}" \
