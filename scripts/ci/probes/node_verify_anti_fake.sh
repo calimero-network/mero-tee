@@ -3,144 +3,191 @@ set -euo pipefail
 
 source scripts/ci/logging.sh
 
-if [[ -z "${ARTIFACTS_DIR:-}" || -z "${BASE_URL:-}" ]]; then
-  ci_fail "MISSING_REQUIRED_ENV" "ARTIFACTS_DIR and BASE_URL are required."
+# Anti-fake TEE attestation probe.
+#
+# This probe no longer relies on a node HTTP attestation endpoint. Instead it
+# SSHes into the staging node and invokes the merod `tee probe` CLI
+# subcommand, mirroring node_runtime_kms_probe.sh. The
+# subcommand runs the positive + negative attestation checks in-process and
+# reports a TeeProbeResult JSON document:
+#
+#   {
+#     "outcome": "success" | "failure",   # mirrors the process exit code
+#     "is_mock": <bool>,                    # true when the quote is a mock quote
+#     "checks": {
+#       "positive":       { "passed": <bool>, ... },
+#       "wrong_nonce":    { "passed": <bool>, ... },
+#       "tampered_quote": { "passed": <bool>, ... }
+#     }
+#   }
+#
+# The probe fails unless the node returns real-hardware assurance: a successful
+# outcome, a non-mock quote, and all three attestation checks passing.
+
+required_env=(
+  ARTIFACTS_DIR
+  INSTANCE_NAME
+  VM_PROJECT
+  VM_ZONE
+)
+for env_name in "${required_env[@]}"; do
+  if [[ -z "${!env_name+x}" ]]; then
+    ci_fail "MISSING_REQUIRED_ENV" "${env_name} is not set."
+    exit 1
+  fi
+done
+
+probe_stdout="${ARTIFACTS_DIR}/node-anti-fake-ssh-stdout.log"
+probe_stderr="${ARTIFACTS_DIR}/node-anti-fake-ssh-stderr.log"
+probe_json="${ARTIFACTS_DIR}/node-anti-fake-probe-raw.json"
+parsed_json="false"
+ssh_exit_code=255
+
+ci_group_start "Node anti-fake TEE probe attempts"
+for attempt in $(seq 1 12); do
+  set +e
+  gcloud compute ssh "${INSTANCE_NAME}" \
+    --project "${VM_PROJECT}" \
+    --zone "${VM_ZONE}" \
+    --quiet \
+    --ssh-flag="-o ConnectTimeout=10" \
+    --ssh-flag="-o ServerAliveInterval=30" \
+    --command "set -euo pipefail; /usr/local/bin/merod --home /mnt/data/calimero --node default tee probe --json" \
+    > "${probe_stdout}" \
+    2> "${probe_stderr}"
+  ssh_exit_code=$?
+  set -e
+
+  if python3 - "${probe_stdout}" "${probe_json}" <<'PY'
+import json
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+end = text.rfind("}")
+if end == -1:
+    raise SystemExit(1)
+
+depth = 0
+start = None
+for idx in range(end, -1, -1):
+    ch = text[idx]
+    if ch == "}":
+        depth += 1
+    elif ch == "{":
+        depth -= 1
+        if depth == 0:
+            start = idx
+            break
+
+if start is None:
+    raise SystemExit(1)
+
+payload = json.loads(text[start : end + 1])
+pathlib.Path(sys.argv[2]).write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  then
+    parsed_json="true"
+    ci_ok "Parsed node anti-fake TEE probe JSON output at attempt ${attempt}"
+    break
+  fi
+  ci_log_transition "node anti-fake probe parse status" "non-json" "non-json" "${attempt}" 3
+  if [[ "${attempt}" -lt 12 ]]; then
+    sleep 10
+  fi
+done
+ci_group_end
+
+if [[ "${parsed_json}" != "true" ]]; then
+  # No parseable TeeProbeResult JSON was retrieved. Distinguish a pure SSH
+  # transport failure (gcloud ssh could never connect -> exit 255) from a
+  # node that answered but emitted a non-JSON terminal error (e.g. the
+  # "TEE is not configured in this node" path emits no JSON and exits nonzero).
+  echo "::group::node-anti-fake-ssh-stdout (last 120 lines)"
+  ci_tail_bounded "${probe_stdout}" 120
+  echo "::endgroup::"
+  echo "::group::node-anti-fake-ssh-stderr (last 120 lines)"
+  ci_tail_bounded "${probe_stderr}" 120
+  echo "::endgroup::"
+  if [[ "${ssh_exit_code}" -eq 255 ]]; then
+    ci_fail "VERIFY_TEE_PROBE_SSH" "Unable to reach node over SSH to run merod tee probe (ssh_exit_code=${ssh_exit_code})."
+  else
+    ci_fail "VERIFY_TEE_PROBE_PARSE" "Node did not return parseable TeeProbeResult JSON from merod tee probe (ssh_exit_code=${ssh_exit_code})."
+  fi
   exit 1
 fi
 
-verify_endpoint="${BASE_URL}/admin-api/tee/verify-quote"
-
-summarize_verify_quote_response() {
-  local response_file="$1"
-  jq -c '{ok, code, error, data: {quoteVerified, nonceVerified, applicationHashVerified}}' \
-    "${response_file}" 2>/dev/null || true
-}
-
-quote_b64="$(jq -r '.data.quoteB64 // empty' "${ARTIFACTS_DIR}/tee-attest-response.json")"
-nonce_hex="$(jq -r '.nonce // empty' "${ARTIFACTS_DIR}/tee-attest-request.json")"
-if [[ -z "${quote_b64}" || -z "${nonce_hex}" ]]; then
-  ci_fail "MISSING_QUOTE_OR_NONCE" "Missing quote or nonce in collected node attestation artifacts."
+# Structural validation: every field we assert on must be present and correctly
+# typed. A malformed payload is a parse-tier failure, not a policy failure.
+if ! jq -e '
+    (.outcome | type == "string")
+    and (.is_mock | type == "boolean")
+    and (.checks | type == "object")
+    and (.checks.positive.passed | type == "boolean")
+    and (.checks.wrong_nonce.passed | type == "boolean")
+    and (.checks.tampered_quote.passed | type == "boolean")
+  ' "${probe_json}" >/dev/null 2>&1; then
+  ci_fail "VERIFY_TEE_PROBE_PARSE" "TeeProbeResult JSON is missing required fields or has unexpected types."
+  jq -c '.' "${probe_json}" 2>/dev/null || true
   exit 1
 fi
 
+outcome="$(jq -r '.outcome' "${probe_json}")"
+is_mock="$(jq -r 'if .is_mock then "true" else "false" end' "${probe_json}")"
+positive_passed="$(jq -r 'if .checks.positive.passed then "true" else "false" end' "${probe_json}")"
+wrong_nonce_passed="$(jq -r 'if .checks.wrong_nonce.passed then "true" else "false" end' "${probe_json}")"
+tampered_passed="$(jq -r 'if .checks.tampered_quote.passed then "true" else "false" end' "${probe_json}")"
+
+# Persist a compact verification summary alongside the raw probe payload.
 jq -n \
-  --arg quoteB64 "${quote_b64}" \
-  --arg nonce "${nonce_hex}" \
-  '{quoteB64: $quoteB64, nonce: $nonce}' \
-  > "${ARTIFACTS_DIR}/tee-verify-quote-positive-request.json"
-positive_status="$(curl -sS --max-time 20 \
-  -o "${ARTIFACTS_DIR}/tee-verify-quote-positive-response.json" \
-  -w "%{http_code}" \
-  -X POST "${verify_endpoint}" \
-  -H "Content-Type: application/json" \
-  -d @"${ARTIFACTS_DIR}/tee-verify-quote-positive-request.json" || true)"
-if [[ "${positive_status}" != "200" ]]; then
-  ci_fail "VERIFY_QUOTE_POSITIVE_HTTP" "Positive /verify-quote check failed (HTTP ${positive_status})."
-  exit 1
-fi
-if ! jq -e '.data.quoteVerified == true and .data.nonceVerified == true' \
-  "${ARTIFACTS_DIR}/tee-verify-quote-positive-response.json" >/dev/null 2>&1; then
-  ci_fail "VERIFY_QUOTE_POSITIVE_INVARIANT" "Positive /verify-quote check did not return quoteVerified=true and nonceVerified=true."
-  summarize_verify_quote_response "${ARTIFACTS_DIR}/tee-verify-quote-positive-response.json"
-  exit 1
-fi
-positive_passed="true"
-
-wrong_nonce_hex="$(python3 -c 'import sys; n=sys.argv[1].strip().lower(); assert len(n)==64, "nonce must be 64 hex chars"; flip=("0" if n[0]!="0" else "1"); print(flip + n[1:])' "${nonce_hex}")"
-jq -n \
-  --arg quoteB64 "${quote_b64}" \
-  --arg nonce "${wrong_nonce_hex}" \
-  '{quoteB64: $quoteB64, nonce: $nonce}' \
-  > "${ARTIFACTS_DIR}/tee-verify-quote-wrong-nonce-request.json"
-wrong_nonce_status="$(curl -sS --max-time 20 \
-  -o "${ARTIFACTS_DIR}/tee-verify-quote-wrong-nonce-response.json" \
-  -w "%{http_code}" \
-  -X POST "${verify_endpoint}" \
-  -H "Content-Type: application/json" \
-  -d @"${ARTIFACTS_DIR}/tee-verify-quote-wrong-nonce-request.json" || true)"
-wrong_nonce_rejected="false"
-if [[ "${wrong_nonce_status}" != "200" ]]; then
-  wrong_nonce_rejected="true"
-elif jq -e '.data.nonceVerified == false or .data.quoteVerified == false' \
-  "${ARTIFACTS_DIR}/tee-verify-quote-wrong-nonce-response.json" >/dev/null 2>&1; then
-  wrong_nonce_rejected="true"
-fi
-if [[ "${wrong_nonce_rejected}" != "true" ]]; then
-  ci_fail "VERIFY_QUOTE_WRONG_NONCE_ACCEPTED" "Wrong nonce was not rejected by /verify-quote."
-  summarize_verify_quote_response "${ARTIFACTS_DIR}/tee-verify-quote-wrong-nonce-response.json"
-  exit 1
-fi
-
-tampered_quote_b64="$(python3 -c 'import base64,sys; raw=base64.b64decode(sys.argv[1], validate=False); assert len(raw)>0, "empty quote bytes"; b=bytearray(raw); b[0]^=0x01; print(base64.b64encode(bytes(b)).decode("ascii"))' "${quote_b64}")"
-jq -n \
-  --arg quoteB64 "${tampered_quote_b64}" \
-  --arg nonce "${nonce_hex}" \
-  '{quoteB64: $quoteB64, nonce: $nonce}' \
-  > "${ARTIFACTS_DIR}/tee-verify-quote-tampered-quote-request.json"
-tampered_quote_status="$(curl -sS --max-time 20 \
-  -o "${ARTIFACTS_DIR}/tee-verify-quote-tampered-quote-response.json" \
-  -w "%{http_code}" \
-  -X POST "${verify_endpoint}" \
-  -H "Content-Type: application/json" \
-  -d @"${ARTIFACTS_DIR}/tee-verify-quote-tampered-quote-request.json" || true)"
-tampered_quote_rejected="false"
-if [[ "${tampered_quote_status}" != "200" ]]; then
-  tampered_quote_rejected="true"
-elif jq -e '.data.quoteVerified == false' \
-  "${ARTIFACTS_DIR}/tee-verify-quote-tampered-quote-response.json" >/dev/null 2>&1; then
-  tampered_quote_rejected="true"
-fi
-if [[ "${tampered_quote_rejected}" != "true" ]]; then
-  ci_fail "VERIFY_QUOTE_TAMPERED_ACCEPTED" "Tampered quote was not rejected by /verify-quote."
-  summarize_verify_quote_response "${ARTIFACTS_DIR}/tee-verify-quote-tampered-quote-response.json"
-  exit 1
-fi
-
-wrong_app_hash_hex="$(openssl rand -hex 32)"
-jq -n \
-  --arg quoteB64 "${quote_b64}" \
-  --arg nonce "${nonce_hex}" \
-  --arg expectedApplicationHash "${wrong_app_hash_hex}" \
-  '{quoteB64: $quoteB64, nonce: $nonce, expectedApplicationHash: $expectedApplicationHash}' \
-  > "${ARTIFACTS_DIR}/tee-verify-quote-wrong-app-hash-request.json"
-wrong_app_hash_status="$(curl -sS --max-time 20 \
-  -o "${ARTIFACTS_DIR}/tee-verify-quote-wrong-app-hash-response.json" \
-  -w "%{http_code}" \
-  -X POST "${verify_endpoint}" \
-  -H "Content-Type: application/json" \
-  -d @"${ARTIFACTS_DIR}/tee-verify-quote-wrong-app-hash-request.json" || true)"
-wrong_app_hash_rejected="false"
-if [[ "${wrong_app_hash_status}" != "200" ]]; then
-  wrong_app_hash_rejected="true"
-elif jq -e '.data.applicationHashVerified == false or .data.quoteVerified == false' \
-  "${ARTIFACTS_DIR}/tee-verify-quote-wrong-app-hash-response.json" >/dev/null 2>&1; then
-  wrong_app_hash_rejected="true"
-fi
-if [[ "${wrong_app_hash_rejected}" != "true" ]]; then
-  ci_fail "VERIFY_QUOTE_APP_HASH_ACCEPTED" "Wrong expected application hash was not rejected by /verify-quote."
-  summarize_verify_quote_response "${ARTIFACTS_DIR}/tee-verify-quote-wrong-app-hash-response.json"
-  exit 1
-fi
-
-jq -n \
-  --arg endpoint "${verify_endpoint}" \
-  --arg positive_status "${positive_status}" \
-  --arg wrong_nonce_status "${wrong_nonce_status}" \
-  --arg tampered_quote_status "${tampered_quote_status}" \
-  --arg wrong_app_hash_status "${wrong_app_hash_status}" \
+  --argjson ssh_exit_code "${ssh_exit_code}" \
+  --arg outcome "${outcome}" \
+  --argjson is_mock "${is_mock}" \
   --argjson positive_passed "${positive_passed}" \
-  --argjson wrong_nonce_rejected "${wrong_nonce_rejected}" \
-  --argjson tampered_quote_rejected "${tampered_quote_rejected}" \
-  --argjson wrong_app_hash_rejected "${wrong_app_hash_rejected}" \
+  --argjson wrong_nonce_passed "${wrong_nonce_passed}" \
+  --argjson tampered_passed "${tampered_passed}" \
+  --slurpfile probe "${probe_json}" \
   '{
-    schema_version: 1,
-    verify_quote_endpoint: $endpoint,
+    schema_version: 2,
+    transport: "ssh+merod-tee-probe",
+    ssh_exit_code: $ssh_exit_code,
+    outcome: $outcome,
+    is_mock: $is_mock,
+    probe: $probe[0],
     checks: {
-      positive: {http_status: $positive_status, passed: $positive_passed},
-      wrong_nonce: {http_status: $wrong_nonce_status, rejected: $wrong_nonce_rejected},
-      tampered_quote: {http_status: $tampered_quote_status, rejected: $tampered_quote_rejected},
-      wrong_expected_application_hash: {http_status: $wrong_app_hash_status, rejected: $wrong_app_hash_rejected}
+      positive: {passed: $positive_passed},
+      wrong_nonce: {passed: $wrong_nonce_passed},
+      tampered_quote: {passed: $tampered_passed}
     }
   }' > "${ARTIFACTS_DIR}/node-client-verification.json"
 
-ci_result "node-image-gcp-anti-fake" "success" "ALL_NEGATIVE_CHECKS_REJECTED" "endpoint=${verify_endpoint}"
+# A mock quote must never count as real-hardware assurance.
+if [[ "${is_mock}" != "false" ]]; then
+  ci_fail "VERIFY_TEE_PROBE_IS_MOCK" "Node reported a mock quote (is_mock=true); mock attestation is not real-hardware assurance."
+  exit 1
+fi
+
+if [[ "${positive_passed}" != "true" ]]; then
+  ci_fail "VERIFY_TEE_PROBE_POSITIVE" "Positive attestation check did not pass."
+  exit 1
+fi
+
+if [[ "${wrong_nonce_passed}" != "true" ]]; then
+  ci_fail "VERIFY_TEE_PROBE_WRONG_NONCE" "Wrong-nonce negative check did not pass (a mismatched nonce was not rejected)."
+  exit 1
+fi
+
+if [[ "${tampered_passed}" != "true" ]]; then
+  ci_fail "VERIFY_TEE_PROBE_TAMPERED" "Tampered-quote negative check did not pass (a tampered quote was not rejected)."
+  exit 1
+fi
+
+if [[ "${outcome}" != "success" ]]; then
+  ci_fail "VERIFY_TEE_PROBE_OUTCOME" "merod tee probe reported outcome=${outcome} (expected success)."
+  exit 1
+fi
+
+ci_result "node-image-gcp-anti-fake" "success" "ALL_TEE_PROBE_CHECKS_PASSED" "outcome=${outcome}" "is_mock=${is_mock}" "ssh_exit_code=${ssh_exit_code}"
