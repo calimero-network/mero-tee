@@ -2,7 +2,7 @@
 title: Error Handling
 description: The real ServiceError catalog for mero-kms-phala — HTTP status, JSON error tag, cause, and operator action — plus per-endpoint failure modes and the attestation-verifier responses.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -39,7 +39,7 @@ human-readable string and may be absent.
 | `401` | `invalid_signature` | Signature failed verification against the peer's public key. | Re-sign the canonical `challengeId + nonce + quoteHash + peerId` payload with the node key. |
 | `401` | `attestation_verification_failed` | TDX quote cryptographic verification failed (bad quote / nonce not bound). | Regenerate the quote with the issued nonce in `report_data`. |
 | `401` | `peer_identity_mismatch` | The supplied public key does not derive to the claimed `peerId`. | Send the public key that matches the peer ID. |
-| `401` | `peer_id_mismatch` | The peer-ID hash bound into the attested quote does not match the claimed `peerId`. | Bind the correct peer-ID hash into the quote's `application_data`. |
+| `401` | `peer_id_mismatch` | The peer-ID hash bound into the attested quote does not match the claimed `peerId`. | Bind the correct peer-ID hash into the quote's `report_data[32..64]`. |
 | `403` | `tcb_status_rejected` | The quote's TCB status is not in the policy allowlist. | Update the platform TCB, or allow the status in the policy if acceptable. |
 | `403` | `measurement_policy_rejected` | An MRTD/RTMR0–3 register is not in the policy allowlist (message names the register). | Ensure the node runs an image whose measurements the policy covers; align profiles / re-probe. |
 | `503` | `policy_not_ready` | The KMS has no usable attestation policy (version unset or fetch failed). | Set `MERO_KMS_VERSION`, confirm the policy asset is reachable, restart. |

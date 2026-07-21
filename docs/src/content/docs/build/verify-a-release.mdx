@@ -1,0 +1,182 @@
+---
+title: Verify a Release
+description: Independently verify a Mero TEE release — checksums and cosign signatures with the release-asset scripts, then a live KMS or node attestation with the public web verifier.
+sidebar:
+  order: 2
+---
+
+Verifying a release happens at two layers, and you should do both before you
+trust a deployment:
+
+1. **The release artifacts** — the checksums, manifests, attestation policies,
+   and container metadata published with a GitHub release. Verify them with the
+   repo's scripts: SHA-256 checksums plus **cosign** (Sigstore) signatures that
+   pin who built them.
+2. **A running instance** — a live KMS or merod node. Verify its attestation
+   with the public web verifier: it pulls a fresh quote, appraises it through
+   Intel Trust Authority, and compares its measurements against the release
+   policy.
+
+The artifact scripts prove *the release you downloaded is authentic and
+untampered*; the web verifier proves *a specific live instance is running that
+release*. See [Verification](/flows/verification/) for the meaning of each check.
+
+## Layer 1 — verify the release assets
+
+The combined entry point takes a version and verifies **both** the KMS and the
+node-image asset sets for it:
+
+```bash
+scripts/release/verify-release-assets.sh <version>
+```
+
+`<version>` may be a bare `X.Y.Z` or a full tag; the script normalizes it and
+derives the two release tags it needs:
+
+```bash
+# All of these verify the 2.3.51 KMS and node-image asset sets:
+scripts/release/verify-release-assets.sh 2.3.51
+scripts/release/verify-release-assets.sh mero-kms-v2.3.51
+scripts/release/verify-release-assets.sh mero-tee-v2.3.51
+```
+
+Internally it calls the two per-artifact verifiers, which you can also run
+directly against a single asset set:
+
+```bash
+scripts/release/verify-kms-phala-release-assets.sh    mero-kms-v<version>
+scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v<version>
+```
+
+### What each script checks
+
+- **Downloads the signed assets** for the tag — checksums file, release
+  manifest, attestation policies (including the per-profile
+  `kms-phala-attestation-policy.<profile>.json` files), container metadata,
+  SBOMs, and the release archives.
+- **Verifies SHA-256 checksums** — normalizes `kms-phala-checksums.txt` and runs
+  `sha256sum -c`, then cross-checks each archive hash against the release
+  manifest so the checksums file and manifest must agree.
+- **Verifies cosign signatures** — for every signed asset it runs
+  `cosign verify-blob` against the asset's `.sig` and `.pem`, pinning the
+  **signer identity** and **OIDC issuer**:
+  - identity (default): the release workflow, e.g.
+    `^https://github.com/calimero-network/mero-tee/.github/workflows/release-kms-phala.yaml@refs/heads/master$`
+    (the node-image script pins `release-node-image-gcp.yaml`).
+  - OIDC issuer (default): `https://token.actions.githubusercontent.com`.
+
+A **non-zero exit means the release is incomplete or tampered — do not deploy
+it.**
+
+### Requirements
+
+The KMS verifier needs `jq`, `cosign`, `sha256sum`, `awk`, `basename`, `curl`,
+and `git` on `PATH`. `gh` (GitHub CLI) is optional — the script uses it when
+present and falls back to `curl` otherwise. For higher API rate limits or
+private repos, export `GH_TOKEN` (or `GITHUB_TOKEN`).
+
+:::tip
+To verify a mirror or a fork, override the pins without editing the script:
+`COSIGN_REPOSITORY`, `COSIGN_CERTIFICATE_IDENTITY_REGEXP`, and
+`COSIGN_CERTIFICATE_OIDC_ISSUER` are all read from the environment.
+:::
+
+:::note
+These same checks run on a schedule in CI (`release-auditor.yaml`) across recent
+releases. Verifying by hand is the operator's independent confirmation, not a
+substitute for the pipeline. The [runbooks](/operate/runbooks/) put this step at
+the top of every deploy.
+:::
+
+## Layer 2 — verify a live instance with the web verifier
+
+The public **attestation verifier** is a small web app backed by a stateless
+`/api/verify` function. It has two routes:
+
+| Route | Verifies | Reachability |
+| --- | --- | --- |
+| `/kms` | a Phala KMS instance, by URL | KMS must serve `POST /attest` over HTTPS |
+| `/mero-tee` | a merod node **or** a KMS | node must serve `POST /admin-api/tee/attest` |
+
+On each route you enter the instance URL and, optionally, a release tag and (for
+KMS) a profile to compare measurements against. The backend generates a fresh
+32-byte nonce, fetches the attestation, appraises the quote through Intel Trust
+Authority, verifies the returned JWT against Intel's JWKS, and compares the
+measurements and compose-hash against the published release policy. The
+mechanics of each check are covered in [Verification](/flows/verification/).
+
+:::note
+Run it locally with `npm run dev` (see
+[Getting Started](/build/getting-started/)), or use the deployed instance — the
+routes and parameters below are relative to whichever base URL hosts it.
+:::
+
+### Deep-link parameters
+
+Both routes read their inputs from query parameters, so you can share a
+pre-filled verification link. A KMS deep link:
+
+```text
+/kms?kms_url=https://your-kms.phala.network&release_tag=mero-kms-v2.3.51&profile=locked-read-only
+```
+
+- `kms_url` — the KMS base URL (required to auto-run).
+- `release_tag` — release to compare against, e.g. `mero-kms-v2.3.51` (optional).
+- `profile` — `debug`, `debug-read-only`, or `locked-read-only` (optional).
+
+A node deep link on `/mero-tee`:
+
+```text
+/mero-tee?node_url=http://34.65.123.45:80&release_tag=mero-tee-v2.3.51
+```
+
+`node_url` (alias `nodeUrl`) and `release_tag` (alias `releaseTag`) are both
+accepted. When a URL parameter is present the page verifies automatically on
+load; otherwise fill the form and submit.
+
+:::caution
+The backend enforces an **SSRF allowlist** on the target host. By default KMS
+URLs must match `phala.network` or localhost, and node URLs must be a bare IPv4
+address or localhost. A self-hosted verifier verifying a KMS on another domain
+must set `KMS_ALLOWED_HOSTS` (or `NODE_ALLOWED_HOSTS`) accordingly, and
+`ITA_API_KEY` must be configured or `/api/verify` returns `503`.
+:::
+
+### Paste-attestation mode
+
+When you already have an attestation JSON (for example the response body of a
+KMS `/attest` call, captured out of band), you can verify it directly without
+the verifier reaching the instance. `POST /api/verify` accepts an `attestation`
+object instead of a URL:
+
+```bash
+curl -s -X POST https://<verifier-host>/api/verify \
+  -H 'content-type: application/json' \
+  -d '{
+    "attestation": {
+      "quote_b64":       "<base64 raw TDX quote>",
+      "reportDataHex":   "<hex of the 64-byte report_data>",
+      "eventLog":        [ /* dstack event-log entries */ ]
+    }
+  }'
+```
+
+The function extracts the quote (top-level `quote_b64` for a KMS attestation, or
+`data.quoteB64` for a merod node response), sends it to Intel Trust Authority,
+and returns the appraisal — `ita_token`, `ita_token_verified`, and `ita_claims`.
+Because you supplied the attestation rather than a live nonce challenge, the
+freshness check only applies if `reportDataHex` is present; the authenticity and
+measurement checks run either way.
+
+## Next steps
+
+- [Getting Started](/build/getting-started/) — build and run the KMS and verifier
+  locally.
+- [Verification](/flows/verification/) — what the four verifier checks establish
+  and why.
+- [Release pipeline](/operate/release-pipeline/) — how the assets you verify here
+  are produced and signed.
+- [Runbooks](/operate/runbooks/) — deploy procedures that begin with this
+  verification step.
+- Calimero Core:
+  [TEE Attestation](https://calimero-network.github.io/core/protocol/tee-attestation/).

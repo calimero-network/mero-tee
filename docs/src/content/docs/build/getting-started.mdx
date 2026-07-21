@@ -1,0 +1,238 @@
+---
+title: Getting Started
+description: Build the Mero TEE KMS from source and run it locally end to end — a dev-friendly mock-attestation mode, the attestation-verifier web app, and one challenge → get-key cycle against a local KMS.
+sidebar:
+  order: 1
+---
+
+This page gets you from a fresh checkout to a **running local KMS** and the
+**attestation-verifier** web app, then walks one `challenge → get-key` cycle
+against your local instance. It is the fastest way to see the moving parts
+before you read the flows in depth.
+
+The production KMS only releases keys to nodes running inside a real Intel TDX
+confidential VM, with quotes signed by the hardware and keys derived over the
+[dstack](/flows/attestation-flow/) socket. None of that exists on a laptop, so
+the KMS ships a **dev-only mock path** (a Cargo feature, off by default) that
+lets you exercise the HTTP surface and most of the verification pipeline without
+TDX hardware.
+
+:::caution
+Everything on this page uses the mock-attestation build and mock acceptance.
+That code is compiled out of the production binary and must **never** be used to
+release real keys. See the [trust model](/understand/trust-model/) for why.
+:::
+
+## Prerequisites
+
+- **Rust** 1.88+ (`rustup`, `cargo`) — the KMS is a Cargo workspace.
+- **Node.js** 18+ and **npm** — for the attestation-verifier web app.
+- `curl` and (optionally) `jq` — to drive the endpoints by hand.
+
+## Build the KMS
+
+The workspace has a single member, `mero-kms-phala`. From the repository root:
+
+```bash
+# Debug build of the whole workspace
+cargo build
+
+# Or an optimized build
+cargo build --release
+```
+
+This produces the production binary — it contains **no** mock-attestation code.
+To run locally you want the dev build described next.
+
+## Run the KMS in dev mode
+
+Two independent things stand between a fresh start and a working `/get-key`
+locally, and you have to satisfy both:
+
+1. **Mock attestation** — accept mock TDX quotes instead of requiring real
+   hardware-signed ones. This is gated behind the default-off `mock-attestation`
+   Cargo feature, and only then is the `ACCEPT_MOCK_ATTESTATION` env var read.
+2. **A ready policy** — `/get-key` is fail-closed. Until a policy is loaded the
+   KMS returns `503 policy_not_ready`. Locally, load one from the environment
+   with `USE_ENV_POLICY=true` instead of fetching a signed release policy.
+
+Build **with the feature** and set both knobs:
+
+```bash
+cd mero-kms
+ACCEPT_MOCK_ATTESTATION=true \
+USE_ENV_POLICY=true \
+  cargo run --features mock-attestation
+```
+
+:::caution
+The `mero-kms` README shows `ACCEPT_MOCK_ATTESTATION=true cargo run`. Without
+`--features mock-attestation` the flag is **silently ignored** — the mock path
+is not compiled in — and mock quotes are rejected as unparseable. Always pass
+`--features mock-attestation` for local dev.
+:::
+
+On startup the service logs its resolved configuration. Expect to see the mock
+warning, the `locked-read-only` profile, the in-memory challenge store, and
+`Policy ready for key issuance: true`:
+
+```text
+INFO Starting mero-kms-phala
+INFO Listen address: 0.0.0.0:8080
+INFO KMS profile cohort: locked-read-only
+INFO Challenge store backend: in-memory
+INFO Policy ready for key issuance: true
+WARN WARNING: Mock attestation acceptance is enabled. This should NEVER be used in production!
+INFO Server listening on 0.0.0.0:8080
+```
+
+:::note
+With mock acceptance on, the startup policy check is short-circuited, so
+`USE_ENV_POLICY=true` alone makes the policy "ready" even with empty
+`ALLOWED_*` allowlists — mock quotes skip the measurement-policy comparison
+anyway. If you want to exercise real measurement checks, set the allowlists:
+`ALLOWED_TCB_STATUSES` (default `uptodate`) and `ALLOWED_MRTD`,
+`ALLOWED_RTMR0`…`ALLOWED_RTMR3` (each a 96-hex-char TDX register value). See the
+[configuration reference](/operate/config-reference/) for every variable and its
+default.
+:::
+
+### Change the listen address (optional)
+
+Defaults are `0.0.0.0:8080` for the HTTP listener and `/var/run/dstack.sock` for
+the dstack socket. Override with `LISTEN_ADDR` if `8080` is taken:
+
+```bash
+LISTEN_ADDR=127.0.0.1:9090 \
+ACCEPT_MOCK_ATTESTATION=true \
+USE_ENV_POLICY=true \
+  cargo run --features mock-attestation
+```
+
+## Confirm it is up
+
+`/health` is a pure liveness probe — it answers `200` regardless of policy
+readiness:
+
+```bash
+curl -s http://localhost:8080/health
+# {"status":"alive","service":"mero-kms-phala"}
+```
+
+## Walk one challenge → get-key cycle
+
+Key release is a two-round challenge-response. Round 1 (`/challenge`) is fully
+self-contained and works locally; round 2 (`/get-key`) runs the whole
+verification pipeline and is where the local/hardware boundary shows up. Both
+routes are documented in full in [Key Release](/flows/key-release/).
+
+### Round 1 — get a challenge
+
+Send any base58btc peer ID. The KMS mints a single-use nonce and returns a
+challenge ID (32 hex characters) plus the base64 nonce and its expiry:
+
+```bash
+curl -s -X POST http://localhost:8080/challenge \
+  -H 'content-type: application/json' \
+  -d '{"peerId":"12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp"}'
+```
+
+```json
+{
+  "challengeId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+  "nonceB64": "aGVsbG8td29ybGQtZXhhbXBsZS0zMi1ieXRlcy1ub25jZQ==",
+  "expiresAt": 1753104000
+}
+```
+
+The challenge is valid for `CHALLENGE_TTL_SECS` (default 60) and can be consumed
+exactly once.
+
+### Round 2 — redeem it at /get-key
+
+`/get-key` takes the challenge ID plus a TDX quote, the peer's public key, and a
+signature binding all of it to the peer identity:
+
+```bash
+curl -s -X POST http://localhost:8080/get-key \
+  -H 'content-type: application/json' \
+  -d '{
+    "challengeId": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    "quoteB64":    "<base64 raw TDX quote with the nonce in report_data>",
+    "peerId":      "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp",
+    "peerPublicKeyB64": "<base64 protobuf libp2p public key>",
+    "signatureB64":     "<base64 signature over the canonical payload>"
+  }'
+```
+
+The KMS then, in order: validates the shapes, **consumes the challenge**
+(so a replay always fails on the second try), verifies the peer signature and
+public-key ownership, verifies the quote (mock quotes are accepted here in dev),
+enforces the measurement policy (skipped for accepted mocks), and finally
+derives the key over dstack. On success it returns:
+
+```json
+{ "key": "<derived storage encryption key>" }
+```
+
+:::note
+**What actually completes locally.** `/challenge` succeeds outright. `/get-key`
+runs every check up to key derivation, but the last step calls dstack's
+`get_key` over `DSTACK_SOCKET_PATH`, and there is **no mock for key derivation**.
+Without a dstack socket the request reaches that step and returns
+`500 key_derivation_failed`. Producing a valid mock `quoteB64` and the matching
+peer signature is the job of a real `merod` node (or the mock helpers in
+`calimero-tee-attestation`), not a hand-written curl body — so treat round 2 as
+a structural walkthrough unless you have a node and dstack in the loop.
+:::
+
+You can still observe the fail-closed behavior directly. Send a `/get-key`
+request with placeholder credentials and watch the gates reject it, and watch
+the challenge get consumed even on failure:
+
+```bash
+# Second identical request returns invalid_challenge — the first attempt
+# already consumed the single-use challenge, regardless of why it failed.
+```
+
+Every error is a machine-readable tag with an HTTP status; the full catalog is
+in [Error handling](/operate/error-handling/).
+
+## Run the attestation verifier
+
+The verifier is a separate React/Vite app with a serverless `/api/verify`
+backend. Run it locally:
+
+```bash
+cd attestation-verifier
+npm install
+npm run dev
+```
+
+Vite serves it at `http://localhost:5173`. The two routes are `/kms` (verify a
+Phala KMS by URL) and `/mero-tee` (verify a merod node or KMS); the landing page
+redirects to `/kms`.
+
+:::note
+The live verification path calls **Intel Trust Authority** and needs an
+`ITA_API_KEY` in the environment — without it `/api/verify` returns
+`503 ITA_API_KEY not configured`. The dev server also does not run the
+serverless functions the way the production host does, so end-to-end
+verification is best exercised against the deployed verifier. See
+[Verify a release](/build/verify-a-release/) for the full UI walkthrough, and
+[Verification](/flows/verification/) for what the checks mean.
+:::
+
+## Next steps
+
+- [Verify a release](/build/verify-a-release/) — check release assets and use
+  the public verifier UI.
+- [Attestation flow](/flows/attestation-flow/) — where quotes come from and the
+  64-byte `report_data` layout.
+- [Key release](/flows/key-release/) — the full `challenge → get-key` protocol
+  and every field it checks.
+- [Configuration reference](/operate/config-reference/) — every environment
+  variable and default.
+- Calimero Core:
+  [TEE Attestation](https://calimero-network.github.io/core/protocol/tee-attestation/) —
+  the protocol-level view of the same primitive.

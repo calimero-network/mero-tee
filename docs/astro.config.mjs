@@ -48,16 +48,22 @@ export default defineConfig({
           href: 'https://github.com/calimero-network/mero-tee',
         },
       ],
-      // Explicit, grouped navigation (not autogenerate): three tracks —
-      // Understand (concepts), How it works (the runtime flows), Operate.
+      // Explicit, grouped navigation (not autogenerate): Get started (tutorials)
+      // → Understand (concepts) → How it works (runtime flows) → Operate.
       sidebar: [
         { label: 'Home', link: '/' },
+        {
+          label: 'Get started',
+          items: ['build/getting-started', 'build/verify-a-release'],
+        },
         {
           label: 'Understand',
           items: [
             'understand/system-overview',
             'understand/trust-model',
             'understand/components',
+            'understand/fleet-sidecar',
+            'understand/security',
             'understand/glossary',
           ],
         },
@@ -73,6 +79,7 @@ export default defineConfig({
         {
           label: 'Operate',
           items: [
+            'operate/deploy-node-image',
             'operate/config-reference',
             'operate/release-pipeline',
             'operate/runbooks',
@@ -80,6 +87,7 @@ export default defineConfig({
           ],
         },
       ],
+
     }),
   ],
 });

@@ -1,0 +1,170 @@
+---
+title: Security & Threat Model
+description: What Mero TEE asks you to trust, what an attacker in each position can and cannot do, the fail-closed mitigations that enforce it, and how to report a vulnerability.
+sidebar:
+  order: 3
+---
+
+Mero TEE's security rests on one root of trust — a hardware-signed Intel TDX
+quote — and a chain of delegations built on top of it. This page states that
+chain honestly: what you **must trust** for the system to be secure, what an
+attacker in each position can and cannot do, which mitigations enforce those
+boundaries, and where the guarantees stop.
+
+It complements the [Trust Model](/understand/trust-model/), which walks the
+bidirectional node ⇄ KMS handshake step by step. Read that first for *how*
+attestation works; read this for *what it protects against* and *what it does
+not*.
+
+## Trust assumptions
+
+Every claim Mero TEE makes reduces to trusting these five things. If any one is
+false, the guarantees above it do not hold.
+
+1. **The TEE hardware (Intel TDX).** The root of trust is a quote signed by the
+   CPU. We assume the TDX implementation, CPU microcode, and DCAP quoting
+   enclave are sound, and that the register measurements (MRTD, RTMR0–3) cannot
+   be forged from inside the guest. Physical attacks, side channels, and
+   compromised microcode are **out of scope** — no software mitigation in this
+   repo defends against a broken CPU.
+
+2. **Intel Trust Authority (ITA).** The public
+   [attestation verifier](/flows/verification/) does not re-implement DCAP
+   appraisal; it submits the quote to ITA
+   (`api.trustauthority.intel.com`) and trusts ITA's signed JWT, verified
+   against Intel's published JWKS (`portal.trustauthority.intel.com/certs`,
+   issuer `https://portal.trustauthority.intel.com`). **Intel's signature is the
+   trust anchor** (`attestation-verifier/api/verify.js`). If ITA is wrong or its
+   signing key is compromised, the verifier's verdict is wrong.
+
+3. **The `calimero-tee-attestation` crate.** The KMS itself delegates the DCAP
+   quote-signature check, the nonce binding, the `application_data` binding, and
+   the TCB-status extraction to `verify_attestation` in the
+   `calimero-tee-attestation` crate — a git dependency on
+   `calimero-network/core` pinned by revision
+   (`mero-kms/Cargo.toml`, `mero-kms/src/handlers/get_key.rs`). The KMS does
+   **not** reimplement quote cryptography; it consumes a `VerificationResult`
+   and layers policy on top. This is a real trust boundary: a bug in that crate
+   is a bug in the KMS's verification.
+
+4. **dstack.** Quote generation and storage-key derivation are delegated to
+   dstack: the KMS asks dstack for its own quote (`/attest`) and, on success,
+   asks dstack to derive the node key at a deterministic path. We trust dstack's
+   TCB to bind quotes honestly and to derive keys deterministically and
+   confidentially.
+
+5. **The signed policy chain.** The measurement allowlists the KMS enforces come
+   from a release policy signed with **keyless Sigstore** (Fulcio certificate +
+   Rekor transparency log), issued under the GitHub Actions OIDC identity
+   (`https://token.actions.githubusercontent.com`) and verified by
+   `--certificate-identity-regexp` + `--certificate-oidc-issuer`
+   (`scripts/release/verify-kms-phala-release-assets.sh`). Trusting the policy
+   means trusting that pipeline identity and the Sigstore/Rekor infrastructure —
+   there is **no signing private key** stored in the repository (`SECURITY.md`).
+
+:::note
+This page covers the **node ⇄ KMS storage-key** system in this repo
+(`mero-kms/`). The separate `ReadOnlyTee` **fleet-admission** trust flow lives in
+Calimero Core — see
+[TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).
+:::
+
+## What an attacker can and cannot do
+
+Each row is an attacker *position*, not a single exploit. "Cannot" means the
+listed control blocks it **given the trust assumptions above hold**.
+
+| Attacker position | Can do | Cannot do (and why) |
+| --- | --- | --- |
+| **On-path network (MITM)** | Observe/drop traffic; replay a captured request once. | Obtain a key: `/get-key` binds a single-use, TTL-bound challenge nonce that is **consumed before any crypto check**, so a replay fails on the second attempt (`get_key.rs`, [Trust Model](/understand/trust-model/)). Impersonate the KMS: a fake KMS cannot produce a valid quote with the expected KMS measurements (Plane 1 `/attest`). |
+| **Malicious node operator (no TEE)** | Send arbitrary key requests. | Get a key from outside TDX: a machine that is not genuine TDX cannot produce a DCAP-valid quote, and `verify_attestation` rejects it. Spoof another node's identity: the request must carry a signature by the key that derives to the claimed `peerId`, and the quote's `report_data` must contain `SHA-256(peerId)` (`hash_peer_id`, `get_key.rs`). |
+| **Tampered / unapproved node image (inside TDX)** | Boot and attest as a real TDX guest. | Pass policy: a modified image yields different MRTD/RTMR measurements, and the KMS rejects any register value not on its allowlist (`measurement_policy_rejected`, 403). Escalate profile: each image profile has a distinct hardware-measured RTMR3; a debug node's quote is rejected by a production policy. |
+| **Node on outdated microcode / TCB** | Produce a syntactically valid quote. | Get a key if its TCB status is not allow-listed: `enforce_tcb_status` rejects any status outside `allowed_tcb_statuses` (`tcb_status_rejected`, 403). |
+| **Compromised KMS host / operator** | Restart the service, change env/config, deny service. | Silently weaken policy to "allow everything": startup **fails closed** — with enforcement on, every register allowlist *and* the TCB allowlist must be non-empty or the service refuses to start (`validate_policy_requirements`, `policy.rs`). Forge a signed policy: policies are Sigstore-signed and can be SHA-256-pinned (`MERO_KMS_POLICY_SHA256`). The KMS holds no long-term secret of its own to exfiltrate. |
+| **Attacker with a captured valid quote** | Present it again. | Reuse it: the `report_data` nonce binds a quote to one challenge, and the challenge is single-use. A quote pasted into the public verifier without a verifier-chosen nonce is flagged as **not freshness-checked** ([Verification](/flows/verification/)). |
+| **SSRF via the public verifier** | Ask the verifier to fetch a URL. | Reach arbitrary internal hosts: `/api/verify` constrains targets to regex allowlists — `KMS_ALLOWED_HOSTS` (default `phala.network`, localhost) and `NODE_ALLOWED_HOSTS` (default IPv4, localhost), with HTTPS required except localhost (`verify.js`). |
+| **Oversized / malformed request** | Send junk to any endpoint. | Exhaust the KMS: request bodies are capped at **64 KiB** (`MAX_REQUEST_BODY_BYTES`, `handlers/mod.rs`); malformed input maps to typed 4xx errors, never a panic. |
+| **Supply-chain (release artifacts)** | Publish a fake release or tamper an asset. | Pass verification: assets ship with Sigstore `.sig`/`.pem` bundles and Rekor entries; `cosign verify-blob` checks the GitHub OIDC identity before an operator trusts a policy or MRTD set (`scripts/release/`, `SECURITY.md`). |
+
+:::danger
+None of these controls survive a compromise of the **trust anchors** in the
+section above. A broken Intel TDX/CPU, a compromised ITA signing key, a malicious
+`calimero-tee-attestation` revision, or a forged GitHub OIDC identity each
+invalidate the corresponding row. Attestation proves *what code is running on
+genuine hardware* — it does not prove that hardware or its issuer is honest.
+:::
+
+## Mitigations
+
+The [Trust Model's mitigations table](/understand/trust-model/#threat-mitigations)
+is the authoritative per-threat list (rogue KMS, rogue node, replay, peer-ID
+spoofing, profile escalation, policy tampering). Rather than duplicate it, the
+mitigations group into four mechanisms:
+
+- **Hardware attestation on both sides.** Neither the node nor the KMS trusts TLS
+  identity or operator assertion — each proves it runs an approved image in
+  genuine TDX via a CPU-signed quote before anything is released. See
+  [Verification](/flows/verification/) and [Trust Model](/understand/trust-model/).
+
+- **Fail-closed policy.** When `ENFORCE_MEASUREMENT_POLICY` is true (the default),
+  a misconfiguration cannot open the door: the service refuses to start unless
+  MRTD, all four RTMRs, *and* the TCB allowlist are populated, and at request
+  time an empty allowlist for any register rejects the quote (`policy.rs`). Debug
+  bypasses live only behind the default-off `mock-attestation` feature, which the
+  production build cannot compile in.
+
+- **Binding and freshness.** A single-use, TTL-bound challenge nonce (consumed
+  before verification) blocks replay; `SHA-256(peerId)` bound into `report_data`
+  plus a libp2p signature over the canonical payload blocks identity spoofing;
+  the profile baked into the key-derivation path means the same `peerId` yields
+  different keys per profile.
+
+- **Signed, verifiable supply chain.** Keyless Sigstore signatures + Rekor
+  transparency + SHA-256 pinning let an operator verify release policies and
+  MRTD sets before trusting them, and re-verify continuously (the release-auditor
+  workflow). See [Policy Management](/flows/policy-management/) and
+  [Configuration Reference](/operate/config-reference/) for the knobs.
+
+Rejections are typed: `measurement_policy_rejected` and `tcb_status_rejected`
+return **403**, challenge/signature/attestation failures return **401**, an
+unloaded policy returns **503** (`handlers/errors.rs`). See
+[error handling](/operate/error-handling/) for the full mapping.
+
+## Non-guarantees
+
+Being explicit about what Mero TEE does **not** promise:
+
+- **No defense against a broken TEE.** Side-channel, physical, and microcode
+  attacks against Intel TDX are out of scope.
+- **Client-side Plane 1 is advisory.** The KMS makes an honest `/attest` quote
+  available, but whether a given `merod` client verifies the KMS *before*
+  requesting a key is a client decision, not something the KMS can force
+  ([Trust Model](/understand/trust-model/)).
+- **Pasted attestations are not freshness-checked.** The public verifier can only
+  vouch that a quote was minted for *this* session on its URL-fetch paths, where
+  it chose the nonce ([Verification](/flows/verification/)).
+- **Release provenance ≠ runtime state.** Sigstore signatures prove an artifact
+  is authentic; only a live attested quote proves what an instance is *running*.
+  Full trust needs both.
+- **Trust anchors are assumed sound.** Intel/ITA, dstack, and the
+  `calimero-tee-attestation` crate are trusted, not verified, by this repo.
+
+## Reporting a vulnerability
+
+Please do **not** open a public GitHub issue for a suspected vulnerability
+(`SECURITY.md`).
+
+- **Contact:** `info@calimero.network`
+- **Include:** the affected component/path, reproduction steps or a
+  proof-of-concept, the potential impact, and any proposed mitigations.
+
+Receipt is acknowledged and triaged as quickly as possible.
+
+**Supported versions.** Security fixes are generally applied to the latest
+`master` branch and the latest released version stream.
+
+**No secrets in the repository.** Private keys, GCP service-account keys, GitHub
+tokens, credentials, and `.env` files must never be committed. Runtime secrets
+flow through GitHub Actions secrets and GCP Secret Manager; release signing is
+keyless (GitHub OIDC), so no signing private key is stored in the repo
+(`SECURITY.md`).
