@@ -1,0 +1,221 @@
+---
+title: Fleet HA Sidecar
+description: The high-availability sidecar baked into ReadOnly fleet node images — its one-second reconcile loop, how it discovers its own PeerId and MRTD, polls MDMA for namespace assignments, joins via meroctl, confirms back, and leaves on disable so Core purges keys.
+sidebar:
+  order: 5
+---
+
+The **fleet HA sidecar** is the Mero TEE half of hardware-attested fleet
+admission. It is a Bash script
+(`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`) baked into the
+ReadOnly TEE node image and run as a **systemd service alongside `merod`**. Its
+job is to keep this node's Calimero **namespace** membership in sync with what
+the fleet control plane (**MDMA**) currently assigns to it: join the namespaces
+MDMA wants it in, and leave the ones it withdraws.
+
+The admission handshake itself — quote generation, `TeeAttestationAnnounce`,
+MRTD-gated admission — lives in Calimero **Core**, not here. The sidecar is only
+the trigger: it drives `merod` through `meroctl` and reports back to MDMA. See
+[Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/)
+for the protocol it drives.
+
+:::note[This is fleet admission, not the KMS storage key]
+Do not conflate this with the [storage-key release flow](/flows/key-release/).
+Those are two **different, unrelated key mechanisms**:
+
+- The **storage key** decrypts a node's on-disk state. The node fetches it once
+  from the **KMS** via a TDX challenge–response. The KMS never sees group keys.
+- The **per-group encryption keys** a `ReadOnlyTee` replica receives are
+  delivered by **Core on admission**, driven by this sidecar. Core's fleet
+  admission never touches the storage key.
+
+The [system overview](/understand/system-overview/) walks through both flows
+side by side.
+:::
+
+## What it reads at startup
+
+Before it can poll, the sidecar has to know two things about itself, plus where
+to talk to MDMA. Configuration is **baked at image build time via Ansible** (so
+it is measured into the MRTD), not read from instance metadata; TLS to MDMA is
+always verified.
+
+| Value | Source | Notes |
+| --- | --- | --- |
+| `MDMA_URL` | Ansible build-time var (`fleet_mdma_url`) | Sidecar exits if unset. |
+| `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`, optional) | Sent as the `X-Fleet-Token` header when present. |
+| **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
+| **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
+
+### Discovering the PeerId
+
+`get_peer_id()` reads the node's PeerId straight from its config file at
+`/mnt/data/calimero/default/config.toml`, under `[identity].peer_id` (via
+`tomllib`, falling back to a `grep`/`sed` parse). It does **not** shell out to
+`meroctl` for this — an earlier version that tried `meroctl peers list` failed
+because `peers` takes no arguments and returns only a count.
+
+### Discovering its own MRTD
+
+`get_mrtd()` reads this TDX guest's own **MRTD** (the SHA-384 measurement of the
+initial VM image) directly from the kernel-exposed sysfs attribute:
+
+```bash
+/sys/class/misc/tdx_guest/measurements/mrtd:sha384
+```
+
+This is the same 48-byte value the Intel Quoting Enclave writes into a TDX quote
+(`quote.mrtd()`), but the kernel surfaces it read-only, so **no quote generation
+or configfs-tsm round-trip is required**. The script hex-encodes it to 96
+lowercase hex characters with no `0x` prefix — exactly the shape MDMA's MRTD
+allowlist compares against. MRTD is computed **once** at startup because it is
+fixed for the life of the immutable node image.
+
+:::caution[MRTD is required for MRTD-gated assignments]
+MDMA's `should_join` skips every MRTD-allowlisted HA request whose `mrtd` field
+does not match. If the sysfs attribute can't be read, the sidecar logs an error
+and continues posting the PeerId only — but MDMA will not assign any MRTD-gated
+namespace until this is resolved.
+:::
+
+## The reconcile loop
+
+After a one-time `wait_for_merod()` (which blocks until
+`meroctl --output-format json peers` exits `0`) and the PeerId/MRTD reads above,
+the sidecar enters an infinite loop with a **one-second poll interval**
+(`POLL_INTERVAL=1`). Each cycle:
+
+1. **Poll MDMA.** `POST {MDMA_URL}/api/fleet/should-join` with body
+   `{"peer_id": "...", "mrtd": "..."}` (`curl -sf --max-time 10`, plus the
+   `X-Fleet-Token` header if a token is configured).
+2. **Gate on poll success.** The response must be HTTP 200 **and** parse as an
+   object with an `assignments` array. Any curl error, non-2xx, timeout, or
+   unparseable/wrong-shape 200 body aborts the cycle *before* any state change —
+   the loop sleeps and `continue`s, leaving the confirmed set untouched (see the
+   safety gate below).
+3. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
+   namespace MDMA currently assigns this node to.
+4. **Join toward `desired`.** For each assigned namespace **not already in the
+   local confirmed set**, run `join_group` (see below). On admission, `POST`
+   `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
+   A namespace is added to `fleet-confirmed.json` **only when both** local
+   admission **and** the MDMA confirm succeed.
+5. **Leave dropped namespaces.** Compute `to_leave = confirmed − desired` and
+   `leave_group` each one (see below). This runs *before* the prune, so the diff
+   is taken while `confirmed` still holds the dropped entries.
+6. **Prune the confirmed set.** Set `confirmed = confirmed ∩ desired` and persist
+   it, so a future re-add is recognized as new.
+7. **Sleep** one second and repeat.
+
+The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
+(a deliberately separate path from any pre-upgrade legacy state file, and a
+different semantics: it records "admitted **and** confirmed", not merely
+"attempted"). Activity is logged to `/var/log/fleet-sidecar.log`.
+
+### Joining a namespace
+
+`join_group()` runs:
+
+```bash
+meroctl --home /mnt/data/calimero --node default \
+  --output-format json tee fleet-join <GROUP_ID>
+```
+
+The group id is passed **positionally** (an earlier `--group-id` flag form
+failed clap parsing; the positional form matches the `GROUP_ID` argument in the
+baked core release — see the CHANGELOG for the exact core version).
+
+Under the hood `meroctl tee fleet-join` generates a TDX quote, broadcasts
+`TeeAttestationAnnounce` on the namespace topic, and polls for admission for up
+to roughly 30 seconds. Critically, **`meroctl` exits `0` whether or not the node
+was admitted** — process success is not admission success. So the sidecar parses
+the JSON response and only treats `admitted: true` as success (it is tolerant of
+both a flat `{"admitted": ...}` shape and a `{"data": {...}}` wrapper). If
+`fleet-join` completes without admission, the namespace is left unconfirmed and
+retried next cycle — `fleet-join` is idempotent in Core (an already-admitted
+group returns `admitted: true` immediately), so retrying is cheap. This retry
+convergence is what an earlier "try once, mark done" design lacked: if the group
+owner was offline during the first ~30s window, the old code marked the
+assignment tried and never retried.
+
+### Leaving a namespace (disable path)
+
+When a namespace the node previously confirmed is no longer in `desired` — HA
+disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar
+self-leaves it:
+
+```bash
+meroctl --home /mnt/data/calimero --node default \
+  --output-format json namespace leave <HEX_NAMESPACE_ID>
+```
+
+This publishes `MemberLeft` at the namespace root, which cascades through every
+descendant subgroup where this node has a direct row. `leave_group` is
+**idempotent and non-fatal**: leaving a namespace the node already left (or was
+never a direct member of) returns a benign error (`nothing to leave` /
+`not a direct member`) that is logged, and the loop continues — it never aborts
+the sidecar.
+
+:::note[Core owns the eviction and key purge]
+The sidecar only issues the `leave`. **Core** performs the actual eviction from
+the namespace and all subgroups and purges the node's local data and keys in
+response to `MemberLeft`. The key-deletion half of that purge requires a
+sufficiently recent core (baked as `merodVersion` in `mero-tee/versions.json`;
+the CHANGELOG tracks the exact rc). On older merod the sidecar still issues the
+leave, but keys may not be purged. This is where mero-tee's responsibility ends
+and Core's begins.
+:::
+
+## The poll-success safety gate
+
+The step-2 gate is safety-critical, not a nicety. Because a **missing assignment
+now triggers an irreversible `namespace leave` + key purge**, a transient MDMA
+outage must never be mistaken for "all namespaces disabled" — that would shred
+keys on every healthy replica at once.
+
+So `poll_mdma` captures curl's body and exit status separately and returns:
+
+- **`0` + a validated body** only on HTTP 200 whose body parses as an
+  `{"assignments": [...]}` object; or
+- **`1` with no stdout** on any curl error, non-2xx, timeout, or
+  unparseable/wrong-shape body.
+
+On a `1`, the main loop skips the entire reconcile — no `desired` computed, no
+join, no leave, no prune — and preserves `fleet-confirmed.json` untouched.
+Preserving `confirmed` across a failed poll is itself load-bearing: if a failed
+poll pruned `confirmed`, a genuine disable on the next good poll would no longer
+appear in the `confirmed − desired` diff, and the node would never leave.
+
+Symmetrically, `confirm_assignment` returns curl's real exit code (rather than
+swallowing errors), so a transient blip on the confirm step leaves the namespace
+out of `confirmed` and is simply retried next cycle instead of being lost.
+
+## MDMA endpoints and paths at a glance
+
+| Item | Value |
+| --- | --- |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd"}` |
+| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id"}` |
+| Join command | `meroctl … tee fleet-join <GROUP_ID>` (positional) |
+| Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
+| Readiness probe | `meroctl --output-format json peers` |
+| PeerId source | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` |
+| MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
+| Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
+| Log | `/var/log/fleet-sidecar.log` |
+| Poll interval | 1 second |
+| Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set) |
+
+## Where to go next
+
+- [System overview](/understand/system-overview/) — the two trust flows, and
+  where the sidecar sits in fleet admission.
+- [Key release flow](/flows/key-release/) — the *other* key mechanism (KMS
+  storage key), kept deliberately separate from fleet admission.
+- [Trust model](/understand/trust-model/) — what MRTD and the other measurements
+  pin.
+- [Glossary](/understand/glossary/) — MRTD, MDMA, namespace, `ReadOnlyTee`, and
+  the rest of the vocabulary.
+- Operate: [runbooks](/operate/runbooks/) and
+  [release pipeline](/operate/release-pipeline/) — how the node image carrying
+  this sidecar is built and rolled out.

@@ -1,0 +1,280 @@
+---
+title: Deploy the node image
+description: Build, publish, and boot a GCP TDX merod node image produced by mero-tee — launch a confidential VM, understand the calimero-init boot sequence, the lockdown profiles, and the GCP metadata knobs the boot script reads.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+How to build a GCP TDX merod node image with this repository and boot it as an
+Intel TDX Confidential VM. This is the layer *underneath* the
+[runbooks](/operate/runbooks/): the runbooks point an already-running merod at
+the KMS; this page gets a node image built, launched, and healthy in the first
+place. Everything below is grounded in the Packer/Ansible sources under
+`mero-tee/` and the two GCP workflows — confirm exact flags against
+`--help` and your checked-out version before running against production.
+
+<Aside type="caution">
+Mero TEE is pre-1.0. Image names, machine types, pinned versions, and defaults
+can change between releases. Boot a `debug` or `debug-read-only` image first;
+never make a fresh `locked-read-only` build your only path to a fleet.
+</Aside>
+
+## What gets baked into an image
+
+A node image is an Ubuntu 25.10 (Questing Quokka, kernel 6.17+) GCP image
+produced by `mero-tee/ubuntu.pkr.hcl` + `mero-tee/playbook.yml`. The kernel is
+pinned at `ubuntu-2510-amd64` (from `ubuntu-os-cloud`) because RTMR3 sysfs
+support needs kernel 6.17+. Component versions are pinned in
+`mero-tee/versions.json`:
+
+| Component | Version key | Value at time of writing |
+| --- | --- | --- |
+| Node image | `imageVersion` | `2.3.51` |
+| merod / meroctl / mero-auth (core tag) | `merodVersion` | `0.11.0-rc.17` |
+| Traefik | `traefikVersion` | `3.5.0` |
+| node-exporter | `nodeExporterVersion` | `1.9.1` |
+| vmagent | `vmagentVersion` | `1.132.0` |
+| Vector | `vectorVersion` | `0.50.0` |
+
+The `playbook.yml` applies these roles in order: `mero-traefik`,
+`calimero-core` (bakes `merod`/`meroctl`/`mero-auth` at the core tag so
+`calimero-init` skips the runtime download), `merotee` (the init script,
+systemd units, and — for read-only profiles — the fleet sidecar),
+`node-exporter`, `vmagent`, `vector`, `cleanup`, and — **only for
+`locked-read-only`** — `merod-lockdown` followed by `merotee-conformance`.
+
+### Profiles
+
+The `lockdown_profile` Packer variable selects one of three profiles
+(`mero-tee/ubuntu.pkr.hcl` validates against exactly this set):
+
+| Profile | Intended use | merod mode | Lockdown role |
+| --- | --- | --- | --- |
+| `debug` | Local / dev | `full` | not applied |
+| `debug-read-only` | Integration / pre-production | `read-only` | not applied |
+| `locked-read-only` | Production | `read-only` | applied + conformance |
+
+`merod_mode` is derived in `ansible/roles/merotee/defaults/main.yml`: it is
+`read-only` for `debug-read-only` and `locked-read-only`, and `full` for
+`debug`. In `read-only` mode the boot script initializes merod with
+`--mode read-only` and disables the client-facing servers (see
+[the boot sequence](#the-calimero-init-boot-sequence) below).
+
+The `merod-lockdown` role (`ansible/roles/merod-lockdown/tasks/main.yml`)
+hardens the production image so its measurements differ from the debug
+profiles. It:
+
+- **R1** removes `openssh-server`/`openssh-client` and deletes `/etc/ssh`;
+- **R2** masks all `getty@`/`serial-getty@ttyS0`/`console-getty`/`getty.target`
+  units and strips `console=` from the kernel cmdline;
+- **R3** masks `emergency`/`rescue`/`debug-shell` (and overrides emergency/rescue
+  to `reboot -f`);
+- **R4** locks the root account, empties `/etc/securetty`, and removes the
+  `ubuntu` user (done last, since Packer SSHes in as `ubuntu`);
+- **R5** masks `google-startup-scripts` and the `cloud-init*` units so **no GCP
+  metadata script is ever executed** — metadata is only read as data by the
+  init script's whitelist.
+
+<Aside type="note">
+Each profile deliberately produces distinct on-disk content
+(`/etc/calimero/image-profile`, `calimero.role`/`calimero.profile` in the
+kernel cmdline) so its MRTD / RTMR measurements differ. That is what lets the
+KMS release keys only to a matching profile — see
+[Verification](/flows/verification/).
+</Aside>
+
+## Prerequisites
+
+- **Packer** and **Ansible** — the build driver and provisioner.
+- **GCP credentials** with rights to create an image in the target project.
+- The Packer plugins pinned in `ubuntu.pkr.hcl`:
+  `googlecompute 1.2.1` and `ansible 1.1.3` (installed by `packer init`).
+
+## Build an image
+
+<Steps>
+
+1. **Install the pinned Packer plugins:**
+
+   ```bash
+   cd mero-tee
+   ./init.sh   # runs: packer init ubuntu.pkr.hcl
+   ```
+
+2. **Build.** For a single profile with all versions read from
+   `versions.json`, use the wrapper — it resolves every pinned version and
+   passes the Packer vars for you:
+
+   ```bash
+   ./build-and-release.sh locked-read-only
+   ```
+
+   With no profile argument it builds all three profiles
+   (`locked-read-only`, `debug-read-only`, `debug`) in turn. To drive Packer
+   directly instead:
+
+   ```bash
+   packer build -var-file=ubuntu-x86.pkrvars.hcl ubuntu.pkr.hcl
+   ```
+
+</Steps>
+
+The build runs on a widely-available `n2-standard-2` host
+(`instance_type` in `ubuntu-x86.pkrvars.hcl`) — no TDX is needed to *build* the
+image, only to *run* it. The build host defaults are `project_id`
+`calimero-p2p-development`, region `europe-west4`, zone `europe-west4-a`,
+overridable via `PACKER_GCP_PROJECT_ID` / `PACKER_GCP_REGION` /
+`PACKER_GCP_ZONE` / `PACKER_GCP_SUBNETWORK`. The base source image is hardcoded
+for release reproducibility and cannot be overridden.
+
+### Where images are published
+
+Packer publishes each image into the GCP project with a deterministic name and
+family (from `ubuntu.pkr.hcl`):
+
+- **Image name:** `merotee-ubuntu-questing-25-10-<profile>-<version-with-dashes>`
+  (e.g. `merotee-ubuntu-questing-25-10-locked-read-only-2-3-51`).
+- **Image family:** `merotee-ubuntu-questing-<profile>`.
+- **Disk:** 20 GB `pd-ssd`.
+
+The `release-node-image-gcp.yaml` workflow builds the images in CI and records
+the published `project` / `family` in its release provenance. Its VM-facing
+defaults (used for the post-build attestation probe) match Calimero Cloud MDMA:
+project `cloud-486420`, zone `europe-west4-a`, machine type `c3-standard-4`.
+
+## Launch a TDX Confidential VM
+
+Boot the image as an Intel TDX Confidential VM. The flags below are exactly
+those the `release-node-image-gcp.yaml` and `node-image-gcp-staging-probe.yaml`
+workflows use to create their ephemeral VMs:
+
+```bash
+gcloud compute instances create <instance-name> \
+  --project <vm-project> \
+  --zone europe-west4-a \
+  --machine-type c3-standard-4 \
+  --confidential-compute-type TDX \
+  --maintenance-policy TERMINATE \
+  --min-cpu-platform "Intel Sapphire Rapids" \
+  --no-service-account \
+  --no-scopes \
+  --image <image-name> \
+  --image-project <image-project> \
+  --subnet <subnetwork> \
+  --metadata merod-version=<merod-version> \
+  --tags merotee
+```
+
+<Aside type="note">
+TDX requires `--confidential-compute-type TDX` **with**
+`--maintenance-policy TERMINATE` and `--min-cpu-platform "Intel Sapphire Rapids"`
+on a `c3` machine type (`c3-standard-4` is the tested size). The CI probes run
+with `--no-service-account --no-scopes` — the node reads metadata as data but
+never needs GCP API credentials.
+</Aside>
+
+### GCP metadata the boot script reads
+
+`calimero-init` reads a fixed **whitelist** of instance metadata attributes
+(`ansible/roles/merotee/templates/calimero-init.sh.j2`) — never arbitrary
+scripts. All are optional except where noted:
+
+| Metadata key | Effect | Default |
+| --- | --- | --- |
+| `server-port` | merod admin/server port | `2428` |
+| `swarm-port` | merod libp2p swarm port | `2528` |
+| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped) | unset → env file removed |
+| `metrics-endpoint` | if set, configures and starts `vmagent` | unset → vmagent stays off |
+| `metrics-secret-name` | secret name for authenticated metrics push | none |
+| `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
+| `logs-secret-name` | secret name for authenticated log push | none |
+| `merod-version` | **only** used to download binaries at boot if they were not baked into the image | required only when unbaked |
+
+Observability is off by default (R7): `vmagent` and `vector` are stopped and
+disabled at boot and started only when the matching `*-endpoint` metadata is
+present.
+
+## The calimero-init boot sequence
+
+`calimero-init.service` is a `oneshot` unit that runs
+`/usr/local/lib/calimero/init.sh` after `network-online.target`; `merod`,
+`mero-auth`, `traefik`, and (in read-only profiles) `fleet-sidecar` all order
+themselves `After=calimero-init.service`. The script
+(`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
+
+<Steps>
+
+1. **Extend RTMR3 for attestation.** It reads `calimero.root_hash` from
+   `/proc/cmdline`, computes an SHA-384 digest of
+   `calimero-rtmr3-v2:<role>:<profile>:<root_hash>`, and writes the 48-byte
+   digest into the TDX guest sysfs
+   (`/sys/class/misc/tdx_guest/measurements/rtmr3:sha384`, falling back to
+   `.../mr/rtmr3:sha384`). This makes each image's runtime measurement unique
+   and unforgeable. It is best-effort: if the sysfs node is unavailable the
+   node still boots, logging a warning.
+
+2. **Disable observability by default** (stops/disables `vmagent` and
+   `vector`), then reads the metadata whitelist above.
+
+3. **Resolve binaries.** If `merod`/`meroctl`/`mero-auth` are baked in
+   `/usr/local/bin` (they are, for images built here), it uses them; otherwise
+   it downloads them from the `core` release matching `merod-version` metadata.
+
+4. **Apply `tee-release-version`.** If set, it writes
+   `MERO_TEE_VERSION=<value>` to `/etc/calimero/merod.env`, which the merod unit
+   loads via `EnvironmentFile`.
+
+5. **Initialize the node** at `/mnt/data/calimero` (node `default`) if not
+   already initialized, with `--advertise-address` and the resolved ports. In
+   `read-only` mode it passes `--mode read-only`.
+
+6. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
+   `server.jsonrpc.enabled=false`, `server.sse.enabled=false`, and
+   `server.websocket.enabled=false` — the client-facing write/subscribe
+   surfaces are turned off, leaving only the read/admin path. In `full`
+   (`debug`) mode these remain enabled.
+
+7. **Start services.** It `daemon-reload`s, enables and non-blocking-starts
+   `merod`, `mero-auth`, and `traefik`; in read-only mode it also starts
+   `fleet-sidecar` when that unit exists.
+
+</Steps>
+
+<Aside type="caution">
+The three servers disabled in read-only mode (`jsonrpc`, `sse`, `websocket`) are
+exactly the client mutation/subscription interfaces. Do not expect to drive a
+`locked-read-only` or `debug-read-only` node through those APIs — it is a
+replication/read node. The read-only fleet node instead converges via the fleet
+HA sidecar; see [the fleet sidecar](/understand/fleet-sidecar/).
+</Aside>
+
+## Verify the booted node
+
+<Steps>
+
+1. **Confirm it reached RUNNING and answers.** After the VM is `RUNNING`, the
+   admin API is reachable on its external IP at the `admin_api_port`
+   (`80` in the CI probes). The `node-image-gcp-staging-probe.yaml` workflow
+   automates exactly this: it boots a TDX VM from a named image, waits for
+   readiness, collects a TDX quote, and verifies it against Intel Trust
+   Authority. Run it via **Actions → Node image GCP staging probe** with
+   `profile`, `image_name`, and `image_project` (see the
+   [probe entry in the runbooks](/operate/runbooks/)).
+
+2. **Attest the measurements.** Confirm the node's MRTD and RTMR values (the
+   RTMR3 extend from step 1 of the boot sequence, plus `calimero.role=node` /
+   `calimero.profile` measured into RTMR[2]) match the published, signed set.
+   See [Verification](/flows/verification/) for the operator verify procedure
+   and [how to verify a release](/build/verify-a-release/) for the release-asset
+   side.
+
+</Steps>
+
+## Next steps
+
+- [Runbooks](/operate/runbooks/) — point the booted node at the KMS and roll versions.
+- [Configuration reference](/operate/config-reference/) — every runtime knob.
+- [Verification](/flows/verification/) — MRTD/RTMR, root hash, operator verify.
+- [Verify a release](/build/verify-a-release/) — trust the release assets before you deploy them.
