@@ -5,6 +5,8 @@ sidebar:
   order: 1
 ---
 
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
 An attestation is a TDX **quote**: a hardware-signed measurement of a confidential
 VM. Before any key is released or any peer is trusted, a component has to *produce*
 one and bind it to the request it is answering. This page covers that production
@@ -120,6 +122,25 @@ verifier has checked the quote it produced:
 7. Verifier: quote signature chain valid ?     (see Verification)
 8. Verifier: measurements match policy ?       (see Policy Management)
 ```
+
+<SeqDiagram
+  id="d-attest"
+  title="KMS self-attestation — POST /attest"
+  lanes={[
+    { label: 'Caller / Verifier', color: '#58a6ff' },
+    { label: 'KMS', color: '#3fb950' },
+    { label: 'dstack', color: '#a371f7' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'POST /attest { nonceB64, bindingB64? }', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'report_data = nonce || binding (or default domain sep)' },
+    { from: 1, to: 2, label: 'get_quote(report_data)', color: '#a371f7' },
+    { from: 2, to: 1, label: 'quote + event log + vmConfig', color: '#a371f7', dashed: true },
+    { from: 1, to: 0, label: '{ quoteB64, reportDataHex, eventLog, vmConfig }', color: '#3fb950' },
+    { from: 0, to: 0, label: 'reportDataHex[0..32] == nonce ? (freshness)' },
+    { type: 'divider', label: 'fresh, identity-bound quote exists — no key released, policy not enforced' },
+  ]}
+/>
 
 Steps 6–8 are the verifier's job; this page ends at step 5, where a fresh,
 identity-bound quote exists. Continue to [Verification](/flows/verification/) for what
