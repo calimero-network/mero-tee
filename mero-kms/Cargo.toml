@@ -36,12 +36,12 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# From calimero-network/core (git dependency; 0.11.0-rc.13)
-# rev 3ab6ee9d is core master's tip. It contains #3269, which feature-gates the
-# mock attestation path in calimero-tee-attestation behind that crate's
-# default-off `mock-attestation` feature (see [features] above).
-calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "3ab6ee9d6c69bb20e5a43083eb1b46d920751b98" }
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "3ab6ee9d6c69bb20e5a43083eb1b46d920751b98" }
+# From calimero-network/core (git dependency; 0.11.0-rc.17)
+# rev 23cf02c9 is core's 0.11.0-rc.17 release commit. It contains #3269, which
+# feature-gates the mock attestation path in calimero-tee-attestation behind
+# that crate's default-off `mock-attestation` feature (see [features] above).
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "23cf02c965a2ca2f9eb4d8abe47ce54a763c7fab" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "23cf02c965a2ca2f9eb4d8abe47ce54a763c7fab" }
 thiserror = "2.0"
 
 [dev-dependencies]
