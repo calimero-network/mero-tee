@@ -1,0 +1,115 @@
+---
+title: Verification
+description: What the attestation verifier checks — the quote signature chain via Intel Trust Authority, freshness, measurements, and the compose-hash policy match.
+sidebar:
+  order: 3
+---
+
+Getting a quote back is not the same as trusting it. **Verification** is the set of
+checks that turn a raw TDX quote into a verdict: that it was produced by genuine Intel
+TDX hardware, that it is fresh (not replayed), that its measurements are the ones you
+expect, and that its running configuration matches a known release. Mero TEE ships a
+public **attestation verifier** — a web app plus a stateless `/api/verify` serverless
+function — that performs these checks against a live KMS or node.
+
+The quote-production step this consumes is described in
+[Attestation Flow](/flows/attestation-flow/); the register model is shared with
+Calimero Core's
+[TEE Attestation](https://calimero-network.github.io/core/protocol/tee-attestation/) page.
+
+## What the verifier checks
+
+The verifier establishes four independent properties. A quote is only trustworthy when
+all four hold.
+
+1. **Freshness (nonce binding).** When the verifier fetches the attestation itself
+   (given a KMS or node URL), it generates a fresh 32-byte nonce, sends it, and then
+   confirms the first 32 bytes of the returned `reportDataHex` equal that nonce. A
+   mismatch means the attestation was not produced for this request — a possible
+   replay — and is rejected.
+
+2. **Quote authenticity (signature chain).** The verifier submits the quote to **Intel
+   Trust Authority (ITA)** (`https://api.trustauthority.intel.com/appraisal/v2/attest`
+   by default, keyed by `ITA_API_KEY`). ITA cryptographically appraises that the quote
+   came from genuine Intel TDX hardware and returns a signed **JWT**. The verifier then
+   verifies that JWT's signature against Intel's published JWKS
+   (`https://portal.trustauthority.intel.com/certs`, issuer
+   `https://portal.trustauthority.intel.com`). Intel's signature on the JWT is the trust
+   anchor — if it does not verify, the result is reported as unverified.
+
+3. **Measurements.** The ITA claims carry the quote's measurement registers — MRTD,
+   RTMR0–3 — and the TCB status (`attester_tcb_status`, e.g. `UpToDate`,
+   `SWHardeningNeeded`, `OutOfDate`). The verifier surfaces these, and independently
+   **replays RTMR0–3 from the dstack event log** (each register is the SHA-384 extend of
+   its `event_type:event:payload` entries, starting from the zero register) and compares
+   the replayed value against the value in the quote. A match confirms the event log
+   faithfully explains the register.
+
+4. **Policy / compose-hash match.** From the event log the verifier extracts the
+   `compose-hash` (and `app-id`) event — the RTMR3 (`imr == 3`) entry that measures the
+   deployed Docker Compose configuration. It compares that 64-hex `compose_hash` against
+   the per-profile expected values published in the release **compatibility map**
+   (`kms-phala-compatibility-map.json`, under `compatibility.profiles.<profile>.event_payload`).
+   A match identifies which release profile the instance is running; no match means the
+   running configuration is not a recognized release.
+
+```text
+verifier ── nonce (32 random bytes) ──▶ KMS /attest  (or node /admin-api/tee/attest)
+verifier ◀── { quoteB64, reportDataHex, eventLog } ──
+
+1. reportDataHex[0..32] == nonce ?                 -> freshness / anti-replay
+2. quote ──▶ Intel Trust Authority ──▶ signed JWT
+   verify JWT signature vs Intel JWKS              -> quote authenticity
+3. read MRTD / RTMR0-3 / tcb_status from claims
+   replay RTMR0-3 from event log, compare          -> measurement integrity
+4. compose-hash (imr==3) vs release compat map     -> known-release policy match
+```
+
+## Inputs the verifier accepts
+
+`/api/verify` works from any one of:
+
+- **`kms_url`** — the verifier fetches `/attest` from the KMS itself (nonce generated
+  server-side, freshness checked). Hosts are constrained by an allow-list
+  (`phala.network`, localhost by default) as SSRF protection.
+- **`node_url`** — the verifier fetches `/admin-api/tee/attest` from a `merod` node.
+- **`attestation`** — a pre-fetched attestation JSON pasted directly (no server-side
+  freshness check, since the verifier did not choose the nonce).
+
+:::note
+Freshness is only enforced on the URL-fetch paths, where the verifier controls the
+nonce. When an attestation is pasted in, the verifier can still check the ITA signature,
+measurements, and compose-hash, but it cannot vouch that the quote was minted for *this*
+session.
+:::
+
+## Two internal trust planes
+
+The public verifier is the operator-facing tool. Inside the system, two automated
+verification relationships run continuously (see the [trust model](/understand/trust-model/)):
+
+- **A node verifies the KMS** before requesting a key: it pulls a quote via `/attest`
+  with a fresh nonce and compares the KMS measurement against values it was configured
+  with.
+- **The KMS verifies a node** on every key request: the quote signature, the nonce
+  binding, and the full measurement policy are checked in [Key Release](/flows/key-release/).
+
+The public verifier reproduces the *node-verifies-KMS* check in an independent,
+third-party way by chaining through Intel Trust Authority rather than trusting any
+Calimero-operated component.
+
+## Release verification is separate
+
+Runtime attestation proves what a *live* instance is running. It says nothing about
+whether a release artifact is authentic — that is established separately by the release
+pipeline's Sigstore signatures and SHA-256 checksums, which prove provenance and
+integrity but not runtime state. Full operator trust needs **both**: verify the release
+artifacts, then attest the running instance against them. The measurement reference
+values and version pairings used for that comparison are managed in
+[Policy Management](/flows/policy-management/).
+
+:::caution
+The RTMR3 `compose-hash` value is authoritative **only** when read from a verified
+quote's event log. The same value taken from provisioning metadata or operator-supplied
+config proves nothing — only the TDX-attested value can be trusted.
+:::

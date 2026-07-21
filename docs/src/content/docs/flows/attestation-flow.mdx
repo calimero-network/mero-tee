@@ -1,0 +1,127 @@
+---
+title: Attestation Flow
+description: How a Mero TEE component generates a fresh TDX quote from dstack, binds it to a caller-supplied nonce, and exposes it for verification.
+sidebar:
+  order: 1
+---
+
+An attestation is a TDX **quote**: a hardware-signed measurement of a confidential
+VM. Before any key is released or any peer is trusted, a component has to *produce*
+one and bind it to the request it is answering. This page covers that production
+step — the report-data layout, the nonce binding, and the endpoints that hand a
+quote back. What a verifier then *does* with the quote lives in
+[Verification](/flows/verification/); the KMS key gate lives in
+[Key Release](/flows/key-release/).
+
+For the Calimero Core view of the same primitive, see the core
+[TEE Attestation](https://calimero-network.github.io/core/protocol/tee-attestation/) page.
+
+## Where quotes come from
+
+Every quote in Mero TEE is produced by **dstack** over its Unix socket
+(`DSTACK_SOCKET_PATH`, default `/var/run/dstack.sock`). The service asks dstack for
+a quote over a 64-byte `report_data` value; dstack returns the raw quote bytes plus
+an **event log** and a VM config string. The service never fabricates measurements —
+MRTD and RTMR0–3 come from the hardware and firmware, and the caller only controls
+`report_data`.
+
+## The 64-byte report_data
+
+`report_data` is the only field the caller influences, and it is what binds a quote
+to a specific, fresh request. It is a plain concatenation of two 32-byte halves — not
+a hash of them:
+
+```text
+report_data[0..32]   = nonce     (32 bytes, caller-supplied freshness value)
+report_data[32..64]  = binding   (32 bytes, identity / channel binding)
+```
+
+The first half is the freshness nonce. The second half binds the quote to an
+identity so a captured quote cannot be replayed for a different subject. What the
+binding contains depends on which surface generated the quote:
+
+| Surface | `report_data[0..32]` | `report_data[32..64]` |
+| --- | --- | --- |
+| KMS `/attest` | caller nonce (`nonceB64`) | caller `bindingB64`, or the default `SHA-256("mero-kms-phala-attest-v1")` |
+| KMS key-release quote (from a node) | challenge nonce issued by the KMS | `SHA-256(peer_id)` |
+
+:::note
+The default KMS binding is a fixed domain separator, `SHA-256("mero-kms-phala-attest-v1")`,
+so the second half is never all-zeros even when the caller supplies no binding. It is
+**not** a hash of the KMS version.
+:::
+
+## KMS self-attestation — `POST /attest`
+
+The KMS exposes `POST /attest` so any caller (for example a `merod` node before it
+trusts the KMS, or the public verifier) can pull a fresh quote and confirm the KMS
+runs the expected measurement.
+
+1. **Caller sends a nonce.** The request body is JSON:
+
+   ```json
+   {
+     "nonceB64": "<base64 of 32 random bytes>",
+     "bindingB64": "<optional base64 of 32 bytes>"
+   }
+   ```
+
+   `nonceB64` must decode to exactly 32 bytes; `bindingB64` is optional and must also
+   be 32 bytes when present.
+
+2. **KMS builds report_data.** It sets `report_data = nonce || binding`, where
+   `binding` is the supplied value or the default domain-separated constant.
+
+3. **KMS asks dstack for a quote** over that `report_data`, then decodes the returned
+   hex quote and parses the event-log JSON.
+
+4. **KMS returns the quote and its context:**
+
+   ```json
+   {
+     "quoteB64": "<base64 raw TDX quote>",
+     "reportDataHex": "<hex of the 64-byte report_data>",
+     "eventLog": [ /* dstack event-log entries */ ],
+     "vmConfig": "<dstack VM config string>"
+   }
+   ```
+
+The caller confirms freshness by checking that the first 32 bytes of `reportDataHex`
+equal the nonce it sent.
+
+:::caution
+`/attest` does **not** release any key and does **not** enforce the measurement
+policy — it only returns a quote. Getting a quote back is not the same as passing
+attestation. The policy gate lives in [Key Release](/flows/key-release/), and the
+signature/measurement checks live in [Verification](/flows/verification/).
+:::
+
+## Node self-attestation — `POST /admin-api/tee/attest`
+
+A `merod` node exposes its own attestation endpoint (documented in Calimero Core) at
+`POST /admin-api/tee/attest`, taking a hex `nonce` and returning a quote for the node
+itself. The public verifier uses this path when pointed at a node URL rather than a
+KMS URL. Treat the exact response envelope as node-owned; the verifier extracts the
+quote (`data.quoteB64`) and the report-data from whichever field the node populates.
+
+## End to end: getting attested
+
+Putting the production step in context, a component becomes "attested" only once a
+verifier has checked the quote it produced:
+
+```text
+1. Verifier generates a fresh 32-byte nonce
+2. Verifier -> component: POST /attest        { nonceB64 }        (KMS)
+                          POST /admin-api/tee/attest { nonce }    (node)
+3. Component -> dstack:   get_quote(nonce || binding)
+4. dstack   -> component: quote + event log
+5. Component -> verifier: { quoteB64, reportDataHex, eventLog, ... }
+6. Verifier: report_data[0..32] == nonce ?     (freshness)
+7. Verifier: quote signature chain valid ?     (see Verification)
+8. Verifier: measurements match policy ?       (see Policy Management)
+```
+
+Steps 6–8 are the verifier's job; this page ends at step 5, where a fresh,
+identity-bound quote exists. Continue to [Verification](/flows/verification/) for what
+makes a quote trustworthy, and to [Key Release](/flows/key-release/) for the node → KMS
+flow that turns a passing attestation into a released storage key.

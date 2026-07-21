@@ -1,0 +1,143 @@
+---
+title: Trust Model
+description: How a merod node and the KMS verify each other with hardware attestation, and exactly which measurements and TCB statuses the KMS policy enforces before releasing a key.
+sidebar:
+  order: 2
+---
+
+Trust in the storage-key flow is **bidirectional**. Before the KMS releases a
+node's storage key, the node proves it runs an approved image inside genuine TDX
+hardware; and the KMS exposes its own quote so the node can prove the KMS is
+genuine first. Neither side relies on TLS identity or operator trust alone — the
+root of trust is the Intel TDX quote signed by the CPU.
+
+:::note
+This page covers the **node ⇄ KMS** storage-key relationship implemented in this
+repo (`mero-kms/`). The separate `ReadOnlyTee` **fleet admission** trust flow
+lives in Calimero Core — see
+[TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).
+:::
+
+## Plane 1 — the node verifies the KMS
+
+The KMS is stateless and holds no long-term secret of its own, but a node should
+still confirm it is talking to a real KMS enclave before sending a key request.
+The KMS provides `POST /attest` for exactly this: the caller sends a fresh 32-byte
+nonce, and the KMS asks dstack for a TDX quote whose `report_data` is
+`nonce ‖ binding` (`mero-kms/src/handlers/attest.rs`). The caller then checks the
+quote's signature, the nonce binding, and the KMS's own measurements against
+known-good values.
+
+```
+report_data[0..32]  = client nonce            (freshness)
+report_data[32..64] = binding                 (defaults to SHA-256("mero-kms-phala-attest-v1"))
+```
+
+The same endpoint powers the public [attestation verifier](/flows/verification/).
+
+:::caution
+`/attest` proves the KMS is a genuine TDX enclave running a specific measurement.
+It does **not** by itself authenticate the caller or release anything — key
+release is gated separately in Plane 2. Whether a given `merod` client enforces
+Plane 1 before requesting a key is a client-side decision; the KMS's role is to
+make an honest quote available.
+:::
+
+## Plane 2 — the KMS verifies the node
+
+Key release (`POST /get-key`, `mero-kms/src/handlers/get_key.rs`) never trusts a
+request without a fresh, signed, hardware-attested proof bound to the node's peer
+identity. The steps, in order:
+
+1. **Challenge.** The node calls `POST /challenge { peerId }`. The KMS stores a
+   single-use random 32-byte nonce keyed by a `challengeId` with a TTL
+   (`CHALLENGE_TTL_SECS`, default **60s**) and returns
+   `{ challengeId, nonceB64, expiresAt }`.
+2. **Quote + signature.** The node generates a TDX quote whose `report_data` is
+   `nonce ‖ SHA-256(peerId)`, and signs a canonical payload binding the
+   `challengeId`, nonce, a hash of the quote, and the `peerId` with its libp2p
+   private key.
+3. **Key request.** The node calls
+   `POST /get-key { challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64 }`.
+4. **Challenge consumed.** The challenge is consumed **before** any crypto check,
+   so a replay always fails on the second attempt regardless of where the first
+   failed.
+5. **Signature check.** The KMS confirms the supplied public key derives to the
+   claimed `peerId`, then verifies the signature over the canonical payload.
+6. **Quote check.** The quote is verified (DCAP signature), and its `report_data`
+   must contain the issued nonce **and** `SHA-256(peerId)`.
+7. **Policy check.** The quote's TCB status and all five measurement registers
+   (MRTD, RTMR0–3) are checked against the loaded attestation policy.
+8. **Key derivation.** On success the KMS asks dstack to derive the key at path
+   `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default prefix `merod/storage`)
+   and returns `{ key }`. Derivation is deterministic — the same node always
+   receives the same key.
+
+Because the profile is part of the derivation path, a debug node and a production
+node with the same `peerId` receive **different** keys even from the same KMS.
+
+## The attestation policy
+
+The policy is loaded at startup (from a signed release, or from `ALLOWED_*` env
+vars in explicit `USE_ENV_POLICY` mode) and modelled as
+(`mero-kms/src/policy.rs`):
+
+```rust
+struct AttestationPolicy {
+    enforce_measurement_policy: bool,
+    allowed_tcb_statuses: Vec<String>, // normalized lowercase, e.g. ["uptodate"]
+    allowed_mrtd:  Vec<HexMeasurement>,
+    allowed_rtmr0: Vec<HexMeasurement>,
+    allowed_rtmr1: Vec<HexMeasurement>,
+    allowed_rtmr2: Vec<HexMeasurement>,
+    allowed_rtmr3: Vec<HexMeasurement>,
+}
+```
+
+In the release-policy JSON the register keys are `node_allowed_mrtd`,
+`node_allowed_rtmr0..3`, and `node_allowed_tcb_statuses`, with legacy
+`allowed_*` names accepted as a fallback. Each measurement is a 48-byte
+(96-hex-char) SHA-384 value.
+
+:::caution[Fail-closed]
+When `ENFORCE_MEASUREMENT_POLICY` is true (the default), startup validation
+requires **every** register allowlist — MRTD *and* all four RTMRs — plus the TCB
+allowlist to be non-empty, or the service refuses to start
+(`validate_policy_requirements`). At request time an empty allowlist for any
+register also rejects the quote. A misconfigured policy fails closed rather than
+admitting everything.
+:::
+
+## What each measurement pins
+
+| Register | What it measures | Notes for this system |
+| --- | --- | --- |
+| `MRTD` | SHA-384 of the initial VM image at launch | Pins the exact node/KMS image. |
+| `RTMR0` | Firmware (TDVF) measurement | Extended during early boot. |
+| `RTMR1` | OS kernel / boot measurement | Extended during kernel boot. |
+| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). |
+| `RTMR3` | Runtime events after boot | Carries the profile/role separation: the KMS extends it with `calimero.kms.profile=<profile>`; the node image's `calimero-init` extends it with role + profile + root hash. |
+
+### RTMR3 profile cohort separation
+
+Each image **profile** (`debug`, `debug-read-only`, `locked-read-only`) produces
+a distinct RTMR3 value. A production KMS policy lists only the production RTMR3,
+so a debug node's quote is rejected. The separation is enforced by hardware —
+there is no software path to forge an RTMR3 value — and reinforced by the profile
+being baked into the key-derivation path.
+
+## Threat mitigations
+
+| Threat | Mitigation |
+| --- | --- |
+| **Rogue KMS** | A fake KMS cannot produce a valid quote with the expected KMS measurements; Plane 1 verification via `/attest` rejects it. |
+| **Rogue / tampered node** | A node outside TDX cannot produce a valid quote; a tampered image has different MRTD/RTMR values that the policy rejects. |
+| **Replay** | The challenge nonce is single-use and TTL-bound and is consumed before verification; the `/attest` nonce prevents quote reuse. |
+| **Peer-ID spoofing** | `get-key` requires a signature by the key that derives to the claimed `peerId`, and binds `SHA-256(peerId)` into the quote's `report_data`. |
+| **Profile escalation** | Distinct hardware-measured RTMR3 per profile; the policy rejects any RTMR3 not on its allowlist. |
+| **Policy tampering** | The release policy can be pinned by SHA-256 (`MERO_KMS_POLICY_SHA256`); a mismatch aborts loading. |
+
+Rejections surface as typed errors — `tcb_status_rejected` and
+`measurement_policy_rejected` return **403**, challenge/signature/attestation
+failures return **401**, and an unloaded policy returns **503**. See
+[error handling](/operate/error-handling/) for the full mapping.

@@ -1,0 +1,119 @@
+---
+title: Error Handling
+description: The real ServiceError catalog for mero-kms-phala — HTTP status, JSON error tag, cause, and operator action — plus per-endpoint failure modes and the attestation-verifier responses.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every `mero-kms-phala` error path returns a consistent JSON body and maps to a
+stable HTTP status and machine-readable tag. This page catalogs the actual
+`ServiceError` variants (`mero-kms/src/handlers/errors.rs`), what triggers each,
+and what an operator should do.
+
+## Response shape
+
+All error responses share one body (`ErrorResponse`, camelCase, `details`
+omitted when absent):
+
+```json
+{
+  "error": "measurement_policy_rejected",
+  "details": "RTMR3 '...' is not in allowlist"
+}
+```
+
+The `error` tag is stable and safe for programmatic matching; `details` is a
+human-readable string and may be absent.
+
+## ServiceError catalog
+
+| HTTP | `error` tag | Cause | Operator action |
+| --- | --- | --- | --- |
+| `400` | `invalid_request` | Base64 decode failed on a request field. | Fix the client payload encoding. |
+| `400` | `invalid_peer_id` | `peerId` empty, over 128 chars, or non-base58btc. | Send a valid libp2p base58 peer ID. |
+| `400` | `invalid_attestation_request` | `/attest` `nonceB64`/`bindingB64` malformed or not exactly 32 bytes. | Send a base64-encoded 32-byte nonce/binding. |
+| `400` | `invalid_peer_public_key` | `peerPublicKeyB64` not valid base64 or not a decodable libp2p protobuf key. | Send the correct protobuf-encoded public key. |
+| `401` | `invalid_challenge` | Challenge ID malformed, not found, already consumed, expired, or its peer ID does not match the caller. | Request a fresh challenge and retry within the TTL. |
+| `401` | `invalid_signature` | Signature failed verification against the peer's public key. | Re-sign the canonical `challengeId + nonce + quoteHash + peerId` payload with the node key. |
+| `401` | `attestation_verification_failed` | TDX quote cryptographic verification failed (bad quote / nonce not bound). | Regenerate the quote with the issued nonce in `report_data`. |
+| `401` | `peer_identity_mismatch` | The supplied public key does not derive to the claimed `peerId`. | Send the public key that matches the peer ID. |
+| `401` | `peer_id_mismatch` | The peer-ID hash bound into the attested quote does not match the claimed `peerId`. | Bind the correct peer-ID hash into the quote's `application_data`. |
+| `403` | `tcb_status_rejected` | The quote's TCB status is not in the policy allowlist. | Update the platform TCB, or allow the status in the policy if acceptable. |
+| `403` | `measurement_policy_rejected` | An MRTD/RTMR0–3 register is not in the policy allowlist (message names the register). | Ensure the node runs an image whose measurements the policy covers; align profiles / re-probe. |
+| `503` | `policy_not_ready` | The KMS has no usable attestation policy (version unset or fetch failed). | Set `MERO_KMS_VERSION`, confirm the policy asset is reachable, restart. |
+| `500` | `key_derivation_failed` | dstack `get_key` failed (socket unreachable / TDX error). | Verify `/var/run/dstack.sock` is mounted and dstack is healthy. |
+| `401` | `mock_attestation_rejected` | A mock quote was submitted. **Only exists in `mock-attestation` dev builds**; unreachable in production (a mock quote is just an unparseable quote and fails ordinary verification). | N/A in production. |
+
+<Aside type="caution">
+`invalid_challenge` is `401`, not `400`. The peer-ID/challenge mismatch during
+consumption is folded into `invalid_challenge` — it is not a separate status.
+`peer_identity_mismatch` and `peer_id_mismatch` are distinct: the former is the
+public-key↔peer-ID check, the latter is the attested-quote↔peer-ID binding.
+</Aside>
+
+<Aside type="note">
+Rate limiting: `429 rate_limited` is returned when the challenge store is at
+capacity. This is a **global** `MAX_PENDING_CHALLENGES` cap across the whole
+store, not a per-peer quota, and its `details` is a fixed message
+(`"Too many pending challenges. Retry shortly."`), not `null`.
+</Aside>
+
+## Failure modes by endpoint
+
+### `POST /challenge`
+
+Issues a nonce challenge. Validates the peer ID shape (`400 invalid_peer_id`) and
+enforces the store capacity (`429 rate_limited`). It does **not** check policy
+readiness, so it never returns `503 policy_not_ready`. A clock error surfaces as
+`invalid_challenge`.
+
+### `POST /get-key`
+
+The gated path. In order: peer-ID and challenge-ID shape (`400`/`401`), **policy
+readiness** (`503 policy_not_ready` when the policy is not loaded), challenge
+consumption (`401 invalid_challenge`), signature verification (`401`), TDX
+attestation verification (`401`), measurement/TCB policy enforcement (`403`), and
+finally key derivation via dstack (`500 key_derivation_failed`). The challenge is
+consumed before the signature/attestation checks, so a replay always fails the
+second time.
+
+### `POST /attest`
+
+KMS self-attestation. Validates the 32-byte nonce/binding (`400
+invalid_attestation_request`) and calls dstack `get_quote`; a dstack failure is
+reported as `attestation_verification_failed`. This endpoint does not depend on
+policy readiness.
+
+### `GET /health`
+
+Always returns `200` with `{"status":"alive","service":"mero-kms-phala"}`.
+
+<Aside type="danger">
+`/health` is **not** gated on policy readiness and does not report version or
+profile. Do not use it as a "can this KMS issue keys?" readiness signal — it only
+tells you the process is alive. Use a staging probe or a real `challenge →
+get-key` for readiness.
+</Aside>
+
+## Attestation-verifier responses
+
+The separate `attestation-verifier` service (`attestation-verifier/api/verify.js`)
+brokers verification of a KMS or node quote through Intel Trust Authority. Its
+responses are independent of the KMS `ServiceError` set:
+
+| HTTP | Meaning |
+| --- | --- |
+| `200` | Verification result (`ita_token_verified`, nonce checks). |
+| `204` | CORS preflight. |
+| `400` | Invalid request body, validation error, or missing `quote_b64`. |
+| `405` | Method not allowed (non-POST). |
+| `502` | Upstream KMS/node `/attest` failed, or ITA verification failed. |
+| `503` | `ITA_API_KEY` not configured. |
+
+## Next steps
+
+- [Runbooks](/operate/runbooks/) — the procedures that resolve these errors, including the incident table.
+- [Configuration reference](/operate/config-reference/) — the settings behind `policy_not_ready` and measurement policy.
+- [Key release](/flows/key-release/) — the `challenge → get-key` flow these errors guard.

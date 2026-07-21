@@ -1,0 +1,43 @@
+---
+title: Mero TEE
+description: Attestation, key management, and the release pipeline for merod nodes running in a TEE — Mero TEE proves what code is running and releases keys only to workloads that match a signed policy.
+template: splash
+hero:
+  tagline: TEE infrastructure for Calimero. A node proves what code it is running with a hardware attestation; the KMS releases its storage key only when that attestation matches a signed release policy. This site is how it fits together — and how to operate it.
+  actions:
+    - text: Read the System Overview
+      link: /understand/system-overview/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/calimero-network/mero-tee
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+{/* Audience-routed landing — pick your track. */}
+
+<CardGrid>
+  <Card title="Understand" icon="open-book">
+    What Mero TEE is and why it is trustworthy: the system map, the trust
+    model, each component, and the glossary. [Start here →](/understand/system-overview/)
+  </Card>
+  <Card title="How it works" icon="rocket">
+    The runtime flows: how a node attests, how the KMS releases a key, what a
+    verifier checks, and how policies are managed. [Follow a flow →](/flows/attestation-flow/)
+  </Card>
+  <Card title="Operate" icon="setting">
+    Run it: every config knob, the release pipeline, operational runbooks, and
+    the error catalog. [Operate a deployment →](/operate/config-reference/)
+  </Card>
+  <Card title="Verify a release" icon="approve-check">
+    Independently check a KMS or node attestation against its signed policy.
+    [How verification works →](/flows/verification/)
+  </Card>
+</CardGrid>
+
+Mero TEE is built on the Calimero TEE attestation model. For the protocol-level
+view of how a node's attestation is admitted into a context, see the
+[Calimero Core TEE reference](https://calimero-network.github.io/core/protocol/tee-attestation/).

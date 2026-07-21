@@ -1,0 +1,155 @@
+---
+title: Key Release
+description: The challenge-response protocol by which the KMS releases a node's storage key only after a fresh TDX attestation and a matching measurement policy.
+sidebar:
+  order: 2
+---
+
+The KMS releases a `merod` node's storage-encryption key only after the node proves,
+against the hardware, that it is running an approved measurement. This is a two-round
+challenge-response: the node first gets a fresh nonce, then presents a TDX quote and a
+signature binding that nonce to its identity. The KMS verifies the quote, enforces the
+[measurement policy](/flows/policy-management/), and only then derives and returns the
+key. This is the trust plane where **the KMS verifies the node** (see the
+[trust model](/understand/trust-model/)).
+
+The quote itself is produced as described in [Attestation Flow](/flows/attestation-flow/);
+here we cover the gate that consumes it.
+
+## Endpoints
+
+The KMS serves the release protocol over two unauthenticated routes plus a health
+check:
+
+| Method · Path | Body | Purpose |
+| --- | --- | --- |
+| `POST /challenge` | `{ peerId }` | Issue a single-use nonce challenge bound to a peer ID. |
+| `POST /get-key` | `{ challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64 }` | Verify attestation + policy, derive and return the key. |
+| `GET /health` | — | Liveness probe. |
+
+## Round 1 — challenge
+
+1. **Node requests a challenge**, sending its base58 libp2p peer ID:
+
+   ```json
+   { "peerId": "12D3KooW..." }
+   ```
+
+2. **KMS mints a nonce.** It generates a cryptographically random 32-byte nonce and a
+   random 16-byte challenge ID (returned as 32 hex characters — not a UUID), and stores
+   `challengeId -> (nonce, peerId, expiresAt)`.
+
+3. **KMS responds:**
+
+   ```json
+   {
+     "challengeId": "<32 hex chars>",
+     "nonceB64": "<base64 of 32 random bytes>",
+     "expiresAt": 1700000000
+   }
+   ```
+
+The challenge lives in a **challenge store** — an in-memory `HashMap` behind a mutex
+for single-process use, or a Redis backend (using Lua scripts for atomic
+insert/consume) for multi-instance deployments. A global cap
+(`MAX_PENDING_CHALLENGES`, default 10000) bounds outstanding challenges; exceeding it
+returns `429 rate_limited`. Challenges expire after `CHALLENGE_TTL_SECS` (default
+**60 seconds**) and are pruned lazily.
+
+## Round 2 — get-key
+
+The node generates a TDX quote whose `report_data` is `nonce || SHA-256(peer_id)`,
+signs a payload binding the challenge to its key, and calls `/get-key`:
+
+```json
+{
+  "challengeId": "<32 hex chars>",
+  "quoteB64": "<base64 raw TDX quote>",
+  "peerId": "12D3KooW...",
+  "peerPublicKeyB64": "<base64 protobuf libp2p public key>",
+  "signatureB64": "<base64 signature over the canonical payload>"
+}
+```
+
+The KMS runs a fixed pipeline. The challenge is **consumed before** any cryptographic
+check, so a replayed request always fails on its second attempt regardless of where
+the first attempt errored:
+
+1. **Validate inputs.** Peer-ID shape (base58btc, ≤128 chars) and challenge-ID shape
+   (32 hex chars) are checked; the quote is base64-decoded.
+
+2. **Policy-ready gate.** If the KMS has no loaded policy, key release is refused with
+   `503 policy_not_ready` before anything else — `/get-key` fails closed while
+   `/attest` still works.
+
+3. **Consume the challenge (single-use).** The store atomically fetches and deletes the
+   challenge, checking it belongs to this `peerId` and is not expired. Missing, already
+   consumed, or expired → `401 invalid_challenge`.
+
+4. **Verify the peer signature.** The submitted public key is decoded, confirmed to
+   derive to the claimed `peerId`, and used to verify a signature over the canonical
+   JSON payload `{ challengeId, challengeNonceHex, quoteHashHex, peerId }` (the quote is
+   hashed, not embedded). A mismatch yields `peer_identity_mismatch` or
+   `invalid_signature`.
+
+5. **Verify the attestation.** The quote is checked cryptographically, and its
+   `report_data` must carry the issued nonce in bytes 0–31 and `SHA-256(peerId)` in
+   bytes 32–63. A failed nonce check → `401 invalid_challenge`; a failed identity
+   binding → `peer_id_mismatch`; otherwise `attestation_verification_failed`.
+
+6. **Enforce the measurement policy.** The reported TCB status must be in
+   `allowed_tcb_statuses` (`403 tcb_status_rejected` otherwise), and each of MRTD and
+   RTMR0–3 must match its allowlist (`403 measurement_policy_rejected` otherwise). An
+   empty allowlist for any enforced register is treated as a rejection, so a
+   misconfigured policy fails closed. See [Policy Management](/flows/policy-management/).
+
+7. **Derive the key.** Only now does the KMS call dstack to derive the key along the
+   path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (e.g. `merod/storage/<profile>/<peerId>`).
+   The derivation is deterministic in those inputs.
+
+8. **Return the key:**
+
+   ```json
+   { "key": "<base64 key material from dstack>" }
+   ```
+
+```text
+node ──POST /challenge { peerId }──────────────▶ KMS
+node ◀─{ challengeId, nonceB64, expiresAt }───── KMS
+
+node: build report_data = nonce || SHA-256(peerId)
+node: quote = dstack.get_quote(report_data)
+node: sig   = sign({challengeId, nonceHex, quoteHash, peerId})
+
+node ──POST /get-key { challengeId, quoteB64,
+                       peerId, peerPublicKeyB64,
+                       signatureB64 }──────────▶ KMS
+                                                 KMS: consume challenge (single-use)
+                                                 KMS: verify signature -> identity
+                                                 KMS: verify quote + nonce + peer bind
+                                                 KMS: enforce TCB + MRTD + RTMR0-3
+                                                 KMS: key = dstack.get_key(path)
+node ◀─{ key }────────────────────────────────── KMS
+```
+
+## Security properties
+
+- **Single-use challenges.** Consumption deletes the challenge atomically, so replaying
+  the same `challengeId` fails.
+- **Freshness.** The nonce lives in the quote's `report_data`, proving the quote was
+  generated for this specific challenge; stale challenges are TTL-pruned.
+- **Identity binding.** The signature ties the request to a key that provably owns the
+  `peerId`, and the quote's second `report_data` half re-binds `SHA-256(peerId)` — a
+  quote cannot be replayed for a different node.
+- **Deterministic keys.** Because derivation is a pure function of the namespace,
+  profile, and peer ID, a node receives the same key from any KMS instance rooted in the
+  same dstack backend.
+- **Fail-closed policy.** No loaded policy, or an empty allowlist for an enforced
+  register, blocks release rather than allowing it.
+
+:::caution
+Mock-quote acceptance exists only under the default-off `mock-attestation` build
+feature and the `ACCEPT_MOCK_ATTESTATION` flag; when a mock is accepted the measurement
+policy is skipped. This is for local/CI testing only and must never be enabled in
+production — the production binary has no such path.
+:::

@@ -1,0 +1,221 @@
+---
+title: Runbooks
+description: Operational procedures for Mero TEE — deploy the Phala KMS, deploy and verify GCP node images, probe staging, verify release assets, and roll a new KMS version safely.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Concrete, ordered procedures for running Mero TEE. They reference the real
+scripts and workflows in this repository; confirm exact flags against
+`--help` for your checked-out version before running against production.
+
+<Aside type="caution">
+Mero TEE is pre-1.0. Commands, asset names, and defaults can change between
+releases. Test each procedure against a non-production KMS / node first.
+</Aside>
+
+## Deploy the Phala KMS
+
+Deploy `mero-kms-phala` on a Phala Cloud CVM using a digest-pinned image and the
+release's attestation policy.
+
+<Steps>
+
+1. **Verify the release assets first.** Never deploy an unverified artifact:
+
+   ```sh
+   scripts/release/verify-kms-phala-release-assets.sh mero-kms-v<version>
+   ```
+
+   This checks the checksums and the cosign Sigstore bundles for the KMS release
+   assets (attestation policies, SBOMs, manifest).
+
+2. **Deploy the container.** The compose template (`scripts/kms/phala/kms-compose-template.yaml`)
+   sets the production environment. Pin the image by digest, not tag:
+
+   ```yaml
+   services:
+     mero-kms:
+       image: ghcr.io/calimero-network/mero-kms-phala@sha256:<DIGEST>
+       restart: unless-stopped
+       ports:
+         - "8080:8080"
+       environment:
+         LISTEN_ADDR: "0.0.0.0:8080"
+         DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
+         CHALLENGE_TTL_SECS: "60"
+         ACCEPT_MOCK_ATTESTATION: "false"
+         ENFORCE_MEASUREMENT_POLICY: "true"
+         MERO_KMS_VERSION: "<version>"
+         MERO_KMS_PROFILE: "locked-read-only"
+       volumes:
+         - /var/run/dstack.sock:/var/run/dstack.sock
+   ```
+
+   `MERO_KMS_VERSION` drives the release-policy fetch; `MERO_KMS_PROFILE`
+   selects the profile cohort. The dstack socket **must** be mounted or key
+   derivation and quote generation fail. See the
+   [configuration reference](/operate/config-reference/) for every knob.
+
+3. **Confirm health.** The health endpoint always returns `200` once the process
+   is up:
+
+   ```sh
+   curl -s https://<kms-host>:8080/health
+   # {"status":"alive","service":"mero-kms-phala"}
+   ```
+
+</Steps>
+
+<Aside type="note">
+`/health` is a liveness check only — it returns `200 {"status":"alive"}`
+regardless of policy readiness. To confirm the KMS can actually issue keys, run a
+staging probe or a real `challenge → get-key` cycle. `ACCEPT_MOCK_ATTESTATION`
+is inert in the production build; it is only read when compiled with the
+`mock-attestation` feature.
+</Aside>
+
+## Configure a merod node to use the KMS
+
+Point a merod node at the KMS and pin the attestation policy, using the repo's
+helper scripts.
+
+<Steps>
+
+1. **Generate the client attestation config** from a release tag and KMS URL:
+
+   ```sh
+   scripts/policy/generate-merod-kms-phala-attestation-config.sh \
+     --profile locked-read-only \
+     <release-tag> https://<kms-host>:8080/ ./tee-kms.toml
+   ```
+
+   The script downloads the release's policy and produces a `[tee]` config
+   fragment (the profile defaults to `locked-read-only`).
+
+2. **Apply it to a node home** (use `--dry-run` first to preview):
+
+   ```sh
+   scripts/policy/apply-merod-kms-phala-attestation-config.sh --dry-run \
+     --profile locked-read-only \
+     <release-tag> https://<kms-host>:8080/ /data default
+   ```
+
+   Re-run without `--dry-run` to write the config into the merod home.
+
+</Steps>
+
+<Aside type="caution">
+Profile must match end to end. A KMS running `MERO_KMS_PROFILE=locked-read-only`
+only releases keys to nodes whose RTMR3 profile measurement is
+`locked-read-only`; a `debug` node will be rejected on measurement policy.
+</Aside>
+
+## Probe staging (KMS or node image)
+
+Both probes are manual (`workflow_dispatch`) GitHub Actions workflows. They boot
+a real confidential VM, exercise the full flow, and emit measurement candidates —
+the same probes the release pipeline runs.
+
+<Tabs>
+<TabItem label="KMS (Phala)">
+
+`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag` (release tag, or `latest`),
+`kms_profile`, `instance_type` (default `tdx.small`), `service_port` (default
+`8080`), `phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust
+Authority). It deploys to Phala, verifies `/attest`, runs a `challenge → get-key`
+cycle, and returns `kms-policy-candidates.json` + `kms-app-identity.json`.
+
+</TabItem>
+<TabItem label="Node image (GCP)">
+
+`node-image-gcp-staging-probe.yaml`. Key inputs: `profile`, `image_name`,
+`image_project`, `admin_api_port` (default `80`), `wait_timeout_minutes`, and
+`ita_appraisal_url`. It boots a TDX VM from the image, waits for readiness,
+collects a quote, and verifies it against Intel Trust Authority.
+
+</TabItem>
+</Tabs>
+
+## Verify release assets
+
+Before trusting any release, run the matching verifier (all under
+`scripts/release/`):
+
+```sh
+scripts/release/verify-kms-phala-release-assets.sh   mero-kms-v<version>
+scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v<version>
+# or the combined entrypoint:
+scripts/release/verify-release-assets.sh <tag>
+```
+
+Each downloads the release assets, checks SHA-256 checksums, and verifies the
+cosign signatures. A non-zero exit means the release is incomplete or tampered —
+do not deploy it. On a schedule, `release-auditor.yaml` runs the same class of
+checks across recent releases automatically.
+
+## Roll a new KMS version
+
+Because the KMS fetches its policy by version and nodes re-attest on their own
+schedule, a version roll is a controlled restart.
+
+<Steps>
+
+1. **Verify** the new KMS release assets (above) and confirm the new version
+   appears in `compatibility-catalog.json` paired with the node-image version
+   your fleet runs.
+
+2. **Stage and probe.** Deploy the new digest to a staging CVM and run
+   `kms-phala-staging-probe.yaml` against it. Confirm the probe's measurement
+   candidates match the published policy and a staging node completes
+   `challenge → get-key`.
+
+3. **Promote policy** if measurements changed: the release pipeline builds the
+   policy from probe candidates. Any change to `kms-phala-attestation-policy.<profile>.json`
+   is reviewed and merged before production.
+
+4. **Deploy to production** with the new digest and `MERO_KMS_VERSION`, then
+   restart the container. The KMS refetches its policy on startup; existing node
+   sessions are unaffected until they re-attest.
+
+5. **Confirm.** Health-check the new instance and run a canary `challenge →
+   get-key` from a production node before removing the old instance.
+
+</Steps>
+
+<Aside type="caution">
+Keep the previous KMS instance (and its policy) in place until the new one is
+proven with a real key release. A KMS that starts without a usable policy is
+fail-closed: `/get-key` returns `503 policy_not_ready` even though `/health` and
+`/attest` still answer.
+</Aside>
+
+## Post-release e2e
+
+After a **Release mero-tee** run completes, two `workflow_run`-triggered
+workflows validate the published artifacts end to end:
+
+- `post-release-mero-tee-node-e2e.yaml` — boots fresh TDX VMs per profile and
+  checks their measurement candidates are covered by the release's
+  `published-mrtds.json`, independent of the KMS.
+- `post-release-kms-node-e2e.yaml` — validates KMS↔node compatibility for the
+  released version pair (`scripts/release/e2e-verify-kms-node-compatibility.sh`).
+
+## Incident response
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `/get-key` → `503 policy_not_ready` | `MERO_KMS_VERSION` unset or release-policy fetch failed | Set `MERO_KMS_VERSION`, confirm the release policy asset exists and is reachable, restart. |
+| Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node profile ≠ KMS profile, stale policy, or outdated TCB | Align profiles; re-probe and promote a policy covering the node's measurements. |
+| Key release → `500 key_derivation_failed` | dstack socket not mounted / unreachable | Verify `/var/run/dstack.sock` is mounted into the container. |
+| `cargo audit` advisory flagged | Vulnerable dependency | Bump the dependency (see `security-audit.yaml` / `CHANGELOG.md` for the pattern). |
+
+See [Error handling](/operate/error-handling/) for the full error catalog.
+
+## Next steps
+
+- [Error handling](/operate/error-handling/) — every runtime error and its operator action.
+- [Release pipeline](/operate/release-pipeline/) — how the assets these runbooks verify are produced.
+- [Attestation flow](/flows/attestation-flow/) and [Key release](/flows/key-release/) — the flows these procedures exercise.

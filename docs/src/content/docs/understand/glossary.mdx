@@ -1,0 +1,196 @@
+---
+title: Glossary
+description: Definitions for the TEE and Mero TEE terms used across this documentation — TDX, MRTD, RTMR, TCB, quote, attestation policy, dstack, KMS, and more.
+sidebar:
+  order: 4
+---
+
+The vocabulary used across the Mero TEE docs. Only terms this system actually
+uses are listed; the protocol-level concepts (namespaces, `ReadOnlyTee`, fleet
+admission) are defined in
+[Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).
+
+## A
+
+**Attestation** — the process by which a TEE proves its software identity and
+integrity to a remote party. In TDX it produces a signed **quote** containing the
+running code's measurements; the verifier checks that quote against expected
+values.
+
+**Attestation policy** — the allowlist the KMS enforces before releasing a key:
+allowed MRTD, RTMR0–3, and TCB-status values (`AttestationPolicy` in
+`mero-kms/src/policy.rs`). Loaded from a signed GitHub release (or `ALLOWED_*`
+env vars in `USE_ENV_POLICY` mode) and optionally pinned by SHA-256.
+
+**Attestation verifier** — the public React + Vercel-serverless tool
+(`attestation-verifier/`) that verifies a KMS or node quote independently, via
+Intel Trust Authority.
+
+## C
+
+**Challenge** — a single-use, TTL-bound random 32-byte nonce the KMS issues from
+`POST /challenge`. The node must embed it in its quote's `report_data`. Stored in
+the challenge store and consumed on the first `/get-key` attempt.
+
+**ChallengeId** — the identifier returned alongside a challenge: 16 random bytes,
+hex-encoded to 32 characters (`mero-kms/src/util.rs`). Used to look up and consume
+the nonce at `/get-key`. (It is not a UUID.)
+
+**ChallengeStore** — the storage abstraction for pending challenges
+(`mero-kms/src/challenge_store.rs`). Two backends: an in-memory map (single
+instance) or Redis (multi-instance, using atomic Lua scripts).
+
+**Cohort separation** — cryptographic isolation between image profiles: each
+profile extends RTMR3 with a distinct runtime event, so a debug node's quote can
+never satisfy a production policy. Reinforced by the profile being baked into the
+key-derivation path.
+
+**compatibility-catalog.json** — the repo-root catalog mapping each release
+`version` to its `kms_tag`, `node_image_tag`, and policy URLs. Refreshed after a
+release by the `update-compatibility-catalog` workflow. (Distinct from the
+per-release `kms-phala-compatibility-map.json` asset that the verifier fetches.)
+
+**compose-hash** — a digest identifying the deployed dstack/Phala compose
+configuration, recorded in the quote's event log. The verifier extracts it
+(`attestation-verifier/src/utils/attestation.js`) so an operator can compare the
+running deployment against a known-good value.
+
+**CVM (Confidential VM)** — a VM with hardware-enforced memory encryption and
+isolation. Both `merod` nodes and the KMS run as TDX CVMs; the hypervisor cannot
+read or tamper with their memory.
+
+## D
+
+**dstack** — Phala's TEE runtime, reached over a Unix socket
+(`DSTACK_SOCKET_PATH`, default `/var/run/dstack.sock`). It generates TDX quotes,
+emits runtime events (extending RTMR3), and performs the deterministic key
+derivation the KMS relies on.
+
+## F
+
+**Fleet HA sidecar** — the systemd service baked into node images
+(`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`). On a one-second
+loop it polls the fleet control plane (MDMA) for namespace assignments and drives
+`merod` via `meroctl tee fleet-join` / `meroctl namespace leave`. It is only the
+trigger — the actual admission, eviction, and key purge happen in Calimero Core.
+
+## I
+
+**ITA (Intel Trust Authority)** — Intel's hosted attestation service. It appraises
+a TDX quote and returns a signed JWT with the verified measurements and TCB
+status. The attestation verifier uses it as an independent oracle.
+
+## K
+
+**Key derivation** — the KMS asks dstack to derive a storage key at the path
+`{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default prefix `merod/storage`). It
+is deterministic: the same inputs always yield the same key, and different
+profiles yield different keys for the same peer.
+
+**Key release** — the `/challenge` → `/get-key` flow by which an attested node
+obtains its storage encryption key. See [key release](/flows/key-release/).
+
+**KMS (mero-kms-phala)** — the Rust/Axum Key Management Service (`mero-kms/`) that
+validates node attestations and releases storage encryption keys via dstack.
+
+## M
+
+**MDMA** — the fleet control plane that decides which namespaces a fleet node
+should join. The fleet HA sidecar polls it (`/api/fleet/should-join`) with the
+node's `peer_id` and MRTD, and confirms admissions back to it.
+
+**Measurement** — a hardware-computed hash written into MRTD or an RTMR. In this
+system each is a 48-byte (96-hex-char) SHA-384 value (`HexMeasurement`).
+
+**merod** — the Calimero node daemon from
+[calimero-network/core](https://github.com/calimero-network/core). In the TEE
+context it runs inside a TDX CVM and fetches its storage key from the KMS at boot.
+
+**MRTD (Measurement of the Trust Domain)** — the SHA-384 measurement of the
+initial VM image, computed by the CPU before the guest runs. Any change to the
+image changes it, pinning the exact binary. A node can also read its own MRTD
+from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`.
+
+**Mutual attestation** — the two-sided trust model for key release: the node
+verifies the KMS (via `/attest`) and the KMS verifies the node (via
+`/challenge` + `/get-key`). See [trust model](/understand/trust-model/).
+
+## N
+
+**Nonce** — a fresh random value that binds an attestation or challenge to a
+specific request, preventing replay. Carried in the first 32 bytes of a quote's
+`report_data`.
+
+## P
+
+**PeerId** — the node's libp2p peer identifier, derived from its public key and
+encoded in base58btc. Used as the node's identity in the challenge–response flow
+and as an input to key derivation.
+
+**Phala Cloud** — the confidential-compute host the KMS runs on, providing TDX
+hardware and the dstack runtime.
+
+**Profile** — one of three image build configurations: `debug` (full access),
+`debug-read-only` (read-only root, SSH retained), or `locked-read-only`
+(production: no SSH, locked down). Each writes a distinct RTMR3 event for cohort
+separation, and the KMS also pins its own profile via `/etc/mero-kms/image-profile`.
+
+**published-mrtds.json** — the node-release artifact listing the MRTD (and related
+measurements) of the images built in that release, per profile. The verifier and
+operators use it to know which node measurements are legitimate.
+
+## Q
+
+**Quote (TDX quote)** — the signed data structure the TDX hardware produces,
+containing the Trust Domain's measurements (MRTD, RTMR0–3), the caller-supplied
+`report_data`, and a hardware signature. Verifiers use it to confirm a running
+enclave's software identity.
+
+## R
+
+**report_data** — 64 caller-supplied bytes baked into a quote. Mero TEE splits it
+as `nonce ‖ binding`: for `/get-key` the binding is `SHA-256(peerId)`; for
+`/attest` it defaults to `SHA-256("mero-kms-phala-attest-v1")`.
+
+**RTMR (Runtime Measurement Register)** — one of four extend-only registers
+(RTMR0–3) that record measurements across the VM lifecycle. RTMR0 ≈ firmware,
+RTMR1 ≈ kernel/boot, RTMR2 ≈ application/kernel-cmdline, RTMR3 ≈ post-boot runtime
+events. In Mero TEE, RTMR2 carries the injected `calimero.root_hash` and RTMR3
+carries the profile/role separation.
+
+## S
+
+**ServiceError** — the KMS's centralized error enum (`mero-kms/src/handlers/errors.rs`).
+Its HTTP mapping: `invalid_request` / `invalid_peer_id` (400), `invalid_challenge`
+/ `invalid_signature` / `attestation_verification_failed` (401),
+`tcb_status_rejected` / `measurement_policy_rejected` (403), `rate_limited` (429),
+`policy_not_ready` (503), `key_derivation_failed` (500). See
+[error handling](/operate/error-handling/).
+
+**Sigstore** — the keyless (GitHub OIDC) signing used for release assets such as
+`published-mrtds.json`; no signing key is stored in the repo.
+
+**Storage encryption key** — the key that decrypts a node's on-disk state, derived
+by dstack and released by the KMS after a successful attestation. It is unrelated
+to the per-group keys a `ReadOnlyTee` replica receives in Core.
+
+## T
+
+**TCB (Trusted Computing Base)** — the hardware/firmware/software critical to a
+TEE's security. A quote reports a **TCB status** (e.g. `UpToDate`,
+`SWHardeningNeeded`, `OutOfDate`); the policy allowlists which are acceptable
+(default: `uptodate`).
+
+**TDVF (TDX Virtual Firmware)** — the UEFI-based firmware that runs inside a Trust
+Domain during early boot and extends RTMR0.
+
+**TDX (Trust Domain Extensions)** — Intel's hardware technology for isolated,
+memory-encrypted VMs (Trust Domains) with CPU-signed attestation. It is the TEE
+this system uses.
+
+**TEE (Trusted Execution Environment)** — a hardware-isolated environment that
+protects code and data from the host OS and hypervisor. Intel TDX (VM-level) and
+Intel SGX (process-level) are examples; Mero TEE uses TDX.
+
+**Trust Domain (TD)** — a single TDX-protected VM, with its own encrypted memory,
+measurement registers, and attestation. Each `merod` node and the KMS is one.
