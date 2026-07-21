@@ -1,0 +1,172 @@
+---
+title: Policy Management
+description: How the KMS appraisal policy and node measurement references are defined, versioned per release, matched to a profile, and tracked in the compatibility catalog.
+sidebar:
+  order: 4
+---
+
+A policy is the answer to "which measurements do we trust?". Mero TEE keeps that answer
+in version-controlled JSON, published per release, and loaded by the KMS at startup so
+that [Key Release](/flows/key-release/) can enforce it. This page covers how those
+policies are defined, how they are versioned and pinned to a profile, how the KMS
+matches a quote against them, and how versions are tracked in the compatibility catalog.
+
+## Two policy artifacts
+
+Each release publishes two related, per-profile artifacts:
+
+| Artifact | Release family | Consumed by |
+| --- | --- | --- |
+| `kms-phala-attestation-policy.<profile>.json` | `mero-kms-v<version>` | the KMS, as its **appraisal / release policy** |
+| `published-mrtds.json` | `mero-tee-v<version>` | operators and the verifier, as **node measurement references** |
+
+The KMS policy is the allowlist the KMS enforces before releasing a key. The node
+`published-mrtds.json` holds the expected MRTD/RTMR values for the node images of that
+release, keyed by profile.
+
+## The KMS policy document
+
+The appraisal policy is a JSON envelope that the KMS validates before extracting the
+allowlists:
+
+```json
+{
+  "tag": "2.3.50",
+  "role": "kms",
+  "profile": "locked-read-only",
+  "policy": {
+    "node_allowed_tcb_statuses": ["uptodate"],
+    "node_allowed_mrtd":  ["<96-hex MRTD>"],
+    "node_allowed_rtmr0": ["<96-hex>"],
+    "node_allowed_rtmr1": ["<96-hex>"],
+    "node_allowed_rtmr2": ["<96-hex>"],
+    "node_allowed_rtmr3": ["<96-hex>"]
+  }
+}
+```
+
+- `tag` must equal the release version the KMS was told to load; `role` must be `kms`;
+  `profile` must match the KMS's own profile. A mismatch is rejected at load.
+- Each measurement is a validated TDX register value — 48 bytes / 96 hex characters,
+  normalized to lowercase without a `0x` prefix.
+- The `node_allowed_*` keys are the current names; the older `allowed_*` names are still
+  accepted as a fallback for pre-existing policy files, and a legacy file that omits
+  `role`/`profile` is only tolerated for the `locked-read-only` profile.
+
+:::note
+An empty allowlist means "reject", not "allow anything". At startup, when enforcement is
+on, the KMS requires a non-empty allowlist for TCB status and for every one of MRTD and
+RTMR0–3 — otherwise it refuses to start. A misconfigured or empty policy fails closed.
+:::
+
+## Profiles and cohort separation
+
+There are exactly three profiles, forming distinct trust cohorts:
+
+- **`debug`** — development only; never production.
+- **`debug-read-only`** — staging / pre-production.
+- **`locked-read-only`** — hardened production.
+
+A KMS serves exactly one profile. The profile is pinned by a file baked into the image
+at `/etc/mero-kms/image-profile`; if the `MERO_KMS_PROFILE` environment variable is also
+set it must match the pinned value, or the KMS refuses to start (the deprecated
+`KMS_POLICY_PROFILE` is a legacy alias for the same variable). The KMS also extends
+RTMR3 with a runtime marker `calimero.kms.profile=<profile>` at startup, so the profile
+is reflected in the hardware measurement itself and a policy for one profile cannot
+silently accept a quote from another.
+
+## How the KMS loads a policy
+
+The policy source is resolved at startup:
+
+1. **Release mode (default).** With `MERO_KMS_VERSION` set (e.g. `2.3.50` or
+   `mero-kms-v2.3.50`) and a profile resolved, the KMS builds the download URL itself
+   from
+   `https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v<version>/`.
+   It tries the profile-specific asset
+   (`kms-phala-attestation-policy.<profile>.json`) first, then the generic
+   `kms-phala-attestation-policy.json` as a legacy fallback. There is **no** policy-URL
+   environment variable — the URL is derived from the version and profile.
+
+2. **Optional integrity pin.** If `MERO_KMS_POLICY_SHA256` is set, the fetched bytes
+   must hash to that value or the load fails.
+
+3. **Env / air-gapped mode.** With `USE_ENV_POLICY=true`, the allowlists come from
+   `ALLOWED_TCB_STATUSES` / `ALLOWED_MRTD` / `ALLOWED_RTMR0..3` instead of a release
+   asset, for development and air-gapped deployments.
+
+4. **Degraded start.** If `MERO_KMS_VERSION` is not set (and env mode is off), the KMS
+   still starts, but `policy_ready` is false: `/attest` keeps working while `/get-key`
+   fails closed with `503 policy_not_ready` until a policy is available.
+
+See [Config Reference](/operate/config-reference/) for the full environment surface.
+
+## How a policy is matched
+
+Matching happens on every `/get-key` request, after the quote is cryptographically
+verified (see [Key Release](/flows/key-release/)). The KMS compares the quote's reported
+values against the loaded allowlists:
+
+```text
+tcb_status ∈ allowed_tcb_statuses      else 403 tcb_status_rejected
+mrtd       ∈ node_allowed_mrtd         \
+rtmr0      ∈ node_allowed_rtmr0         |
+rtmr1      ∈ node_allowed_rtmr1         |  any miss => 403 measurement_policy_rejected
+rtmr2      ∈ node_allowed_rtmr2         |
+rtmr3      ∈ node_allowed_rtmr3         /
+```
+
+All five registers plus the TCB status must match; any single mismatch is a policy
+violation. RTMR3 is the profile discriminator, so a production policy that only lists
+production RTMR3 values will never admit a debug node.
+
+## Versioning and the compatibility catalog
+
+Because a KMS version change can change measurements, KMS and node-image versions move
+together. The repository's `compatibility-catalog.json` records the released pairings:
+
+```json
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "2.3.50",
+      "kms_tag": "mero-kms-v2.3.50",
+      "node_image_tag": "mero-tee-v2.3.50",
+      "kms_policy_url":  ".../mero-kms-v2.3.50/kms-phala-attestation-policy.json",
+      "node_policy_url": ".../mero-tee-v2.3.50/published-mrtds.json"
+    }
+  ]
+}
+```
+
+Each entry pairs a KMS release with the node-image release of the same version and links
+directly to that pair's policy and MRTD assets. The catalog is regenerated
+automatically whenever a release is published (the `update-compatibility-catalog`
+workflow enumerates `mero-kms-v*` releases and commits the rebuilt file to `master`), so
+it is a derived index rather than a hand-edited source. Look up a pairing by version:
+
+```bash
+jq '.releases[] | select(.version == "2.3.50")' compatibility-catalog.json
+```
+
+A separate CI guard keeps the KMS and `merod`/node versions from drifting apart when
+either is bumped.
+
+:::note
+The `compatibility-catalog.json` in the repo (version → policy/MRTD URLs) is distinct
+from the per-release **compatibility map** asset (`kms-phala-compatibility-map.json`)
+that the [verifier](/flows/verification/) uses to match a running instance's
+`compose-hash` to a profile. Same idea, different scope: one indexes releases, the other
+maps a measurement to a profile within one release.
+:::
+
+## Promotion
+
+Policy values are not hand-typed. A staging probe deploys a candidate KMS image, pulls a
+quote via `/attest`, extracts the measurements (MRTD, RTMR0–3, TCB status) and the
+compose hash, and produces measurement candidates. Those candidates are promoted into
+the profile-specific policy file by pull request, reviewed, and then bundled into the
+next release — so every accepted measurement is auditable through git history. The
+operational details of that pipeline live in the
+[release pipeline](/operate/release-pipeline/) and [runbooks](/operate/runbooks/).

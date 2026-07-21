@@ -2,7 +2,7 @@
 
 TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP node-image build** (Packer-based merod node images with TDX attestation).
 
-> **Full documentation**: [Architecture Reference](https://calimero-network.github.io/mero-tee/)
+> **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
 
 ## Components
 
@@ -40,22 +40,22 @@ scripts/policy/generate-merod-kms-phala-attestation-config.sh \
 
 ## Documentation
 
-All detailed documentation lives in the **[Architecture Reference](https://calimero-network.github.io/mero-tee/)**:
+All detailed documentation lives in the **[Documentation](https://calimero-network.github.io/mero-tee/)**:
 
 | Topic | Page |
 |-------|------|
-| High-level architecture & system map | [System Overview](https://calimero-network.github.io/mero-tee/system-overview.html) |
-| KMS, node images, attestation verifier | [Components](https://calimero-network.github.io/mero-tee/components.html) |
-| Mutual attestation & trust boundaries | [Trust Model](https://calimero-network.github.io/mero-tee/trust-model.html) |
-| Challenge/get-key protocol | [Key Release Flow](https://calimero-network.github.io/mero-tee/key-release-flow.html) |
-| KMS self-attestation & public verifier | [Attestation Flow](https://calimero-network.github.io/mero-tee/attestation-flow.html) |
-| MRTD/RTMR, compose hash, operator verify | [Verification](https://calimero-network.github.io/mero-tee/verification.html) |
-| Release classes, CI/CD, pipeline flows | [Release Pipeline](https://calimero-network.github.io/mero-tee/release-pipeline.html) |
-| Staging probes, policy promotion, ADRs | [Policy Management](https://calimero-network.github.io/mero-tee/policy-management.html) |
-| Phala KMS, GCP nodes, blue-green rollout | [Runbooks](https://calimero-network.github.io/mero-tee/runbooks.html) |
-| All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/config-reference.html) |
-| ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/error-handling.html) |
-| TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/glossary.html) |
+| High-level architecture & system map | [System Overview](https://calimero-network.github.io/mero-tee/understand/system-overview/) |
+| KMS, node images, attestation verifier | [Components](https://calimero-network.github.io/mero-tee/understand/components/) |
+| Mutual attestation & trust boundaries | [Trust Model](https://calimero-network.github.io/mero-tee/understand/trust-model/) |
+| Challenge/get-key protocol | [Key Release Flow](https://calimero-network.github.io/mero-tee/flows/key-release/) |
+| KMS self-attestation & public verifier | [Attestation Flow](https://calimero-network.github.io/mero-tee/flows/attestation-flow/) |
+| MRTD/RTMR, compose hash, operator verify | [Verification](https://calimero-network.github.io/mero-tee/flows/verification/) |
+| Release classes, CI/CD, pipeline flows | [Release Pipeline](https://calimero-network.github.io/mero-tee/operate/release-pipeline/) |
+| Staging probes, policy promotion, ADRs | [Policy Management](https://calimero-network.github.io/mero-tee/flows/policy-management/) |
+| Phala KMS, GCP nodes, blue-green rollout | [Runbooks](https://calimero-network.github.io/mero-tee/operate/runbooks/) |
+| All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/operate/config-reference/) |
+| ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/operate/error-handling/) |
+| TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/understand/glossary/) |
 
 ## Fleet HA sidecar lifecycle
 

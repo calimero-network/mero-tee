@@ -1,0 +1,190 @@
+---
+title: Components
+description: A reference for each moving part of Mero TEE — the mero-kms-phala service, the GCP node-image build, and the attestation verifier — mapped to where it lives in the repo.
+sidebar:
+  order: 3
+---
+
+Mero TEE is three components plus a release pipeline that ties them together.
+This page is the map: what each part does and where it lives.
+
+## mero-kms-phala — the KMS
+
+`mero-kms/` · Rust + Axum · runs inside a Phala Cloud confidential VM alongside
+Phala **dstack**.
+
+The KMS validates a node's TDX attestation and releases a deterministic storage
+encryption key. It is stateless apart from short-lived challenges. Source of
+truth: `mero-kms/src/`.
+
+### Endpoints
+
+Registered in `mero-kms/src/handlers/mod.rs`:
+
+| Method · Path | Request | Response |
+| --- | --- | --- |
+| `GET /health` | — | `{ status: "alive", service: "mero-kms-phala" }` (always 200) |
+| `POST /challenge` | `{ peerId }` | `{ challengeId, nonceB64, expiresAt }` |
+| `POST /get-key` | `{ challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64 }` | `{ key }` |
+| `POST /attest` | `{ nonceB64, bindingB64? }` | `{ quoteB64, reportDataHex, eventLog, vmConfig }` |
+
+:::note
+`/health` is a static liveness probe — it returns 200 even when the attestation
+policy is not yet loaded. Policy readiness is enforced only at `/get-key` (which
+returns `503 policy_not_ready` until a policy is present), not at `/health`.
+:::
+
+The [key release flow](/flows/key-release/) walks the `/challenge` → `/get-key`
+exchange step by step; [trust model](/understand/trust-model/) covers the checks.
+
+### Key modules
+
+| File | Responsibility |
+| --- | --- |
+| `src/main.rs` | Bootstraps config, CORS, the RTMR3 profile runtime event, and the Axum server. |
+| `src/config/mod.rs`, `config/env.rs` | Parse and validate all environment variables into `Config`. |
+| `src/config/policy_loader.rs` | Fetch the attestation policy from a GitHub release, with SHA-256 pinning. |
+| `src/policy.rs` | `AttestationPolicy` model, JSON parsing, and fail-closed startup validation. |
+| `src/measurement.rs`, `src/util.rs` | The 48-byte SHA-384 `HexMeasurement` newtype and hex helpers. |
+| `src/challenge_store.rs` | Single-use challenge storage: in-memory (`DashMap`-free `HashMap` behind a mutex) or Redis. |
+| `src/runtime_event.rs` | Emits the `calimero.kms.profile=<profile>` runtime event that extends RTMR3. |
+| `src/handlers/` | `challenge.rs`, `get_key.rs`, `attest.rs`, and the `errors.rs` `ServiceError` enum. |
+
+### Configuration & deployment
+
+Two policy modes: **release fetch** (production — set `MERO_KMS_VERSION` and
+`MERO_KMS_PROFILE`, optionally pin with `MERO_KMS_POLICY_SHA256`) and
+**`USE_ENV_POLICY`** (explicit `ALLOWED_*` env vars, for air-gapped or dev use).
+The full variable table is in the [config reference](/operate/config-reference/).
+
+:::caution[Mock attestation is a build-time feature]
+Accepting synthetic quotes is gated behind a **default-off `mock-attestation`
+Cargo feature**. Production KMS builds compile *zero* mock code — the
+`ACCEPT_MOCK_ATTESTATION` env var is only read when that feature is enabled. A
+release binary cannot be flipped into mock mode by an env var alone.
+:::
+
+Deployment is a container on Phala Cloud (`mero-kms/docker-compose.phala.yaml`):
+the published `ghcr.io/calimero-network/mero-kms-phala` image with
+`/var/run/dstack.sock` mounted in. See the [runbooks](/operate/runbooks/).
+
+## Node image build
+
+`mero-tee/` · Packer (`googlecompute`) + Ansible · builds GCP TDX Confidential
+VM images containing `merod`.
+
+`ubuntu.pkr.hcl` provisions an Ubuntu 25.10 (Questing) image — kernel 6.17+ is
+required for RTMR3 sysfs support — from `ubuntu-2510-amd64`, running the Ansible
+`playbook.yml`. The build host does not need TDX (`n2-standard-2`); the resulting
+image runs on TDX-capable hardware (e.g. `c3-standard-4`) at runtime. Output
+image family: `merotee-ubuntu-questing-<profile>`.
+
+### What the image bakes
+
+Driven by `playbook.yml` and `mero-tee/versions.json`:
+
+- `merod`, `meroctl`, and `mero-auth` at a pinned core tag (via the
+  `calimero-core` role).
+- Traefik reverse proxy, plus `node-exporter`, `vmagent`, and `vector` for
+  metrics/logs.
+- The **fleet HA sidecar** systemd service
+  (`ansible/roles/merotee/templates/fleet-sidecar.sh.j2`).
+- A profile marker at `/etc/calimero/image-profile` and a `calimero.root_hash`
+  (a SHA-256 over `/etc/calimero`, the baked binaries, and grub config) injected
+  into the kernel cmdline so binary substitution changes the measurements.
+
+### Profiles
+
+| Profile | Posture |
+| --- | --- |
+| `debug` | Development. SSH and read-write filesystem. |
+| `debug-read-only` | Integration / pre-production. Read-only root, SSH retained. |
+| `locked-read-only` | Production. The `merod-lockdown`, `merotee-conformance`, and ubuntu-user-removal steps run **only** for this profile, so its content — and therefore its MRTD/RTMR — differs from the others. |
+
+Each profile produces a distinct RTMR3 via `calimero-init`, giving the
+cryptographic cohort separation the [trust model](/understand/trust-model/)
+relies on.
+
+### Building
+
+```bash
+packer build -var-file=ubuntu-x86.pkrvars.hcl ubuntu.pkr.hcl
+```
+
+Release builds go through `mero-tee/build-and-release.sh`, which reads versions
+from `versions.json` and can build one profile or all three. Requires Packer,
+Ansible, and GCP credentials.
+
+## Attestation verifier
+
+`attestation-verifier/` · React (Vite) SPA + Vercel serverless API.
+
+A public tool for **independent** verification: anyone can confirm a KMS or a
+`merod` node is running genuine TEE code, without being part of the node ⇄ KMS
+trust relationship. It routes quotes through **Intel Trust Authority (ITA)**.
+
+### Serverless API
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/verify` | Accepts `{ kms_url }`, `{ node_url }`, or a pasted `{ attestation }`; fetches a quote, submits it to ITA, verifies the returned JWT, and checks the nonce binding. |
+| `GET /api/policy` | Proxies `kms-phala-attestation-policy.{profile}.json` from a release (avoids CORS). |
+| `GET /api/node-policy` | Proxies `published-mrtds.json` (`{ profiles: {…} }`) from a node release. |
+| `GET /api/compat-map` | Proxies `kms-phala-compatibility-map.json` from a KMS release. |
+
+`api/verify.js` fetches `POST /attest` (with `{ nonceB64 }`) from a KMS, or
+`POST /admin-api/tee/attest` (with `{ nonce }` hex) from a node, then verifies the
+ITA appraisal JWT against Intel's JWKS
+(`https://portal.trustauthority.intel.com/certs`, issuer
+`https://portal.trustauthority.intel.com`).
+
+:::tip
+Node verification is **implemented**, not planned: `/api/verify` handles a
+`node_url` by calling the node's `/admin-api/tee/attest` and checking the same
+nonce binding it uses for the KMS.
+:::
+
+### Security & configuration
+
+Deployed on Vercel. Environment: `ITA_API_KEY`, `ITA_APPRAISAL_URL` (defaults to
+the ITA v2 appraisal endpoint), `KMS_ALLOWED_HOSTS`, and `NODE_ALLOWED_HOSTS`.
+The two allow-host lists are **SSRF protection** — regex allowlists that a target
+URL must match before any outbound request is made (default KMS allowlist is
+`phala.network` / localhost). Each request generates a fresh 32-byte nonce and
+rejects a quote whose `report_data` does not carry it. See
+[verification](/flows/verification/).
+
+## Release pipeline
+
+Each version ships **two** artifact families from GitHub releases:
+
+- **`mero-kms-vX.Y.Z`** — KMS binaries, per-profile attestation policies, the
+  compatibility map, Sigstore signatures.
+- **`mero-tee-vX.Y.Z`** — `published-mrtds.json`, release provenance, SBOM,
+  checksums, Sigstore signatures.
+
+Release assets are **keyless-signed with Sigstore** (GitHub OIDC) — no signing
+key is stored in the repo (`SECURITY.md`). After a release, the
+`update-compatibility-catalog` workflow refreshes the repo-root
+`compatibility-catalog.json`, which maps each version to its KMS/node tags and
+policy URLs:
+
+```json
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "2.3.x",
+      "kms_tag": "mero-kms-v2.3.x",
+      "node_image_tag": "mero-tee-v2.3.x",
+      "kms_policy_url":  "https://github.com/.../kms-phala-attestation-policy.json",
+      "node_policy_url": "https://github.com/.../published-mrtds.json"
+    }
+  ]
+}
+```
+
+CI/CD lives in `.github/workflows/` (release, staging probes, post-release e2e,
+release auditor, security audit, version-sync guard). The
+[release pipeline](/operate/release-pipeline/) and
+[policy management](/flows/policy-management/) pages cover it in depth.

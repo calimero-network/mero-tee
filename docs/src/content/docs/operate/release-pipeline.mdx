@@ -1,0 +1,198 @@
+---
+title: Release Pipeline
+description: The end-to-end path from a version bump to signed, attested, published KMS and node-image releases — keyed to the actual GitHub Actions workflows.
+sidebar:
+  order: 2
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Mero TEE ships two coupled artifact families from one monorepo: the
+`mero-kms-phala` container (a Phala Cloud KMS) and the `mero-tee` GCP node image.
+Each has its own release workflow, but they share a version number and a
+measurement contract. This page traces the real pipeline: bump → build →
+attest/measure → sign → publish → catalog.
+
+<Aside type="note">
+Releases are **not** tag-triggered. Both release workflows run on `push` to
+`master` (path-filtered) and on manual `workflow_dispatch`; they create the
+`mero-kms-v<version>` / `mero-tee-v<version>` GitHub release tags themselves as
+their final step.
+</Aside>
+
+## Version coupling
+
+The KMS version and the node-image version move together. The **release version
+sync guard** (`release-version-sync-guard.yaml` → `scripts/policy/check_release_version_sync.sh`)
+fails a PR unless all three agree:
+
+- `mero-kms/Cargo.toml` `package.version`
+- `mero-tee/versions.json` `imageVersion`
+- the `mero-kms-phala` entry in `Cargo.lock`
+
+`versions.json` `merodVersion` is decoupled — it pins the `calimero-network/core`
+merod tag baked into the node image.
+
+## KMS release — `release-kms-phala.yaml`
+
+Workflow name **Release mero-kms**. Triggers: push to `master` touching
+`mero-kms/**`, `Cargo.toml`, `Cargo.lock`, or the KMS scripts/workflows; plus PR
+(dry-run) and `workflow_dispatch`.
+
+<Steps>
+
+1. **`prepare`** — resolve the version and release tags (`get-version-info.sh`),
+   validate the merod attestation-config helper scripts.
+
+2. **`build-binaries`** — compile the `mero-kms-phala` binary for `x86_64` and
+   (on non-PR runs) `aarch64`, upload as artifacts.
+
+3. **`release-container`** — build and push a multi-arch image to
+   `ghcr.io/calimero-network/mero-kms-phala`, **one tag set per profile**
+   (`debug`, `debug-read-only`, `locked-read-only`), and attest each image's
+   build provenance (`actions/attest-build-provenance`).
+
+4. **`probe`** — for each profile, dispatch the staging probe
+   (`kms-phala-staging-probe.yaml`) against a real Phala CVM and wait. The probe
+   returns `kms-policy-candidates.json` (measured MRTD/RTMR/TCB values) and
+   `kms-app-identity.json` (the dstack `compose_hash`).
+
+5. **`release-metadata`** — the assembly step:
+   - Wait for and fetch the counterpart node release's `published-mrtds.json`.
+   - Generate the SBOMs with Syft (`syft` over the container and the binaries).
+   - Build the per-profile attestation policy JSON from the probe candidates and
+     the node MRTDs, plus a compatibility map and container-metadata file.
+   - Write `kms-phala-checksums.txt` (SHA-256 of all assets).
+   - Sign every asset with **cosign keyless** (Sigstore / Fulcio / Rekor),
+     producing `<asset>.bundle.json` sidecars, then verify the signatures.
+   - Publish the GitHub release `mero-kms-v<version>` with all assets.
+
+</Steps>
+
+### KMS release assets
+
+Uploaded to the `mero-kms-v<version>` release (each with a `.bundle.json`
+Sigstore sidecar):
+
+- `kms-phala-attestation-policy.<profile>.json` (one per profile) and the legacy
+  profile-less `kms-phala-attestation-policy.json`
+- `kms-phala-checksums.txt`
+- `kms-phala-container-sbom.spdx.json`, `kms-phala-binaries-sbom.spdx.json`
+- `kms-phala-release-manifest.json`, `kms-phala-container-metadata.json`
+- `kms-phala-compatibility-map.json`, `kms-phala-rekor-index.json`
+
+<Aside type="caution">
+Attestation-policy assets are named `kms-phala-attestation-policy.<profile>.json`
+— **not** `attestation-policy-<profile>.json`. The policy is generated from live
+probe measurements at release time; it is never hand-populated from `ALLOWED_*`
+environment variables.
+</Aside>
+
+## Node-image release — `release-node-image-gcp.yaml`
+
+Workflow name **Release mero-tee**. Triggers: push to `master` touching
+`mero-tee/versions.json`; plus `workflow_dispatch`.
+
+<Steps>
+
+1. **`preflight`** — a release gate that resolves the target merod version and
+   verifies the `calimero-network/core` release tag (and its required tarball
+   assets) actually exists, so the image build is blocked until core ships.
+   Reads `imageVersion` from `versions.json`.
+
+2. **`profile_pipeline`** (matrix over the three profiles) — the measurement
+   step, which unlike the KMS path must **boot a real TDX VM**:
+   - Run `build-and-release.sh <profile>` (Packer + Ansible) to build the GCP
+     image.
+   - Create an ephemeral firewall rule and a **`c3-standard-4` Intel TDX** VM
+     from the new image.
+   - Collect TEE info and a TDX quote from the node's admin API, then verify the
+     quote externally against **Intel Trust Authority**.
+   - Emit `mrtd-<profile>.json` (MRTD + RTMR0–3), a provenance record, and the
+     attestation artifacts.
+
+3. **`cleanup_attestation_resources`** — tear down the ephemeral VM and firewall
+   rule.
+
+4. **`publish_mrtds`** — assemble `published-mrtds.json` (per-profile
+   measurements) with `assemble-published-mrtd-payload.sh`, generate the SBOM,
+   cosign-sign the assets (`.sig` + `.pem`), and publish the GitHub release
+   `mero-tee-v<version>`.
+
+</Steps>
+
+### Node-image release assets
+
+Uploaded to `mero-tee-v<version>` (each with `.sig` and `.pem` sidecars):
+
+- `published-mrtds.json` — expected MRTD/RTMR0–3 for each profile
+- `release-provenance.json`
+- `node-image-gcp-release-sbom.spdx.json`
+- `node-image-gcp-checksums.txt`
+
+<Aside type="caution">
+The two families cross-reference each other: the KMS `release-metadata` job waits
+for the node release's `published-mrtds.json`, and the node measurements plus the
+KMS probe candidates together form each profile's attestation policy. A node
+image built for the `debug` family cannot obtain keys from a `locked-read-only`
+KMS because their RTMR3 profile measurements differ.
+</Aside>
+
+## Compatibility catalog
+
+`compatibility-catalog.json` is the source of truth for which KMS and node-image
+versions pair. It is rebuilt by `update-compatibility-catalog.yaml` on every
+`release: published` event (and on demand), by enumerating published
+`mero-kms-v*` tags and pairing each with the identically-versioned node tag:
+
+```json
+{
+  "schema_version": 1,
+  "releases": [
+    {
+      "version": "2.3.13",
+      "kms_tag": "mero-kms-v2.3.13",
+      "node_image_tag": "mero-tee-v2.3.13",
+      "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.13/kms-phala-attestation-policy.json",
+      "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.13/published-mrtds.json"
+    }
+  ]
+}
+```
+
+<Aside type="caution">
+The catalog schema is `{ "schema_version": 1, "releases": [...] }` keyed by
+`version` + release tags + asset URLs. There are no `entries`, `kms`,
+`node_image`, `profiles`, `tested`, or `notes` fields — pairing is by identical
+version number, computed from the published tags, not hand-curated.
+</Aside>
+
+## Guards and audits
+
+| Workflow | Trigger | What it enforces |
+| --- | --- | --- |
+| `release-version-sync-guard.yaml` | PR / push to master | KMS `Cargo.toml`, `versions.json`, and `Cargo.lock` versions agree. |
+| `docs-update-guard.yaml` | PR | Changes under `.github/workflows/`, `scripts/`, or `mero-tee/**` ship with a `docs/**` / `README.md` / `CHANGELOG.md` update. |
+| `ci-kms-phala.yaml` | PR / push (KMS paths) | `cargo fmt` + `clippy -D warnings` + tests on `mero-kms-phala`. |
+| `security-audit.yaml` | Weekly (Mon 04:00) / PR | `cargo audit` against the advisory database. |
+| `release-auditor.yaml` | Weekly (Mon 03:30) / dispatch | Re-verifies recent releases' assets and cosign signatures. |
+| `post-release-kms-node-e2e.yaml` | `workflow_run` after Release mero-tee | KMS↔node compatibility e2e on the released artifacts. |
+| `post-release-mero-tee-node-e2e.yaml` | `workflow_run` after Release mero-tee | Boots fresh TDX VMs and checks their measurement candidates are covered by `published-mrtds.json` — without waiting on the KMS. |
+
+## Degraded policy state (`policy_not_ready`)
+
+When the KMS has no usable policy (e.g. `MERO_KMS_VERSION` unset, or the release
+policy fetch failed), it starts in a **fail-closed** degraded mode: `/attest`
+still answers, but `/get-key` returns `503 policy_not_ready`.
+
+<Aside type="danger">
+`policy_not_ready` does **not** relax verification. It blocks key release
+entirely — it does not accept all measurements. A production KMS must reach a
+policy-ready state before it can issue keys.
+</Aside>
+
+## Next steps
+
+- [Configuration reference](/operate/config-reference/) — the versions and env vars this pipeline consumes.
+- [Runbooks](/operate/runbooks/) — deploying and probing a published release.
+- [Policy management](/flows/policy-management/) — how the attestation policy governs key release.

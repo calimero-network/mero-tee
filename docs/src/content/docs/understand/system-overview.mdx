@@ -1,0 +1,115 @@
+---
+title: System Overview
+description: What Mero TEE is, the three components it ships, and the two hardware-attested trust flows that tie merod nodes, the KMS, and the public verifier together.
+sidebar:
+  order: 1
+---
+
+Mero TEE is the confidential-computing layer for Calimero. Its job is narrow and
+concrete: prove **what code a node is running** on genuine Trusted Execution
+Environment (TEE) hardware, and hand out secrets — storage keys, group
+membership — only to nodes that pass that proof. It is the operational home of
+the attestation ideas described in the Calimero Core
+[TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/)
+chapter; read that first for the protocol, then this track for how the pieces
+are built, deployed, and verified.
+
+Everything here rests on Intel **TDX** (Trust Domain Extensions): each `merod`
+node and the KMS run inside a confidential VM whose memory the hypervisor cannot
+read, and whose software identity the CPU measures and signs into an attestation
+**quote**. See the [glossary](/understand/glossary/) for the vocabulary.
+
+## The three components
+
+| Component | Repo path | What it is |
+| --- | --- | --- |
+| **mero-kms-phala** | `mero-kms/` | A stateless Rust/Axum HTTP service that validates a node's TDX attestation and releases a deterministic **storage encryption key** via Phala **dstack**. Runs inside a Phala Cloud confidential VM. |
+| **Node image build** | `mero-tee/` | A Packer + Ansible pipeline that bakes `merod` (and its sidecars) into a GCP TDX Confidential VM image, in three security **profiles**. |
+| **attestation-verifier** | `attestation-verifier/` | A React single-page app plus Vercel serverless API that lets anyone independently verify a KMS **or** a node quote through Intel Trust Authority (ITA). |
+
+The [components reference](/understand/components/) maps each of these in detail.
+
+## Two trust flows, not one
+
+The most important thing to understand is that Mero TEE carries **two distinct
+attestation flows** that are easy to conflate. They use different mechanisms and
+solve different problems.
+
+### 1. Storage-key release (node ⇄ KMS)
+
+When a `merod` node boots inside a TDX VM, it needs the key that decrypts its
+on-disk storage. It gets that key from the KMS, but only after a
+**challenge–response** exchange in which the node proves — with a hardware quote —
+that it is an approved image. The KMS in turn exposes a self-attestation endpoint
+so the node (or anyone) can verify the KMS is itself genuine before trusting it.
+This is the flow the [trust model](/understand/trust-model/) and
+[key release](/flows/key-release/) pages describe.
+
+```
+merod (TDX VM)                         mero-kms-phala (Phala CVM + dstack)
+     │  POST /challenge { peerId }              │
+     │ ───────────────────────────────────────▶│  issue single-use nonce
+     │  { challengeId, nonceB64, expiresAt }    │
+     │ ◀───────────────────────────────────────│
+     │  quote over (nonce ‖ SHA-256(peerId))    │
+     │  + signature by the peer key             │
+     │  POST /get-key { challengeId, quoteB64,  │
+     │     peerId, peerPublicKeyB64, sigB64 }   │
+     │ ───────────────────────────────────────▶│  verify sig → verify quote →
+     │                                          │  enforce MRTD/RTMR/TCB policy →
+     │  { key }                                 │  dstack key derivation
+     │ ◀───────────────────────────────────────│
+```
+
+### 2. Fleet admission (node ⇄ namespace, via Core)
+
+Separately, a node can join a Calimero **namespace** as a hardware-attested
+read-only replica (`ReadOnlyTee`) with no human invite. That admission handshake
+lives in Calimero **Core**, not in this repo; the Mero TEE side is the **fleet HA
+sidecar** baked into the node image
+(`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`). The sidecar
+polls the fleet control plane (MDMA) for namespace assignments and drives `merod`
+via `meroctl tee fleet-join`, then leaves and lets Core purge keys when an
+assignment is withdrawn.
+
+:::note
+The storage key a node fetches from the KMS and the per-group encryption keys a
+`ReadOnlyTee` replica receives on admission are **unrelated** key mechanisms. The
+KMS never sees group keys; Core's fleet admission never touches the storage key.
+Keep the two flows separate. The full admission protocol is documented in
+[Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).
+:::
+
+## What binds identity to hardware
+
+Both flows lean on the same TDX primitives:
+
+- **MRTD** — a SHA-384 measurement of the initial VM image. Any change to the
+  image changes it.
+- **RTMR0–3** — four extend-only runtime registers. In this system, **RTMR3
+  carries the profile/role separation**: the KMS extends it with a
+  `calimero.kms.profile=<profile>` runtime event
+  (`mero-kms/src/runtime_event.rs`), and the node image's `calimero-init`
+  extends it with the node's role + profile + a root-content hash at boot
+  (`mero-tee/playbook.yml`). Because the registers are hardware-measured and can
+  only be extended, a debug image cannot present a production RTMR3.
+- **report_data** — 64 caller-supplied bytes baked into the quote, split as
+  `nonce ‖ binding`, that tie a quote to a specific fresh request and identity.
+
+The KMS's admission decisions are governed by an **attestation policy** — an
+allowlist of MRTD, RTMR0–3, and TCB-status values — fetched from a signed GitHub
+release at startup. See [policy management](/flows/policy-management/) and the
+[config reference](/operate/config-reference/).
+
+## Where to go next
+
+- [Trust model](/understand/trust-model/) — how the node and KMS verify each
+  other, and what each measurement pins.
+- [Components](/understand/components/) — the KMS endpoints, the node-image
+  build, and the verifier, each mapped to its repo location.
+- [Glossary](/understand/glossary/) — every domain term used above.
+- Flows: [attestation](/flows/attestation-flow/), [key release](/flows/key-release/),
+  [verification](/flows/verification/), [policy management](/flows/policy-management/).
+- Operate: [config reference](/operate/config-reference/),
+  [release pipeline](/operate/release-pipeline/), [runbooks](/operate/runbooks/),
+  [error handling](/operate/error-handling/).
