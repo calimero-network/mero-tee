@@ -12,6 +12,7 @@ on:
       - "mero-tee/**"
       - "docs/**"
       - "README.md"
+      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -51,7 +52,7 @@ jobs:
               requires_docs_update="true"
             fi
 
-            if [[ "${file}" == docs/* || "${file}" == README.md ]]; then
+            if [[ "${file}" == docs/* || "${file}" == README.md || "${file}" == CHANGELOG.md ]]; then
               has_docs_update="true"
             fi
           done

@@ -3,11 +3,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine;
-use calimero_tee_attestation::verify_mock_attestation;
 use libp2p_identity::Keypair;
 use tower::util::ServiceExt;
 
-use crate::test_util::{create_mock_quote, read_json_body};
+use crate::test_util::read_json_body;
 use crate::AttestationPolicy;
 
 use super::errors::ServiceError;
@@ -22,15 +21,74 @@ fn post_json_request(uri: &str, body: &serde_json::Value) -> Request<Body> {
         .expect("request should build")
 }
 
-fn mock_verification_result(nonce_seed: u8) -> calimero_tee_attestation::VerificationResult {
-    let nonce = [nonce_seed; 32];
-    let mock_quote = create_mock_quote(&nonce);
-    // rc.13 made app-hash verification mandatory (was Option<_> / skippable).
-    // `create_mock_quote` leaves report_data[32..64] zeroed, so the quote's
-    // embedded app-hash is all zeros; passing it back keeps
-    // `application_hash_verified == true`, matching the prior `None` semantics.
-    let expected_app_hash = [0u8; 32];
-    verify_mock_attestation(&mock_quote, &nonce, &expected_app_hash).unwrap()
+/// Build a `VerificationResult` fixture for exercising the *real* measurement
+/// policy machinery (`enforce_attestation_policy`).
+///
+/// This is deliberately built by hand from `calimero_server_primitives` types
+/// rather than via core's `verify_mock_attestation`, so that the policy tests
+/// below stay compiled and running in the default (no-`mock-attestation`) build.
+/// All measurement registers are zeroed, matching what a mock quote produced.
+fn policy_verification_result(nonce_seed: u8) -> calimero_tee_attestation::VerificationResult {
+    use calimero_server_primitives::admin::{
+        CertificationData, QeReportCertificationDataInfo, Quote, QuoteBody, QuoteHeader,
+    };
+
+    let zero_48b = "0".repeat(96);
+    let zero_16b = "0".repeat(32);
+    let zero_8b = "0".repeat(16);
+
+    let mut report_data = [0u8; 64];
+    report_data[..32].copy_from_slice(&[nonce_seed; 32]);
+
+    let quote = Quote {
+        header: QuoteHeader {
+            version: 4,
+            attestation_key_type: 2,
+            tee_type: 0x81,
+            qe_vendor_id: "939a7233f79c4ca9940a0db3957f0607".to_owned(),
+            user_data: zero_16b.clone(),
+        },
+        body: QuoteBody {
+            tdx_version: "1.0".to_owned(),
+            tee_tcb_svn: zero_16b,
+            mrseam: zero_48b.clone(),
+            mrsignerseam: zero_48b.clone(),
+            seamattributes: zero_8b.clone(),
+            tdattributes: zero_8b.clone(),
+            xfam: zero_8b,
+            mrtd: zero_48b.clone(),
+            mrconfigid: zero_48b.clone(),
+            mrowner: zero_48b.clone(),
+            mrownerconfig: zero_48b.clone(),
+            rtmr0: zero_48b.clone(),
+            rtmr1: zero_48b.clone(),
+            rtmr2: zero_48b.clone(),
+            rtmr3: zero_48b,
+            reportdata: hex::encode(report_data),
+            tee_tcb_svn_2: None,
+            mrservicetd: None,
+        },
+        signature: "0".repeat(128),
+        attestation_key: "04".to_owned() + &"0".repeat(128),
+        certification_data: CertificationData::QeReportCertificationData(
+            QeReportCertificationDataInfo {
+                qe_report: "0".repeat(768),
+                signature: "0".repeat(128),
+                qe_authentication_data: "0".repeat(64),
+                certification_data_type: "PckCertChain".to_owned(),
+                certification_data: "0".repeat(200),
+            },
+        ),
+    };
+
+    calimero_tee_attestation::VerificationResult {
+        quote_verified: true,
+        nonce_verified: true,
+        application_hash_verified: true,
+        tcb_status: Some("Mock".to_owned()),
+        advisory_ids: Vec::new(),
+        quote,
+    }
 }
 
 #[test]
@@ -96,7 +154,7 @@ fn test_policy_not_ready_blocks_key_release() {
 
 #[test]
 fn test_policy_rejects_tcb_status() {
-    let mut verification = mock_verification_result(0x11);
+    let mut verification = policy_verification_result(0x11);
     verification.tcb_status = Some("OutOfDate".to_owned());
 
     let config = Config {
@@ -116,7 +174,7 @@ fn test_policy_rejects_tcb_status() {
 fn test_policy_rejects_untrusted_mrtd() {
     use crate::measurement::HexMeasurement;
 
-    let mut verification = mock_verification_result(0x22);
+    let mut verification = policy_verification_result(0x22);
     verification.tcb_status = Some("UpToDate".to_owned());
 
     let config = Config {
@@ -140,7 +198,7 @@ fn test_policy_rejects_untrusted_mrtd() {
 fn test_policy_accepts_allowlisted_measurements() {
     use crate::measurement::HexMeasurement;
 
-    let mut verification = mock_verification_result(0x33);
+    let mut verification = policy_verification_result(0x33);
     verification.tcb_status = Some("UpToDate".to_owned());
     let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();
 
