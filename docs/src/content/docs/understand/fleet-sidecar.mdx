@@ -5,6 +5,8 @@ sidebar:
   order: 5
 ---
 
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
 The **fleet HA sidecar** is the Mero TEE half of hardware-attested fleet
 admission. It is a Bash script
 (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`) baked into the
@@ -111,6 +113,30 @@ The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
 different semantics: it records "admitted **and** confirmed", not merely
 "attempted"). Activity is logged to `/var/log/fleet-sidecar.log`.
+
+<SeqDiagram
+  id="d-fleet-reconcile"
+  title="Fleet sidecar reconcile loop (1s poll)"
+  lanes={[
+    { label: 'Fleet sidecar', color: '#3fb950' },
+    { label: 'MDMA', color: '#58a6ff' },
+    { label: 'merod / Core', color: '#a371f7' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'POST /api/fleet/should-join { peer_id, mrtd }', color: '#a5ff11' },
+    { from: 1, to: 0, label: '200 { assignments: [...] }', color: '#58a6ff', dashed: true },
+    { from: 0, to: 0, label: 'gate: HTTP 200 + valid shape, else skip cycle' },
+    { from: 0, to: 0, label: 'desired = sorted group_ids; diff vs confirmed' },
+    { from: 0, to: 2, label: 'meroctl tee fleet-join <GROUP_ID>', color: '#a371f7' },
+    { from: 2, to: 2, label: 'TDX quote + TeeAttestationAnnounce, MRTD-gated admission' },
+    { from: 2, to: 0, label: '{ admitted: true }', color: '#a371f7', dashed: true },
+    { from: 0, to: 1, label: 'POST /api/fleet/confirm { peer_id, group_id }', color: '#a5ff11' },
+    { from: 0, to: 0, label: 'add to fleet-confirmed.json (admitted AND confirmed)' },
+    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (confirmed − desired)', dashed: true },
+    { from: 2, to: 2, label: 'MemberLeft → evict + purge keys' },
+    { type: 'divider', label: 'confirmed = confirmed ∩ desired; persist, sleep 1s, repeat' },
+  ]}
+/>
 
 ### Joining a namespace
 
