@@ -1490,7 +1490,7 @@ jobs:
         run: bash scripts/release/kms-phala/verify-generated-signatures.sh
 
       - name: Upload release metadata assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
