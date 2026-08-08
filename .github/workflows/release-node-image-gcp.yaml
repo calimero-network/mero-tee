@@ -55,7 +55,7 @@ jobs:
       gate_reason: ${{ steps.release_gate.outputs.reason }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Validate packer helper scripts
         run: |
@@ -123,7 +123,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Determine GCP auth mode
         id: auth_mode
@@ -764,7 +764,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Determine GCP auth mode
         id: auth_mode
@@ -821,7 +821,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download attestation artifacts
         uses: actions/download-artifact@v8
