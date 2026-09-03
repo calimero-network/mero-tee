@@ -70,6 +70,28 @@ retries `meroctl tee fleet-join <GROUP_ID>` until core reports `admitted: true`,
 `fleet-confirmed.json` once both local admission and the MDMA confirm succeed, so a transient
 MDMA blip on the confirm step is retried (fleet-join is idempotent in core) rather than lost.
 
+**Delegated execution (the node as a relay).** A fleet node is also the relay a
+Calimero Cloud account holder writes through when they run no node at all: they
+sign a warrant locally, present it to the node, and the node executes as *their*
+principal — the delta is attributed to their account, not the node's. Three
+facts have to reach that client and none is derivable off-node, so the sidecar
+reports them: its **executor account** (`meroctl account show`, the account a
+warrant's `executor` must name), its **relay URL** (from the `relay-url`
+instance metadata key — a node cannot derive its own external address), and
+whether it holds **`CAN_AUTHOR_ON_BEHALF`** on each namespace (`meroctl group
+members get-capabilities`, bit 9). The first two ride the should-join poll; the
+third rides `/confirm` and is re-reported whenever it changes, because the
+capability is granted by a namespace admin long after admission. Any failure
+degrades to "replicates but does not relay" — MDMA then never advertises the
+node, so clients are not sent to mint warrants it would refuse. The image opens
+exactly one path for this, driven by the single Ansible variable
+`fleet_delegated_execution`: a Traefik router exempting
+`/admin-api/contexts/<ctx>/intents` from forwardAuth, and merod's
+`server.admin.public_intents`. Both from one variable because these nodes run
+merod in proxy auth mode, so Traefik is the only gate and a drift between the
+two would be silent in the unsafe direction. See [Fleet HA
+sidecar](https://calimero-network.github.io/mero-tee/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay).
+
 **Leave on disable (converge away from dropped namespaces).** When a namespace the node had
 previously confirmed (`confirmed`) is no longer in MDMA's assignment set (`desired`) — i.e. HA
 disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar self-leaves it

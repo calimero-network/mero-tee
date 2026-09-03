@@ -155,6 +155,24 @@ sets the build-host defaults.
 | `subnetwork` | `""` | Optional build subnetwork. |
 | `version` | `""` (supplied at build) | Image version, threaded into the image name/family. |
 
+### Ansible play variables
+
+Defined at play level in `mero-tee/playbook.yml` (so several roles see one
+value), and overridable at build time with `-e`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `fleet_delegated_execution` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives *both* edges of the posture — the Traefik router exempting `/admin-api/contexts/<ctx>/intents` from `auth-node`, and merod's `server.admin.public_intents`. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
+| `fleet_mdma_url` | `https://manager.cloud.calimero.network` | Where the fleet sidecar polls for assignments. Baked (and so measured); the sidecar exits if unset. |
+| `fleet_auth_token` | `""` | Sent as `X-Fleet-Token` on sidecar requests when set. |
+
+<Aside type="caution">
+Changing `fleet_delegated_execution` changes `/etc/traefik/routing.yml` and the
+node's merod config, both of which are covered by the image root hash — so it
+**changes the image's measurements**. That is intended: opening a write path is
+exactly the kind of change an attestation policy should notice.
+</Aside>
+
 The base image is hardcoded for reproducibility: `source_image_family =
 ubuntu-2510-amd64` from `ubuntu-os-cloud` (Ubuntu 25.10, kernel 6.17+ for RTMR3
 sysfs support), `disk_size = 20` GB `pd-ssd`. The output image name is
