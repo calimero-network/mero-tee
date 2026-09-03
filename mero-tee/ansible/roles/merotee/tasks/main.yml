@@ -189,3 +189,63 @@
     enabled: true
     daemon_reload: true
   when: merod_mode == "read-only"
+
+# --- Delegated-execution conformance -----------------------------------------
+#
+# A relay image has one cross-repo dependency the build cannot infer: the baked
+# merod must actually implement `server.admin.public_intents` and the
+# `GET .../intents` descriptor. Pin `merodVersion` at a core release that
+# predates them and the image still builds, still boots, and still reports
+# itself to MDMA — it simply never serves a client, because the config key is
+# ignored and the discovery read 404s. That failure appears in a browser, days
+# later, as "the relay does not answer".
+#
+# So the invariant is asserted here instead of documented. `--public-intents`
+# on `merod init` and `server.admin.public_intents` are the same feature, and
+# the flag is the part a CLI can be asked about without a node, a network or a
+# config file — which makes it a clean capability probe for the baked binary.
+- name: Probe whether the baked merod supports delegated execution
+  command: /usr/local/bin/merod --node conformance init --help
+  register: merod_init_help
+  changed_when: false
+  failed_when: false
+  when: fleet_delegated_execution | default(false) | bool
+
+- name: Assert the baked merod can serve delegated execution
+  assert:
+    that:
+      - merod_init_help.rc == 0
+      - "'--public-intents' in merod_init_help.stdout"
+    fail_msg: >-
+      This image enables delegated execution (fleet_delegated_execution), but the
+      baked merod ({{ merod_version | default('unknown') }}) has no
+      --public-intents flag, so it does not implement
+      server.admin.public_intents or GET /admin-api/contexts/<ctx>/intents.
+      Bump merodVersion in mero-tee/versions.json to a core release carrying
+      them, or build with -e fleet_delegated_execution=false.
+  when: fleet_delegated_execution | default(false) | bool
+
+# The other half of the posture. Traefik is the only gate on these nodes (merod
+# runs in proxy auth mode), so an image that set the merod key but shipped a
+# routing file without the exemption would look configured and serve nothing —
+# and one with the exemption but no merod support is the case above. Asserting
+# the rendered file keeps a template regression from reaching a release.
+- name: Read the rendered traefik routing file
+  slurp:
+    path: /etc/traefik/routing.yml
+  register: traefik_routing
+  when: fleet_delegated_execution | default(false) | bool
+
+- name: Assert traefik exempts exactly the delegated-execution path
+  assert:
+    that:
+      - "'node-api-intents' in (traefik_routing.content | b64decode)"
+      - "'/admin-api/contexts/[0-9a-f]{64}/intents' in (traefik_routing.content | b64decode)"
+      # The catch-all must stay guarded: the exemption is one anchored path, not
+      # a prefix over every context route.
+      - "'auth-node' in (traefik_routing.content | b64decode)"
+    fail_msg: >-
+      This image enables delegated execution but /etc/traefik/routing.yml does
+      not carry the anchored node-api-intents exemption (or has lost the
+      auth-node guard on the catch-all).
+  when: fleet_delegated_execution | default(false) | bool
