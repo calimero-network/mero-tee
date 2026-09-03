@@ -22,6 +22,23 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
   **To unblock:** bump `merodVersion` to a core release carrying that flag (the change is on core's `master`, unreleased at time of writing) — or build with `-e fleet_delegated_execution=false` for a fleet that only replicates.
 
+  **That bump is a coordinated network upgrade, not a routine pin move — read this before making it.** `merodVersion` is `0.11.0-rc.17`, and the latest core release is `0.11.0-rc.32`. Verified by ancestry against the `0.11.0-rc.17` tag (`23cf02c9`), the jump crosses six breaking wire changes, every one of them absent from rc.17 and present in rc.32:
+
+  | Change | PR |
+  | --- | --- |
+  | `CrdtType` borsh tags moved to `0x80+` | #3743 |
+  | `Custom(String)` → `Custom(CustomTypeId)` digest, new tag | #3789 |
+  | **map entries reordered value-first** | #3796 |
+  | entries gained a `crdt_type` stamp | #3799 |
+  | every `Mergeable` type must declare how it merges | #3807 |
+  | admitters became an authorization boundary; endorsement moved onto the envelope | #3804, #3819 |
+
+  Five of the six announce themselves — they move a discriminant, so a stale peer hits an unknown tag and fails the decode. **The map-entry reorder does not.** `Entry<(K, V)>` became `Entry<(V, K)>`: same fields, same length, no tag, so a pre-upgrade reader takes the value bytes for the key and carries on, surfacing as a decode error or as plausible nonsense. And the handshake versioning that would have refused an incompatible peer was removed in #3811 rather than left looking functional, so there is **no in-band detection** — core's own note says the upgrade order is a convention the code does not enforce.
+
+  So the fleet and its clients have to move together, and the cheapest way to pay that once rather than twice is to make a **single** jump to the first core release that also carries delegated execution: rc.32 would cost the same flag-day and still leave this build blocked, since the feature is not in it either.
+
+  Until then the fleet stays on rc.17 deliberately. That is 15 releases stale, which is its own problem — it is recorded here rather than fixed silently, because choosing when to take the flag-day is an operational decision, not a version-file edit.
+
 - Bump the pinned `calimero-network/core` git rev to `23cf02c9` (`0.11.0-rc.17`) — the first published core release carrying the default-off `mock-attestation` feature — and cut release **2.3.51**: `mero-kms/Cargo.toml` `2.3.50` → `2.3.51`, `imageVersion` `2.3.50` → `2.3.51`, `Cargo.lock` in sync per the release-version-sync guard.
 - Bump `merodVersion` `0.11.0-rc.13` → `0.11.0-rc.17` in `mero-tee/versions.json` so the GCP node image bakes the rc.17 merod, aligning the fleet with the KMS core dep and rc.17 clients. The governance borsh wire is append-only across rc.13→rc.17 (one new `GroupKeyRotated` `GroupOp` variant appended at the end; envelope enums and schema version unchanged), so an rc.17 fleet node (a ReadOnlyTee that never authors ops) does not reintroduce the rc.8→rc.13-style decode skew — roll clients to rc.17 in tandem to close the one residual (`GroupKeyRotated` from a client self-leaving a Restricted group is unreadable by lagging rc.13 clients).
 
