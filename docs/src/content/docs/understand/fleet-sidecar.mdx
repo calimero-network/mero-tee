@@ -48,6 +48,8 @@ always verified.
 | `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`, optional) | Sent as the `X-Fleet-Token` header when present. |
 | **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
 | **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
+| **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
+| **Relay URL** | Instance metadata key `relay-url` | The one value **not** baked at build time — it is per-node. See below. |
 
 ### Discovering the PeerId
 
@@ -192,6 +194,96 @@ leave, but keys may not be purged. This is where mero-tee's responsibility ends
 and Core's begins.
 :::
 
+## Delegated execution: the node as a relay
+
+A fleet node does more than replicate. It is also the **relay** through which a
+Calimero Cloud account holder who runs no node at all can write.
+
+That user holds one signing key. They cannot execute — the runtime is a WASM JIT
+running against materialized state under an execution lock — and they cannot
+decrypt, because they never received the group's scope key. So they sign a
+**warrant** locally (their consent for one specific intent, once), present it to
+this node, and this node runs the method **as their principal**. The resulting
+delta is attributed to *their* account and device; the node's key only signs the
+envelope. See
+[Core → Delegated Authorship](https://calimero-network.github.io/core/protocol/delegated-authorship/)
+for the protocol.
+
+Three facts have to reach that client before it can mint a usable warrant, and
+**none of them is derivable anywhere but here**. Reporting them is the sidecar's
+second job:
+
+| Fact | Why only the node can say it | Where it goes |
+| --- | --- | --- |
+| **Executor account** | It is derived from an account root minted inside the TEE. MDMA never sees inside; the client has no way to compute it. A warrant naming the wrong executor is refused — after the author has spent a nonce on it. | `executor_account` on every should-join poll |
+| **Relay URL** | `merod` terminates no TLS and sits behind Traefik on a host it was never told about, so it cannot derive its own external address. MDMA holds only the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
+| **Authorship grant** | `CAN_AUTHOR_ON_BEHALF` is a governance capability, granted by an **admin of the namespace** and readable only by a node holding that group's key. MDMA does not grant it and cannot observe it. | `authorship_ready` on `/api/fleet/confirm` |
+
+### Why the grant is re-reported, not reported once
+
+Core implies `CAN_AUTHOR_ON_BEHALF` from **nothing** — not membership, not
+admin, and it is deliberately not propagated by the subgroup-admit cascade. So
+every namespace is authorship-closed until an admin publishes the op, which
+typically happens minutes, hours or days *after* this node was admitted.
+
+A join-time answer alone would therefore be frozen at `false` forever, and the
+cloud would never advertise this relay to anyone. `reconcile_authorship` closes
+that: each cycle it re-reads the grant for every confirmed namespace with
+
+```bash
+meroctl --home /mnt/data/calimero --node default --output-format json \
+  group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>
+```
+
+and tests bit 9 (`512`) of the returned `capabilities` bitmask. It re-`POST`s
+`/api/fleet/confirm` **only when the answer changed** — the loop runs once a
+second and `/confirm` is a write — and records the new state only after that
+POST succeeded, so a transient MDMA blip is retried rather than lost. A revoked
+grant travels back the same way, so the cloud stops advertising the relay.
+
+For this reason MDMA's `/api/fleet/confirm` accepts an **already-active**
+assignment rather than 404'ing it: a node makes its one `assigned → active`
+transition at admission, and requiring that state would mean a grant made five
+minutes later could never be reported without evicting and rejoining the node.
+
+### Every failure lands on "replicates but does not relay"
+
+None of the three reads is fatal, and they degrade in the same safe direction.
+A node that cannot read its account, has no `relay-url` metadata, or fails the
+capability read reports the missing value as empty/`false`. MDMA then does not
+offer it as a writable relay, so clients are never sent to mint warrants it
+would refuse — they see "no relay available" rather than a refusal after
+burning a nonce. The node keeps replicating throughout.
+
+An **empty** report never erases a value MDMA already holds (only a different
+non-empty one overwrites), which is what lets an older and a newer sidecar be
+live at once during a fleet roll.
+
+### The two edges the image opens
+
+Being a relay means accepting a write from a caller with no account on this
+node, so the image has to open exactly one path — and it is a path that carries
+its own credential. `merod` refuses an intent, before executing anything, unless
+the warrant is genuinely the member's, commits to this exact context, method and
+arguments, has not expired, has an unspent nonce, and this node holds the
+authorship grant on the owning group. A node token would prove none of that, and
+requiring one would make the feature unreachable for exactly the callers it
+exists for.
+
+Both edges are driven by the single Ansible variable `fleet_delegated_execution`
+(defined at play level in `mero-tee/playbook.yml`; on for the ReadOnly fleet
+profiles, off for `debug`):
+
+| Edge | What it does |
+| --- | --- |
+| Traefik (`traefik-routing.yml.j2`) | Adds a `node-api-intents` router for `PathRegexp(^/admin-api/contexts/[0-9a-f]{64}/intents$)`, `GET`/`POST`/`OPTIONS` only, at a higher priority than the auth-guarded `node-api` catch-all and **without** the `auth-node` forwardAuth middleware. A `PathPrefix` on `/admin-api/contexts/` would have exempted every context route on the node, `DELETE` included. |
+| `merod` (`calimero-init.sh.j2`) | Sets `server.admin.public_intents=true`, which moves those same two routes onto core's public router. |
+
+They are one variable rather than two defaults on purpose: these nodes run
+`merod` in proxy auth mode, so **Traefik is the only gate**. An exemption added
+there without the matching `merod` setting still opens the path — the drift is
+silent in the unsafe direction.
+
 ## The poll-success safety gate
 
 The step-2 gate is safety-critical, not a nicety. Because a **missing assignment
@@ -220,14 +312,18 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 
 | Item | Value |
 | --- | --- |
-| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd"}` |
-| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id"}` |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url"}` |
+| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready"}` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID>` (positional) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
+| Authorship probe | `meroctl … group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>` → bit 9 (`512`) |
 | Readiness probe | `meroctl --output-format json peers` |
 | PeerId source | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` |
 | MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
+| Executor account source | `meroctl --output-format json account show` → `accountId` |
+| Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
+| Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
 | Log | `/var/log/fleet-sidecar.log` |
 | Poll interval | 1 second |
 | Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set) |
