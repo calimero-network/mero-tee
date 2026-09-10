@@ -5,6 +5,31 @@
 # Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod binaries — cannot be forged.
 - hosts: all
   become: true
+  vars:
+    # Delegated execution: whether this image is a RELAY, i.e. whether a
+    # keyholder with no account on this node may present a signed warrant to it
+    # and have it write on their behalf.
+    #
+    # Defined here, at play level, rather than in either role's defaults,
+    # because the posture has two edges that must move together:
+    #
+    #   * traefik exempts `/admin-api/contexts/<ctx>/intents` from `auth-node`
+    #     (ansible/roles/mero-traefik/templates/traefik-routing.yml.j2), and
+    #   * merod serves those routes on its public router
+    #     (`server.admin.public_intents`, set in calimero-init).
+    #
+    # A per-role default would let one drift from the other, and the failure is
+    # silent in the bad direction: the traefik exemption alone opens the path
+    # whatever merod's config says, since these nodes run merod in proxy auth
+    # mode and traefik is the only gate.
+    #
+    # On for the read-only fleet profiles, which is what "fleet node" means
+    # here — the replicas mdma assigns to a namespace, whose whole job is to be
+    # available for other people's writes. Off for `debug`, a developer's own
+    # node that authors its own. Override at build time with
+    # `-e fleet_delegated_execution=false` for a fleet with no hosted relaying.
+    fleet_delegated_execution: >-
+      {{ (lockdown_profile | default('locked-read-only')) in ['debug-read-only', 'locked-read-only'] }}
   pre_tasks:
     - name: Refresh apt metadata cache only (avoid non-deterministic full upgrades)
       apt:

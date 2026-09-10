@@ -13,13 +13,23 @@ LOG="/var/log/fleet-sidecar.log"
 # — and that's exactly what made the old design fire-once-and-give-up).
 # Different path so any pre-upgrade legacy state is ignored on first boot.
 CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
+# Per-namespace record of the authorship grant we last told mdma about, so a
+# grant made (or revoked) AFTER admission gets re-reported exactly once per
+# change rather than on every one-second cycle. See `reconcile_authorship`.
+AUTHORSHIP_FILE="/var/lib/calimero/fleet-authorship.json"
 POLL_INTERVAL=1
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
+# `MemberCapabilities::CAN_AUTHOR_ON_BEHALF` — bit 9 of the per-member u32
+# bitmask in core (crates/context/config/src/lib.rs). The grant delegated
+# execution runs on, and implied by nothing else: not membership, not admin,
+# and not the subgroup-admit cascade.
+CAN_AUTHOR_ON_BEHALF=512
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
 mkdir -p "$(dirname "$CONFIRMED_FILE")"
 [[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
+[[ -f "$AUTHORSHIP_FILE" ]] || echo '{}' > "$AUTHORSHIP_FILE"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
@@ -62,6 +72,81 @@ get_mrtd() {
   fi
 }
 
+# The account this node WRITES AS — what a warrant's `executor` field must name.
+#
+# An account, not this node's signing key, and that distinction is the whole
+# reason a client can be told it once: the account is a content address derived
+# from a root inside the TEE, so the node re-keying does not void warrants
+# already issued to it. mdma cannot derive it (it never sees inside the TEE) and
+# a client cannot either, so this hop is the only way it reaches them.
+#
+# Stable for the life of the node, hence read once at startup like the MRTD.
+get_executor_account() {
+  local out
+  out=$($MEROCTL --output-format json account show 2>>"$LOG") || return 1
+  echo "$out" | python3 -c '
+import sys, json
+try:
+  obj = json.loads(sys.stdin.read())
+  data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+  account = (data or {}).get("accountId") or (data or {}).get("account_id") or ""
+except Exception as exc:
+  print(f"sidecar: failed to parse meroctl account show JSON: {exc}", file=sys.stderr)
+  account = ""
+print(account.strip().lower())
+' 2>>"$LOG"
+}
+
+# The URL clients present intents to.
+#
+# From instance metadata rather than derived: merod terminates no TLS and sits
+# behind traefik on a host it was never told about, so `public_ip` is not an
+# address a client can verify a certificate against. Whoever provisioned the DNS
+# is the only party that knows, and mdma's dispatcher writes it here when it
+# does (`MDMA_TEE_RELAY_URL_TEMPLATE`). Empty when it does not, which mdma then
+# reports as "no relay URL" — an honest absence rather than an address that
+# fails TLS verification on the client.
+get_relay_url() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/relay-url" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
+# Whether this node holds CAN_AUTHOR_ON_BEHALF on a namespace — i.e. whether it
+# can actually serve delegated execution there.
+#
+# Read from core rather than assumed, because it is not ours to decide: the
+# capability is a governance op signed by an admin of the namespace, arriving
+# over gossip at some arbitrary time after admission. Prints `true` or `false`;
+# any failure prints `false`, which is the safe direction — mdma then does not
+# advertise this node as a writable relay and clients are not sent to mint
+# warrants it would refuse.
+check_authorship() {
+  local group_id="$1"
+  if [[ -z "${EXECUTOR_ACCOUNT:-}" ]]; then
+    echo "false"
+    return 0
+  fi
+  local out rc
+  rc=0
+  out=$($MEROCTL --output-format json group members get-capabilities "$group_id" "$EXECUTOR_ACCOUNT" 2>>"$LOG") || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "false"
+    return 0
+  fi
+  echo "$out" | python3 -c "
+import sys, json
+try:
+  obj = json.loads(sys.stdin.read())
+  data = obj.get('data') if isinstance(obj.get('data'), dict) else obj
+  caps = int((data or {}).get('capabilities') or 0)
+except Exception as exc:
+  print(f'sidecar: failed to parse get-capabilities JSON: {exc}', file=sys.stderr)
+  caps = 0
+print('true' if caps & $CAN_AUTHOR_ON_BEHALF else 'false')
+" 2>>"$LOG" || echo "false"
+}
+
 poll_mdma() {
   local peer_id="$1"
   local mrtd="$2"
@@ -82,9 +167,22 @@ poll_mdma() {
   # (non-2xx via -f, timeout, DNS) OR an unparseable body returns 1 with NO
   # stdout, so the caller can leave `confirmed` state untouched and skip the
   # entire reconcile/leave/prune cycle this round.
-  local response rc
+  # The poll doubles as the relay-identity report: `executor_account` and
+  # `relay_url` are node-level facts mdma cannot derive, and this is the one
+  # request it already makes every second. Empty values are skipped mdma-side,
+  # so a node with no relay URL configured still polls and still replicates.
+  local body rc response
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+  "peer_id": sys.argv[1],
+  "mrtd": sys.argv[2],
+  "executor_account": sys.argv[3],
+  "relay_url": sys.argv[4],
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+
   response=$(curl -sf --max-time 10 "${headers[@]}" \
-    -d "{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}" \
+    -d "$body" \
     "${MDMA_URL}/api/fleet/should-join" 2>>"$LOG")
   rc=$?
 
@@ -114,6 +212,10 @@ if not isinstance(data.get('assignments'), list):
 confirm_assignment() {
   local peer_id="$1"
   local group_id="$2"
+  # Whether we can serve delegated execution here. Passed in rather than read
+  # inside, because the caller already knows: the join path has just checked it,
+  # and `reconcile_authorship` calls this precisely BECAUSE the answer changed.
+  local authorship_ready="${3:-false}"
 
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
@@ -126,12 +228,82 @@ confirm_assignment() {
   # heard about it — re-creating the original fire-once bug on the
   # confirm step. stderr goes to the log so ops still see what failed.
   if curl -sf --max-time 10 "${headers[@]}" \
-      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\"}" \
+      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\",\"authorship_ready\":$authorship_ready}" \
       "${MDMA_URL}/api/fleet/confirm" 2>>"$LOG"; then
     return 0
   else
     log "WARN: POST /api/fleet/confirm failed for $group_id; will retry next cycle"
     return 1
+  fi
+}
+
+load_authorship() {
+  cat "$AUTHORSHIP_FILE" 2>/dev/null || echo '{}'
+}
+
+save_authorship() {
+  echo "$1" > "$AUTHORSHIP_FILE"
+}
+
+# Re-report the authorship grant for already-confirmed namespaces when it
+# changes.
+#
+# The grant almost never exists at admission time: core implies
+# CAN_AUTHOR_ON_BEHALF from nothing, so a namespace is authorship-closed until
+# an admin publishes a governance op — minutes, hours or days after this node
+# joined. Without this the join-time answer would be frozen forever and a
+# namespace that was granted the capability would still show `authorship_ready:
+# false` in the cloud, so no client would ever be sent to this relay.
+#
+# Only re-POSTs on a CHANGE, not every cycle: the loop runs once a second and
+# mdma's /confirm is a write. The recorded state is updated only when the POST
+# succeeded, so a transient mdma blip retries on the next change-detection pass
+# rather than being lost.
+reconcile_authorship() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local recorded updated changed
+  recorded=$(load_authorship)
+  updated="$recorded"
+  changed=0
+
+  for group_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    local now was
+    now=$(check_authorship "$group_id")
+    was=$(echo "$recorded" | python3 -c "
+import sys, json
+try:
+  print('true' if json.load(sys.stdin).get('$group_id') else 'false')
+except Exception:
+  print('false')
+" 2>/dev/null || echo "false")
+    [[ "$now" == "$was" ]] && continue
+    if confirm_assignment "$peer_id" "$group_id" "$now"; then
+      log "Authorship grant for $group_id is now $now; reported to mdma"
+      updated=$(echo "$updated" | python3 -c "
+import sys, json
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+state['$group_id'] = $( [[ "$now" == "true" ]] && echo True || echo False )
+print(json.dumps(state, sort_keys=True))
+" 2>>"$LOG" || echo "$updated")
+      changed=1
+    fi
+  done
+
+  # Prune namespaces we no longer hold, so a re-join is treated as new rather
+  # than inheriting a stale "already reported" verdict.
+  local pruned
+  pruned=$(python3 -c "
+import json, sys
+state = json.loads('''$updated''')
+keep = set(json.loads('''$confirmed'''))
+print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
+" 2>>"$LOG" || echo "$updated")
+  if [[ "$pruned" != "$recorded" ]] || [[ $changed -eq 1 ]]; then
+    save_authorship "$pruned"
   fi
 }
 
@@ -260,6 +432,26 @@ else
   log "Fleet node MRTD: $MRTD"
 fi
 
+# Relay identity, read once: both are fixed for the life of the node, and both
+# are things only this hop can tell mdma. Never fatal — a node that cannot
+# report either still replicates; it simply is not advertised as a relay, and
+# clients are never sent to mint warrants it could not honour.
+EXECUTOR_ACCOUNT=$(get_executor_account || true)
+if [[ -z "$EXECUTOR_ACCOUNT" ]]; then
+  log "WARN: could not read this node's account from 'meroctl account show'; \
+delegated execution will not be offered for this node (it will still replicate)"
+else
+  log "Fleet node executor account: $EXECUTOR_ACCOUNT"
+fi
+
+RELAY_URL=$(get_relay_url)
+if [[ -z "$RELAY_URL" ]]; then
+  log "No relay-url instance metadata; mdma will report no relay URL for this node \
+(set MDMA_TEE_RELAY_URL_TEMPLATE on the dispatcher to publish one)"
+else
+  log "Fleet node relay url: $RELAY_URL"
+fi
+
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
   # poll_mdma returns 0 + a valid assignments body on HTTP 200, or 1 on any
@@ -308,14 +500,31 @@ except:
       # leave the group out of CONFIRMED_FILE so the next cycle's
       # join_group returns admitted=true immediately (idempotent in
       # core) and we re-try /confirm — eventually consistent.
-      if confirm_assignment "$PEER_ID" "$group_id"; then
-        log "Confirmed group $group_id with mdma"
+      # Report the authorship grant with the very first confirm, so a namespace
+      # that ALREADY holds the grant (a re-joining node, a namespace whose admin
+      # granted it before this replica existed) is advertised as writable
+      # immediately instead of waiting for `reconcile_authorship` to spot a
+      # change that never comes.
+      authorship=$(check_authorship "$group_id")
+      if confirm_assignment "$PEER_ID" "$group_id" "$authorship"; then
+        log "Confirmed group $group_id with mdma (authorship_ready=$authorship)"
         confirmed=$(echo "$confirmed" | python3 -c "
 import sys, json
 c = json.load(sys.stdin)
 c.append('$group_id')
 print(json.dumps(sorted(set(c))))
 " 2>>"$LOG" || echo "$confirmed")
+        # Record what we just reported, so the reconcile pass below only fires
+        # on an actual later change.
+        save_authorship "$(load_authorship | python3 -c "
+import sys, json
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+state['$group_id'] = $( [[ "$authorship" == "true" ]] && echo True || echo False )
+print(json.dumps(state, sort_keys=True))
+" 2>>"$LOG" || load_authorship)"
       fi
     fi
     # No `break`: keep iterating to give other assignments a fair shot
@@ -355,5 +564,11 @@ print(json.dumps(sorted(con & des)))
 " 2>/dev/null || echo '[]')
 
   save_confirmed "$confirmed"
+
+  # Last, and over the pruned `confirmed` set: the authorship grant arrives
+  # long after admission, so it has to be re-read for namespaces we already
+  # hold. Runs after the prune so a namespace we just left is not re-reported.
+  reconcile_authorship "$PEER_ID" "$confirmed"
+
   sleep "$POLL_INTERVAL"
 done

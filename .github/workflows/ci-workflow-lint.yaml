@@ -63,6 +63,17 @@ jobs:
 
           shellcheck "${shell_files[@]}"
 
+      # Runs here rather than in a probe workflow because it needs neither a TDX
+      # node nor an MDMA: it renders the sidecar template and drives its
+      # authorship-reporting logic against stubbed `meroctl` / `curl`. That logic
+      # decides when this node tells MDMA it can serve delegated execution, and
+      # it is silent in both failure directions, so it is worth checking on every
+      # change to the template.
+      - name: Run fleet-sidecar authorship test
+        id: sidecar_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-authorship-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -75,6 +86,7 @@ jobs:
             --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
             --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
+            --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
