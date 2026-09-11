@@ -17,7 +17,7 @@ on:
         required: false
         default: ""
       kms_tag:
-        description: "Release tag to deploy when kms_image is empty. Use 'latest' to auto-pick the latest GitHub release tag."
+        description: "KMS release tag (mero-kms-v<version>) to deploy when kms_image is empty. Use 'latest' for the newest published mero-kms-v* release. An umbrella <version> or mero-tee-v<version> tag is rejected."
         required: true
         default: "latest"
       kms_profile:
@@ -161,18 +161,44 @@ jobs:
             resolved_kms_image="${KMS_IMAGE_INPUT}"
           else
             if [[ "${KMS_RELEASE_TAG_INPUT}" == "latest" ]]; then
-              resolved_release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+              # NOT `releases/latest`. Each version publishes three releases --
+              # `mero-tee-v<v>`, `mero-kms-v<v>`, and a bare `<v>` umbrella -- and
+              # which one carries the "latest" flag is a human choice in the GitHub
+              # UI. When the umbrella was marked latest for 2.3.52 this resolved to
+              # a bare `2.3.52`, which then fell through the `^mero-kms-v(.+)$`
+              # version derivation below and died with a "Could not resolve
+              # MERO_KMS_VERSION" that points at the wrong thing entirely. Ask for
+              # the newest KMS release by name instead. See #252.
+              #
+              # The releases list is newest-first, so the first non-draft
+              # `mero-kms-v*` entry is the one we want.
+              resolved_release_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                --jq 'map(select(.draft == false and (.tag_name | startswith("mero-kms-v")))) | first | .tag_name // empty' \
+                2>/dev/null || true)"
               if [[ -z "${resolved_release_tag}" ]]; then
-                echo "::error::Could not resolve latest release tag for ${GITHUB_REPOSITORY}."
-                echo "::error::Provide kms_image override or explicit kms_tag."
+                echo "::error::No published mero-kms-v* release found in ${GITHUB_REPOSITORY}."
+                echo "::error::Provide a kms_image override, or an explicit kms_tag such as mero-kms-v2.3.52."
                 exit 1
               fi
+              echo "Resolved kms_tag=latest to ${resolved_release_tag}"
             else
               resolved_release_tag="${KMS_RELEASE_TAG_INPUT}"
               if ! gh release view "${resolved_release_tag}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; then
                 echo "::error::Release tag '${resolved_release_tag}' not found in ${GITHUB_REPOSITORY}."
                 exit 1
               fi
+            fi
+
+            # Reject an umbrella or node tag here, where the cause is still
+            # visible, rather than letting it surface further down as a missing
+            # MERO_KMS_VERSION -- an error that names the wrong thing. This is
+            # reachable only via an explicit kms_tag, since the 'latest' branch
+            # above already filters by prefix.
+            if [[ ! "${resolved_release_tag}" =~ ^mero-kms-v ]]; then
+              echo "::error::Release tag '${resolved_release_tag}' is not a KMS release."
+              echo "::error::Each version publishes mero-tee-v<version> (node image), mero-kms-v<version> (KMS)"
+              echo "::error::and a bare <version> umbrella. This probe needs the mero-kms-v one."
+              exit 1
             fi
 
             resolved_kms_image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/mero-kms-phala:${resolved_release_tag}"
