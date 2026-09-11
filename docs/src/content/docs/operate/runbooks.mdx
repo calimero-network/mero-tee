@@ -144,6 +144,26 @@ hand and often sits on the umbrella tag. To probe a pinned image instead, set
 `ita_appraisal_url`. It boots a TDX VM from the image, waits for readiness,
 collects a quote, and verifies it against Intel Trust Authority.
 
+The verifying happens **in CI, over the admin API** — the VM only supplies the
+quote, from `/admin-api/tee/attest`. CI picks a fresh nonce and then asserts
+four things (`scripts/ci/probes/node_anti_fake_http.py`, artifact
+`node-client-verification.json`):
+
+| check | proves |
+| --- | --- |
+| `nonce_binding` | the quote's `report_data` carries the nonce CI just chose, so it is not a replay |
+| `wrong_nonce` | `report_data` does *not* match a different nonce |
+| `genuine_hardware` | Intel Trust Authority validates the quote |
+| `tampered_quote` | ITA **rejects** the same quote with one byte flipped |
+
+<Aside type="note">
+Nothing here takes the node's word for anything, and no step needs a shell on
+the VM — which is what lets it run on `locked-read-only`, where `merod-lockdown`
+has removed openssh. An ITA call that fails for a transport or authorization
+reason is reported as `inconclusive` and fails the run; only an explicit
+rejection from ITA counts as a verdict about the quote.
+</Aside>
+
 </TabItem>
 </Tabs>
 
