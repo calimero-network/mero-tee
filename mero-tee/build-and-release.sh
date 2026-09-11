@@ -48,7 +48,10 @@ fi
 if [[ -n "${PACKER_GCP_SUBNETWORK:-}" ]]; then
   packer_args+=(-var "subnetwork=${PACKER_GCP_SUBNETWORK}")
 fi
-# source_image is hardcoded to ubuntu-2510-amd64 in ubuntu.pkr.hcl; no override allowed for release reproducibility
+# The base image is pinned in ubuntu.pkr.hcl (`source_image_family`), which is the
+# single source of truth -- the value is deliberately not repeated here or in CI,
+# since a second copy can disagree with the one Packer actually builds from. No
+# override is allowed, for release reproducibility.
 
 packer_cmd=(packer build)
 if [[ "${PACKER_FORCE_BUILD:-false}" == "true" ]]; then

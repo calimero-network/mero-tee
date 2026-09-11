@@ -174,10 +174,23 @@ exactly the kind of change an attestation policy should notice.
 </Aside>
 
 The base image is hardcoded for reproducibility: `source_image_family =
-ubuntu-2510-amd64` from `ubuntu-os-cloud` (Ubuntu 25.10, kernel 6.17+ for RTMR3
-sysfs support), `disk_size = 20` GB `pd-ssd`. The output image name is
-`merotee-ubuntu-questing-25-10-<profile>-<version>` in family
-`merotee-ubuntu-questing-<profile>`.
+ubuntu-2604-lts-amd64` from `ubuntu-os-cloud` (Ubuntu 26.04 LTS, comfortably past
+the kernel 6.17+ that RTMR3 sysfs support needs), `disk_size = 20` GB `pd-ssd`.
+That line in `ubuntu.pkr.hcl` is the single source of truth — CI's
+`Validate Packer source image` step reads the pin from the file rather than
+repeating it, so it can never check one base while Packer builds from another.
+
+The pin has to name a **supported** release, not merely a new-enough kernel:
+Canonical delists an EOL Ubuntu from `ubuntu-os-cloud`, which fails the build
+outright. That is what happened in September 2026 — 25.10 (Questing) is an
+interim release, went EOL in July 2026, and its family disappeared. An LTS avoids
+the nine-month repeat.
+
+The output image name is `merotee-ubuntu-questing-25-10-<profile>-<version>` in
+family `merotee-ubuntu-questing-<profile>`. Those names intentionally still say
+`questing-25-10` after the base moved: mdma's dispatcher resolves images by those
+exact prefixes, so renaming them needs a paired mdma change and a deploy ordering.
+Read the name as an identifier, not as a statement about the base release.
 
 <Aside type="caution">
 There is **no** `ubuntu-2404-tdx` / `confidential-vm-images` base and no

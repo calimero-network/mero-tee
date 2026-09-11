@@ -30,6 +30,10 @@ fi
 
 # Always x86; architecture in image name omitted (we only deploy on Intel TDX)
 cpu_architecture="x86"
+# Must match `image_name` in mero-tee/ubuntu.pkr.hcl exactly -- this recomputes
+# the name Packer published in order to find it again. The "questing-25-10" part
+# is a frozen identifier, not the base release (which is now 26.04 LTS): mdma's
+# dispatcher matches on the same prefix, so all three move together or not at all.
 image_name="merotee-ubuntu-questing-25-10-${profile}-${image_version//./-}"
 image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
 
