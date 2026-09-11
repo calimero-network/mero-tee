@@ -65,30 +65,70 @@ def attest(base_url: str, nonce_hex: str, timeout: int) -> Tuple[int, str]:
     return status, body
 
 
-def ita_verdict(
-    ita_url: str, ita_api_key: str, quote_b64: str, timeout: int
-) -> Tuple[str, Optional[int], str]:
-    """Return (verdict, http_status, detail).
+# ITA has taken more than one request shape across API versions, so the shared
+# verifier tries the v2 form first and falls back to the legacy one. Mirror that
+# list rather than hardcoding one shape: sending only the legacy form gets a 4xx
+# from ITA v2, which -- read naively -- looks exactly like "this quote is bad".
+def ita_request_shapes(quote_b64: str) -> Tuple[Tuple[str, Dict[str, Any]], ...]:
+    return (
+        ("v2_tdx", {"tdx": {"quote": quote_b64}}),
+        ("legacy_quote", {"quote": quote_b64}),
+    )
 
-    verdict is "accepted" when ITA issued a token, "rejected" when ITA answered
-    but declined, and "inconclusive" when we could not get an answer at all.
-    An inconclusive result must never be read as either -- a flaky network is
-    not evidence that a tampered quote was caught.
+
+def ita_call(
+    ita_url: str, ita_api_key: str, payload: Dict[str, Any], timeout: int
+) -> Tuple[str, Optional[int], str]:
+    """One ITA request -> ("accepted" | "declined" | "unusable", status, detail).
+
+    "declined" means ITA understood the request and would not vouch for the
+    quote. "unusable" means we never got a verdict -- transport failure, 5xx, or
+    a 4xx that is ITA rejecting the *request* rather than the quote. Collapsing
+    those two is how a protocol mistake turns into a false "not genuine
+    hardware" on a perfectly good image.
     """
     status, _headers, body = post_json(
-        url=ita_url, api_key=ita_api_key, payload={"quote": quote_b64}, timeout=timeout
+        url=ita_url, api_key=ita_api_key, payload=payload, timeout=timeout
     )
-    if status == 0:
-        return "inconclusive", None, body
-    if status >= 500:
-        return "inconclusive", status, body[:400]
+    if status == 0 or status >= 500 or status in (401, 403, 404, 415):
+        return "unusable", (status or None), body[:400]
     try:
-        payload = json.loads(body)
+        parsed: Any = json.loads(body)
     except json.JSONDecodeError:
-        payload = body
-    if 200 <= status < 300 and isinstance(payload, (dict, list)) and find_token(payload):
+        parsed = body
+    if 200 <= status < 300 and isinstance(parsed, (dict, list)) and find_token(parsed):
         return "accepted", status, ""
-    return "rejected", status, (body[:400] if isinstance(body, str) else "")
+    if 200 <= status < 300:
+        # 2xx with no token: ITA answered and issued nothing.
+        return "declined", status, body[:400]
+    return "declined", status, body[:400]
+
+
+def ita_verdict(
+    ita_url: str,
+    ita_api_key: str,
+    quote_b64: str,
+    timeout: int,
+    shape: Optional[str] = None,
+) -> Tuple[str, Optional[int], str, Optional[str]]:
+    """Return (verdict, http_status, detail, shape_name).
+
+    `verdict` is "accepted", "rejected", or "inconclusive". When `shape` is
+    given, only that request form is tried -- used for the tampered quote, so it
+    is judged by the exact form that already worked for the real one and a
+    difference in outcome can only come from the quote itself.
+    """
+    all_shapes = ita_request_shapes(quote_b64)
+    shapes = tuple(sh for sh in all_shapes if sh[0] == shape) if shape else all_shapes
+    last: Tuple[str, Optional[int], str] = ("inconclusive", None, "no request attempted")
+    for name, payload in shapes:
+        outcome, status, detail = ita_call(ita_url, ita_api_key, payload, timeout)
+        if outcome == "accepted":
+            return "accepted", status, "", name
+        if outcome == "declined":
+            return "rejected", status, detail, name
+        last = (outcome, status, detail)
+    return "inconclusive", last[1], last[2], None
 
 
 def flip_a_byte(quote_b64: str) -> Optional[str]:
@@ -144,11 +184,14 @@ def main() -> int:
     flipped[0] ^= 0xFF
     checks["wrong_nonce"] = {"passed": bound != flipped.hex(), "rejected_nonce": flipped.hex()}
 
-    verdict, http_status, detail = ita_verdict(args.ita_url, args.ita_api_key, quote_b64, args.timeout)
+    verdict, http_status, detail, shape = ita_verdict(
+        args.ita_url, args.ita_api_key, quote_b64, args.timeout
+    )
     checks["genuine_hardware"] = {
         "passed": verdict == "accepted",
         "ita_verdict": verdict,
         "http_status": http_status,
+        "ita_request_shape": shape,
         "detail": detail,
     }
 
@@ -156,13 +199,18 @@ def main() -> int:
     if mutated is None:
         checks["tampered_quote"] = {"passed": False, "ita_verdict": "not_attempted", "detail": "quote too short to mutate"}
     else:
-        t_verdict, t_status, t_detail = ita_verdict(args.ita_url, args.ita_api_key, mutated, args.timeout)
+        # Judge the tampered quote with the SAME request shape that worked for the
+        # real one, so any difference in outcome can only come from the quote.
+        t_verdict, t_status, t_detail, _ = ita_verdict(
+            args.ita_url, args.ita_api_key, mutated, args.timeout, shape=shape
+        )
         checks["tampered_quote"] = {
             # Only an explicit rejection passes. "inconclusive" is a failure to
             # establish the property, not evidence for it.
             "passed": t_verdict == "rejected",
             "ita_verdict": t_verdict,
             "http_status": t_status,
+            "ita_request_shape": shape,
             "detail": t_detail,
         }
 
