@@ -412,6 +412,52 @@ jobs:
         run: |
           bash scripts/ci/probes/node_verify_anti_fake.sh
 
+      # When the anti-fake check cannot reach the node, SSH is precisely the
+      # channel that is broken, so the serial console is the only way to see
+      # inside the VM -- and it needs no guest cooperation at all. Without this,
+      # diagnosing `VERIFY_TEE_PROBE_SSH` means reproducing by hand against an
+      # instance that the next step has already deleted (see #251, where the
+      # probe had been failing this way since 2.3.50 with no record of why).
+      # Runs before `Cleanup probe resources`, which is the last chance.
+      - name: Capture serial console on probe failure
+        if: ${{ failure() && steps.verify_anti_fake.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          INSTANCE_NAME: ${{ steps.params.outputs.instance_name }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+        run: |
+          set -uo pipefail
+          out="${ARTIFACTS_DIR}/serial-console.log"
+          # `|| true` rather than `set -e`: a missing serial log must not mask
+          # the real failure the operator came here to read.
+          gcloud compute instances get-serial-port-output "${INSTANCE_NAME}" \
+            --project "${VM_PROJECT}" \
+            --zone "${VM_ZONE}" \
+            --port 1 > "${out}" 2>"${out}.err" || true
+
+          if [[ ! -s "${out}" ]]; then
+            echo "::warning::Serial console output was empty; see ${out}.err"
+            sed -n '1,20p' "${out}.err" 2>/dev/null || true
+            exit 0
+          fi
+
+          echo "Serial console captured: $(wc -l < "${out}") lines -> ${out}"
+
+          # Surface the lines that answer "is sshd there at all" directly in the
+          # job log, so the common case needs no artifact download.
+          echo "--- serial console: ssh / sshd mentions ---"
+          grep -inE 'sshd|ssh\.service|ssh\.socket|openssh|secure shell' "${out}" | tail -40 \
+            || echo "  (no ssh/sshd mention in serial output -- suggests openssh is absent from the image)"
+
+          echo "--- serial console: systemd unit failures ---"
+          grep -inE 'Failed to start|failed with result|dependency failed' "${out}" | tail -30 \
+            || echo "  (no systemd unit failures reported)"
+
+          echo "--- serial console: last 40 lines ---"
+          tail -n 40 "${out}"
+
       - name: Probe node-to-KMS runtime flow (optional)
         id: runtime_probe
         if: ${{ inputs.kms_probe_expected_outcome != 'skip' }}
@@ -486,11 +532,17 @@ jobs:
             --entry "external-verification-response.json|Raw ITA API JSON response" \
             --entry "external-attestation-token.jwt|ITA attestation JWT" \
             --entry "node-kms-probe-ssh-stdout.log|Runtime probe stdout log" \
-            --entry "node-kms-probe-ssh-stderr.log|Runtime probe stderr log"
+            --entry "node-kms-probe-ssh-stderr.log|Runtime probe stderr log" \
+          --entry "serial-console.log|VM serial console (captured when the anti-fake SSH check fails)"
           ci_artifact "artifact index saved to ${index_file}"
 
       - name: Upload node probe artifacts
         id: upload_artifacts
+        # Without this the step defaults to success(), so a failing probe threw
+        # away every diagnostic it had just collected -- which is why #251 went
+        # two releases without anyone being able to look at it. A failed run is
+        # exactly when these artifacts are worth keeping.
+        if: ${{ always() && steps.params.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}

@@ -179,7 +179,10 @@ to the per-group keys a `ReadOnlyTee` replica receives in Core.
 **TCB (Trusted Computing Base)** — the hardware/firmware/software critical to a
 TEE's security. A quote reports a **TCB status** (e.g. `UpToDate`,
 `SWHardeningNeeded`, `OutOfDate`); the policy allowlists which are acceptable
-(default: `uptodate`).
+(default: `uptodate`; mero-tee releases currently also declare `outofdate`,
+see the release pipeline). The allowlist is a *declared* release input, not a
+reading taken from the release probe host — see
+[release pipeline](/operate/release-pipeline/).
 
 **TDVF (TDX Virtual Firmware)** — the UEFI-based firmware that runs inside a Trust
 Domain during early boot and extends RTMR0.

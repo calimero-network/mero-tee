@@ -46,13 +46,19 @@ ssh_exit_code=255
 ci_group_start "Node anti-fake TEE probe attempts"
 for attempt in $(seq 1 12); do
   set +e
+  # `sudo`: merod's home is the root-owned encrypted TEE mount and the systemd
+  # unit runs merod as root, but `gcloud compute ssh` logs in unprivileged. Without
+  # sudo merod cannot read the node dir and exits with "Node is not initialized in
+  # /mnt/data/calimero/default" (merod cli/tee.rs:113) -- a bail! that happens before
+  # `print_result`, so there is no JSON at all and this loop read it as a parse
+  # failure on every attempt. See #251.
   gcloud compute ssh "${INSTANCE_NAME}" \
     --project "${VM_PROJECT}" \
     --zone "${VM_ZONE}" \
     --quiet \
     --ssh-flag="-o ConnectTimeout=10" \
     --ssh-flag="-o ServerAliveInterval=30" \
-    --command "set -euo pipefail; /usr/local/bin/merod --home /mnt/data/calimero --node default tee probe --json" \
+    --command "set -euo pipefail; sudo /usr/local/bin/merod --home /mnt/data/calimero --node default tee probe --json" \
     > "${probe_stdout}" \
     2> "${probe_stderr}"
   ssh_exit_code=$?

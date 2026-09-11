@@ -227,19 +227,19 @@ fi
 
 jq -e '
   .role == "node" and
-  (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0) and
+  (.profiles.debug.allowed_tcb_statuses | type == "array" and length > 0 and (index("uptodate") != null)) and
   (.profiles.debug.allowed_mrtd | type == "array" and length > 0) and
   (.profiles.debug.allowed_rtmr0 | type == "array" and length > 0) and
   (.profiles.debug.allowed_rtmr1 | type == "array" and length > 0) and
   (.profiles.debug.allowed_rtmr2 | type == "array" and length > 0) and
   (.profiles.debug.allowed_rtmr3 | type == "array" and length > 0) and
-  (.profiles["debug-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
+  (.profiles["debug-read-only"].allowed_tcb_statuses | type == "array" and length > 0 and (index("uptodate") != null)) and
   (.profiles["debug-read-only"].allowed_mrtd | type == "array" and length > 0) and
   (.profiles["debug-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
   (.profiles["debug-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
   (.profiles["debug-read-only"].allowed_rtmr2 | type == "array" and length > 0) and
   (.profiles["debug-read-only"].allowed_rtmr3 | type == "array" and length > 0) and
-  (.profiles["locked-read-only"].allowed_tcb_statuses | type == "array" and length > 0) and
+  (.profiles["locked-read-only"].allowed_tcb_statuses | type == "array" and length > 0 and (index("uptodate") != null)) and
   (.profiles["locked-read-only"].allowed_mrtd | type == "array" and length > 0) and
   (.profiles["locked-read-only"].allowed_rtmr0 | type == "array" and length > 0) and
   (.profiles["locked-read-only"].allowed_rtmr1 | type == "array" and length > 0) and
