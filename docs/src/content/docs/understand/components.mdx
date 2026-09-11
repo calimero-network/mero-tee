@@ -73,11 +73,14 @@ the published `ghcr.io/calimero-network/mero-kms-phala` image with
 `mero-tee/` · Packer (`googlecompute`) + Ansible · builds GCP TDX Confidential
 VM images containing `merod`.
 
-`ubuntu.pkr.hcl` provisions an Ubuntu 25.10 (Questing) image — kernel 6.17+ is
-required for RTMR3 sysfs support — from `ubuntu-2510-amd64`, running the Ansible
-`playbook.yml`. The build host does not need TDX (`n2-standard-2`); the resulting
-image runs on TDX-capable hardware (e.g. `c3-standard-4`) at runtime. Output
-image family: `merotee-ubuntu-questing-<profile>`.
+`ubuntu.pkr.hcl` provisions an Ubuntu 26.04 LTS (Resolute Raccoon) image — kernel
+6.17+ is required for RTMR3 sysfs support, and an LTS because an EOL release gets
+delisted from `ubuntu-os-cloud` and fails the build — from
+`ubuntu-2604-lts-amd64`, running the Ansible `playbook.yml`. The build host does
+not need TDX (`n2-standard-2`); the resulting image runs on TDX-capable hardware
+(e.g. `c3-standard-4`) at runtime. Output image family:
+`merotee-ubuntu-questing-<profile>` — a frozen identifier that mdma's dispatcher
+matches on, not a claim about the base release.
 
 ### What the image bakes
 

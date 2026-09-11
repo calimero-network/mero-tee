@@ -23,10 +23,12 @@ never make a fresh `locked-read-only` build your only path to a fleet.
 
 ## What gets baked into an image
 
-A node image is an Ubuntu 25.10 (Questing Quokka, kernel 6.17+) GCP image
-produced by `mero-tee/ubuntu.pkr.hcl` + `mero-tee/playbook.yml`. The kernel is
-pinned at `ubuntu-2510-amd64` (from `ubuntu-os-cloud`) because RTMR3 sysfs
-support needs kernel 6.17+. Component versions are pinned in
+A node image is an Ubuntu 26.04 LTS (Resolute Raccoon) GCP image produced by
+`mero-tee/ubuntu.pkr.hcl` + `mero-tee/playbook.yml`. The base is pinned at
+`ubuntu-2604-lts-amd64` (from `ubuntu-os-cloud`): RTMR3 sysfs support needs
+kernel 6.17+, and an LTS is used because Canonical delists an EOL release from
+that project, which fails the build — the previous pin on the interim 25.10 did
+exactly that when it reached EOL. Component versions are pinned in
 `mero-tee/versions.json`:
 
 | Component | Version key | Value at time of writing |
@@ -138,6 +140,10 @@ family (from `ubuntu.pkr.hcl`):
   (e.g. `merotee-ubuntu-questing-25-10-locked-read-only-2-3-51`).
 - **Image family:** `merotee-ubuntu-questing-<profile>`.
 - **Disk:** 20 GB `pd-ssd`.
+
+The `questing-25-10` in those names is a frozen identifier, **not** the base
+release — the base is 26.04 LTS. mdma's dispatcher matches on these prefixes, so
+they do not move when the base does.
 
 The `release-node-image-gcp.yaml` workflow builds the images in CI and records
 the published `project` / `family` in its release provenance. Its VM-facing
