@@ -41,13 +41,22 @@ ssh_exit_code=255
 ci_group_start "Node->KMS runtime probe attempts"
 for attempt in $(seq 1 12); do
   set +e
+  # `sudo`: merod's home is the root-owned encrypted TEE mount and the systemd
+  # unit runs merod as root, but `gcloud compute ssh` logs in unprivileged.
+  # Without sudo merod cannot read the node dir and exits with "Node is not
+  # initialized in /mnt/data/calimero/default" from a `bail!` that fires before
+  # it prints any JSON -- so every attempt below falls through to the non-JSON
+  # fallback and the probe reports a KMS outcome it never actually obtained.
+  # The sibling anti-fake check carried this same fix until #255 replaced it
+  # with the HTTP path and deleted the script, taking the fix with it; this
+  # invocation was left behind unprivileged.
   gcloud compute ssh "${INSTANCE_NAME}" \
     --project "${VM_PROJECT}" \
     --zone "${VM_ZONE}" \
     --quiet \
     --ssh-flag="-o ConnectTimeout=10" \
     --ssh-flag="-o ServerAliveInterval=30" \
-    --command "set -euo pipefail; /usr/local/bin/merod --home /mnt/data/calimero --node default kms probe --kms-url '${KMS_PROBE_URL}' --json" \
+    --command "set -euo pipefail; sudo /usr/local/bin/merod --home /mnt/data/calimero --node default kms probe --kms-url '${KMS_PROBE_URL}' --json" \
     > "${probe_stdout}" \
     2> "${probe_stderr}"
   ssh_exit_code=$?
@@ -152,6 +161,17 @@ if [[ "${KMS_PROBE_EXPECTED_OUTCOME}" == "success" ]]; then
 else
   if [[ "${probe_ok}" == "false" ]]; then
     outcome_matches="true"
+  fi
+  # An expected failure is a claim about what the KMS did: it refused this node.
+  # `MEROD_KMS_PROBE_NO_JSON` is the opposite of that -- merod produced nothing
+  # we could read, so we do not know whether it ever reached the KMS. Letting it
+  # match would assert a refusal that was never observed, and with
+  # KMS_PROBE_EXPECTED_CODES unset the run would then pass on it silently. Only
+  # an outcome merod actually reported, or the specific recognized
+  # MEROD_TEE_NOT_CONFIGURED condition, counts as a refusal.
+  if [[ "${probe_code}" == "MEROD_KMS_PROBE_NO_JSON" ]]; then
+    outcome_matches="false"
+    ci_warn "Expected a KMS refusal but merod returned no parseable result; not counting it as one."
   fi
 fi
 
