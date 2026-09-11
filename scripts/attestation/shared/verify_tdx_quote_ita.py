@@ -308,6 +308,56 @@ def resolve_mrtd(
     )
 
 
+# Claim keys worth surfacing in the log rather than only in the artifact: the
+# appraisal verdict and, when the verdict is not UpToDate, *why*. Matched by
+# substring rather than exact name because ITA has spelled these several ways
+# across API versions (`attester_tcb_status` / `tcbStatus`,
+# `attester_advisory_ids` / `advisoryIDs`), and a renamed claim should degrade
+# to printing nothing rather than to a crash.
+TCB_POSTURE_KEY_HINTS = ("tcb", "advisory")
+
+# Long enough for a handful of advisory ids, short enough that a pathological
+# claim cannot flood the job log.
+TCB_POSTURE_VALUE_MAX_CHARS = 400
+
+
+def collect_tcb_posture(claims: Any) -> Dict[str, str]:
+    """Flatten every TCB/advisory claim to `path -> bounded string`.
+
+    These are appraisal metadata (verdict, advisory ids, TCB dates), never
+    credentials, so they are safe to print; the ITA API key lives in the request
+    headers and never reaches the decoded claims.
+    """
+    out: Dict[str, str] = {}
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(node, list):
+            # Render a leaf list whole (advisory ids are the reason we are here)
+            # and only recurse when it nests further.
+            if all(not isinstance(item, (dict, list)) for item in node):
+                if any(hint in path.lower() for hint in TCB_POSTURE_KEY_HINTS):
+                    out[path] = truncate_for_log(json.dumps(node))
+                return
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+            return
+        if any(hint in path.lower() for hint in TCB_POSTURE_KEY_HINTS):
+            out[path] = truncate_for_log(str(node))
+
+    walk(claims, "")
+    return out
+
+
+def truncate_for_log(value: str) -> str:
+    if len(value) <= TCB_POSTURE_VALUE_MAX_CHARS:
+        return value
+    return f"{value[:TCB_POSTURE_VALUE_MAX_CHARS]}… (+{len(value) - TCB_POSTURE_VALUE_MAX_CHARS} chars)"
+
+
 def write_ci_verification_summary(
     *,
     output_dir: str,
@@ -323,6 +373,7 @@ def write_ci_verification_summary(
     quote_sha256 = hashlib.sha256(quote_bytes).hexdigest() if quote_bytes else ""
 
     top_keys = list(claims.keys()) if isinstance(claims, dict) else []
+    tcb_posture = collect_tcb_posture(claims)
 
     summary: Dict[str, Any] = {
         "ita_url": ita_url,
@@ -332,6 +383,7 @@ def write_ci_verification_summary(
         "node_quote_sha256_hex": quote_sha256,
         "ita_jwt_token_json_path": token_path,
         "ita_jwt_claim_top_level_keys": top_keys,
+        "tcb_posture": tcb_posture,
         "note": "MRTD/RTMR ground truth: merod data.quote.body / data.quoteB64; see external-attestation-token-claims.json for full ITA JWT.",
     }
 
@@ -347,6 +399,12 @@ def write_ci_verification_summary(
     print(f"node_quote_sha256={quote_sha256}")
     print(f"ita_jwt_token_path={token_path}")
     print(f"ita_jwt_claim_top_level_keys={top_keys}")
+    if tcb_posture:
+        print("--- TCB posture (Intel's appraisal of this host) ---")
+        for key in sorted(tcb_posture):
+            print(f"  {key}={tcb_posture[key]}")
+    else:
+        print("--- TCB posture: no tcb/advisory claim found in the ITA JWT ---")
     print("MRTD/RTMR: use merod attest JSON (data.quote.body); ITA claims in external-attestation-token-claims.json")
     print(f"Full JSON: {path}")
     print("=== End ITA CI summary ===")
