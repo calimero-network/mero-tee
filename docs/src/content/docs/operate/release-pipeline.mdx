@@ -200,6 +200,32 @@ version number, computed from the published tags, not hand-curated.
 | `post-release-kms-node-e2e.yaml` | `workflow_run` after Release mero-tee | KMS↔node compatibility e2e on the released artifacts. |
 | `post-release-mero-tee-node-e2e.yaml` | `workflow_run` after Release mero-tee | Boots fresh TDX VMs and checks their measurement candidates are covered by `published-mrtds.json` — without waiting on the KMS. |
 
+### When a post-release probe fails
+
+Both post-release workflows run *after* publication, triggered by
+`workflow_run`. A `workflow_run` result is attached to nothing a release
+consumer reads — there is no pull request, it does not appear on the release
+page, and it sets no commit status on the tag. Left alone, a failure against a
+published artifact is one red row in the Actions tab.
+
+So each workflow ends with a `report_failure` job that opens a GitHub issue
+naming the release, the failing job, and the run
+(`scripts/ci/report_post_release_failure.py`). Repeat failures for the same
+release comment on the existing issue instead of opening another, matched on a
+marker in the issue body rather than on its title.
+
+<Aside type="note">
+The issue is **not** closed automatically when a later run goes green. The
+published artifact does not change when CI is re-run, so "it passed the second
+time" is a finding for a human to weigh, not a resolution.
+
+Two limits worth knowing: a failure *before* the release is resolved (a bad
+checkout, say) files nothing, because at that point the run has no release to
+name and the problem is CI's rather than the release's; and if issue creation
+itself fails the step warns rather than failing, so a permissions problem
+cannot mask the probe failure underneath it.
+</Aside>
+
 ## Degraded policy state (`policy_not_ready`)
 
 When the KMS has no usable policy (e.g. `MERO_KMS_VERSION` unset, or the release
