@@ -6,7 +6,11 @@ MRTD and RTMR0–3 are taken from **merod** ``data.quote.body`` when present (sa
 (same layout as ``attestation-verifier`` ``extractMeasurementsFromQuoteB64``).
 
 TCB status strings still come from ITA token claims (not present as plain text in the
-quote blob we parse here).
+quote blob we parse here). They are recorded as an *observation* of the probe host and
+do NOT become the policy: ``allowed_tcb_statuses`` is the declared ``--allowed-tcb-status``
+set (default ``uptodate``). Deriving the allowlist from whatever the probe happened to
+report is how releases 2.3.48-2.3.52 all shipped ``["outofdate"]`` -- a policy that
+rejects a fully patched host and accepts only a stale one.
 
 Requires ``--attest-response`` (merod ``data.quoteB64`` shape or mero-kms ``/attest``
 top-level ``quoteB64``): measurements are never taken from ITA claims alone.
@@ -29,6 +33,7 @@ import base64
 import datetime as dt
 import json
 import re
+import sys
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
@@ -157,22 +162,27 @@ def normalize_key_segment(path: str) -> str:
     return re.sub(r"[^a-z0-9]", "", key.lower())
 
 
+TCB_STATUS_ALIASES = {
+    "uptodate": "uptodate",
+    "up2date": "uptodate",
+    "outofdate": "outofdate",
+    "revoked": "revoked",
+    "configurationandswhardeningneeded": "configurationandswhardeningneeded",
+    "configurationneeded": "configurationneeded",
+    "swhardeningneeded": "swhardeningneeded",
+    "unrecognized": "unrecognized",
+}
+
+
 def normalize_tcb_status(raw: str) -> Optional[str]:
     token = re.sub(r"[^a-z0-9]", "", raw.strip().lower())
     if not token:
         return None
 
-    aliases = {
-        "uptodate": "uptodate",
-        "up2date": "uptodate",
-        "outofdate": "outofdate",
-        "revoked": "revoked",
-        "configurationandswhardeningneeded": "configurationandswhardeningneeded",
-        "configurationneeded": "configurationneeded",
-        "swhardeningneeded": "swhardeningneeded",
-        "unrecognized": "unrecognized",
-    }
-    return aliases.get(token, token)
+    # Unknown tokens pass through: ITA may report a status this table predates, and
+    # dropping it would silently narrow an *observation*. Declared policy input is
+    # validated separately in `resolve_allowed_tcb_statuses`.
+    return TCB_STATUS_ALIASES.get(token, token)
 
 
 def measurements_from_quote(attest_payload: Any) -> Tuple[Dict[str, Tuple[str, str]], str]:
@@ -252,6 +262,74 @@ def extract_tcb_status_candidates(payload: Any) -> List[Tuple[str, str, str]]:
     return out
 
 
+DEFAULT_ALLOWED_TCB_STATUSES = ["uptodate"]
+
+
+def resolve_allowed_tcb_statuses(raw_values: Optional[List[str]]) -> List[str]:
+    """Normalize the declared ``--allowed-tcb-status`` set, defaulting to ``uptodate``.
+
+    Deliberately independent of what the probe reported. Order is preserved and
+    duplicates dropped so the emitted array is stable across runs on one input.
+    """
+    if raw_values is None:
+        return list(DEFAULT_ALLOWED_TCB_STATUSES)
+
+    resolved: List[str] = []
+    for raw in raw_values:
+        # One flag may carry a comma-separated list, so a workflow can pass a single
+        # `${{ vars.X }}` through without shell-splitting it.
+        for token in raw.split(","):
+            if not token.strip():
+                continue
+            normalized = normalize_tcb_status(token)
+            # `normalize_tcb_status` deliberately passes an unknown token through, so
+            # extraction can record a status ITA invents later. A *declared* policy gets
+            # no such benefit of the doubt: a typo would silently become the whole
+            # allowlist and reject every host.
+            if normalized is None or normalized not in set(TCB_STATUS_ALIASES.values()):
+                raise RuntimeError(
+                    f"Unrecognized --allowed-tcb-status value: {token.strip()!r}. "
+                    f"Known values: {', '.join(sorted(set(TCB_STATUS_ALIASES.values())))}."
+                )
+            if normalized not in resolved:
+                resolved.append(normalized)
+
+    if not resolved:
+        raise RuntimeError(
+            "--allowed-tcb-status resolved to an empty set; the KMS refuses to start "
+            "with an empty allowlist, so refusing to generate such a policy."
+        )
+    return resolved
+
+
+def report_observed_vs_allowed(
+    observed: List[str],
+    allowed: List[str],
+    *,
+    require_observed_allowed: bool,
+) -> None:
+    """Surface a probe host whose own TCB status the generated policy would reject.
+
+    Silence here is what let ``["outofdate"]`` ship four releases running: the value
+    went straight from one stale probe host into a published policy with nothing in
+    the run naming it.
+    """
+    unmet = [status for status in observed if status not in allowed]
+    if not unmet:
+        return
+
+    message = (
+        f"Probe host reported TCB status {', '.join(unmet)}, which the generated "
+        f"policy does not allow (allowed: {', '.join(allowed)}). The policy is correct; "
+        "the probe fleet is behind on microcode and would itself be rejected by it."
+    )
+    if require_observed_allowed:
+        raise RuntimeError(message)
+    # GitHub renders the annotation; the stderr copy keeps it visible off-Actions.
+    print(f"::warning::{message}")
+    print(f"WARNING: {message}", file=sys.stderr)
+
+
 def compact_json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"))
 
@@ -277,6 +355,27 @@ def main() -> int:
         action="store_true",
         help="Do not fail if no TCB status claim is found",
     )
+    parser.add_argument(
+        "--allowed-tcb-status",
+        action="append",
+        dest="allowed_tcb_status",
+        metavar="STATUS",
+        help=(
+            "TCB status the generated policy will accept; repeatable. "
+            "Defaults to 'uptodate'. This is a declared policy decision -- it is NOT "
+            "derived from what the probe host reported, because a stale probe host "
+            "would otherwise mint a policy that rejects every patched host."
+        ),
+    )
+    parser.add_argument(
+        "--require-observed-allowed",
+        action="store_true",
+        help=(
+            "Fail instead of warning when the probe host's own TCB status is not in "
+            "the allowed set. Flip this on once the probe fleet reports 'uptodate', "
+            "so the inconsistency cannot come back silently."
+        ),
+    )
     args = parser.parse_args()
 
     claims = load_json(args.claims)
@@ -294,7 +393,14 @@ def main() -> int:
             "Could not extract attester TCB status from token claims; refusing to generate candidate policy."
         )
 
-    allowed_tcb_statuses = [value for value, _, _ in tcb_candidates]
+    observed_tcb_statuses = [value for value, _, _ in tcb_candidates]
+    allowed_tcb_statuses = resolve_allowed_tcb_statuses(args.allowed_tcb_status)
+    report_observed_vs_allowed(
+        observed_tcb_statuses,
+        allowed_tcb_statuses,
+        require_observed_allowed=args.require_observed_allowed,
+    )
+
     allowed_mrtd = [mrtd[0]]
     allowed_rtmr0 = [rtmr0[0]]
     allowed_rtmr1 = [rtmr1[0]]
@@ -319,6 +425,7 @@ def main() -> int:
                 for value, path, raw in tcb_candidates
             ],
         },
+        "observed_tcb_statuses": observed_tcb_statuses,
         "policy": {
             "allowed_tcb_statuses": allowed_tcb_statuses,
             "allowed_mrtd": allowed_mrtd,

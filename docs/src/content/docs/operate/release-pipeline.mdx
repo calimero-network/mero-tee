@@ -54,8 +54,21 @@ Workflow name **Release mero-kms**. Triggers: push to `master` touching
 
 4. **`probe`** — for each profile, dispatch the staging probe
    (`kms-phala-staging-probe.yaml`) against a real Phala CVM and wait. The probe
-   returns `kms-policy-candidates.json` (measured MRTD/RTMR/TCB values) and
-   `kms-app-identity.json` (the dstack `compose_hash`).
+   returns `kms-policy-candidates.json` (measured MRTD/RTMR values, plus the
+   probe host's **observed** TCB status) and `kms-app-identity.json` (the dstack
+   `compose_hash`).
+
+   :::caution[Measurements are observed; the TCB allowlist is declared]
+   MRTD and RTMR0–3 are necessarily taken from the probe's own quote — they *are*
+   the thing being published. The accepted TCB statuses are not: they come from
+   `--allowed-tcb-status` (default `uptodate`), never from what the probe
+   reported. Deriving them from the probe is how releases 2.3.48–2.3.52 each
+   shipped `allowed_tcb_statuses: ["outofdate"]` — a policy that accepted only a
+   stale host and would have rejected every patched one, so the fleet would have
+   broken on being updated. When the probe's own status falls outside the allowed
+   set the run emits a warning naming it; pass `--require-observed-allowed` to
+   turn that into a hard failure once the probe fleet reports `uptodate`.
+   :::
 
 5. **`release-metadata`** — the assembly step:
    - Wait for and fetch the counterpart node release's `published-mrtds.json`.
