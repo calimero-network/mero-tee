@@ -224,6 +224,11 @@ checkout, say) files nothing, because at that point the run has no release to
 name and the problem is CI's rather than the release's; and if issue creation
 itself fails the step warns rather than failing, so a permissions problem
 cannot mask the probe failure underneath it.
+
+Act on the issue quickly. The probe workflows upload their diagnostics with a
+short `retention-days` — 3 for the node probe, 14 for the KMS probe — so the
+artifact naming the failed assertion expires within days, while the release it
+concerns stays published indefinitely. The issue outlives the evidence.
 </Aside>
 
 ## Degraded policy state (`policy_not_ready`)
