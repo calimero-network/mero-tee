@@ -58,6 +58,10 @@ jobs:
   verify_published_node_policy_on_fresh_vms:
     name: Verify published-mrtds.json on fresh TDX VMs
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tee_tag: ${{ steps.resolve.outputs.tee_tag }}
+      should_run: ${{ steps.resolve.outputs.should_run }}
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'workflow_run' &&
@@ -222,3 +226,34 @@ jobs:
             echo "- **Checks:** For each profile (debug, debug-read-only, locked-read-only), a fresh GCP TDX VM was booted from \`release-provenance.json\`, and \`measurement-policy-candidates\` values were verified as subsets of \`published-mrtds.json\` (same gates as the node section of the KMS-node e2e workflow, except no KMS staging probes and no debug→locked KMS runtime probe)."
             echo "- **Docs:** see \`docs/release/workflow-setup.md\` (Post-release mero-tee node e2e)."
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  report_failure:
+    # A workflow_run-triggered failure is attached to nothing a release consumer
+    # reads: no PR, no release page, no commit status -- only a red row in the
+    # Actions tab. See #251, where exactly that hid a real finding.
+    name: Report post-release failure
+    runs-on: ubuntu-latest
+    needs: verify_published_node_policy_on_fresh_vms
+    if: >-
+      ${{ always() &&
+          needs.verify_published_node_policy_on_fresh_vms.result == 'failure' &&
+          needs.verify_published_node_policy_on_fresh_vms.outputs.should_run == 'true' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: File or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/report_post_release_failure.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --version "${{ needs.verify_published_node_policy_on_fresh_vms.outputs.version }}" \
+            --tag "${{ needs.verify_published_node_policy_on_fresh_vms.outputs.tee_tag }}" \
+            --workflow "${GITHUB_WORKFLOW}" \
+            --job "Verify published-mrtds.json on fresh TDX VMs" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
