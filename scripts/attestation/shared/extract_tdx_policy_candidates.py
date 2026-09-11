@@ -8,7 +8,8 @@ MRTD and RTMR0–3 are taken from **merod** ``data.quote.body`` when present (sa
 TCB status strings still come from ITA token claims (not present as plain text in the
 quote blob we parse here). They are recorded as an *observation* of the probe host and
 do NOT become the policy: ``allowed_tcb_statuses`` is the declared ``--allowed-tcb-status``
-set (default ``uptodate``). Deriving the allowlist from whatever the probe happened to
+set (default ``uptodate,outofdate`` -- see ``DEFAULT_ALLOWED_TCB_STATUSES`` for why the
+second entry is there and when to remove it). Deriving the allowlist from whatever the probe happened to
 report is how releases 2.3.48-2.3.52 all shipped ``["outofdate"]`` -- a policy that
 rejects a fully patched host and accepts only a stale one.
 
@@ -262,7 +263,23 @@ def extract_tcb_status_candidates(payload: Any) -> List[Tuple[str, str, str]]:
     return out
 
 
-DEFAULT_ALLOWED_TCB_STATUSES = ["uptodate"]
+# The declared default. `uptodate` is the floor and must always be present: it is
+# what core enforces (`DEFAULT_ALLOWED_TCB_STATUS`, and an empty group allowlist
+# fails closed to it), so dropping it inverts the "admitted implies can get key"
+# invariant -- which is exactly the bug this file's docstring describes.
+#
+# `outofdate` is here as a DELIBERATE, REVIEWABLE decision, not an observation.
+# The node images run on GCP Confidential VMs and the KMS on Phala CVMs; a TCB
+# status reflects those vendors' host firmware, which Calimero cannot patch. As of
+# 2026-09-11 both fleets report OutOfDate, so a floor of `uptodate` alone would be
+# satisfiable by no host we run on. Accepting both keeps the fleet working AND
+# accepts a patched host the moment a vendor catches up -- unlike the old
+# observation-derived `["outofdate"]`, which rejected patched hosts outright.
+#
+# REVIEW THIS. Drop `outofdate` and add `--require-observed-allowed` to the probe
+# call sites once the probes report `uptodate`; the warning this script emits on
+# every release says when that is.
+DEFAULT_ALLOWED_TCB_STATUSES = ["uptodate", "outofdate"]
 
 
 def resolve_allowed_tcb_statuses(raw_values: Optional[List[str]]) -> List[str]:

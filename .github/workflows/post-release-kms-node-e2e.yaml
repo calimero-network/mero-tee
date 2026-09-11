@@ -637,8 +637,16 @@ jobs:
                       )
 
           # RTMR3 is derived from replayed event log, not policy allowlist matching.
+          #
+          # `allowed_tcb_statuses` is deliberately NOT in this list. MRTD/RTMR are
+          # measurements: the release must publish exactly what it measured, so set
+          # equality is the right assertion. A TCB status is a policy floor, not a
+          # measurement -- the release declares which statuses it accepts, and the
+          # probe host merely happens to report one of them. Asserting equality here
+          # forced the published policy to equal whatever the probe observed, which
+          # is how releases 2.3.48-2.3.52 all shipped `["outofdate"]`. It is checked
+          # as a subset below instead.
           keys = [
-              "allowed_tcb_statuses",
               "allowed_mrtd",
               "allowed_rtmr0",
               "allowed_rtmr1",
@@ -658,6 +666,28 @@ jobs:
                       f"  probe:   {sorted(probe_values)}\n"
                       f"  release: {sorted(release_values)}"
                   )
+          probe_tcb = set(normalize(probe_policy.get("allowed_tcb_statuses", [])))
+          release_tcb = set(
+              normalize(
+                  release_policy.get(
+                      "kms_allowed_tcb_statuses",
+                      release_policy.get("allowed_tcb_statuses", []),
+                  )
+              )
+          )
+          if not release_tcb:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: release policy declares no allowed_tcb_statuses for profile={profile}"
+              )
+          if probe_tcb and not probe_tcb.issubset(release_tcb):
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: the probe host's TCB status is not accepted by the "
+                  f"release policy for profile={profile}. The policy is not necessarily wrong -- this "
+                  f"says the probe fleet cannot satisfy it.\n"
+                  f"  probe observed: {sorted(probe_tcb)}\n"
+                  f"  release allows: {sorted(release_tcb)}"
+              )
+
           print(f"[post-release-e2e] OK: probed KMS measurements exactly match release policy for profile={profile}")
           PY
               )"; then
@@ -1048,8 +1078,16 @@ jobs:
           published_profile = published_payload.get("profiles", {}).get(profile, {})
 
           # RTMR3 is derived from replayed event log, not policy allowlist matching.
+          #
+          # `allowed_tcb_statuses` is deliberately NOT in this list. MRTD/RTMR are
+          # measurements: the release must publish exactly what it measured, so set
+          # equality is the right assertion. A TCB status is a policy floor, not a
+          # measurement -- the release declares which statuses it accepts, and the
+          # probe host merely happens to report one of them. Asserting equality here
+          # forced the published policy to equal whatever the probe observed, which
+          # is how releases 2.3.48-2.3.52 all shipped `["outofdate"]`. It is checked
+          # as a subset below instead.
           keys = [
-              "allowed_tcb_statuses",
               "allowed_mrtd",
               "allowed_rtmr0",
               "allowed_rtmr1",
@@ -1069,6 +1107,21 @@ jobs:
                       f"  probe:     {sorted(probe_values)}\n"
                       f"  published: {sorted(published_values)}"
                   )
+          probe_tcb = set(normalize(probe_policy.get("allowed_tcb_statuses", [])))
+          published_tcb = set(normalize(published_profile.get("allowed_tcb_statuses", [])))
+          if not published_tcb:
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: published policy declares no allowed_tcb_statuses for profile={profile}"
+              )
+          if probe_tcb and not probe_tcb.issubset(published_tcb):
+              raise SystemExit(
+                  f"[post-release-e2e] ERROR: the probe host's TCB status is not accepted by the "
+                  f"published node policy for profile={profile}. The policy is not necessarily wrong -- "
+                  f"this says the probe fleet cannot satisfy it.\n"
+                  f"  probe observed: {sorted(probe_tcb)}\n"
+                  f"  published allows: {sorted(published_tcb)}"
+              )
+
           print(f"[post-release-e2e] OK: probed node measurements exactly match published policy for profile={profile}")
           PY
 

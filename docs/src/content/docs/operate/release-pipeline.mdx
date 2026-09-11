@@ -61,13 +61,21 @@ Workflow name **Release mero-kms**. Triggers: push to `master` touching
    :::caution[Measurements are observed; the TCB allowlist is declared]
    MRTD and RTMR0–3 are necessarily taken from the probe's own quote — they *are*
    the thing being published. The accepted TCB statuses are not: they come from
-   `--allowed-tcb-status` (default `uptodate`), never from what the probe
-   reported. Deriving them from the probe is how releases 2.3.48–2.3.52 each
+   `--allowed-tcb-status` (default `uptodate,outofdate`), never from what the probe
+   reported. `outofdate` is in the default as a deliberate, reviewable decision —
+   the node images run on GCP Confidential VMs and the KMS on Phala CVMs, whose
+   host firmware Calimero cannot patch, and both fleets currently report
+   `OutOfDate`. Drop it once the probes report `uptodate`. Deriving them from the probe is how releases 2.3.48–2.3.52 each
    shipped `allowed_tcb_statuses: ["outofdate"]` — a policy that accepted only a
    stale host and would have rejected every patched one, so the fleet would have
    broken on being updated. When the probe's own status falls outside the allowed
    set the run emits a warning naming it; pass `--require-observed-allowed` to
    turn that into a hard failure once the probe fleet reports `uptodate`.
+
+   The post-release E2E enforces the same distinction: MRTD/RTMR must match the
+   release policy *exactly*, while the probe's TCB status need only be **accepted
+   by** it. Asserting equality there was the third place that treated an
+   observation as the spec, and it would have rejected any corrected policy.
    :::
 
 5. **`release-metadata`** — the assembly step:
