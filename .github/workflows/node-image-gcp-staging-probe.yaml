@@ -402,23 +402,29 @@ jobs:
             '{base_url: $base_url, nonce: $nonce, profile: $profile, instance: $instance, image: $image, project: $project, zone: $zone}' \
             > "${artifacts_dir}/attestation-context.json"
 
+      # Over HTTP, not SSH. The SSH route could never cover `locked-read-only`
+      # (openssh is removed there by hardening rule R1 and conformance asserts it
+      # is gone), and it asked the node to grade its own quote. CI verifies now;
+      # the node only supplies the quote. See #251.
       - name: Verify client-side node quote checks (anti-fake)
         id: verify_anti_fake
         env:
           ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
-          INSTANCE_NAME: ${{ steps.params.outputs.instance_name }}
-          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
-          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          BASE_URL: ${{ steps.endpoint.outputs.base_url }}
+          ITA_APPRAISAL_URL: ${{ inputs.ita_appraisal_url }}
         run: |
-          bash scripts/ci/probes/node_verify_anti_fake.sh
+          set -euo pipefail
+          python3 scripts/ci/probes/node_anti_fake_http.py \
+            --base-url "${BASE_URL}" \
+            --ita-url "${ITA_APPRAISAL_URL}" \
+            --ita-api-key "${ITA_API_KEY}" \
+            --output "${ARTIFACTS_DIR}/node-client-verification.json"
 
-      # When the anti-fake check cannot reach the node, SSH is precisely the
-      # channel that is broken, so the serial console is the only way to see
-      # inside the VM -- and it needs no guest cooperation at all. Without this,
-      # diagnosing `VERIFY_TEE_PROBE_SSH` means reproducing by hand against an
-      # instance that the next step has already deleted (see #251, where the
-      # probe had been failing this way since 2.3.50 with no record of why).
-      # Runs before `Cleanup probe resources`, which is the last chance.
+      # The serial console needs no guest cooperation, so it is the one view that
+      # survives whatever is wrong inside the VM. Kept after the move to HTTP: an
+      # attestation that fails to verify is exactly when the boot log matters, and
+      # the next step deletes the instance (see #251, where the probe had been
+      # failing for two releases with no record of why).
       - name: Capture serial console on probe failure
         if: ${{ failure() && steps.verify_anti_fake.outcome == 'failure' }}
         continue-on-error: true
