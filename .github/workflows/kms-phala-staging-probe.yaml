@@ -17,7 +17,7 @@ on:
         required: false
         default: ""
       kms_tag:
-        description: "Release tag to deploy when kms_image is empty. Use 'latest' to auto-pick the latest GitHub release tag."
+        description: "KMS release tag (mero-kms-v<version>) to deploy when kms_image is empty. Use 'latest' for the newest published mero-kms-v* release. An umbrella <version> or mero-tee-v<version> tag is rejected."
         required: true
         default: "latest"
       kms_profile:

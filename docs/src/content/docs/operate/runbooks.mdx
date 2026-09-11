@@ -122,11 +122,19 @@ the same probes the release pipeline runs.
 <Tabs>
 <TabItem label="KMS (Phala)">
 
-`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag` (release tag, or `latest`),
-`kms_profile`, `instance_type` (default `tdx.small`), `service_port` (default
-`8080`), `phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust
-Authority). It deploys to Phala, verifies `/attest`, runs a `challenge → get-key`
-cycle, and returns `kms-policy-candidates.json` + `kms-app-identity.json`.
+`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag`, `kms_profile`,
+`instance_type` (default `tdx.small`), `service_port` (default `8080`),
+`phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust Authority).
+It deploys to Phala, verifies `/attest`, runs a `challenge → get-key` cycle, and
+returns `kms-policy-candidates.json` + `kms-app-identity.json`.
+
+`kms_tag` takes a `mero-kms-v<version>` tag, or `latest` for the newest
+published one. An umbrella `<version>` tag or a `mero-tee-v<version>` node tag
+is rejected up front — each version publishes all three, and this probe needs
+the KMS one. Note that `latest` here means the newest `mero-kms-v*` release,
+*not* whatever GitHub's "latest release" flag points at: that flag is set by
+hand and often sits on the umbrella tag. To probe a pinned image instead, set
+`kms_image` and pass its version in `kms_version`.
 
 </TabItem>
 <TabItem label="Node image (GCP)">
