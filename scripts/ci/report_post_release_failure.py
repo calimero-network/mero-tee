@@ -111,9 +111,12 @@ def build_body(args: argparse.Namespace, marker: str) -> str:
         "",
         "1. Open the run above and read the failing step's assertion — not just "
         "the job conclusion.",
-        "2. Download the run's artifacts before they expire (90 days by "
-        "default) — they carry the verifier output that says *which* assertion "
-        "failed.",
+        "2. **Download the run's artifacts now.** They carry the verifier "
+        "output naming *which* assertion failed, and the probe workflows set a "
+        "short `retention-days` (3 for the node probe, 14 for the KMS probe) — "
+        "not the 90-day default. The evidence for a failure against a "
+        "published release expires within days while the release stays up. "
+        "The run page shows each artifact's exact expiry.",
         "3. Decide whether the published artifact is affected. If it is, that "
         "is a release problem, not a CI problem.",
         "",
