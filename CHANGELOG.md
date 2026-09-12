@@ -16,6 +16,12 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The post-release probes did not re-run when the scripts that decide their verdicts changed.** Both post-release workflows filter on a path list that named the workflow and its top-level script but none of the probe scripts those actually run. So merging #264 -- which changed `scripts/ci/probes/node_runtime_kms_probe.sh`, the probe whose broken expectation logic #264 existed to fix -- triggered nothing, and the fix landed without re-validating anything. Merging #263 did re-run the node e2e only because it happened to touch `e2e-mero-tee-node-post-release.sh`, which was on the list; the same commit's change to the KMS-node workflow produced a 14-second run whose real steps were all skipped.
+
+  Both lists now also carry the probe workflow that gets dispatched and the three scripts that decide what it asserts (`assert_node_anti_fake.py`, `node_anti_fake_http.py`, `node_runtime_kms_probe.sh`). Generic plumbing -- logging, summary writers, polling helpers -- is deliberately left off: these workflows boot real TDX VMs and Phala CVMs, so they should re-run when the verification logic changes, not when a log line does. The principle is recorded as a comment in both files, since the next person adding a probe script will face the same question.
+
+  Verified by parsing both workflows and checking, for each, that no verification-bearing file is missing from its path list, that the `push` and `pull_request` lists are identical, and that every declared path exists on disk.
+
 - **The node->KMS runtime probe ran merod unprivileged, so the cross-profile check reported a KMS refusal it never observed.** `node_runtime_kms_probe.sh` SSHes in and runs `merod ... kms probe`, but merod's home is the root-owned encrypted TEE mount and the systemd unit runs it as root, while `gcloud compute ssh` logs in unprivileged. Without `sudo` merod cannot read the node dir and exits from a `bail!` that fires before printing any JSON, so all twelve attempts fell through to the non-JSON fallback and the probe recorded `MEROD_KMS_PROBE_NO_JSON`. The sibling anti-fake check carried exactly this fix until #255 replaced it with the HTTP path and deleted that script, taking the fix with it; this invocation was left behind unprivileged.
 
   Surfaced on 2.3.53 as `KMS_PROBE_EXPECTATION_MISMATCH` on `profile=debug` (run 34637264907), which then failed the KMS-node compatibility run waiting on it (#262). The published artifacts were not affected.
