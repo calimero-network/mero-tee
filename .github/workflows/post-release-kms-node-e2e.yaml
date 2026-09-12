@@ -10,6 +10,12 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      # The probe scripts the dispatched staging probes run, and the asserter
+      # this workflow calls inline. Same principle as the node e2e: the checks
+      # that decide a verdict, not the plumbing around them.
+      - "scripts/ci/probes/assert_node_anti_fake.py"
+      - "scripts/ci/probes/node_anti_fake_http.py"
+      - "scripts/ci/probes/node_runtime_kms_probe.sh"
       - "mero-kms/Cargo.toml"
       - "mero-tee/versions.json"
       - "Cargo.lock"
@@ -20,6 +26,12 @@ on:
       - ".github/workflows/kms-phala-staging-probe.yaml"
       - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-verify-kms-node-compatibility.sh"
+      # The probe scripts the dispatched staging probes run, and the asserter
+      # this workflow calls inline. Same principle as the node e2e: the checks
+      # that decide a verdict, not the plumbing around them.
+      - "scripts/ci/probes/assert_node_anti_fake.py"
+      - "scripts/ci/probes/node_anti_fake_http.py"
+      - "scripts/ci/probes/node_runtime_kms_probe.sh"
       - "mero-kms/Cargo.toml"
       - "mero-tee/versions.json"
       - "Cargo.lock"

@@ -11,15 +11,37 @@ on:
     branches:
       - master
     paths:
+      # This workflow and the script it runs, plus the probe workflow it
+      # dispatches and the scripts that decide what that probe asserts.
+      # Generic plumbing (logging, summaries, polling helpers) is deliberately
+      # excluded: this boots real TDX VMs, so it should re-run when the
+      # verification logic changes, not when a log line does.
+      # node_runtime_kms_probe.sh was absent here, so the fix in #264 merged
+      # without re-validating anything.
       - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
+      - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-mero-tee-node-post-release.sh"
+      - "scripts/ci/probes/assert_node_anti_fake.py"
+      - "scripts/ci/probes/node_anti_fake_http.py"
+      - "scripts/ci/probes/node_runtime_kms_probe.sh"
       - "mero-tee/versions.json"
       - "mero-kms/Cargo.toml"
       - "Cargo.lock"
   pull_request:
     paths:
+      # This workflow and the script it runs, plus the probe workflow it
+      # dispatches and the scripts that decide what that probe asserts.
+      # Generic plumbing (logging, summaries, polling helpers) is deliberately
+      # excluded: this boots real TDX VMs, so it should re-run when the
+      # verification logic changes, not when a log line does.
+      # node_runtime_kms_probe.sh was absent here, so the fix in #264 merged
+      # without re-validating anything.
       - ".github/workflows/post-release-mero-tee-node-e2e.yaml"
+      - ".github/workflows/node-image-gcp-staging-probe.yaml"
       - "scripts/release/e2e-mero-tee-node-post-release.sh"
+      - "scripts/ci/probes/assert_node_anti_fake.py"
+      - "scripts/ci/probes/node_anti_fake_http.py"
+      - "scripts/ci/probes/node_runtime_kms_probe.sh"
       - "mero-tee/versions.json"
       - "mero-kms/Cargo.toml"
       - "Cargo.lock"
