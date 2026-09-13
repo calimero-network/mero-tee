@@ -74,6 +74,17 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-authorship-test.sh
 
+      # Same reasoning, for the other half of what the sidecar tells MDMA. The
+      # context inventory is what makes `GET /api/cloud/contexts/{id}/relays`
+      # able to answer at all, and it is wrong quietly in two directions: a
+      # context reported under the wrong group routes a client to a relay that
+      # will refuse the write, and a `full` report assembled from partial reads
+      # makes MDMA prune rows for contexts this node is serving.
+      - name: Run fleet-sidecar inventory test
+        id: sidecar_inventory_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-inventory-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -87,6 +98,7 @@ jobs:
             --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
             --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
+            --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
