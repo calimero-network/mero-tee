@@ -35,12 +35,12 @@ if [[ ! -r "${TEMPLATE}" ]]; then
   exit 1
 fi
 # `@` as the delimiter: the auth-token placeholder contains a Jinja filter pipe.
+# The state directory is redirected wholesale rather than file by file, so a
+# state file added to the sidecar later cannot silently escape the sandbox.
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
-    -e "s@/var/lib/calimero/fleet-confirmed.json@${SB}/confirmed.json@" \
-    -e "s@/var/lib/calimero/fleet-authorship.json@${SB}/authorship.json@" \
-    -e "s@/var/lib/calimero/fleet-inventory.json@${SB}/inventory.json@" \
+    -e "s@/var/lib/calimero/@${SB}/@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 
 if ! grep -q '^# --- Main loop ---$' "${SB}/rendered.sh"; then
@@ -53,6 +53,22 @@ sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/func
 if grep -q '{{\|{%' "${SB}/functions.sh"; then
   echo "FAIL: unsubstituted Jinja left in the rendered sidecar:" >&2
   grep -n '{{\|{%' "${SB}/functions.sh" >&2
+  exit 1
+fi
+
+# Every state file the rendered sidecar touches must land in the sandbox.
+# Sourcing the template executes its top-level `[[ -f "$X" ]] || echo ... > "$X"`
+# initialisers, so one path outside ${SB} either writes to the developer's real
+# machine or -- on a CI runner, where /var/lib/calimero does not exist -- fails
+# the whole test with an error pointing at the harness rather than at the change
+# that caused it. That is exactly how adding `INVENTORY_FILE` broke this test.
+#
+# The wholesale substitution above already covers anything under
+# /var/lib/calimero; this catches a state file introduced somewhere else.
+if leaked="$(grep -nE '^[A-Za-z_]+_FILE="[^"]*"' "${SB}/functions.sh" | grep -v "${SB}/")"; then
+  echo "FAIL: the rendered sidecar keeps state outside the sandbox:" >&2
+  echo "${leaked}" >&2
+  echo "       add it to the substitution above." >&2
   exit 1
 fi
 
@@ -256,8 +272,8 @@ printf 'aa=ctx1\nbb=ctx2,ctx3\n' > "${SB}/contexts"
 touch "${SB}/post-fails"
 reconcile_inventory peer1 '["aa"]'
 rm -f "${SB}/post-fails"
-grep -q 'ctx3' "${SB}/inventory.json" \
-  && fail "a failed POST must leave the recorded state unadvanced: $(cat "${SB}/inventory.json")"
+grep -q 'ctx3' "${SB}/fleet-inventory.json" \
+  && fail "a failed POST must leave the recorded state unadvanced: $(cat "${SB}/fleet-inventory.json")"
 reconcile_inventory peer1 '["aa"]'
 grep -q 'ctx3' "${SB}/inventory-log" \
   || fail "the retry after a failed POST must happen"
@@ -267,9 +283,9 @@ grep -q 'ctx3' "${SB}/inventory-log" \
 reconcile_inventory peer1 '[]'
 python3 -c "
 import json
-state = json.load(open('${SB}/inventory.json'))
+state = json.load(open('${SB}/fleet-inventory.json'))
 assert state['namespaces'] == {}, state
-" || fail "a dropped namespace must be pruned: $(cat "${SB}/inventory.json")"
+" || fail "a dropped namespace must be pruned: $(cat "${SB}/fleet-inventory.json")"
 
 # 10. A namespace that cannot be read AT ALL is not reported. An empty report
 #     would be indistinguishable from 'this node holds no contexts', and under
