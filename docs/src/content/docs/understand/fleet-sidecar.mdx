@@ -109,12 +109,19 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    is taken while `confirmed` still holds the dropped entries.
 6. **Prune the confirmed set.** Set `confirmed = confirmed ∩ desired` and persist
    it, so a future re-add is recognized as new.
-7. **Sleep** one second and repeat.
+7. **Report the context inventory**, over the pruned set — but on its own much
+   slower clock than this loop, and immediately when the confirmed set itself
+   changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
+8. **Sleep** one second and repeat.
 
 The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
 different semantics: it records "admitted **and** confirmed", not merely
-"attempted"). Activity is logged to `/var/log/fleet-sidecar.log`.
+"attempted"). Two more files alongside it record what MDMA has already been
+told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
+and `fleet-inventory.json` for the context inventory. Each is advanced **only
+after** the POST it describes succeeded, so a transient MDMA blip is retried
+rather than lost. Activity is logged to `/var/log/fleet-sidecar.log`.
 
 <SeqDiagram
   id="d-fleet-reconcile"
@@ -209,7 +216,7 @@ envelope. See
 [Core → Delegated Authorship](https://calimero-network.github.io/core/protocol/delegated-authorship/)
 for the protocol.
 
-Three facts have to reach that client before it can mint a usable warrant, and
+Four facts have to reach that client before it can mint a usable warrant, and
 **none of them is derivable anywhere but here**. Reporting them is the sidecar's
 second job:
 
@@ -218,6 +225,7 @@ second job:
 | **Executor account** | It is derived from an account root minted inside the TEE. MDMA never sees inside; the client has no way to compute it. A warrant naming the wrong executor is refused — after the author has spent a nonce on it. | `executor_account` on every should-join poll |
 | **Relay URL** | `merod` terminates no TLS and sits behind Traefik on a host it was never told about, so it cannot derive its own external address. MDMA holds only the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
 | **Authorship grant** | `CAN_AUTHOR_ON_BEHALF` is a governance capability, granted by an **admin of the namespace** and readable only by a node holding that group's key. MDMA does not grant it and cannot observe it. | `authorship_ready` on `/api/fleet/confirm` |
+| **Context inventory** | Which contexts exist inside a namespace, and which *group* each one hangs off, is governance state readable only by a member holding that group's key. MDMA stores an assignment per **namespace**, which is one level too coarse to route a write. | `namespaces[].groups[]` on `/api/fleet/inventory` |
 
 ### Why the grant is re-reported, not reported once
 
@@ -246,11 +254,76 @@ assignment rather than 404'ing it: a node makes its one `assigned → active`
 transition at admission, and requiring that state would mean a grant made five
 minutes later could never be reported without evicting and rejoining the node.
 
+### The context inventory, and why it is per group
+
+`fleet_assignments` records which **namespaces** this node replicates. That is
+not enough to answer the only question a client actually asks — *can this node
+execute for context X?* — because core scopes `CAN_AUTHOR_ON_BEHALF` per
+**group**, and contexts belong to groups. A node can hold the namespace root's
+key and grant while being no member at all of a restricted subgroup beneath it.
+Advertising it for that subgroup's context makes the client discover the truth
+by minting a warrant, which spends a nonce it cannot get back.
+
+So `reconcile_inventory` walks the namespace's group tree — breadth-first from
+the root, since the namespace is itself a group and holds contexts of its own —
+and reports each context under **its own group id**, with the authorship grant
+re-asked for that group rather than inherited from the namespace:
+
+```bash
+meroctl ... group subgroups        <GROUP_ID>   # the walk
+meroctl ... group contexts list    <GROUP_ID>   # what hangs off it
+meroctl ... group members list     <NAMESPACE>  # a COUNT, never a roster
+```
+
+MDMA writes the result to `relay_contexts`, which is what
+`GET /api/cloud/contexts/{id}/relays` reads. Without this report that table is
+empty and **every** context answers `servable: false`.
+
+The counts (`member_count`, `context_count`) ride the same report and are
+aggregated **on the node**, inside the group's key. No account id crosses the
+wire, which is a stronger guarantee than MDMA choosing not to store one: there
+is nothing there to store. A count that could not be read is *omitted*, never
+sent as `0` — `NULL` means "no node has told us", and a namespace always has at
+least its admin.
+
+#### On change, with a slow full reconcile
+
+Core exposes no "contexts changed" signal, so the walk is polled: once a minute,
+posting only when the payload differs from the last post MDMA acknowledged. A
+steady-state node therefore posts nothing at all. Every 15 minutes, and
+immediately whenever the confirmed set changes, it posts with `full: true`.
+
+Both halves are load-bearing. Walking at the loop's 1 Hz would be dozens of
+`meroctl` subprocesses a second for data that moves a few times a day; and an
+incremental post can only *add*, so without the periodic full pass a context the
+node has left would be advertised forever.
+
+#### A partial read is never posted as authoritative
+
+`full: true` makes MDMA **prune** every context row the report does not mention,
+per namespace. So a full report assembled from partial reads deletes rows for
+contexts this node is serving perfectly well, and un-advertises a healthy relay
+because one `meroctl` call happened to fail.
+
+The walk therefore tracks whether it saw everything, and anything that could
+hide a context clears that flag: a failed or unparseable read, or a list that
+came back at core's 100-row page limit — `meroctl` passes no offset/limit, so a
+full page is indistinguishable from a truncated one. Namespaces that came back
+complete are posted with the requested `full`; the rest are posted additively in
+a second request, and MDMA keeps what it already has for them.
+
+The distinction is deliberately narrow: only a read that could hide a *context*
+counts. A failed capability or member-count read is a worse answer about
+contexts that are still being reported, so it degrades to `false`/absent without
+blocking the prune — otherwise a namespace whose member list merely exceeds one
+page could never be pruned at all.
+
 ### Every failure lands on "replicates but does not relay"
 
-None of the three reads is fatal, and they degrade in the same safe direction.
-A node that cannot read its account, has no `relay-url` metadata, or fails the
-capability read reports the missing value as empty/`false`. MDMA then does not
+None of these reads is fatal, and they degrade in the same safe direction.
+A node that cannot read its account, has no `relay-url` metadata, fails the
+capability read, or cannot walk its group tree reports the missing value as
+empty/`false`/absent. MDMA then does not
 offer it as a writable relay, so clients are never sent to mint warrants it
 would refuse — they see "no relay available" rather than a refusal after
 burning a nonce. The node keeps replicating throughout.

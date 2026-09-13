@@ -27,6 +27,12 @@ export SB
 # The two Jinja placeholders are substituted directly rather than through
 # Ansible: this test is about the shell logic, and pulling in Jinja would make a
 # shell test depend on a Python toolchain being present.
+#
+# The state directory is redirected wholesale rather than file by file. A
+# per-file list silently misses any state file added to the sidecar later: the
+# sourced template then tries to create it under the real /var/lib/calimero,
+# which does not exist on a CI runner, and the failure lands in THIS test rather
+# than in the change that caused it.
 if [[ ! -r "${TEMPLATE}" ]]; then
   echo "FAIL: cannot read ${TEMPLATE}" >&2
   exit 1
@@ -36,8 +42,7 @@ fi
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
-    -e "s@/var/lib/calimero/fleet-confirmed.json@${SB}/confirmed.json@" \
-    -e "s@/var/lib/calimero/fleet-authorship.json@${SB}/authorship.json@" \
+    -e "s@/var/lib/calimero/@${SB}/@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 
 # Only the function half: the main loop polls forever.
@@ -51,6 +56,22 @@ sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/func
 if grep -q '{{\|{%' "${SB}/functions.sh"; then
   echo "FAIL: unsubstituted Jinja left in the rendered sidecar:" >&2
   grep -n '{{\|{%' "${SB}/functions.sh" >&2
+  exit 1
+fi
+
+# Every state file the rendered sidecar touches must land in the sandbox.
+# Sourcing the template executes its top-level `[[ -f "$X" ]] || echo ... > "$X"`
+# initialisers, so one path outside ${SB} either writes to the developer's real
+# machine or -- on a CI runner, where /var/lib/calimero does not exist -- fails
+# the whole test with an error pointing at the harness rather than at the change
+# that caused it. That is exactly how adding `INVENTORY_FILE` broke this test.
+#
+# The wholesale substitution above already covers anything under
+# /var/lib/calimero; this catches a state file introduced somewhere else.
+if leaked="$(grep -nE '^[A-Za-z_]+_FILE="[^"]*"' "${SB}/functions.sh" | grep -v "${SB}/")"; then
+  echo "FAIL: the rendered sidecar keeps state outside the sandbox:" >&2
+  echo "${leaked}" >&2
+  echo "       add it to the substitution above." >&2
   exit 1
 fi
 
@@ -151,16 +172,16 @@ echo "aa=512" > "${SB}/caps"
 touch "${SB}/confirm-fails"
 reconcile_authorship peer1 '["aa"]'
 rm -f "${SB}/confirm-fails"
-grep -q '"aa": false' "${SB}/authorship.json" \
-  || fail "a failed POST must leave the state unadvanced: $(cat "${SB}/authorship.json")"
+grep -q '"aa": false' "${SB}/fleet-authorship.json" \
+  || fail "a failed POST must leave the state unadvanced: $(cat "${SB}/fleet-authorship.json")"
 reconcile_authorship peer1 '["aa"]'
 expect_confirms 3 "the retry after a failed POST must happen"
 
 # 6. A namespace MDMA no longer assigns is pruned, so a later re-join is treated
 #    as new rather than inheriting a stale "already reported" verdict.
 reconcile_authorship peer1 '[]'
-[[ "$(cat "${SB}/authorship.json")" == "{}" ]] \
-  || fail "a dropped namespace must be pruned: $(cat "${SB}/authorship.json")"
+[[ "$(cat "${SB}/fleet-authorship.json")" == "{}" ]] \
+  || fail "a dropped namespace must be pruned: $(cat "${SB}/fleet-authorship.json")"
 
 # 7. An unreadable capability is false, never a crash and never true. This is
 #    the safe direction: MDMA does not advertise the node, so clients are not

@@ -17,7 +17,41 @@ CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
 # grant made (or revoked) AFTER admission gets re-reported exactly once per
 # change rather than on every one-second cycle. See `reconcile_authorship`.
 AUTHORSHIP_FILE="/var/lib/calimero/fleet-authorship.json"
+# The context inventory we last successfully POSTed, per namespace, plus when
+# the last authoritative (`full`) post landed. Change detection compares against
+# this, so a steady-state node posts nothing at all. See `reconcile_inventory`.
+INVENTORY_FILE="/var/lib/calimero/fleet-inventory.json"
 POLL_INTERVAL=1
+# How often the group tree is WALKED. Not the post interval — a walk that finds
+# nothing changed posts nothing. Core exposes no "contexts changed" signal, so
+# a poll is the only detector available; at one walk a minute a namespace with
+# a handful of groups costs a few `meroctl` subprocesses a minute, against the
+# dozens a second a 1 Hz walk would cost for data that changes a few times a day.
+INVENTORY_SCAN_INTERVAL=60
+# How often a `full` (authoritative, pruning) post is sent regardless of whether
+# anything changed. This is what repairs a missed change: an incremental post
+# can only add, so a context the node no longer holds is removed from mdma here
+# or not at all.
+INVENTORY_FULL_INTERVAL=900
+# core's `DEFAULT_LIST_LIMIT` (crates/server/src/admin/handlers/groups.rs), and
+# `meroctl` exposes no --offset/--limit for `group contexts list` /
+# `group members list`. A page that comes back exactly this long may have been
+# truncated, and there is no way to tell from here — so it is treated as an
+# INCOMPLETE read rather than as a complete one, which is what keeps a `full`
+# post from pruning rows for contexts that merely fell off page one.
+MEROCTL_PAGE_LIMIT=100
+# Hard stop on the group walk. A cycle in the parent/child index would otherwise
+# hang the sidecar; `seen` already prevents revisiting, so this only bounds the
+# pathological case of a genuinely enormous namespace — which is likewise
+# reported as incomplete rather than silently half-reported.
+MAX_GROUP_WALK=512
+# Wall-clock budget for one namespace's walk. The walk runs INSIDE the
+# one-second reconcile loop, so while it is running this node is not polling
+# `should-join` — and that poll is what drives the safety-critical leave path.
+# A hung `meroctl` would otherwise stall it for 30s per group. Past the budget
+# the walk stops and reports what it has, marked incomplete, which is the same
+# safe answer as any other partial read.
+INVENTORY_WALK_BUDGET=20
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
 # `MemberCapabilities::CAN_AUTHOR_ON_BEHALF` — bit 9 of the per-member u32
 # bitmask in core (crates/context/config/src/lib.rs). The grant delegated
@@ -30,6 +64,7 @@ log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 mkdir -p "$(dirname "$CONFIRMED_FILE")"
 [[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
 [[ -f "$AUTHORSHIP_FILE" ]] || echo '{}' > "$AUTHORSHIP_FILE"
+[[ -f "$INVENTORY_FILE" ]] || echo '{"namespaces":{},"last_full":0}' > "$INVENTORY_FILE"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
@@ -307,6 +342,414 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
   fi
 }
 
+# --- context inventory ------------------------------------------------------
+#
+# `FleetAssignment` records which NAMESPACES this node replicates, which is one
+# level too coarse to route a delegated write: core scopes
+# `CAN_AUTHOR_ON_BEHALF` per group, implies it from nothing, and deliberately
+# does not propagate it through the subgroup-admit cascade — so this node can
+# hold the namespace root's key and grant while being no member at all of a
+# restricted subgroup beneath it. Contexts hang off groups, so only a
+# per-GROUP report can answer "can this node execute for context X".
+#
+# Without this reporter `GET /api/cloud/contexts/{id}/relays` reads an empty
+# table and answers `servable: false` for every context that exists (mdma#222).
+
+# Walk one namespace's group tree and assemble its `InventoryNamespace`.
+#
+# Prints ONE JSON object — {"namespace": {...}, "complete": true|false} — and
+# returns 0; returns 1 with no stdout when nothing usable could be read.
+#
+# `complete` is the load-bearing half. A `full` post PRUNES every context row it
+# does not mention, per namespace, so a report assembled from partial reads
+# would delete live rows and un-advertise a node that is serving them perfectly
+# well. Anything that could hide a context — a failed `meroctl`, an unparseable
+# body, a page that came back at exactly the limit, the walk cap — clears it,
+# and the caller then posts that namespace incrementally instead.
+collect_namespace_inventory() {
+  local namespace_id="$1"
+  MEROCTL_CMD="$MEROCTL" \
+  NAMESPACE_ID="$namespace_id" \
+  EXECUTOR_ACCOUNT="${EXECUTOR_ACCOUNT:-}" \
+  AUTHOR_BIT="$CAN_AUTHOR_ON_BEHALF" \
+  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  MAX_GROUPS="$MAX_GROUP_WALK" \
+  WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
+  python3 - <<'PY' 2>>"$LOG"
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip()
+ACCOUNT = os.environ.get("EXECUTOR_ACCOUNT", "").strip()
+AUTHOR_BIT = int(os.environ["AUTHOR_BIT"])
+PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+MAX_GROUPS = int(os.environ["MAX_GROUPS"])
+DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
+
+# Cleared by anything that could make the report understate what this node
+# holds. Never set back to True.
+complete = True
+
+
+def incomplete(why):
+    global complete
+    complete = False
+    print("sidecar: inventory read incomplete: " + why, file=sys.stderr)
+
+
+def meroctl(*args, critical=True):
+    """Run meroctl and parse its JSON, or return None. Never raises: a node
+    mid-restart, a group that vanished between two reads, and a genuinely
+    broken command all have to leave the sidecar running.
+
+    `critical` says whether a failure could make the report UNDERSTATE which
+    contexts this node holds. Only those clear `complete`. A failed capabilities
+    or member-count read is a worse answer about a context that is still being
+    reported, not a missing context — and treating it as one would mean a
+    namespace whose member list simply exceeds one page could never be pruned
+    at all."""
+    def failed(why):
+        if critical:
+            incomplete(why)
+        else:
+            print("sidecar: " + why, file=sys.stderr)
+
+    try:
+        proc = subprocess.run(
+            MEROCTL + ["--output-format", "json", *args],
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, DEADLINE - time.monotonic()),
+        )
+    except Exception as exc:
+        failed("meroctl " + " ".join(args) + " did not run: " + str(exc))
+        return None
+    if proc.returncode != 0:
+        failed(
+            "meroctl " + " ".join(args) + " exited " + str(proc.returncode)
+            + ": " + proc.stderr.strip()[:200]
+        )
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except Exception as exc:
+        failed("meroctl " + " ".join(args) + " returned unparseable JSON: " + str(exc))
+        return None
+
+
+def hexid(entry, *keys):
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def maybe_truncated(entries, what, critical=True):
+    """A list exactly one page long is indistinguishable from a truncated one:
+    meroctl passes no offset/limit, so page two is unreachable from here."""
+    if len(entries) < PAGE_LIMIT:
+        return False
+    why = what + " came back at the " + str(PAGE_LIMIT) + "-row page limit"
+    if critical:
+        incomplete(why)
+    else:
+        print("sidecar: " + why, file=sys.stderr)
+    return True
+
+
+def child_groups(group_id):
+    response = meroctl("group", "subgroups", group_id)
+    if response is None:
+        return []
+    entries = response.get("subgroups")
+    if not isinstance(entries, list):
+        incomplete("group subgroups " + group_id + " had no 'subgroups' array")
+        return []
+    return [gid for gid in (hexid(e, "groupId", "group_id") for e in entries if isinstance(e, dict)) if gid]
+
+
+def group_contexts(group_id):
+    """Context ids in one group, or None when the answer could not be read.
+
+    None and [] are deliberately different: [] is 'this group holds no
+    contexts', which a `full` post is entitled to act on, while None means the
+    group is omitted from the report AND the namespace is marked incomplete, so
+    nothing is pruned on the strength of a read that failed."""
+    response = meroctl("group", "contexts", "list", group_id)
+    if response is None:
+        return None
+    entries = response.get("data")
+    if not isinstance(entries, list):
+        incomplete("group contexts list " + group_id + " had no 'data' array")
+        return None
+    maybe_truncated(entries, "group contexts list " + group_id)
+    return [cid for cid in (hexid(e, "contextId", "context_id") for e in entries if isinstance(e, dict)) if cid]
+
+
+def authorship_ready(group_id):
+    """Whether this node may write on members' behalf in THIS group.
+
+    Re-asked per group rather than inherited from the namespace: core does not
+    propagate the grant down the subgroup cascade, and inheriting it is exactly
+    the lie this endpoint exists to prevent — a client would learn the truth by
+    minting a warrant, which spends a nonce it cannot get back.
+
+    Unreadable is `false`, matching `check_authorship`: mdma then does not
+    advertise the node for that group, which is the safe direction. It does NOT
+    clear `complete` — false is a real answer about a context that is still
+    being reported, not a gap that could cause a wrongful prune."""
+    if not ACCOUNT:
+        return False
+    response = meroctl("group", "members", "get-capabilities", group_id, ACCOUNT, critical=False)
+    if response is None:
+        return False
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    try:
+        return bool(int((data or {}).get("capabilities") or 0) & AUTHOR_BIT)
+    except Exception as exc:
+        print("sidecar: could not read capabilities for " + group_id + ": " + str(exc), file=sys.stderr)
+        return False
+
+
+def member_count():
+    """Members of the namespace root group — a COUNT, never a roster. The
+    aggregation happens here, inside the TEE and inside the group's key, so no
+    account id crosses the wire to mdma at all.
+
+    A truncated page would be an undercount, and an undercount reads as a real
+    number. None reads as 'did not look', which is the truth."""
+    response = meroctl("group", "members", "list", NAMESPACE_ID, critical=False)
+    if response is None:
+        return None
+    entries = response.get("members")
+    if not isinstance(entries, list):
+        print("sidecar: group members list " + NAMESPACE_ID + " had no 'members' array", file=sys.stderr)
+        return None
+    if maybe_truncated(entries, "group members list " + NAMESPACE_ID, critical=False):
+        return None
+    return len(entries)
+
+
+if not NAMESPACE_ID:
+    sys.exit(1)
+
+# Breadth-first over the group tree, starting AT the namespace root: the
+# namespace is itself a group and holds contexts of its own, and
+# `namespace groups` would have returned only its direct children.
+group_ids = []
+seen = set()
+queue = [NAMESPACE_ID]
+while queue and len(group_ids) < MAX_GROUPS and time.monotonic() < DEADLINE:
+    group_id = queue.pop(0)
+    if not group_id or group_id in seen:
+        continue
+    seen.add(group_id)
+    group_ids.append(group_id)
+    queue.extend(child_groups(group_id))
+if queue:
+    incomplete(
+        "group walk stopped early with " + str(len(queue)) + " group(s) unvisited "
+        "(cap " + str(MAX_GROUPS) + ", budget " + os.environ["WALK_BUDGET"] + "s)"
+    )
+
+groups = []
+distinct_contexts = set()
+for group_id in group_ids:
+    if time.monotonic() >= DEADLINE:
+        incomplete("ran out of walk budget before reading every group's contexts")
+        break
+    context_ids = group_contexts(group_id)
+    if context_ids is None:
+        # Unreadable: omit the group entirely. `complete` is already cleared,
+        # so this namespace will not be posted as authoritative and the rows
+        # mdma already holds for it survive.
+        continue
+    if not context_ids:
+        # Nothing to advertise, and no reason to spend a capabilities read.
+        continue
+    distinct_contexts.update(context_ids)
+    groups.append(
+        {
+            "group_id": group_id,
+            "context_ids": sorted(set(context_ids)),
+            "authorship_ready": authorship_ready(group_id),
+        }
+    )
+
+if not groups and not complete:
+    # Nothing read and nothing trustworthy to say. Reporting an empty namespace
+    # here would be indistinguishable from 'this node holds no contexts'.
+    sys.exit(1)
+
+namespace = {"namespace_id": NAMESPACE_ID, "groups": groups}
+
+members = member_count()
+if members is not None:
+    namespace["member_count"] = members
+if complete:
+    # Only meaningful when every group was read; otherwise it is an undercount
+    # wearing the clothes of a real number.
+    namespace["context_count"] = len(distinct_contexts)
+
+print(json.dumps({"namespace": namespace, "complete": complete}, sort_keys=True))
+PY
+}
+
+load_inventory() {
+  cat "$INVENTORY_FILE" 2>/dev/null || echo '{"namespaces":{},"last_full":0}'
+}
+
+save_inventory() {
+  echo "$1" > "$INVENTORY_FILE"
+}
+
+# POST one batch of assembled namespaces. `full` is a request-level flag in
+# mdma's `InventoryRequest`, which is why complete and partial namespaces go in
+# separate posts rather than one mixed one.
+#
+# Returns curl's success, like `confirm_assignment`: the caller must not record
+# a report it never delivered, or the change is lost until something else
+# happens to change again.
+post_inventory() {
+  local peer_id="$1"
+  local full="$2"
+  shift 2
+  [[ $# -eq 0 ]] && return 0
+
+  local body
+  body=$(python3 -c '
+import json, sys
+peer, full = sys.argv[1], sys.argv[2] == "true"
+namespaces = [json.loads(arg)["namespace"] for arg in sys.argv[3:]]
+print(json.dumps({"peer_id": peer, "namespaces": namespaces, "full": full}))
+' "$peer_id" "$full" "$@" 2>>"$LOG") || {
+    log "WARN: could not assemble the inventory body; skipping this post"
+    return 1
+  }
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  if curl -sf --max-time 15 "${headers[@]}" \
+      -d "$body" \
+      "${MDMA_URL}/api/fleet/inventory" >/dev/null 2>>"$LOG"; then
+    return 0
+  fi
+  log "WARN: POST /api/fleet/inventory failed (full=$full); will retry next scan"
+  return 1
+}
+
+# Report the context inventory for every confirmed namespace.
+#
+# Posts on CHANGE, with a slow periodic `full` pass. Both halves are needed:
+# without change detection this writes to mdma every cycle for data that moves a
+# few times a day, and without the periodic full pass an incremental-only stream
+# can never REMOVE a context — it would keep advertising a node for a context it
+# has left until something unrelated triggered a full report.
+#
+# `full` is claimed only for namespaces whose walk came back complete. That is
+# the whole reason `collect_namespace_inventory` tracks it: mdma prunes per
+# reported namespace, so one failed `meroctl` inside a `full` report deletes
+# live rows.
+reconcile_inventory() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local force_full="${3:-false}"
+
+  local recorded now last_full want_full
+  recorded=$(load_inventory)
+  now=$(date +%s)
+  last_full=$(echo "$recorded" | python3 -c "
+import sys, json
+try:
+  print(int(json.load(sys.stdin).get('last_full') or 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+  want_full=false
+  if [[ "$force_full" == "true" ]] || (( now - last_full >= INVENTORY_FULL_INTERVAL )); then
+    want_full=true
+  fi
+
+  local complete_batch=() partial_batch=()
+  local namespace_id out rc
+  for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    rc=0
+    out=$(collect_namespace_inventory "$namespace_id") || rc=$?
+    if [[ $rc -ne 0 ]] || [[ -z "$out" ]]; then
+      log "WARN: could not read the context inventory for $namespace_id; leaving mdma's copy untouched"
+      continue
+    fi
+    if echo "$out" | python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('complete') else 1)" 2>/dev/null; then
+      complete_batch+=("$out")
+    else
+      log "Context inventory for $namespace_id is partial; reporting it additively (no prune)"
+      partial_batch+=("$out")
+    fi
+  done
+
+  # Whether anything actually moved since the last successful post. A `full`
+  # pass posts regardless — that is what makes it a reconcile.
+  local changed
+  changed=$(python3 -c "
+import json, sys
+recorded = json.loads(sys.argv[1]).get('namespaces') or {}
+seen = {}
+for arg in sys.argv[2:]:
+    namespace = json.loads(arg)['namespace']
+    seen[namespace['namespace_id']] = namespace
+if any(recorded.get(k) != v for k, v in seen.items()):
+    print('true')
+else:
+    print('false')
+" "$recorded" ${complete_batch[@]+"${complete_batch[@]}"} ${partial_batch[@]+"${partial_batch[@]}"} 2>>"$LOG" || echo true)
+
+  local posted=() full_landed=false
+  if [[ ${#complete_batch[@]} -gt 0 ]] && { [[ "$want_full" == "true" ]] || [[ "$changed" == "true" ]]; }; then
+    if post_inventory "$peer_id" "$want_full" "${complete_batch[@]}"; then
+      posted+=("${complete_batch[@]}")
+      [[ "$want_full" == "true" ]] && full_landed=true
+    fi
+  fi
+  if [[ ${#partial_batch[@]} -gt 0 ]] && [[ "$changed" == "true" ]]; then
+    if post_inventory "$peer_id" false "${partial_batch[@]}"; then
+      posted+=("${partial_batch[@]}")
+    fi
+  fi
+
+  # Record only what mdma actually acknowledged, and prune namespaces we no
+  # longer hold so a re-join reports from scratch instead of inheriting a stale
+  # "already told them" verdict.
+  local updated
+  updated=$(python3 -c "
+import json, sys
+state = json.loads(sys.argv[1])
+namespaces = state.get('namespaces') or {}
+keep = set(json.loads(sys.argv[2]))
+last_full = int(state.get('last_full') or 0)
+if sys.argv[3] == 'true':
+    last_full = int(sys.argv[4])
+for arg in sys.argv[5:]:
+    namespace = json.loads(arg)['namespace']
+    namespaces[namespace['namespace_id']] = namespace
+namespaces = {k: v for k, v in namespaces.items() if k in keep}
+print(json.dumps({'namespaces': namespaces, 'last_full': last_full}, sort_keys=True))
+" "$recorded" "$confirmed" "$full_landed" "$now" ${posted[@]+"${posted[@]}"} 2>>"$LOG" || echo "$recorded")
+
+  if [[ "$updated" != "$recorded" ]]; then
+    save_inventory "$updated"
+    if [[ ${#posted[@]} -gt 0 ]]; then
+      log "Reported the context inventory for ${#posted[@]} namespace(s) (full=$full_landed)"
+    fi
+  fi
+}
+
 join_group() {
   local group_id="$1"
   log "Attempting fleet-join for group $group_id..."
@@ -452,6 +895,16 @@ else
   log "Fleet node relay url: $RELAY_URL"
 fi
 
+# Inventory scan clock. Starts at 0 so the first successful poll walks the tree
+# immediately rather than leaving `/api/cloud/contexts/{id}/relays` answering
+# "not servable" for the first scan interval after every boot.
+LAST_INVENTORY_SCAN=0
+# The confirmed set as it stood at the last scan. A join or a leave changes what
+# this node can execute for, and waiting out the scan interval to notice
+# something we already know is a pointless delay on the one signal core does
+# give us for free.
+LAST_INVENTORY_CONFIRMED=""
+
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
   # poll_mdma returns 0 + a valid assignments body on HTTP 200, or 1 on any
@@ -569,6 +1022,23 @@ print(json.dumps(sorted(con & des)))
   # long after admission, so it has to be re-read for namespaces we already
   # hold. Runs after the prune so a namespace we just left is not re-reported.
   reconcile_authorship "$PEER_ID" "$confirmed"
+
+  # Context inventory, also over the pruned set. Walking the group tree costs a
+  # `meroctl` subprocess per group, so it runs on its own much slower clock than
+  # this one-second loop — except when the confirmed set itself changed, which
+  # is a membership change we already know about and should not sit on.
+  now_ts=$(date +%s)
+  if [[ "$confirmed" != "$LAST_INVENTORY_CONFIRMED" ]] \
+     || (( now_ts - LAST_INVENTORY_SCAN >= INVENTORY_SCAN_INTERVAL )); then
+    # A membership change forces the authoritative variant: a namespace this
+    # node just left must stop being advertised now, and only a `full` post
+    # prunes.
+    force_full=false
+    [[ -n "$LAST_INVENTORY_CONFIRMED" && "$confirmed" != "$LAST_INVENTORY_CONFIRMED" ]] && force_full=true
+    reconcile_inventory "$PEER_ID" "$confirmed" "$force_full"
+    LAST_INVENTORY_SCAN="$now_ts"
+    LAST_INVENTORY_CONFIRMED="$confirmed"
+  fi
 
   sleep "$POLL_INTERVAL"
 done
