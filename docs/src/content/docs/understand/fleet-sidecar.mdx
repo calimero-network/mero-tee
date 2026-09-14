@@ -318,6 +318,55 @@ contexts that are still being reported, so it degrades to `false`/absent without
 blocking the prune — otherwise a namespace whose member list merely exceeds one
 page could never be pruned at all.
 
+### Account recovery envelopes, and who they are written for
+
+Holding an account root recovers the **account**. It does not recover the
+**list of namespaces** that account belongs to: namespaces are separate
+keypairs, and the local governance state left with the lost device. Without a
+record somewhere, those namespaces keep existing on other people's nodes and are
+permanently unaddressable — and the loss is only discovered at the moment the
+last device dies, when no retroactive fix exists.
+
+A relay is the only party that can write that record. It holds the group key, so
+it can enumerate the membership, and since
+[core#3918](https://github.com/calimero-network/core/pull/3918) it can seal to a
+member's account **root** via `meroctl account seal-to`. The recipient being the
+root rather than a device key is the whole point: a device is exactly what is
+gone in the case worth sealing for, so an envelope addressed to one is valid,
+opaque, and unopenable precisely when it is needed.
+
+**One envelope per `(account, namespace)` this node serves**, never one per
+account. A relay only ever sees the namespaces it serves, so a per-account
+envelope would be a partial list overwriting other relays' partial lists — which
+is [mdma#228](https://github.com/calimero-network/mdma/issues/228), fixed by
+keying MDMA's table per namespace.
+
+Four things this writer has to get right, none of which fail loudly:
+
+- **Only linked accounts.** The sidecar reports member *counts* and never
+  rosters, so no account id crosses the wire. Writing an envelope per member
+  would undo that by naming every member of every served namespace. Instead
+  `GET /api/fleet/linked-accounts` says which accounts hold a cloud login, and
+  the node intersects that against the roster it already holds. The link is also
+  the same predicate that authorizes the read, so an envelope for an unlinked
+  account could never be fetched by anyone anyway.
+- **Incomplete means write nothing.** A shorter list overwriting a longer one at
+  a higher version is the same data loss as a stale clobber, with a valid version
+  number on it. Any failed read in the walk aborts that namespace's pass.
+- **The version is durable.** It lives in `/var/lib/calimero/fleet-recovery.json`,
+  not in memory and not in wall-clock. MDMA answers `409` to a version that goes
+  backwards, so a counter that reset on restart would strand the envelope at
+  whatever MDMA last accepted.
+- **Change is detected on the plaintext.** Sealing mints a fresh ephemeral sender
+  key every call, so identical data seals to different bytes. Comparing
+  ciphertexts would see a change on every pass, burn a version each time, and
+  rewrite MDMA forever for data that never moved.
+
+MDMA's `ciphertext` field is a single opaque string, while a sealed envelope is
+four values (`accountRootEpoch`, `ephemeralPublicKey`, `nonce`, `ciphertext`) and
+a recovering holder needs all four. The whole envelope is JSON-encoded into that
+string; MDMA stores it without looking, as it does everything else here.
+
 ### Every failure lands on "replicates but does not relay"
 
 None of these reads is fatal, and they degrade in the same safe direction.
@@ -397,6 +446,10 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
 | Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
+| Linked accounts | `GET {MDMA_URL}/api/fleet/linked-accounts` → `{"accounts": [...]}` |
+| Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
+| Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
+| Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |
 | Log | `/var/log/fleet-sidecar.log` |
 | Poll interval | 1 second |
 | Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set) |

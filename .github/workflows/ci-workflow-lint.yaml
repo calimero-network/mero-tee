@@ -85,6 +85,19 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-inventory-test.sh
 
+      # The recovery-envelope writer (mdma#223). Every way it can be wrong is
+      # invisible until someone's last device dies and there is no retroactive
+      # fix: writing for members with no cloud login hands MDMA the membership
+      # roster the inventory half is careful never to send, a partial list at a
+      # higher version destroys a good envelope exactly as a stale copy would,
+      # a version that resets across a restart earns a permanent 409, and
+      # detecting change by comparing ciphertexts rewrites forever because every
+      # seal mints a fresh ephemeral key.
+      - name: Run fleet-sidecar recovery test
+        id: sidecar_recovery_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-recovery-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -99,6 +112,7 @@ jobs:
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
             --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
             --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
+            --checks-line "- fleet-sidecar recovery test: ${{ steps.sidecar_recovery_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

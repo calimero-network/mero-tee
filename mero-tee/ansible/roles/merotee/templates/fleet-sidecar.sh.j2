@@ -33,6 +33,22 @@ INVENTORY_SCAN_INTERVAL=60
 # can only add, so a context the node no longer holds is removed from mdma here
 # or not at all.
 INVENTORY_FULL_INTERVAL=900
+# Per (namespace, account): the envelope version last accepted by mdma, and a
+# hash of the PLAINTEXT it was sealed from. Sealing is non-deterministic — every
+# call mints a fresh ephemeral sender key, so two seals of identical data differ
+# in every byte. Change detection therefore compares plaintext hashes; comparing
+# ciphertexts would see a change on every pass, burn a version number each time,
+# and rewrite mdma forever for data that never moved. See `reconcile_recovery`.
+RECOVERY_FILE="/var/lib/calimero/fleet-recovery.json"
+# How often recovery envelopes are reconsidered. Far slower than the inventory
+# walk: this costs a `meroctl account seal-to` subprocess per changed account on
+# top of the walk, and the data behind it (which namespaces an account belongs
+# to) changes on the order of days, not minutes.
+RECOVERY_SCAN_INTERVAL=300
+# How often every envelope is re-sealed and re-posted even with no detected
+# change. The repair path for a write mdma lost, a row an operator deleted, or a
+# local state file wiped by a reimage — none of which the node can observe.
+RECOVERY_FULL_INTERVAL=86400
 # core's `DEFAULT_LIST_LIMIT` (crates/server/src/admin/handlers/groups.rs), and
 # `meroctl` exposes no --offset/--limit for `group contexts list` /
 # `group members list`. A page that comes back exactly this long may have been
@@ -750,6 +766,410 @@ print(json.dumps({'namespaces': namespaces, 'last_full': last_full}, sort_keys=T
   fi
 }
 
+# --- account recovery envelopes ---------------------------------------------
+#
+# Holding a root key recovers the ACCOUNT; it does not recover the LIST of
+# namespaces that account belongs to, because namespaces are separate keypairs
+# and the local governance state left with the lost device. A relay is the only
+# party that can record that list: it holds the group key, can enumerate the
+# membership, and can seal to a member's account root.
+#
+# One envelope per (account, namespace) THIS node serves — not one per account.
+# A relay only ever sees the namespaces it serves, so a per-account envelope
+# would be a partial list overwriting other relays' partial lists
+# (calimero-network/mdma#228, fixed by keying mdma's table per namespace).
+
+# Account ids that hold a cloud login, per mdma.
+#
+# The relay must not report its rosters: `member_count` aggregates inside the
+# TEE precisely so no account id crosses the wire, and writing an envelope per
+# member would name every member of every served namespace. So the intersection
+# happens HERE — mdma says which accounts are linked, this node matches that
+# against the roster it already holds, and only the overlap is written back.
+#
+# The link is also exactly who can read an envelope: mdma authorizes the read
+# through `CloudAccountLink`, so one written for an unlinked account could never
+# be fetched by anyone.
+fetch_linked_accounts() {
+  local headers=()
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  local body
+  body=$(curl -sf --max-time 15 "${headers[@]}" \
+    "${MDMA_URL}/api/fleet/linked-accounts" 2>>"$LOG") || {
+    log "WARN: GET /api/fleet/linked-accounts failed; writing no envelopes this pass"
+    return 1
+  }
+  echo "$body" | python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+accounts = payload.get('accounts')
+if not isinstance(accounts, list):
+    sys.exit(1)
+print(json.dumps(sorted({str(a).strip().lower() for a in accounts if str(a).strip()})))
+" 2>>"$LOG" || {
+    log "WARN: /api/fleet/linked-accounts returned an unusable body; writing no envelopes this pass"
+    return 1
+  }
+}
+
+# Assemble, for one namespace, the plaintext each linked member's envelope
+# should carry. Emits {"complete": bool, "accounts": {<account>: {...}}}.
+#
+# `complete` is the load-bearing part. A relay that cannot finish the walk must
+# write NOTHING for this namespace: a shorter list overwriting a longer one at a
+# higher version is the same silent data loss as a clobber, with a valid version
+# number on it.
+collect_recovery_plan() {
+  local namespace_id="$1"
+  local linked_json="$2"
+  MEROCTL_CMD="$MEROCTL" \
+  NAMESPACE_ID="$namespace_id" \
+  LINKED_JSON="$linked_json" \
+  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  MAX_GROUPS="$MAX_GROUP_WALK" \
+  WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
+  python3 - <<'PY' 2>>"$LOG"
+import hashlib
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip().lower()
+LINKED = set(json.loads(os.environ["LINKED_JSON"]))
+PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+MAX_GROUPS = int(os.environ["MAX_GROUPS"])
+DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
+
+complete = True
+
+
+def incomplete(why):
+    global complete
+    complete = False
+    print("sidecar: recovery read incomplete: " + why, file=sys.stderr)
+
+
+def meroctl(*args):
+    try:
+        proc = subprocess.run(
+            MEROCTL + ["--output-format", "json", *args],
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, DEADLINE - time.monotonic()),
+        )
+    except Exception as exc:
+        incomplete("meroctl " + " ".join(args) + " did not run: " + str(exc))
+        return None
+    if proc.returncode != 0:
+        incomplete("meroctl " + " ".join(args) + " exited " + str(proc.returncode))
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except Exception as exc:
+        incomplete("meroctl " + " ".join(args) + " returned unparseable JSON: " + str(exc))
+        return None
+
+
+def page_complete(entries, what):
+    """A list exactly one page long may be truncated, and meroctl exposes no
+    offset. An undercount here would drop a group or a membership from someone's
+    recovery list, so it counts as incomplete."""
+    if len(entries) >= PAGE_LIMIT:
+        incomplete(what + " came back at the " + str(PAGE_LIMIT) + "-row page limit")
+        return False
+    return True
+
+
+def child_groups(group_id):
+    response = meroctl("group", "subgroups", group_id)
+    if response is None:
+        return []
+    entries = response.get("subgroups")
+    if not isinstance(entries, list):
+        incomplete("group subgroups " + group_id + " had no 'subgroups' array")
+        return []
+    page_complete(entries, "group subgroups " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("group_id") or entry.get("groupId") or entry.get("id")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+def group_members(group_id):
+    response = meroctl("group", "members", "list", group_id)
+    if response is None:
+        return []
+    entries = response.get("members")
+    if not isinstance(entries, list):
+        incomplete("group members list " + group_id + " had no 'members' array")
+        return []
+    page_complete(entries, "group members list " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("identity") or entry.get("account")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+def group_contexts(group_id):
+    response = meroctl("group", "contexts", "list", group_id)
+    if response is None:
+        return []
+    entries = response.get("data")
+    if not isinstance(entries, list):
+        incomplete("group contexts list " + group_id + " had no 'data' array")
+        return []
+    page_complete(entries, "group contexts list " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("context_id") or entry.get("contextId") or entry.get("id")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+if not NAMESPACE_ID:
+    sys.exit(1)
+
+# Walk the group tree once, collecting membership and contexts per group.
+seen = set()
+queue = [NAMESPACE_ID]
+per_group = []
+while queue and len(seen) < MAX_GROUPS:
+    if time.monotonic() >= DEADLINE:
+        incomplete("ran out of walk budget")
+        break
+    group_id = queue.pop()
+    if group_id in seen:
+        continue
+    seen.add(group_id)
+    per_group.append((group_id, group_members(group_id), group_contexts(group_id)))
+    for child in child_groups(group_id):
+        if child not in seen:
+            queue.append(child)
+
+if len(seen) >= MAX_GROUPS and queue:
+    incomplete("hit the " + str(MAX_GROUPS) + "-group walk ceiling")
+
+# Invert to per-account. Only LINKED accounts are kept: everyone else's
+# membership stays inside the TEE, and an envelope for them could never be read.
+accounts = {}
+for group_id, members, contexts in per_group:
+    for account in members:
+        if account not in LINKED:
+            continue
+        record = accounts.setdefault(account, {"groups": set(), "contexts": set()})
+        record["groups"].add(group_id)
+        record["contexts"].update(contexts)
+
+plans = {}
+for account, record in accounts.items():
+    # Self-contained on purpose: `namespace_id` is repeated inside the sealed
+    # body so an envelope is interpretable without trusting the cleartext key it
+    # arrived under. `v` so the shape can move without guessing.
+    payload = {
+        "v": 1,
+        "namespace_id": NAMESPACE_ID,
+        "groups": sorted(record["groups"]),
+        "contexts": sorted(record["contexts"]),
+    }
+    plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    plans[account] = {
+        "plaintext": plaintext,
+        # Hash of the PLAINTEXT, never of the ciphertext: sealing mints a fresh
+        # ephemeral key every call, so identical data seals to different bytes
+        # and a ciphertext comparison would report a change on every pass.
+        "sha256": hashlib.sha256(plaintext.encode()).hexdigest(),
+    }
+
+print(json.dumps({"complete": complete, "accounts": plans}, sort_keys=True))
+PY
+}
+
+# Seal one plaintext to an account's ROOT key, via core's `meroctl account
+# seal-to` (calimero-network/core#3918). Prints the envelope mdma should store.
+#
+# The recipient is the account ROOT, never a device key: a device is exactly
+# what is gone in the case worth sealing for, so an envelope addressed to one is
+# valid, opaque, and unopenable precisely when it is needed. `seal-to` resolves
+# the root itself; this node never names a key.
+#
+# mdma's `ciphertext` is one opaque string, while a sealed envelope is four
+# fields (epoch, ephemeral key, nonce, ciphertext) and a recovering holder needs
+# all four. So the whole envelope is JSON-encoded into that string. mdma stores
+# it without looking, exactly as it stores everything else here.
+seal_for_account() {
+  local group_id="$1"
+  local account="$2"
+  local plaintext="$3"
+
+  local sealed
+  sealed=$(printf '%s' "$plaintext" | $MEROCTL --output-format json account seal-to "$group_id" "$account" 2>>"$LOG") || {
+    log "WARN: sealing for $account in $group_id failed; leaving mdma's copy untouched"
+    return 1
+  }
+  echo "$sealed" | python3 -c "
+import json, sys
+env = json.load(sys.stdin)
+need = ('accountRootEpoch', 'ephemeralPublicKey', 'nonce', 'ciphertext')
+if not all(k in env for k in need):
+    sys.exit(1)
+print(json.dumps({k: env[k] for k in need}, sort_keys=True))
+" 2>>"$LOG" || {
+    log "WARN: meroctl account seal-to returned an unexpected envelope for $account; skipping"
+    return 1
+  }
+}
+
+load_recovery() {
+  cat "$RECOVERY_FILE" 2>/dev/null || echo '{"envelopes":{},"last_full":0}'
+}
+
+save_recovery() {
+  echo "$1" > "$RECOVERY_FILE"
+}
+
+# PUT one envelope. Returns curl's success: a version must not be recorded
+# locally unless mdma accepted it, or the next pass believes it is already
+# stored and the write is lost until the plaintext happens to change again.
+put_recovery_envelope() {
+  local peer_id="$1" account="$2" namespace_id="$3" ciphertext="$4" version="$5"
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+    "peer_id": sys.argv[1],
+    "account_id": sys.argv[2],
+    "namespace_id": sys.argv[3],
+    "ciphertext": sys.argv[4],
+    "version": int(sys.argv[5]),
+}))
+' "$peer_id" "$account" "$namespace_id" "$ciphertext" "$version" 2>>"$LOG") || return 1
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  if curl -sf --max-time 15 -X PUT "${headers[@]}" \
+      -d "$body" \
+      "${MDMA_URL}/api/fleet/recovery-envelope" >/dev/null 2>>"$LOG"; then
+    return 0
+  fi
+  log "WARN: PUT /api/fleet/recovery-envelope failed for $account in $namespace_id (v$version)"
+  return 1
+}
+
+# Write an envelope for every linked member of every namespace this node serves,
+# on change and on a slow periodic pass.
+#
+# `version` is monotonic per (account, namespace) and survives restarts because
+# it lives in RECOVERY_FILE rather than in memory or in wall-clock: mdma rejects
+# a version that goes backwards with a 409, and a counter that reset on restart
+# would strand the envelope at a version mdma will no longer accept.
+reconcile_recovery() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local force_full="${3:-false}"
+
+  local linked
+  linked=$(fetch_linked_accounts) || return 0
+  if [[ "$linked" == "[]" ]]; then
+    # Nothing to do, and importantly NOT a reason to fall back to writing for
+    # every member: no cloud login means no reader.
+    return 0
+  fi
+
+  local state now last_full want_full
+  state=$(load_recovery)
+  now=$(date +%s)
+  last_full=$(echo "$state" | python3 -c "
+import sys, json
+try:
+  print(int(json.load(sys.stdin).get('last_full') or 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+  want_full=false
+  if [[ "$force_full" == "true" ]] || (( now - last_full >= RECOVERY_FULL_INTERVAL )); then
+    want_full=true
+  fi
+
+  local namespace_id plan wrote_any=false
+  for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    plan=$(collect_recovery_plan "$namespace_id" "$linked") || plan=""
+    if [[ -z "$plan" ]]; then
+      log "WARN: could not assemble recovery plans for $namespace_id; leaving mdma's copies untouched"
+      continue
+    fi
+    if ! echo "$plan" | python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('complete') else 1)" 2>/dev/null; then
+      # The criterion that matters: a partial list at a higher version destroys
+      # a good one just as effectively as a stale copy would.
+      log "Recovery plan for $namespace_id is incomplete; writing nothing rather than a partial list"
+      continue
+    fi
+
+    local account entry plaintext digest known_digest version
+    for account in $(echo "$plan" | python3 -c "import sys,json; [print(a) for a in sorted(json.load(sys.stdin)['accounts'])]" 2>/dev/null); do
+      entry=$(echo "$plan" | python3 -c "
+import sys, json
+print(json.dumps(json.load(sys.stdin)['accounts'][sys.argv[1]]))
+" "$account" 2>/dev/null) || continue
+      plaintext=$(echo "$entry" | python3 -c "import sys,json; print(json.load(sys.stdin)['plaintext'])" 2>/dev/null) || continue
+      digest=$(echo "$entry" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha256'])" 2>/dev/null) || continue
+
+      known_digest=$(echo "$state" | python3 -c "
+import sys, json
+key = sys.argv[1]
+print((json.load(sys.stdin).get('envelopes') or {}).get(key, {}).get('sha256', ''))
+" "${namespace_id}/${account}" 2>/dev/null || echo "")
+
+      if [[ "$digest" == "$known_digest" && "$want_full" != "true" ]]; then
+        continue
+      fi
+
+      version=$(echo "$state" | python3 -c "
+import sys, json
+key = sys.argv[1]
+print(int((json.load(sys.stdin).get('envelopes') or {}).get(key, {}).get('version', 0)) + 1)
+" "${namespace_id}/${account}" 2>/dev/null || echo 1)
+
+      local sealed
+      sealed=$(seal_for_account "$namespace_id" "$account" "$plaintext") || continue
+      if put_recovery_envelope "$peer_id" "$account" "$namespace_id" "$sealed" "$version"; then
+        state=$(echo "$state" | python3 -c "
+import sys, json
+state = json.load(sys.stdin)
+state.setdefault('envelopes', {})[sys.argv[1]] = {'version': int(sys.argv[2]), 'sha256': sys.argv[3]}
+print(json.dumps(state, sort_keys=True))
+" "${namespace_id}/${account}" "$version" "$digest" 2>/dev/null || echo "$state")
+        wrote_any=true
+        log "Recovery envelope written for $account in $namespace_id (v$version)"
+      fi
+    done
+  done
+
+  if [[ "$want_full" == "true" ]]; then
+    state=$(echo "$state" | python3 -c "
+import sys, json
+state = json.load(sys.stdin)
+state['last_full'] = int(sys.argv[1])
+print(json.dumps(state, sort_keys=True))
+" "$now" 2>/dev/null || echo "$state")
+    wrote_any=true
+  fi
+
+  [[ "$wrote_any" == "true" ]] && save_recovery "$state"
+  return 0
+}
+
 join_group() {
   local group_id="$1"
   log "Attempting fleet-join for group $group_id..."
@@ -904,6 +1324,8 @@ LAST_INVENTORY_SCAN=0
 # something we already know is a pointless delay on the one signal core does
 # give us for free.
 LAST_INVENTORY_CONFIRMED=""
+LAST_RECOVERY_SCAN=0
+LAST_RECOVERY_CONFIRMED=""
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
@@ -1038,6 +1460,21 @@ print(json.dumps(sorted(con & des)))
     reconcile_inventory "$PEER_ID" "$confirmed" "$force_full"
     LAST_INVENTORY_SCAN="$now_ts"
     LAST_INVENTORY_CONFIRMED="$confirmed"
+  fi
+
+  # Recovery envelopes, on their own much slower clock again: this adds a
+  # `meroctl account seal-to` per changed account on top of the walk, for data
+  # that moves on the order of days. A change to the confirmed set still forces
+  # a pass — a namespace just joined has members whose recovery list is now
+  # wrong, and waiting out the interval leaves them unrecoverable in the window.
+  now_ts=$(date +%s)
+  if [[ "$confirmed" != "$LAST_RECOVERY_CONFIRMED" ]] \
+     || (( now_ts - LAST_RECOVERY_SCAN >= RECOVERY_SCAN_INTERVAL )); then
+    recovery_full=false
+    [[ -n "$LAST_RECOVERY_CONFIRMED" && "$confirmed" != "$LAST_RECOVERY_CONFIRMED" ]] && recovery_full=true
+    reconcile_recovery "$PEER_ID" "$confirmed" "$recovery_full"
+    LAST_RECOVERY_SCAN="$now_ts"
+    LAST_RECOVERY_CONFIRMED="$confirmed"
   fi
 
   sleep "$POLL_INTERVAL"
