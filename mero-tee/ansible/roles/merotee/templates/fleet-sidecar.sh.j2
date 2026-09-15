@@ -39,6 +39,11 @@ INVENTORY_FULL_INTERVAL=900
 # in every byte. Change detection therefore compares plaintext hashes; comparing
 # ciphertexts would see a change on every pass, burn a version number each time,
 # and rewrite mdma forever for data that never moved. See `reconcile_recovery`.
+# The identity mdma last ACCEPTED a registration for. Compared against the
+# node's current identity each cycle, so a re-key or a new relay url
+# re-registers and anything else costs nothing. Written only after mdma
+# accepted, so a refusal or an outage is retried rather than recorded as done.
+REGISTRATION_FILE="/var/lib/calimero/fleet-registration.json"
 RECOVERY_FILE="/var/lib/calimero/fleet-recovery.json"
 # How often recovery envelopes are reconsidered. Far slower than the inventory
 # walk: this costs a `meroctl account seal-to` subprocess per changed account on
@@ -1170,6 +1175,183 @@ print(json.dumps(state, sort_keys=True))
   return 0
 }
 
+# --- attested node registration ---------------------------------------------
+#
+# Everything this sidecar tells mdma about itself — peer id, executor account,
+# relay url, mrtd — used to be taken on trust. The only credential is a
+# fleet-wide token that says "some node" and never "which node", so mdma could
+# not tell one node's claims from another's, and `should_join` compared a
+# REPORTED mrtd against a customer's measurement allowlist
+# (calimero-network/mdma#225).
+#
+# Registration binds those claims to a quote. Nothing here signs anything: the
+# executor account is minted inside the TEE and never leaves it, so an
+# allowlisted image saying what its account is is exactly what attestation is
+# for. The binding goes in the quote's report-data nonce.
+
+# The merod HTTP port, for `/admin-api/tee/attest`. Same instance-metadata key
+# and same default `calimero-init` uses, rather than a second source of truth.
+get_server_port() {
+  local port
+  port=$(curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/server-port" \
+    2>/dev/null | tr -d '\r\n' || true)
+  echo "${port:-2428}"
+}
+
+load_registration() {
+  cat "$REGISTRATION_FILE" 2>/dev/null || echo '{}'
+}
+
+save_registration() {
+  echo "$1" > "$REGISTRATION_FILE"
+}
+
+# Ask merod for a quote committing to `nonce_hex`.
+#
+# `/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
+# `protected_service()`), so this reaches it over loopback with no token — which
+# is why no core change was needed for any of this.
+#
+# Deliberately NO `application_id`: `build_report_data(nonce, None)` leaves the
+# second half of report data as zeros, and the whole identity binding lives in
+# the nonce. mdma verifies against zeros for that half and its own code says the
+# check is vacuous, so sending an application id here would change what mdma
+# must expect for no gain.
+attest_quote() {
+  local nonce_hex="$1"
+  local port="$2"
+  local body
+  body=$(curl -sf --max-time 30 -H "Content-Type: application/json" \
+    -d "{\"nonce\":\"${nonce_hex}\"}" \
+    "http://127.0.0.1:${port}/admin-api/tee/attest" 2>>"$LOG") || {
+    log "WARN: /admin-api/tee/attest did not answer; cannot register this pass"
+    return 1
+  }
+  echo "$body" | python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+quote = data.get('quoteB64') or payload.get('quoteB64') or ''
+if not isinstance(quote, str) or not quote.strip():
+    sys.exit(1)
+print(quote.strip())
+" 2>>"$LOG" || {
+    log "WARN: /admin-api/tee/attest returned no quoteB64; cannot register this pass"
+    return 1
+  }
+}
+
+# Register this node's identity with mdma, binding it to a fresh quote.
+#
+# Returns 0 only when mdma accepted. Anything else leaves the recorded state
+# untouched so the next pass tries again — including mdma's 503, which means
+# "the quote could not be EVALUATED" (Intel collateral unreachable, verifier
+# missing) rather than "your quote is bad". Those are different answers and
+# retrying the first is correct; treating it as a refusal and giving up would
+# leave a healthy node permanently unregistered because of someone else's
+# outage.
+register_with_mdma() {
+  local peer_id="$1" account="$2" relay_url="$3" port="$4"
+
+  local headers=()
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  local challenge
+  challenge=$(curl -sf --max-time 15 "${headers[@]}" \
+    "${MDMA_URL}/api/fleet/nodes/challenge" 2>>"$LOG" \
+    | python3 -c "
+import json, sys
+value = json.load(sys.stdin).get('challenge')
+if not isinstance(value, str) or not value.strip():
+    sys.exit(1)
+print(value.strip())
+" 2>>"$LOG") || {
+    log "WARN: could not get a registration challenge from mdma; will retry"
+    return 1
+  }
+
+  # The binding mdma recomputes from the request body. Field order and the
+  # separator are part of the contract — get either wrong and the quote is
+  # rejected as bound to a different identity, which is the mechanism working.
+  local nonce_hex
+  nonce_hex=$(python3 -c "
+import hashlib, sys
+print(hashlib.sha256('|'.join(sys.argv[1:5]).encode()).hexdigest())
+" "$challenge" "$peer_id" "$account" "$relay_url" 2>>"$LOG") || return 1
+
+  local quote
+  quote=$(attest_quote "$nonce_hex" "$port") || return 1
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+    "peer_id": sys.argv[1],
+    "executor_account": sys.argv[2],
+    "relay_url": sys.argv[3],
+    "challenge": sys.argv[4],
+    "quote": sys.argv[5],
+}))
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" 2>>"$LOG") || return 1
+
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+    -H "Content-Type: application/json" "${headers[@]}" \
+    -d "$body" "${MDMA_URL}/api/fleet/nodes/register" 2>>"$LOG") || code="000"
+
+  case "$code" in
+    2*)
+      log "Registered with mdma (peer=$peer_id)"
+      return 0 ;;
+    403)
+      # A verdict against this node: the quote did not verify, its measurement
+      # is not published for this release/profile, or the challenge was spent.
+      # Retried on the next pass anyway — a published-policy update is exactly
+      # the kind of thing that turns this into a pass without the node changing.
+      log "WARN: mdma refused this node's registration (403); it replicates but will not relay" ;;
+    503)
+      log "mdma could not evaluate the attestation (503); will retry" ;;
+    *)
+      log "WARN: registration POST returned ${code}; will retry" ;;
+  esac
+  return 1
+}
+
+# Register when the identity mdma holds is not the one this node now has.
+#
+# Re-registers on CHANGE rather than on a timer: a registration does not expire,
+# and the identity it binds (peer id, executor account, relay url) is fixed for
+# the life of the node unless it re-keys or moves behind a different ingress —
+# at which point the old registration describes a node that no longer exists.
+reconcile_registration() {
+  local peer_id="$1" account="$2" relay_url="$3" port="$4"
+
+  # Nothing to bind yet. Not an error: a node with no account reported cannot be
+  # advertised as a relay anyway, so registering a half-identity would only
+  # record something that has to be replaced.
+  [[ -z "$peer_id" || -z "$account" ]] && return 0
+
+  local recorded want
+  recorded=$(load_registration | python3 -c "
+import json, sys
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '']))
+" 2>/dev/null || echo "")
+  want="${peer_id}|${account}|${relay_url}"
+  [[ "$recorded" == "$want" ]] && return 0
+
+  if register_with_mdma "$peer_id" "$account" "$relay_url" "$port"; then
+    save_registration "$(python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
+' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+  fi
+}
+
 join_group() {
   local group_id="$1"
   log "Attempting fleet-join for group $group_id..."
@@ -1307,6 +1489,7 @@ else
   log "Fleet node executor account: $EXECUTOR_ACCOUNT"
 fi
 
+SERVER_PORT=$(get_server_port)
 RELAY_URL=$(get_relay_url)
 if [[ -z "$RELAY_URL" ]]; then
   log "No relay-url instance metadata; mdma will report no relay URL for this node \
@@ -1444,6 +1627,12 @@ print(json.dumps(sorted(con & des)))
   # long after admission, so it has to be re-read for namespaces we already
   # hold. Runs after the prune so a namespace we just left is not re-reported.
   reconcile_authorship "$PEER_ID" "$confirmed"
+
+  # Attested registration. Cheap when nothing changed — a string compare
+  # against the recorded identity — so it sits on the 1 Hz loop rather than a
+  # timer of its own: until this succeeds mdma will not advertise the node as a
+  # relay at all, so there is nothing to gain by waiting.
+  reconcile_registration "$PEER_ID" "$EXECUTOR_ACCOUNT" "$RELAY_URL" "$SERVER_PORT"
 
   # Context inventory, also over the pruned set. Walking the group tree costs a
   # `meroctl` subprocess per group, so it runs on its own much slower clock than

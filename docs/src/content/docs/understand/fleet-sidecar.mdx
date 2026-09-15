@@ -318,6 +318,61 @@ contexts that are still being reported, so it degrades to `false`/absent without
 blocking the prune — otherwise a namespace whose member list merely exceeds one
 page could never be pruned at all.
 
+### Attested registration, and why nothing here signs anything
+
+Everything the sidecar tells MDMA about itself — peer id, executor account,
+relay URL, MRTD — was taken on trust. The only credential is a fleet-wide shared
+token, which identifies *some* node and never *which* node, so MDMA could not
+tell one node's claims from another's. Two things rested on that:
+
+- `should_join` compared the **reported** MRTD against a customer's
+  `allowed_measurements`. That value is a hex string the caller types, so the
+  allowlist meant to restrict a namespace to nodes running a known image was
+  satisfied by asserting the right answer.
+- relay identity was keyed on the claimed peer id, and `relay_url` /
+  `executor_account` are what `GET /api/cloud/contexts/{id}/relays` hands
+  clients — so naming yourself the relay for a context bought denial of service
+  and disclosure of intent contents.
+
+`GET /api/fleet/nodes/challenge` → `POST /api/fleet/nodes/register` closes both.
+See [mdma#225](https://github.com/calimero-network/mdma/issues/225).
+
+**No signature, and no core change was needed.** The executor account is minted
+*inside* the TEE and never leaves it, so an allowlisted image saying what its
+account is is precisely what attestation is for. The binding rides the quote's
+report data: the sidecar computes
+`SHA256(challenge | peer_id | executor_account | relay_url)`, asks merod's
+`POST /admin-api/tee/attest` for a quote over that nonce, and MDMA recomputes
+the same hash from the request body. A quote therefore commits to exactly one
+identity and one challenge — a genuine quote from one node cannot be presented
+alongside another's claim, and neither can be replayed.
+
+`/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
+`protected_service()`), which is why the sidecar reaches it over loopback with
+no token and why none of this needed a change in core. No `application_id` is
+sent: `build_report_data(nonce, None)` leaves the second half of report data as
+zeros, and the whole binding lives in the nonce.
+
+Four things this has to get right, each covered by
+`scripts/ci/tests/fleet-sidecar-registration-test.sh`:
+
+- **The hash is a contract computed twice.** Field order and separator are part
+  of it; get either wrong and every registration is refused as bound to a
+  different identity — indistinguishable from a genuinely bad attestation.
+- **Only an accepted registration is recorded.** State is written after MDMA
+  says yes, so a refusal or an outage is retried rather than remembered as done.
+- **`503` is not `403`.** MDMA answers `503` when the quote could not be
+  *evaluated* — Intel collateral unreachable, verifier missing — which is not a
+  verdict about this node. Treating it as a refusal would leave a healthy fleet
+  unregistered through someone else's outage.
+- **Re-register on change, not on a timer.** A registration does not expire, and
+  the identity it binds is fixed for the life of the node unless it re-keys or
+  moves behind a different ingress.
+
+Until a node registers it **replicates but does not relay**: MDMA records no
+identity for it and never advertises it, which is the same posture every other
+failure on this path takes.
+
 ### Account recovery envelopes, and who they are written for
 
 Holding an account root recovers the **account**. It does not recover the
@@ -446,6 +501,10 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
 | Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
+| Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
+| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote"}` |
+| Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
+| Registration state | `/var/lib/calimero/fleet-registration.json` |
 | Linked accounts | `GET {MDMA_URL}/api/fleet/linked-accounts` → `{"accounts": [...]}` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |

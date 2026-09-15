@@ -98,6 +98,18 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-recovery-test.sh
 
+      # Attested node registration (mdma#225). The binding is a hash the
+      # sidecar and MDMA compute independently, so a field-order or separator
+      # change breaks every registration in a way that looks exactly like a bad
+      # attestation. The rest is retry semantics that fail quietly: recording a
+      # registration MDMA refused, or treating its 503 ("could not EVALUATE the
+      # quote") as a verdict, each leave a healthy node unadvertised for as long
+      # as it runs.
+      - name: Run fleet-sidecar registration test
+        id: sidecar_registration_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-registration-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -113,6 +125,7 @@ jobs:
             --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
             --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
             --checks-line "- fleet-sidecar recovery test: ${{ steps.sidecar_recovery_test.outcome }}" \
+            --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
