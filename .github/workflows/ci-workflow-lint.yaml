@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Run actionlint
         id: actionlint
@@ -62,6 +62,24 @@ jobs:
           fi
 
           shellcheck "${shell_files[@]}"
+
+      # The sidecar tests below substitute the template's variables with `sed`,
+      # which exercises the bash but never asks whether Jinja can parse the file.
+      # `${#arr[@]}` opens with Jinja's comment delimiter, so a counted array
+      # makes Ansible swallow the rest of the template and die with "Missing end
+      # of comment tag" -- five minutes into a packer build, on a GCP VM, and
+      # only on the read-only profiles, since the sidecar task is gated on
+      # `merod_mode == "read-only"`. That took out the 2.3.55 and 2.3.56 node
+      # images and then every later `Release mero-kms` run with it, because that
+      # workflow refuses to publish without the node release's published-mrtds.
+      # Parsing each template here costs a second and fails on the PR instead.
+      - name: Check Ansible templates parse
+        id: ansible_templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet jinja2 pyyaml
+          python3 scripts/ci/check-ansible-templates.py
 
       # Runs here rather than in a probe workflow because it needs neither a TDX
       # node nor an MDMA: it renders the sidecar template and drives its
