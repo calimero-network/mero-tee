@@ -163,6 +163,15 @@
     owner: root
     group: root
     mode: "0755"
+    # This template is a bash script, and bash's array-length form `${#arr[@]}`
+    # opens with the same two characters as a Jinja comment. Jinja then reads
+    # the rest of the file looking for `#}`, hits EOF, and the render dies with
+    # "Missing end of comment tag" -- which is what broke the 2.3.55 and 2.3.56
+    # node images. The file has no Jinja comments in it (only the two variables
+    # below), so moving the comment delimiter somewhere bash cannot produce
+    # costs nothing and retires the whole class.
+    comment_start_string: "{@#"
+    comment_end_string: "#@}"
   when: merod_mode == "read-only"
 
 - name: Create fleet sidecar systemd service
