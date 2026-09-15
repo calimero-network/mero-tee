@@ -49,16 +49,17 @@ default_src = ["'self'"]
 script_src = ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
 style_src = ["'self'", "'unsafe-inline'"]
 
-# Authentication providers configuration
+# Authentication providers configuration.
+#
+# `user_password` is the only provider `mero-auth` implements
+# (`crates/auth/src/providers/impls/`). `providers` is a
+# `HashMap<String, bool>`, so naming any other one parses cleanly and then
+# matches nothing -- which is how a `near_wallet = true` entry and a `[near]`
+# block pointing at NEAR testnet sat here advertising a login this binary
+# cannot perform. `AuthConfig` has no `deny_unknown_fields`, so serde discarded
+# the block silently rather than complaining.
 [providers]
-near_wallet = true
 user_password = true
-
-# NEAR wallet configuration
-[near]
-network = "testnet"
-rpc_url = "https://rpc.testnet.near.org"
-wallet_url = "https://wallet.testnet.near.org"
 
 # Username/password configuration
 [user_password]
