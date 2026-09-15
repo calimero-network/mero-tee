@@ -49,18 +49,28 @@ default_src = ["'self'"]
 script_src = ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
 style_src = ["'self'", "'unsafe-inline'"]
 
-# Authentication providers configuration
+# Authentication providers: none.
+#
+# A fleet relay is operated by Calimero and serves several tenants' namespaces
+# at once. Nobody should be holding an interactive login on it, so no provider
+# is enabled and no new token can be minted here.
+#
+# `user_password` was the only one that ever worked. A `near_wallet = true`
+# entry and a `[near]` block pointing at NEAR testnet also sat here, and never
+# did anything: `mero-auth` implements one provider
+# (`crates/auth/src/providers/impls/user_password.rs`), `providers` is a
+# `HashMap<String, bool>` so an unregistered name matches nothing, and
+# `AuthConfig` has no `deny_unknown_fields` so serde discarded the block in
+# silence. The image was advertising a login it could not perform.
+#
+# What this does NOT affect: the fleet sidecar talks to
+# `http://127.0.0.1:<port>/admin-api/...` directly and `meroctl` uses the local
+# `--home`, so neither passes through Traefik's `auth-node` forwardAuth. What it
+# closes is external access to `/jsonrpc` and `/admin-api/` through the ingress,
+# which on this machine had no legitimate user.
+#
+# `create_providers` collects enabled registrations into a `Vec` and returns it
+# unconditionally, so an empty set starts cleanly -- token *validation* still
+# works for `auth-node`, there is simply no way to obtain a new one.
 [providers]
-near_wallet = true
-user_password = true
-
-# NEAR wallet configuration
-[near]
-network = "testnet"
-rpc_url = "https://rpc.testnet.near.org"
-wallet_url = "https://wallet.testnet.near.org"
-
-# Username/password configuration
-[user_password]
-min_password_length = 8
-max_password_length = 128
+user_password = false
