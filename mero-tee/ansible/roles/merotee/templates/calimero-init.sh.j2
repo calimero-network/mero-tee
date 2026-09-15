@@ -148,6 +148,29 @@ if [[ "$MEROD_MODE" == "read-only" ]]; then
     || log "WARN: failed to apply read-only merod config"
 fi
 
+{% if fleet_delegated_execution | default(false) | bool %}
+# Delegated execution: serve `GET`/`POST /admin-api/contexts/<ctx>/intents`
+# without a node credential, so a keyholder that has no account here can still
+# have this node write on their behalf.
+#
+# The pair to the `node-api-intents` router in traefik's routing.yml, set from
+# the same `fleet_delegated_execution` variable so the two edges cannot drift.
+# Only those two routes are opened, and both are self-authenticating: merod
+# refuses an intent unless the warrant is the member's, commits to this exact
+# method and arguments, is unexpired, has an unspent nonce, and this node holds
+# `CAN_AUTHOR_ON_BEHALF` on the owning group.
+#
+# Non-fatal on failure, deliberately: a node that cannot apply this is a node
+# that replicates but does not relay, which is a degraded fleet member rather
+# than a broken one. The `authorship_ready` the sidecar reports to mdma is what
+# keeps clients from being sent to it — mdma only advertises a relay the node
+# itself confirmed can write.
+log "Enabling delegated execution (public intents) on the admin API..."
+"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+  'server.admin.public_intents=true' \
+  || log "WARN: failed to enable public intents; this node will replicate but not relay"
+{% endif %}
+
 log "Starting services..."
 systemctl daemon-reload
 systemctl enable merod mero-auth traefik

@@ -84,15 +84,38 @@ variable "subnetwork" {
 
 source "googlecompute" "this" {
   project_id           = var.project_id
-  # Hardcoded for release reproducibility; kernel 6.17+ required for RTMR3 sysfs support
-  source_image_family  = "ubuntu-2510-amd64"
+  # Pinned rather than tracking a moving "latest", for release reproducibility.
+  #
+  # SINGLE SOURCE OF TRUTH for the base image: the CI preflight in
+  # `release-node-image-gcp.yaml` reads this line rather than repeating the
+  # string, so bumping the pin is a one-line change here.
+  #
+  # The pin must name a SUPPORTED release. Canonical delists an EOL Ubuntu from
+  # `ubuntu-os-cloud`, and a delisted family fails the build outright with
+  # "Source image family ... not found" — which is exactly how the whole image
+  # build went down in September 2026: 25.10 (Questing) is an interim release,
+  # reached EOL in July 2026, and took its family with it. Hence an LTS: an
+  # interim release buys nine months and then does this again.
+  #
+  # Kernel: RTMR3 sysfs support needs 6.17+ (see `calimero-init.sh.j2`, which
+  # reads `tdx_guest/measurements/` on 6.17+ and falls back to `tdx_guest/mr/`).
+  # 26.04 LTS ships well past that bar.
+  source_image_family  = "ubuntu-2604-lts-amd64"
   source_image_project_id = ["ubuntu-os-cloud"]
   disable_default_service_account = true
   zone                 = var.zone
   region               = var.region
+  # The PUBLISHED name and family are a cross-repo contract and deliberately do
+  # NOT track the base release. mdma's dispatcher resolves images by these exact
+  # prefixes (`tee_image_name_prefix` / `tee_image_family_prefix` in
+  # `dispatcher/app/config.py`), as does
+  # `scripts/release/node-image-gcp/resolve-image-vm-parameters.sh`, so renaming
+  # them here alone would leave the dispatcher unable to find any image. They
+  # still read "questing-25-10" after the base moved to 26.04 LTS; renaming needs
+  # a paired mdma change and a deploy ordering, so it is not done here.
   image_name           = "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
   image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}"
-  image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 25.10 (Questing Quokka, kernel 6.17+) with Traefik and mero-auth"
+  image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
   machine_type         = var.instance_type
   disk_size            = 20
   disk_type            = "pd-ssd"

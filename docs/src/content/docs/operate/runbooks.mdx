@@ -2,7 +2,7 @@
 title: Runbooks
 description: Operational procedures for Mero TEE — deploy the Phala KMS, deploy and verify GCP node images, probe staging, verify release assets, and roll a new KMS version safely.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -122,11 +122,19 @@ the same probes the release pipeline runs.
 <Tabs>
 <TabItem label="KMS (Phala)">
 
-`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag` (release tag, or `latest`),
-`kms_profile`, `instance_type` (default `tdx.small`), `service_port` (default
-`8080`), `phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust
-Authority). It deploys to Phala, verifies `/attest`, runs a `challenge → get-key`
-cycle, and returns `kms-policy-candidates.json` + `kms-app-identity.json`.
+`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag`, `kms_profile`,
+`instance_type` (default `tdx.small`), `service_port` (default `8080`),
+`phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust Authority).
+It deploys to Phala, verifies `/attest`, runs a `challenge → get-key` cycle, and
+returns `kms-policy-candidates.json` + `kms-app-identity.json`.
+
+`kms_tag` takes a `mero-kms-v<version>` tag, or `latest` for the newest
+published one. An umbrella `<version>` tag or a `mero-tee-v<version>` node tag
+is rejected up front — each version publishes all three, and this probe needs
+the KMS one. Note that `latest` here means the newest `mero-kms-v*` release,
+*not* whatever GitHub's "latest release" flag points at: that flag is set by
+hand and often sits on the umbrella tag. To probe a pinned image instead, set
+`kms_image` and pass its version in `kms_version`.
 
 </TabItem>
 <TabItem label="Node image (GCP)">
@@ -135,6 +143,26 @@ cycle, and returns `kms-policy-candidates.json` + `kms-app-identity.json`.
 `image_project`, `admin_api_port` (default `80`), `wait_timeout_minutes`, and
 `ita_appraisal_url`. It boots a TDX VM from the image, waits for readiness,
 collects a quote, and verifies it against Intel Trust Authority.
+
+The verifying happens **in CI, over the admin API** — the VM only supplies the
+quote, from `/admin-api/tee/attest`. CI picks a fresh nonce and then asserts
+four things (`scripts/ci/probes/node_anti_fake_http.py`, artifact
+`node-client-verification.json`):
+
+| check | proves |
+| --- | --- |
+| `nonce_binding` | the quote's `report_data` carries the nonce CI just chose, so it is not a replay |
+| `wrong_nonce` | `report_data` does *not* match a different nonce |
+| `genuine_hardware` | Intel Trust Authority validates the quote |
+| `tampered_quote` | ITA **rejects** the same quote with one byte flipped |
+
+<Aside type="note">
+Nothing here takes the node's word for anything, and no step needs a shell on
+the VM — which is what lets it run on `locked-read-only`, where `merod-lockdown`
+has removed openssh. An ITA call that fails for a transport or authorization
+reason is reported as `inconclusive` and fails the run; only an explicit
+rejection from ITA counts as a verdict about the quote.
+</Aside>
 
 </TabItem>
 </Tabs>

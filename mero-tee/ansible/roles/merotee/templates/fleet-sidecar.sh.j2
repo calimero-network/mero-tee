@@ -13,13 +13,79 @@ LOG="/var/log/fleet-sidecar.log"
 # — and that's exactly what made the old design fire-once-and-give-up).
 # Different path so any pre-upgrade legacy state is ignored on first boot.
 CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
+# Per-namespace record of the authorship grant we last told mdma about, so a
+# grant made (or revoked) AFTER admission gets re-reported exactly once per
+# change rather than on every one-second cycle. See `reconcile_authorship`.
+AUTHORSHIP_FILE="/var/lib/calimero/fleet-authorship.json"
+# The context inventory we last successfully POSTed, per namespace, plus when
+# the last authoritative (`full`) post landed. Change detection compares against
+# this, so a steady-state node posts nothing at all. See `reconcile_inventory`.
+INVENTORY_FILE="/var/lib/calimero/fleet-inventory.json"
 POLL_INTERVAL=1
+# How often the group tree is WALKED. Not the post interval — a walk that finds
+# nothing changed posts nothing. Core exposes no "contexts changed" signal, so
+# a poll is the only detector available; at one walk a minute a namespace with
+# a handful of groups costs a few `meroctl` subprocesses a minute, against the
+# dozens a second a 1 Hz walk would cost for data that changes a few times a day.
+INVENTORY_SCAN_INTERVAL=60
+# How often a `full` (authoritative, pruning) post is sent regardless of whether
+# anything changed. This is what repairs a missed change: an incremental post
+# can only add, so a context the node no longer holds is removed from mdma here
+# or not at all.
+INVENTORY_FULL_INTERVAL=900
+# Per (namespace, account): the envelope version last accepted by mdma, and a
+# hash of the PLAINTEXT it was sealed from. Sealing is non-deterministic — every
+# call mints a fresh ephemeral sender key, so two seals of identical data differ
+# in every byte. Change detection therefore compares plaintext hashes; comparing
+# ciphertexts would see a change on every pass, burn a version number each time,
+# and rewrite mdma forever for data that never moved. See `reconcile_recovery`.
+# The identity mdma last ACCEPTED a registration for. Compared against the
+# node's current identity each cycle, so a re-key or a new relay url
+# re-registers and anything else costs nothing. Written only after mdma
+# accepted, so a refusal or an outage is retried rather than recorded as done.
+REGISTRATION_FILE="/var/lib/calimero/fleet-registration.json"
+RECOVERY_FILE="/var/lib/calimero/fleet-recovery.json"
+# How often recovery envelopes are reconsidered. Far slower than the inventory
+# walk: this costs a `meroctl account seal-to` subprocess per changed account on
+# top of the walk, and the data behind it (which namespaces an account belongs
+# to) changes on the order of days, not minutes.
+RECOVERY_SCAN_INTERVAL=300
+# How often every envelope is re-sealed and re-posted even with no detected
+# change. The repair path for a write mdma lost, a row an operator deleted, or a
+# local state file wiped by a reimage — none of which the node can observe.
+RECOVERY_FULL_INTERVAL=86400
+# core's `DEFAULT_LIST_LIMIT` (crates/server/src/admin/handlers/groups.rs), and
+# `meroctl` exposes no --offset/--limit for `group contexts list` /
+# `group members list`. A page that comes back exactly this long may have been
+# truncated, and there is no way to tell from here — so it is treated as an
+# INCOMPLETE read rather than as a complete one, which is what keeps a `full`
+# post from pruning rows for contexts that merely fell off page one.
+MEROCTL_PAGE_LIMIT=100
+# Hard stop on the group walk. A cycle in the parent/child index would otherwise
+# hang the sidecar; `seen` already prevents revisiting, so this only bounds the
+# pathological case of a genuinely enormous namespace — which is likewise
+# reported as incomplete rather than silently half-reported.
+MAX_GROUP_WALK=512
+# Wall-clock budget for one namespace's walk. The walk runs INSIDE the
+# one-second reconcile loop, so while it is running this node is not polling
+# `should-join` — and that poll is what drives the safety-critical leave path.
+# A hung `meroctl` would otherwise stall it for 30s per group. Past the budget
+# the walk stops and reports what it has, marked incomplete, which is the same
+# safe answer as any other partial read.
+INVENTORY_WALK_BUDGET=20
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
+# `MemberCapabilities::CAN_AUTHOR_ON_BEHALF` — bit 9 of the per-member u32
+# bitmask in core (crates/context/config/src/lib.rs). The grant delegated
+# execution runs on, and implied by nothing else: not membership, not admin,
+# and not the subgroup-admit cascade.
+CAN_AUTHOR_ON_BEHALF=512
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
 mkdir -p "$(dirname "$CONFIRMED_FILE")"
 [[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
+[[ -f "$AUTHORSHIP_FILE" ]] || echo '{}' > "$AUTHORSHIP_FILE"
+[[ -f "$INVENTORY_FILE" ]] || echo '{"namespaces":{},"last_full":0}' > "$INVENTORY_FILE"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
@@ -62,6 +128,81 @@ get_mrtd() {
   fi
 }
 
+# The account this node WRITES AS — what a warrant's `executor` field must name.
+#
+# An account, not this node's signing key, and that distinction is the whole
+# reason a client can be told it once: the account is a content address derived
+# from a root inside the TEE, so the node re-keying does not void warrants
+# already issued to it. mdma cannot derive it (it never sees inside the TEE) and
+# a client cannot either, so this hop is the only way it reaches them.
+#
+# Stable for the life of the node, hence read once at startup like the MRTD.
+get_executor_account() {
+  local out
+  out=$($MEROCTL --output-format json account show 2>>"$LOG") || return 1
+  echo "$out" | python3 -c '
+import sys, json
+try:
+  obj = json.loads(sys.stdin.read())
+  data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+  account = (data or {}).get("accountId") or (data or {}).get("account_id") or ""
+except Exception as exc:
+  print(f"sidecar: failed to parse meroctl account show JSON: {exc}", file=sys.stderr)
+  account = ""
+print(account.strip().lower())
+' 2>>"$LOG"
+}
+
+# The URL clients present intents to.
+#
+# From instance metadata rather than derived: merod terminates no TLS and sits
+# behind traefik on a host it was never told about, so `public_ip` is not an
+# address a client can verify a certificate against. Whoever provisioned the DNS
+# is the only party that knows, and mdma's dispatcher writes it here when it
+# does (`MDMA_TEE_RELAY_URL_TEMPLATE`). Empty when it does not, which mdma then
+# reports as "no relay URL" — an honest absence rather than an address that
+# fails TLS verification on the client.
+get_relay_url() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/relay-url" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
+# Whether this node holds CAN_AUTHOR_ON_BEHALF on a namespace — i.e. whether it
+# can actually serve delegated execution there.
+#
+# Read from core rather than assumed, because it is not ours to decide: the
+# capability is a governance op signed by an admin of the namespace, arriving
+# over gossip at some arbitrary time after admission. Prints `true` or `false`;
+# any failure prints `false`, which is the safe direction — mdma then does not
+# advertise this node as a writable relay and clients are not sent to mint
+# warrants it would refuse.
+check_authorship() {
+  local group_id="$1"
+  if [[ -z "${EXECUTOR_ACCOUNT:-}" ]]; then
+    echo "false"
+    return 0
+  fi
+  local out rc
+  rc=0
+  out=$($MEROCTL --output-format json group members get-capabilities "$group_id" "$EXECUTOR_ACCOUNT" 2>>"$LOG") || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "false"
+    return 0
+  fi
+  echo "$out" | python3 -c "
+import sys, json
+try:
+  obj = json.loads(sys.stdin.read())
+  data = obj.get('data') if isinstance(obj.get('data'), dict) else obj
+  caps = int((data or {}).get('capabilities') or 0)
+except Exception as exc:
+  print(f'sidecar: failed to parse get-capabilities JSON: {exc}', file=sys.stderr)
+  caps = 0
+print('true' if caps & $CAN_AUTHOR_ON_BEHALF else 'false')
+" 2>>"$LOG" || echo "false"
+}
+
 poll_mdma() {
   local peer_id="$1"
   local mrtd="$2"
@@ -82,9 +223,22 @@ poll_mdma() {
   # (non-2xx via -f, timeout, DNS) OR an unparseable body returns 1 with NO
   # stdout, so the caller can leave `confirmed` state untouched and skip the
   # entire reconcile/leave/prune cycle this round.
-  local response rc
+  # The poll doubles as the relay-identity report: `executor_account` and
+  # `relay_url` are node-level facts mdma cannot derive, and this is the one
+  # request it already makes every second. Empty values are skipped mdma-side,
+  # so a node with no relay URL configured still polls and still replicates.
+  local body rc response
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+  "peer_id": sys.argv[1],
+  "mrtd": sys.argv[2],
+  "executor_account": sys.argv[3],
+  "relay_url": sys.argv[4],
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+
   response=$(curl -sf --max-time 10 "${headers[@]}" \
-    -d "{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}" \
+    -d "$body" \
     "${MDMA_URL}/api/fleet/should-join" 2>>"$LOG")
   rc=$?
 
@@ -114,6 +268,10 @@ if not isinstance(data.get('assignments'), list):
 confirm_assignment() {
   local peer_id="$1"
   local group_id="$2"
+  # Whether we can serve delegated execution here. Passed in rather than read
+  # inside, because the caller already knows: the join path has just checked it,
+  # and `reconcile_authorship` calls this precisely BECAUSE the answer changed.
+  local authorship_ready="${3:-false}"
 
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
@@ -126,12 +284,1071 @@ confirm_assignment() {
   # heard about it — re-creating the original fire-once bug on the
   # confirm step. stderr goes to the log so ops still see what failed.
   if curl -sf --max-time 10 "${headers[@]}" \
-      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\"}" \
+      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\",\"authorship_ready\":$authorship_ready}" \
       "${MDMA_URL}/api/fleet/confirm" 2>>"$LOG"; then
     return 0
   else
     log "WARN: POST /api/fleet/confirm failed for $group_id; will retry next cycle"
     return 1
+  fi
+}
+
+load_authorship() {
+  cat "$AUTHORSHIP_FILE" 2>/dev/null || echo '{}'
+}
+
+save_authorship() {
+  echo "$1" > "$AUTHORSHIP_FILE"
+}
+
+# Re-report the authorship grant for already-confirmed namespaces when it
+# changes.
+#
+# The grant almost never exists at admission time: core implies
+# CAN_AUTHOR_ON_BEHALF from nothing, so a namespace is authorship-closed until
+# an admin publishes a governance op — minutes, hours or days after this node
+# joined. Without this the join-time answer would be frozen forever and a
+# namespace that was granted the capability would still show `authorship_ready:
+# false` in the cloud, so no client would ever be sent to this relay.
+#
+# Only re-POSTs on a CHANGE, not every cycle: the loop runs once a second and
+# mdma's /confirm is a write. The recorded state is updated only when the POST
+# succeeded, so a transient mdma blip retries on the next change-detection pass
+# rather than being lost.
+reconcile_authorship() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local recorded updated changed
+  recorded=$(load_authorship)
+  updated="$recorded"
+  changed=0
+
+  for group_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    local now was
+    now=$(check_authorship "$group_id")
+    was=$(echo "$recorded" | python3 -c "
+import sys, json
+try:
+  print('true' if json.load(sys.stdin).get('$group_id') else 'false')
+except Exception:
+  print('false')
+" 2>/dev/null || echo "false")
+    [[ "$now" == "$was" ]] && continue
+    if confirm_assignment "$peer_id" "$group_id" "$now"; then
+      log "Authorship grant for $group_id is now $now; reported to mdma"
+      updated=$(echo "$updated" | python3 -c "
+import sys, json
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+state['$group_id'] = $( [[ "$now" == "true" ]] && echo True || echo False )
+print(json.dumps(state, sort_keys=True))
+" 2>>"$LOG" || echo "$updated")
+      changed=1
+    fi
+  done
+
+  # Prune namespaces we no longer hold, so a re-join is treated as new rather
+  # than inheriting a stale "already reported" verdict.
+  local pruned
+  pruned=$(python3 -c "
+import json, sys
+state = json.loads('''$updated''')
+keep = set(json.loads('''$confirmed'''))
+print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
+" 2>>"$LOG" || echo "$updated")
+  if [[ "$pruned" != "$recorded" ]] || [[ $changed -eq 1 ]]; then
+    save_authorship "$pruned"
+  fi
+}
+
+# --- context inventory ------------------------------------------------------
+#
+# `FleetAssignment` records which NAMESPACES this node replicates, which is one
+# level too coarse to route a delegated write: core scopes
+# `CAN_AUTHOR_ON_BEHALF` per group, implies it from nothing, and deliberately
+# does not propagate it through the subgroup-admit cascade — so this node can
+# hold the namespace root's key and grant while being no member at all of a
+# restricted subgroup beneath it. Contexts hang off groups, so only a
+# per-GROUP report can answer "can this node execute for context X".
+#
+# Without this reporter `GET /api/cloud/contexts/{id}/relays` reads an empty
+# table and answers `servable: false` for every context that exists (mdma#222).
+
+# Walk one namespace's group tree and assemble its `InventoryNamespace`.
+#
+# Prints ONE JSON object — {"namespace": {...}, "complete": true|false} — and
+# returns 0; returns 1 with no stdout when nothing usable could be read.
+#
+# `complete` is the load-bearing half. A `full` post PRUNES every context row it
+# does not mention, per namespace, so a report assembled from partial reads
+# would delete live rows and un-advertise a node that is serving them perfectly
+# well. Anything that could hide a context — a failed `meroctl`, an unparseable
+# body, a page that came back at exactly the limit, the walk cap — clears it,
+# and the caller then posts that namespace incrementally instead.
+collect_namespace_inventory() {
+  local namespace_id="$1"
+  MEROCTL_CMD="$MEROCTL" \
+  NAMESPACE_ID="$namespace_id" \
+  EXECUTOR_ACCOUNT="${EXECUTOR_ACCOUNT:-}" \
+  AUTHOR_BIT="$CAN_AUTHOR_ON_BEHALF" \
+  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  MAX_GROUPS="$MAX_GROUP_WALK" \
+  WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
+  python3 - <<'PY' 2>>"$LOG"
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip()
+ACCOUNT = os.environ.get("EXECUTOR_ACCOUNT", "").strip()
+AUTHOR_BIT = int(os.environ["AUTHOR_BIT"])
+PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+MAX_GROUPS = int(os.environ["MAX_GROUPS"])
+DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
+
+# Cleared by anything that could make the report understate what this node
+# holds. Never set back to True.
+complete = True
+
+
+def incomplete(why):
+    global complete
+    complete = False
+    print("sidecar: inventory read incomplete: " + why, file=sys.stderr)
+
+
+def meroctl(*args, critical=True):
+    """Run meroctl and parse its JSON, or return None. Never raises: a node
+    mid-restart, a group that vanished between two reads, and a genuinely
+    broken command all have to leave the sidecar running.
+
+    `critical` says whether a failure could make the report UNDERSTATE which
+    contexts this node holds. Only those clear `complete`. A failed capabilities
+    or member-count read is a worse answer about a context that is still being
+    reported, not a missing context — and treating it as one would mean a
+    namespace whose member list simply exceeds one page could never be pruned
+    at all."""
+    def failed(why):
+        if critical:
+            incomplete(why)
+        else:
+            print("sidecar: " + why, file=sys.stderr)
+
+    try:
+        proc = subprocess.run(
+            MEROCTL + ["--output-format", "json", *args],
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, DEADLINE - time.monotonic()),
+        )
+    except Exception as exc:
+        failed("meroctl " + " ".join(args) + " did not run: " + str(exc))
+        return None
+    if proc.returncode != 0:
+        failed(
+            "meroctl " + " ".join(args) + " exited " + str(proc.returncode)
+            + ": " + proc.stderr.strip()[:200]
+        )
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except Exception as exc:
+        failed("meroctl " + " ".join(args) + " returned unparseable JSON: " + str(exc))
+        return None
+
+
+def hexid(entry, *keys):
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def maybe_truncated(entries, what, critical=True):
+    """A list exactly one page long is indistinguishable from a truncated one:
+    meroctl passes no offset/limit, so page two is unreachable from here."""
+    if len(entries) < PAGE_LIMIT:
+        return False
+    why = what + " came back at the " + str(PAGE_LIMIT) + "-row page limit"
+    if critical:
+        incomplete(why)
+    else:
+        print("sidecar: " + why, file=sys.stderr)
+    return True
+
+
+def child_groups(group_id):
+    response = meroctl("group", "subgroups", group_id)
+    if response is None:
+        return []
+    entries = response.get("subgroups")
+    if not isinstance(entries, list):
+        incomplete("group subgroups " + group_id + " had no 'subgroups' array")
+        return []
+    return [gid for gid in (hexid(e, "groupId", "group_id") for e in entries if isinstance(e, dict)) if gid]
+
+
+def group_contexts(group_id):
+    """Context ids in one group, or None when the answer could not be read.
+
+    None and [] are deliberately different: [] is 'this group holds no
+    contexts', which a `full` post is entitled to act on, while None means the
+    group is omitted from the report AND the namespace is marked incomplete, so
+    nothing is pruned on the strength of a read that failed."""
+    response = meroctl("group", "contexts", "list", group_id)
+    if response is None:
+        return None
+    entries = response.get("data")
+    if not isinstance(entries, list):
+        incomplete("group contexts list " + group_id + " had no 'data' array")
+        return None
+    maybe_truncated(entries, "group contexts list " + group_id)
+    return [cid for cid in (hexid(e, "contextId", "context_id") for e in entries if isinstance(e, dict)) if cid]
+
+
+def authorship_ready(group_id):
+    """Whether this node may write on members' behalf in THIS group.
+
+    Re-asked per group rather than inherited from the namespace: core does not
+    propagate the grant down the subgroup cascade, and inheriting it is exactly
+    the lie this endpoint exists to prevent — a client would learn the truth by
+    minting a warrant, which spends a nonce it cannot get back.
+
+    Unreadable is `false`, matching `check_authorship`: mdma then does not
+    advertise the node for that group, which is the safe direction. It does NOT
+    clear `complete` — false is a real answer about a context that is still
+    being reported, not a gap that could cause a wrongful prune."""
+    if not ACCOUNT:
+        return False
+    response = meroctl("group", "members", "get-capabilities", group_id, ACCOUNT, critical=False)
+    if response is None:
+        return False
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    try:
+        return bool(int((data or {}).get("capabilities") or 0) & AUTHOR_BIT)
+    except Exception as exc:
+        print("sidecar: could not read capabilities for " + group_id + ": " + str(exc), file=sys.stderr)
+        return False
+
+
+def member_count():
+    """Members of the namespace root group — a COUNT, never a roster. The
+    aggregation happens here, inside the TEE and inside the group's key, so no
+    account id crosses the wire to mdma at all.
+
+    A truncated page would be an undercount, and an undercount reads as a real
+    number. None reads as 'did not look', which is the truth."""
+    response = meroctl("group", "members", "list", NAMESPACE_ID, critical=False)
+    if response is None:
+        return None
+    entries = response.get("members")
+    if not isinstance(entries, list):
+        print("sidecar: group members list " + NAMESPACE_ID + " had no 'members' array", file=sys.stderr)
+        return None
+    if maybe_truncated(entries, "group members list " + NAMESPACE_ID, critical=False):
+        return None
+    return len(entries)
+
+
+if not NAMESPACE_ID:
+    sys.exit(1)
+
+# Breadth-first over the group tree, starting AT the namespace root: the
+# namespace is itself a group and holds contexts of its own, and
+# `namespace groups` would have returned only its direct children.
+group_ids = []
+seen = set()
+queue = [NAMESPACE_ID]
+while queue and len(group_ids) < MAX_GROUPS and time.monotonic() < DEADLINE:
+    group_id = queue.pop(0)
+    if not group_id or group_id in seen:
+        continue
+    seen.add(group_id)
+    group_ids.append(group_id)
+    queue.extend(child_groups(group_id))
+if queue:
+    incomplete(
+        "group walk stopped early with " + str(len(queue)) + " group(s) unvisited "
+        "(cap " + str(MAX_GROUPS) + ", budget " + os.environ["WALK_BUDGET"] + "s)"
+    )
+
+groups = []
+distinct_contexts = set()
+for group_id in group_ids:
+    if time.monotonic() >= DEADLINE:
+        incomplete("ran out of walk budget before reading every group's contexts")
+        break
+    context_ids = group_contexts(group_id)
+    if context_ids is None:
+        # Unreadable: omit the group entirely. `complete` is already cleared,
+        # so this namespace will not be posted as authoritative and the rows
+        # mdma already holds for it survive.
+        continue
+    if not context_ids:
+        # Nothing to advertise, and no reason to spend a capabilities read.
+        continue
+    distinct_contexts.update(context_ids)
+    groups.append(
+        {
+            "group_id": group_id,
+            "context_ids": sorted(set(context_ids)),
+            "authorship_ready": authorship_ready(group_id),
+        }
+    )
+
+if not groups and not complete:
+    # Nothing read and nothing trustworthy to say. Reporting an empty namespace
+    # here would be indistinguishable from 'this node holds no contexts'.
+    sys.exit(1)
+
+namespace = {"namespace_id": NAMESPACE_ID, "groups": groups}
+
+members = member_count()
+if members is not None:
+    namespace["member_count"] = members
+if complete:
+    # Only meaningful when every group was read; otherwise it is an undercount
+    # wearing the clothes of a real number.
+    namespace["context_count"] = len(distinct_contexts)
+
+print(json.dumps({"namespace": namespace, "complete": complete}, sort_keys=True))
+PY
+}
+
+load_inventory() {
+  cat "$INVENTORY_FILE" 2>/dev/null || echo '{"namespaces":{},"last_full":0}'
+}
+
+save_inventory() {
+  echo "$1" > "$INVENTORY_FILE"
+}
+
+# POST one batch of assembled namespaces. `full` is a request-level flag in
+# mdma's `InventoryRequest`, which is why complete and partial namespaces go in
+# separate posts rather than one mixed one.
+#
+# Returns curl's success, like `confirm_assignment`: the caller must not record
+# a report it never delivered, or the change is lost until something else
+# happens to change again.
+post_inventory() {
+  local peer_id="$1"
+  local full="$2"
+  shift 2
+  [[ $# -eq 0 ]] && return 0
+
+  local body
+  body=$(python3 -c '
+import json, sys
+peer, full = sys.argv[1], sys.argv[2] == "true"
+namespaces = [json.loads(arg)["namespace"] for arg in sys.argv[3:]]
+print(json.dumps({"peer_id": peer, "namespaces": namespaces, "full": full}))
+' "$peer_id" "$full" "$@" 2>>"$LOG") || {
+    log "WARN: could not assemble the inventory body; skipping this post"
+    return 1
+  }
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  if curl -sf --max-time 15 "${headers[@]}" \
+      -d "$body" \
+      "${MDMA_URL}/api/fleet/inventory" >/dev/null 2>>"$LOG"; then
+    return 0
+  fi
+  log "WARN: POST /api/fleet/inventory failed (full=$full); will retry next scan"
+  return 1
+}
+
+# Report the context inventory for every confirmed namespace.
+#
+# Posts on CHANGE, with a slow periodic `full` pass. Both halves are needed:
+# without change detection this writes to mdma every cycle for data that moves a
+# few times a day, and without the periodic full pass an incremental-only stream
+# can never REMOVE a context — it would keep advertising a node for a context it
+# has left until something unrelated triggered a full report.
+#
+# `full` is claimed only for namespaces whose walk came back complete. That is
+# the whole reason `collect_namespace_inventory` tracks it: mdma prunes per
+# reported namespace, so one failed `meroctl` inside a `full` report deletes
+# live rows.
+reconcile_inventory() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local force_full="${3:-false}"
+
+  local recorded now last_full want_full
+  recorded=$(load_inventory)
+  now=$(date +%s)
+  last_full=$(echo "$recorded" | python3 -c "
+import sys, json
+try:
+  print(int(json.load(sys.stdin).get('last_full') or 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+  want_full=false
+  if [[ "$force_full" == "true" ]] || (( now - last_full >= INVENTORY_FULL_INTERVAL )); then
+    want_full=true
+  fi
+
+  local complete_batch=() partial_batch=()
+  local namespace_id out rc
+  for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    rc=0
+    out=$(collect_namespace_inventory "$namespace_id") || rc=$?
+    if [[ $rc -ne 0 ]] || [[ -z "$out" ]]; then
+      log "WARN: could not read the context inventory for $namespace_id; leaving mdma's copy untouched"
+      continue
+    fi
+    if echo "$out" | python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('complete') else 1)" 2>/dev/null; then
+      complete_batch+=("$out")
+    else
+      log "Context inventory for $namespace_id is partial; reporting it additively (no prune)"
+      partial_batch+=("$out")
+    fi
+  done
+
+  # Whether anything actually moved since the last successful post. A `full`
+  # pass posts regardless — that is what makes it a reconcile.
+  local changed
+  changed=$(python3 -c "
+import json, sys
+recorded = json.loads(sys.argv[1]).get('namespaces') or {}
+seen = {}
+for arg in sys.argv[2:]:
+    namespace = json.loads(arg)['namespace']
+    seen[namespace['namespace_id']] = namespace
+if any(recorded.get(k) != v for k, v in seen.items()):
+    print('true')
+else:
+    print('false')
+" "$recorded" ${complete_batch[@]+"${complete_batch[@]}"} ${partial_batch[@]+"${partial_batch[@]}"} 2>>"$LOG" || echo true)
+
+  local posted=() full_landed=false
+  if [[ ${#complete_batch[@]} -gt 0 ]] && { [[ "$want_full" == "true" ]] || [[ "$changed" == "true" ]]; }; then
+    if post_inventory "$peer_id" "$want_full" "${complete_batch[@]}"; then
+      posted+=("${complete_batch[@]}")
+      [[ "$want_full" == "true" ]] && full_landed=true
+    fi
+  fi
+  if [[ ${#partial_batch[@]} -gt 0 ]] && [[ "$changed" == "true" ]]; then
+    if post_inventory "$peer_id" false "${partial_batch[@]}"; then
+      posted+=("${partial_batch[@]}")
+    fi
+  fi
+
+  # Record only what mdma actually acknowledged, and prune namespaces we no
+  # longer hold so a re-join reports from scratch instead of inheriting a stale
+  # "already told them" verdict.
+  local updated
+  updated=$(python3 -c "
+import json, sys
+state = json.loads(sys.argv[1])
+namespaces = state.get('namespaces') or {}
+keep = set(json.loads(sys.argv[2]))
+last_full = int(state.get('last_full') or 0)
+if sys.argv[3] == 'true':
+    last_full = int(sys.argv[4])
+for arg in sys.argv[5:]:
+    namespace = json.loads(arg)['namespace']
+    namespaces[namespace['namespace_id']] = namespace
+namespaces = {k: v for k, v in namespaces.items() if k in keep}
+print(json.dumps({'namespaces': namespaces, 'last_full': last_full}, sort_keys=True))
+" "$recorded" "$confirmed" "$full_landed" "$now" ${posted[@]+"${posted[@]}"} 2>>"$LOG" || echo "$recorded")
+
+  if [[ "$updated" != "$recorded" ]]; then
+    save_inventory "$updated"
+    if [[ ${#posted[@]} -gt 0 ]]; then
+      log "Reported the context inventory for ${#posted[@]} namespace(s) (full=$full_landed)"
+    fi
+  fi
+}
+
+# --- account recovery envelopes ---------------------------------------------
+#
+# Holding a root key recovers the ACCOUNT; it does not recover the LIST of
+# namespaces that account belongs to, because namespaces are separate keypairs
+# and the local governance state left with the lost device. A relay is the only
+# party that can record that list: it holds the group key, can enumerate the
+# membership, and can seal to a member's account root.
+#
+# One envelope per (account, namespace) THIS node serves — not one per account.
+# A relay only ever sees the namespaces it serves, so a per-account envelope
+# would be a partial list overwriting other relays' partial lists
+# (calimero-network/mdma#228, fixed by keying mdma's table per namespace).
+
+# Account ids that hold a cloud login, per mdma.
+#
+# The relay must not report its rosters: `member_count` aggregates inside the
+# TEE precisely so no account id crosses the wire, and writing an envelope per
+# member would name every member of every served namespace. So the intersection
+# happens HERE — mdma says which accounts are linked, this node matches that
+# against the roster it already holds, and only the overlap is written back.
+#
+# The link is also exactly who can read an envelope: mdma authorizes the read
+# through `CloudAccountLink`, so one written for an unlinked account could never
+# be fetched by anyone.
+fetch_linked_accounts() {
+  local headers=()
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  local body
+  body=$(curl -sf --max-time 15 "${headers[@]}" \
+    "${MDMA_URL}/api/fleet/linked-accounts" 2>>"$LOG") || {
+    log "WARN: GET /api/fleet/linked-accounts failed; writing no envelopes this pass"
+    return 1
+  }
+  echo "$body" | python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+accounts = payload.get('accounts')
+if not isinstance(accounts, list):
+    sys.exit(1)
+print(json.dumps(sorted({str(a).strip().lower() for a in accounts if str(a).strip()})))
+" 2>>"$LOG" || {
+    log "WARN: /api/fleet/linked-accounts returned an unusable body; writing no envelopes this pass"
+    return 1
+  }
+}
+
+# Assemble, for one namespace, the plaintext each linked member's envelope
+# should carry. Emits {"complete": bool, "accounts": {<account>: {...}}}.
+#
+# `complete` is the load-bearing part. A relay that cannot finish the walk must
+# write NOTHING for this namespace: a shorter list overwriting a longer one at a
+# higher version is the same silent data loss as a clobber, with a valid version
+# number on it.
+collect_recovery_plan() {
+  local namespace_id="$1"
+  local linked_json="$2"
+  MEROCTL_CMD="$MEROCTL" \
+  NAMESPACE_ID="$namespace_id" \
+  LINKED_JSON="$linked_json" \
+  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  MAX_GROUPS="$MAX_GROUP_WALK" \
+  WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
+  python3 - <<'PY' 2>>"$LOG"
+import hashlib
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip().lower()
+LINKED = set(json.loads(os.environ["LINKED_JSON"]))
+PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+MAX_GROUPS = int(os.environ["MAX_GROUPS"])
+DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
+
+complete = True
+
+
+def incomplete(why):
+    global complete
+    complete = False
+    print("sidecar: recovery read incomplete: " + why, file=sys.stderr)
+
+
+def meroctl(*args):
+    try:
+        proc = subprocess.run(
+            MEROCTL + ["--output-format", "json", *args],
+            capture_output=True,
+            text=True,
+            timeout=max(1.0, DEADLINE - time.monotonic()),
+        )
+    except Exception as exc:
+        incomplete("meroctl " + " ".join(args) + " did not run: " + str(exc))
+        return None
+    if proc.returncode != 0:
+        incomplete("meroctl " + " ".join(args) + " exited " + str(proc.returncode))
+        return None
+    try:
+        return json.loads(proc.stdout)
+    except Exception as exc:
+        incomplete("meroctl " + " ".join(args) + " returned unparseable JSON: " + str(exc))
+        return None
+
+
+def page_complete(entries, what):
+    """A list exactly one page long may be truncated, and meroctl exposes no
+    offset. An undercount here would drop a group or a membership from someone's
+    recovery list, so it counts as incomplete."""
+    if len(entries) >= PAGE_LIMIT:
+        incomplete(what + " came back at the " + str(PAGE_LIMIT) + "-row page limit")
+        return False
+    return True
+
+
+def child_groups(group_id):
+    response = meroctl("group", "subgroups", group_id)
+    if response is None:
+        return []
+    entries = response.get("subgroups")
+    if not isinstance(entries, list):
+        incomplete("group subgroups " + group_id + " had no 'subgroups' array")
+        return []
+    page_complete(entries, "group subgroups " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("group_id") or entry.get("groupId") or entry.get("id")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+def group_members(group_id):
+    response = meroctl("group", "members", "list", group_id)
+    if response is None:
+        return []
+    entries = response.get("members")
+    if not isinstance(entries, list):
+        incomplete("group members list " + group_id + " had no 'members' array")
+        return []
+    page_complete(entries, "group members list " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("identity") or entry.get("account")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+def group_contexts(group_id):
+    response = meroctl("group", "contexts", "list", group_id)
+    if response is None:
+        return []
+    entries = response.get("data")
+    if not isinstance(entries, list):
+        incomplete("group contexts list " + group_id + " had no 'data' array")
+        return []
+    page_complete(entries, "group contexts list " + group_id)
+    out = []
+    for entry in entries:
+        value = entry.get("context_id") or entry.get("contextId") or entry.get("id")
+        if isinstance(value, str) and value.strip():
+            out.append(value.strip().lower())
+    return out
+
+
+if not NAMESPACE_ID:
+    sys.exit(1)
+
+# Walk the group tree once, collecting membership and contexts per group.
+seen = set()
+queue = [NAMESPACE_ID]
+per_group = []
+while queue and len(seen) < MAX_GROUPS:
+    if time.monotonic() >= DEADLINE:
+        incomplete("ran out of walk budget")
+        break
+    group_id = queue.pop()
+    if group_id in seen:
+        continue
+    seen.add(group_id)
+    per_group.append((group_id, group_members(group_id), group_contexts(group_id)))
+    for child in child_groups(group_id):
+        if child not in seen:
+            queue.append(child)
+
+if len(seen) >= MAX_GROUPS and queue:
+    incomplete("hit the " + str(MAX_GROUPS) + "-group walk ceiling")
+
+# Invert to per-account. Only LINKED accounts are kept: everyone else's
+# membership stays inside the TEE, and an envelope for them could never be read.
+accounts = {}
+for group_id, members, contexts in per_group:
+    for account in members:
+        if account not in LINKED:
+            continue
+        record = accounts.setdefault(account, {"groups": set(), "contexts": set()})
+        record["groups"].add(group_id)
+        record["contexts"].update(contexts)
+
+plans = {}
+for account, record in accounts.items():
+    # Self-contained on purpose: `namespace_id` is repeated inside the sealed
+    # body so an envelope is interpretable without trusting the cleartext key it
+    # arrived under. `v` so the shape can move without guessing.
+    payload = {
+        "v": 1,
+        "namespace_id": NAMESPACE_ID,
+        "groups": sorted(record["groups"]),
+        "contexts": sorted(record["contexts"]),
+    }
+    plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    plans[account] = {
+        "plaintext": plaintext,
+        # Hash of the PLAINTEXT, never of the ciphertext: sealing mints a fresh
+        # ephemeral key every call, so identical data seals to different bytes
+        # and a ciphertext comparison would report a change on every pass.
+        "sha256": hashlib.sha256(plaintext.encode()).hexdigest(),
+    }
+
+print(json.dumps({"complete": complete, "accounts": plans}, sort_keys=True))
+PY
+}
+
+# Seal one plaintext to an account's ROOT key, via core's `meroctl account
+# seal-to` (calimero-network/core#3918). Prints the envelope mdma should store.
+#
+# The recipient is the account ROOT, never a device key: a device is exactly
+# what is gone in the case worth sealing for, so an envelope addressed to one is
+# valid, opaque, and unopenable precisely when it is needed. `seal-to` resolves
+# the root itself; this node never names a key.
+#
+# mdma's `ciphertext` is one opaque string, while a sealed envelope is four
+# fields (epoch, ephemeral key, nonce, ciphertext) and a recovering holder needs
+# all four. So the whole envelope is JSON-encoded into that string. mdma stores
+# it without looking, exactly as it stores everything else here.
+seal_for_account() {
+  local group_id="$1"
+  local account="$2"
+  local plaintext="$3"
+
+  local sealed
+  sealed=$(printf '%s' "$plaintext" | $MEROCTL --output-format json account seal-to "$group_id" "$account" 2>>"$LOG") || {
+    log "WARN: sealing for $account in $group_id failed; leaving mdma's copy untouched"
+    return 1
+  }
+  echo "$sealed" | python3 -c "
+import json, sys
+env = json.load(sys.stdin)
+need = ('accountRootEpoch', 'ephemeralPublicKey', 'nonce', 'ciphertext')
+if not all(k in env for k in need):
+    sys.exit(1)
+print(json.dumps({k: env[k] for k in need}, sort_keys=True))
+" 2>>"$LOG" || {
+    log "WARN: meroctl account seal-to returned an unexpected envelope for $account; skipping"
+    return 1
+  }
+}
+
+load_recovery() {
+  cat "$RECOVERY_FILE" 2>/dev/null || echo '{"envelopes":{},"last_full":0}'
+}
+
+save_recovery() {
+  echo "$1" > "$RECOVERY_FILE"
+}
+
+# PUT one envelope. Returns curl's success: a version must not be recorded
+# locally unless mdma accepted it, or the next pass believes it is already
+# stored and the write is lost until the plaintext happens to change again.
+put_recovery_envelope() {
+  local peer_id="$1" account="$2" namespace_id="$3" ciphertext="$4" version="$5"
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+    "peer_id": sys.argv[1],
+    "account_id": sys.argv[2],
+    "namespace_id": sys.argv[3],
+    "ciphertext": sys.argv[4],
+    "version": int(sys.argv[5]),
+}))
+' "$peer_id" "$account" "$namespace_id" "$ciphertext" "$version" 2>>"$LOG") || return 1
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  if curl -sf --max-time 15 -X PUT "${headers[@]}" \
+      -d "$body" \
+      "${MDMA_URL}/api/fleet/recovery-envelope" >/dev/null 2>>"$LOG"; then
+    return 0
+  fi
+  log "WARN: PUT /api/fleet/recovery-envelope failed for $account in $namespace_id (v$version)"
+  return 1
+}
+
+# Write an envelope for every linked member of every namespace this node serves,
+# on change and on a slow periodic pass.
+#
+# `version` is monotonic per (account, namespace) and survives restarts because
+# it lives in RECOVERY_FILE rather than in memory or in wall-clock: mdma rejects
+# a version that goes backwards with a 409, and a counter that reset on restart
+# would strand the envelope at a version mdma will no longer accept.
+reconcile_recovery() {
+  local peer_id="$1"
+  local confirmed="$2"
+  local force_full="${3:-false}"
+
+  local linked
+  linked=$(fetch_linked_accounts) || return 0
+  if [[ "$linked" == "[]" ]]; then
+    # Nothing to do, and importantly NOT a reason to fall back to writing for
+    # every member: no cloud login means no reader.
+    return 0
+  fi
+
+  local state now last_full want_full
+  state=$(load_recovery)
+  now=$(date +%s)
+  last_full=$(echo "$state" | python3 -c "
+import sys, json
+try:
+  print(int(json.load(sys.stdin).get('last_full') or 0))
+except Exception:
+  print(0)
+" 2>/dev/null || echo 0)
+  want_full=false
+  if [[ "$force_full" == "true" ]] || (( now - last_full >= RECOVERY_FULL_INTERVAL )); then
+    want_full=true
+  fi
+
+  local namespace_id plan wrote_any=false
+  for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
+    plan=$(collect_recovery_plan "$namespace_id" "$linked") || plan=""
+    if [[ -z "$plan" ]]; then
+      log "WARN: could not assemble recovery plans for $namespace_id; leaving mdma's copies untouched"
+      continue
+    fi
+    if ! echo "$plan" | python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('complete') else 1)" 2>/dev/null; then
+      # The criterion that matters: a partial list at a higher version destroys
+      # a good one just as effectively as a stale copy would.
+      log "Recovery plan for $namespace_id is incomplete; writing nothing rather than a partial list"
+      continue
+    fi
+
+    local account entry plaintext digest known_digest version
+    for account in $(echo "$plan" | python3 -c "import sys,json; [print(a) for a in sorted(json.load(sys.stdin)['accounts'])]" 2>/dev/null); do
+      entry=$(echo "$plan" | python3 -c "
+import sys, json
+print(json.dumps(json.load(sys.stdin)['accounts'][sys.argv[1]]))
+" "$account" 2>/dev/null) || continue
+      plaintext=$(echo "$entry" | python3 -c "import sys,json; print(json.load(sys.stdin)['plaintext'])" 2>/dev/null) || continue
+      digest=$(echo "$entry" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha256'])" 2>/dev/null) || continue
+
+      known_digest=$(echo "$state" | python3 -c "
+import sys, json
+key = sys.argv[1]
+print((json.load(sys.stdin).get('envelopes') or {}).get(key, {}).get('sha256', ''))
+" "${namespace_id}/${account}" 2>/dev/null || echo "")
+
+      if [[ "$digest" == "$known_digest" && "$want_full" != "true" ]]; then
+        continue
+      fi
+
+      version=$(echo "$state" | python3 -c "
+import sys, json
+key = sys.argv[1]
+print(int((json.load(sys.stdin).get('envelopes') or {}).get(key, {}).get('version', 0)) + 1)
+" "${namespace_id}/${account}" 2>/dev/null || echo 1)
+
+      local sealed
+      sealed=$(seal_for_account "$namespace_id" "$account" "$plaintext") || continue
+      if put_recovery_envelope "$peer_id" "$account" "$namespace_id" "$sealed" "$version"; then
+        state=$(echo "$state" | python3 -c "
+import sys, json
+state = json.load(sys.stdin)
+state.setdefault('envelopes', {})[sys.argv[1]] = {'version': int(sys.argv[2]), 'sha256': sys.argv[3]}
+print(json.dumps(state, sort_keys=True))
+" "${namespace_id}/${account}" "$version" "$digest" 2>/dev/null || echo "$state")
+        wrote_any=true
+        log "Recovery envelope written for $account in $namespace_id (v$version)"
+      fi
+    done
+  done
+
+  if [[ "$want_full" == "true" ]]; then
+    state=$(echo "$state" | python3 -c "
+import sys, json
+state = json.load(sys.stdin)
+state['last_full'] = int(sys.argv[1])
+print(json.dumps(state, sort_keys=True))
+" "$now" 2>/dev/null || echo "$state")
+    wrote_any=true
+  fi
+
+  [[ "$wrote_any" == "true" ]] && save_recovery "$state"
+  return 0
+}
+
+# --- attested node registration ---------------------------------------------
+#
+# Everything this sidecar tells mdma about itself — peer id, executor account,
+# relay url, mrtd — used to be taken on trust. The only credential is a
+# fleet-wide token that says "some node" and never "which node", so mdma could
+# not tell one node's claims from another's, and `should_join` compared a
+# REPORTED mrtd against a customer's measurement allowlist
+# (calimero-network/mdma#225).
+#
+# Registration binds those claims to a quote. Nothing here signs anything: the
+# executor account is minted inside the TEE and never leaves it, so an
+# allowlisted image saying what its account is is exactly what attestation is
+# for. The binding goes in the quote's report-data nonce.
+
+# The merod HTTP port, for `/admin-api/tee/attest`. Same instance-metadata key
+# and same default `calimero-init` uses, rather than a second source of truth.
+get_server_port() {
+  local port
+  port=$(curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/server-port" \
+    2>/dev/null | tr -d '\r\n' || true)
+  echo "${port:-2428}"
+}
+
+load_registration() {
+  cat "$REGISTRATION_FILE" 2>/dev/null || echo '{}'
+}
+
+save_registration() {
+  echo "$1" > "$REGISTRATION_FILE"
+}
+
+# Ask merod for a quote committing to `nonce_hex`.
+#
+# `/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
+# `protected_service()`), so this reaches it over loopback with no token — which
+# is why no core change was needed for any of this.
+#
+# Deliberately NO `application_id`: `build_report_data(nonce, None)` leaves the
+# second half of report data as zeros, and the whole identity binding lives in
+# the nonce. mdma verifies against zeros for that half and its own code says the
+# check is vacuous, so sending an application id here would change what mdma
+# must expect for no gain.
+attest_quote() {
+  local nonce_hex="$1"
+  local port="$2"
+  local body
+  body=$(curl -sf --max-time 30 -H "Content-Type: application/json" \
+    -d "{\"nonce\":\"${nonce_hex}\"}" \
+    "http://127.0.0.1:${port}/admin-api/tee/attest" 2>>"$LOG") || {
+    log "WARN: /admin-api/tee/attest did not answer; cannot register this pass"
+    return 1
+  }
+  echo "$body" | python3 -c "
+import json, sys
+payload = json.load(sys.stdin)
+data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+quote = data.get('quoteB64') or payload.get('quoteB64') or ''
+if not isinstance(quote, str) or not quote.strip():
+    sys.exit(1)
+print(quote.strip())
+" 2>>"$LOG" || {
+    log "WARN: /admin-api/tee/attest returned no quoteB64; cannot register this pass"
+    return 1
+  }
+}
+
+# Register this node's identity with mdma, binding it to a fresh quote.
+#
+# Returns 0 only when mdma accepted. Anything else leaves the recorded state
+# untouched so the next pass tries again — including mdma's 503, which means
+# "the quote could not be EVALUATED" (Intel collateral unreachable, verifier
+# missing) rather than "your quote is bad". Those are different answers and
+# retrying the first is correct; treating it as a refusal and giving up would
+# leave a healthy node permanently unregistered because of someone else's
+# outage.
+register_with_mdma() {
+  local peer_id="$1" account="$2" relay_url="$3" port="$4"
+
+  local headers=()
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  local challenge
+  challenge=$(curl -sf --max-time 15 "${headers[@]}" \
+    "${MDMA_URL}/api/fleet/nodes/challenge" 2>>"$LOG" \
+    | python3 -c "
+import json, sys
+value = json.load(sys.stdin).get('challenge')
+if not isinstance(value, str) or not value.strip():
+    sys.exit(1)
+print(value.strip())
+" 2>>"$LOG") || {
+    log "WARN: could not get a registration challenge from mdma; will retry"
+    return 1
+  }
+
+  # The binding mdma recomputes from the request body. Field order and the
+  # separator are part of the contract — get either wrong and the quote is
+  # rejected as bound to a different identity, which is the mechanism working.
+  local nonce_hex
+  nonce_hex=$(python3 -c "
+import hashlib, sys
+print(hashlib.sha256('|'.join(sys.argv[1:5]).encode()).hexdigest())
+" "$challenge" "$peer_id" "$account" "$relay_url" 2>>"$LOG") || return 1
+
+  local quote
+  quote=$(attest_quote "$nonce_hex" "$port") || return 1
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+    "peer_id": sys.argv[1],
+    "executor_account": sys.argv[2],
+    "relay_url": sys.argv[3],
+    "challenge": sys.argv[4],
+    "quote": sys.argv[5],
+}))
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" 2>>"$LOG") || return 1
+
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+    -H "Content-Type: application/json" "${headers[@]}" \
+    -d "$body" "${MDMA_URL}/api/fleet/nodes/register" 2>>"$LOG") || code="000"
+
+  case "$code" in
+    2*)
+      log "Registered with mdma (peer=$peer_id)"
+      return 0 ;;
+    403)
+      # A verdict against this node: the quote did not verify, its measurement
+      # is not published for this release/profile, or the challenge was spent.
+      # Retried on the next pass anyway — a published-policy update is exactly
+      # the kind of thing that turns this into a pass without the node changing.
+      log "WARN: mdma refused this node's registration (403); it replicates but will not relay" ;;
+    503)
+      log "mdma could not evaluate the attestation (503); will retry" ;;
+    *)
+      log "WARN: registration POST returned ${code}; will retry" ;;
+  esac
+  return 1
+}
+
+# Register when the identity mdma holds is not the one this node now has.
+#
+# Re-registers on CHANGE rather than on a timer: a registration does not expire,
+# and the identity it binds (peer id, executor account, relay url) is fixed for
+# the life of the node unless it re-keys or moves behind a different ingress —
+# at which point the old registration describes a node that no longer exists.
+reconcile_registration() {
+  local peer_id="$1" account="$2" relay_url="$3" port="$4"
+
+  # Nothing to bind yet. Not an error: a node with no account reported cannot be
+  # advertised as a relay anyway, so registering a half-identity would only
+  # record something that has to be replaced.
+  [[ -z "$peer_id" || -z "$account" ]] && return 0
+
+  local recorded want
+  recorded=$(load_registration | python3 -c "
+import json, sys
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '']))
+" 2>/dev/null || echo "")
+  want="${peer_id}|${account}|${relay_url}"
+  [[ "$recorded" == "$want" ]] && return 0
+
+  if register_with_mdma "$peer_id" "$account" "$relay_url" "$port"; then
+    save_registration "$(python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
+' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
   fi
 }
 
@@ -260,6 +1477,39 @@ else
   log "Fleet node MRTD: $MRTD"
 fi
 
+# Relay identity, read once: both are fixed for the life of the node, and both
+# are things only this hop can tell mdma. Never fatal — a node that cannot
+# report either still replicates; it simply is not advertised as a relay, and
+# clients are never sent to mint warrants it could not honour.
+EXECUTOR_ACCOUNT=$(get_executor_account || true)
+if [[ -z "$EXECUTOR_ACCOUNT" ]]; then
+  log "WARN: could not read this node's account from 'meroctl account show'; \
+delegated execution will not be offered for this node (it will still replicate)"
+else
+  log "Fleet node executor account: $EXECUTOR_ACCOUNT"
+fi
+
+SERVER_PORT=$(get_server_port)
+RELAY_URL=$(get_relay_url)
+if [[ -z "$RELAY_URL" ]]; then
+  log "No relay-url instance metadata; mdma will report no relay URL for this node \
+(set MDMA_TEE_RELAY_URL_TEMPLATE on the dispatcher to publish one)"
+else
+  log "Fleet node relay url: $RELAY_URL"
+fi
+
+# Inventory scan clock. Starts at 0 so the first successful poll walks the tree
+# immediately rather than leaving `/api/cloud/contexts/{id}/relays` answering
+# "not servable" for the first scan interval after every boot.
+LAST_INVENTORY_SCAN=0
+# The confirmed set as it stood at the last scan. A join or a leave changes what
+# this node can execute for, and waiting out the scan interval to notice
+# something we already know is a pointless delay on the one signal core does
+# give us for free.
+LAST_INVENTORY_CONFIRMED=""
+LAST_RECOVERY_SCAN=0
+LAST_RECOVERY_CONFIRMED=""
+
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
   # poll_mdma returns 0 + a valid assignments body on HTTP 200, or 1 on any
@@ -308,14 +1558,31 @@ except:
       # leave the group out of CONFIRMED_FILE so the next cycle's
       # join_group returns admitted=true immediately (idempotent in
       # core) and we re-try /confirm — eventually consistent.
-      if confirm_assignment "$PEER_ID" "$group_id"; then
-        log "Confirmed group $group_id with mdma"
+      # Report the authorship grant with the very first confirm, so a namespace
+      # that ALREADY holds the grant (a re-joining node, a namespace whose admin
+      # granted it before this replica existed) is advertised as writable
+      # immediately instead of waiting for `reconcile_authorship` to spot a
+      # change that never comes.
+      authorship=$(check_authorship "$group_id")
+      if confirm_assignment "$PEER_ID" "$group_id" "$authorship"; then
+        log "Confirmed group $group_id with mdma (authorship_ready=$authorship)"
         confirmed=$(echo "$confirmed" | python3 -c "
 import sys, json
 c = json.load(sys.stdin)
 c.append('$group_id')
 print(json.dumps(sorted(set(c))))
 " 2>>"$LOG" || echo "$confirmed")
+        # Record what we just reported, so the reconcile pass below only fires
+        # on an actual later change.
+        save_authorship "$(load_authorship | python3 -c "
+import sys, json
+try:
+  state = json.load(sys.stdin)
+except Exception:
+  state = {}
+state['$group_id'] = $( [[ "$authorship" == "true" ]] && echo True || echo False )
+print(json.dumps(state, sort_keys=True))
+" 2>>"$LOG" || load_authorship)"
       fi
     fi
     # No `break`: keep iterating to give other assignments a fair shot
@@ -355,5 +1622,49 @@ print(json.dumps(sorted(con & des)))
 " 2>/dev/null || echo '[]')
 
   save_confirmed "$confirmed"
+
+  # Last, and over the pruned `confirmed` set: the authorship grant arrives
+  # long after admission, so it has to be re-read for namespaces we already
+  # hold. Runs after the prune so a namespace we just left is not re-reported.
+  reconcile_authorship "$PEER_ID" "$confirmed"
+
+  # Attested registration. Cheap when nothing changed — a string compare
+  # against the recorded identity — so it sits on the 1 Hz loop rather than a
+  # timer of its own: until this succeeds mdma will not advertise the node as a
+  # relay at all, so there is nothing to gain by waiting.
+  reconcile_registration "$PEER_ID" "$EXECUTOR_ACCOUNT" "$RELAY_URL" "$SERVER_PORT"
+
+  # Context inventory, also over the pruned set. Walking the group tree costs a
+  # `meroctl` subprocess per group, so it runs on its own much slower clock than
+  # this one-second loop — except when the confirmed set itself changed, which
+  # is a membership change we already know about and should not sit on.
+  now_ts=$(date +%s)
+  if [[ "$confirmed" != "$LAST_INVENTORY_CONFIRMED" ]] \
+     || (( now_ts - LAST_INVENTORY_SCAN >= INVENTORY_SCAN_INTERVAL )); then
+    # A membership change forces the authoritative variant: a namespace this
+    # node just left must stop being advertised now, and only a `full` post
+    # prunes.
+    force_full=false
+    [[ -n "$LAST_INVENTORY_CONFIRMED" && "$confirmed" != "$LAST_INVENTORY_CONFIRMED" ]] && force_full=true
+    reconcile_inventory "$PEER_ID" "$confirmed" "$force_full"
+    LAST_INVENTORY_SCAN="$now_ts"
+    LAST_INVENTORY_CONFIRMED="$confirmed"
+  fi
+
+  # Recovery envelopes, on their own much slower clock again: this adds a
+  # `meroctl account seal-to` per changed account on top of the walk, for data
+  # that moves on the order of days. A change to the confirmed set still forces
+  # a pass — a namespace just joined has members whose recovery list is now
+  # wrong, and waiting out the interval leaves them unrecoverable in the window.
+  now_ts=$(date +%s)
+  if [[ "$confirmed" != "$LAST_RECOVERY_CONFIRMED" ]] \
+     || (( now_ts - LAST_RECOVERY_SCAN >= RECOVERY_SCAN_INTERVAL )); then
+    recovery_full=false
+    [[ -n "$LAST_RECOVERY_CONFIRMED" && "$confirmed" != "$LAST_RECOVERY_CONFIRMED" ]] && recovery_full=true
+    reconcile_recovery "$PEER_ID" "$confirmed" "$recovery_full"
+    LAST_RECOVERY_SCAN="$now_ts"
+    LAST_RECOVERY_CONFIRMED="$confirmed"
+  fi
+
   sleep "$POLL_INTERVAL"
 done

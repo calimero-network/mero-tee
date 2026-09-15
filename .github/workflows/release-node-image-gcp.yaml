@@ -236,13 +236,38 @@ jobs:
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
           set -euo pipefail
-          echo "Checking hardcoded source image family ubuntu-2510-amd64 in ubuntu-os-cloud..."
-          if ! gcloud compute images describe-from-family ubuntu-2510-amd64 --project ubuntu-os-cloud >/dev/null 2>&1; then
-            echo "::error::Source image family ubuntu-2510-amd64 not found in ubuntu-os-cloud."
-            echo "List available: gcloud compute images list --project=ubuntu-os-cloud --filter='family:ubuntu-25'"
+          # Read the pin out of ubuntu.pkr.hcl instead of repeating it here. This
+          # step used to hardcode the family a second time, so the gate and the
+          # build could disagree about what is being checked -- and the gate is
+          # the thing that is supposed to catch a bad pin.
+          pkr="mero-tee/ubuntu.pkr.hcl"
+          if [[ ! -f "${pkr}" ]]; then
+            # Checked before the reads below, which would otherwise die on sed's
+            # own error under `set -e` and never reach the annotation.
+            echo "::error::${pkr} not found (run from the repository root). Cannot verify the pinned base image."
             exit 1
           fi
-          echo "Source image family ubuntu-2510-amd64 is available."
+          family="$(sed -n 's/^[[:space:]]*source_image_family[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${pkr}" | head -n1)"
+          project="$(sed -n 's/^[[:space:]]*source_image_project_id[[:space:]]*=[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' "${pkr}" | head -n1)"
+          if [[ -z "${family}" || -z "${project}" ]]; then
+            echo "::error::Could not read source_image_family / source_image_project_id from ${pkr}. Packer would build from an unknown base; refusing."
+            exit 1
+          fi
+          echo "Checking source image family ${family} in ${project} (pinned in ${pkr})..."
+          if gcloud compute images describe-from-family "${family}" --project "${project}" >/dev/null 2>&1; then
+            echo "Source image family ${family} is available."
+            exit 0
+          fi
+          # This fires on the calendar, not on a code change: Canonical delists an
+          # EOL Ubuntu from its image project, so a pin on an interim release
+          # breaks roughly nine months after that release ships. Print what is
+          # actually published, so the failure names its own fix rather than a
+          # command for someone to go and run.
+          echo "::error::Source image family ${family} not found in ${project}. If that release reached EOL it has been delisted; move the pin in ${pkr} to a supported release (prefer an LTS)."
+          echo "Families currently published by ${project}:"
+          gcloud compute images list --project "${project}" --format="value(family)" 2>/dev/null | sort -u | sed 's/^/  /' \
+            || echo "  (could not list images in ${project})"
+          exit 1
 
       - name: Show tool versions
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}

@@ -63,6 +63,53 @@ jobs:
 
           shellcheck "${shell_files[@]}"
 
+      # Runs here rather than in a probe workflow because it needs neither a TDX
+      # node nor an MDMA: it renders the sidecar template and drives its
+      # authorship-reporting logic against stubbed `meroctl` / `curl`. That logic
+      # decides when this node tells MDMA it can serve delegated execution, and
+      # it is silent in both failure directions, so it is worth checking on every
+      # change to the template.
+      - name: Run fleet-sidecar authorship test
+        id: sidecar_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-authorship-test.sh
+
+      # Same reasoning, for the other half of what the sidecar tells MDMA. The
+      # context inventory is what makes `GET /api/cloud/contexts/{id}/relays`
+      # able to answer at all, and it is wrong quietly in two directions: a
+      # context reported under the wrong group routes a client to a relay that
+      # will refuse the write, and a `full` report assembled from partial reads
+      # makes MDMA prune rows for contexts this node is serving.
+      - name: Run fleet-sidecar inventory test
+        id: sidecar_inventory_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-inventory-test.sh
+
+      # The recovery-envelope writer (mdma#223). Every way it can be wrong is
+      # invisible until someone's last device dies and there is no retroactive
+      # fix: writing for members with no cloud login hands MDMA the membership
+      # roster the inventory half is careful never to send, a partial list at a
+      # higher version destroys a good envelope exactly as a stale copy would,
+      # a version that resets across a restart earns a permanent 409, and
+      # detecting change by comparing ciphertexts rewrites forever because every
+      # seal mints a fresh ephemeral key.
+      - name: Run fleet-sidecar recovery test
+        id: sidecar_recovery_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-recovery-test.sh
+
+      # Attested node registration (mdma#225). The binding is a hash the
+      # sidecar and MDMA compute independently, so a field-order or separator
+      # change breaks every registration in a way that looks exactly like a bad
+      # attestation. The rest is retry semantics that fail quietly: recording a
+      # registration MDMA refused, or treating its 503 ("could not EVALUATE the
+      # quote") as a verdict, each leave a healthy node unadvertised for as long
+      # as it runs.
+      - name: Run fleet-sidecar registration test
+        id: sidecar_registration_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-registration-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -75,6 +122,10 @@ jobs:
             --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
             --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
+            --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
+            --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
+            --checks-line "- fleet-sidecar recovery test: ${{ steps.sidecar_recovery_test.outcome }}" \
+            --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

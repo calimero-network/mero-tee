@@ -317,36 +317,10 @@ for key in keys:
 print(f"[mero-tee-node-e2e] OK: probed node measurements exactly match published policy for profile={profile}")
 PY
 
-  python3 - "${profile}" "${node_client_verification_file}" <<'PY'
-import json
-import pathlib
-import sys
-
-profile = sys.argv[1]
-verification_file = pathlib.Path(sys.argv[2])
-payload = json.loads(verification_file.read_text(encoding="utf-8"))
-checks = payload.get("checks", {})
-
-
-def assert_true(path: str, value):
-    if value is not True:
-        raise SystemExit(
-            f"[mero-tee-node-e2e] ERROR: node client verification check failed for profile={profile}: {path} expected true, got {value!r}"
-        )
-
-
-assert_true("checks.positive.passed", checks.get("positive", {}).get("passed"))
-assert_true("checks.wrong_nonce.rejected", checks.get("wrong_nonce", {}).get("rejected"))
-assert_true("checks.tampered_quote.rejected", checks.get("tampered_quote", {}).get("rejected"))
-assert_true(
-    "checks.wrong_expected_application_hash.rejected",
-    checks.get("wrong_expected_application_hash", {}).get("rejected"),
-)
-print(
-    "[mero-tee-node-e2e] OK: node client-side anti-fake verification checks passed "
-    f"for profile={profile}"
-)
-PY
+  python3 scripts/ci/probes/assert_node_anti_fake.py \
+    --profile "${profile}" \
+    --input "${node_client_verification_file}" \
+    --log-prefix mero-tee-node-e2e
 
 done
 

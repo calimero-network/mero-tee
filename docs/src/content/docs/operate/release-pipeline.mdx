@@ -54,8 +54,29 @@ Workflow name **Release mero-kms**. Triggers: push to `master` touching
 
 4. **`probe`** — for each profile, dispatch the staging probe
    (`kms-phala-staging-probe.yaml`) against a real Phala CVM and wait. The probe
-   returns `kms-policy-candidates.json` (measured MRTD/RTMR/TCB values) and
-   `kms-app-identity.json` (the dstack `compose_hash`).
+   returns `kms-policy-candidates.json` (measured MRTD/RTMR values, plus the
+   probe host's **observed** TCB status) and `kms-app-identity.json` (the dstack
+   `compose_hash`).
+
+   :::caution[Measurements are observed; the TCB allowlist is declared]
+   MRTD and RTMR0–3 are necessarily taken from the probe's own quote — they *are*
+   the thing being published. The accepted TCB statuses are not: they come from
+   `--allowed-tcb-status` (default `uptodate,outofdate`), never from what the probe
+   reported. `outofdate` is in the default as a deliberate, reviewable decision —
+   the node images run on GCP Confidential VMs and the KMS on Phala CVMs, whose
+   host firmware Calimero cannot patch, and both fleets currently report
+   `OutOfDate`. Drop it once the probes report `uptodate`. Deriving them from the probe is how releases 2.3.48–2.3.52 each
+   shipped `allowed_tcb_statuses: ["outofdate"]` — a policy that accepted only a
+   stale host and would have rejected every patched one, so the fleet would have
+   broken on being updated. When the probe's own status falls outside the allowed
+   set the run emits a warning naming it; pass `--require-observed-allowed` to
+   turn that into a hard failure once the probe fleet reports `uptodate`.
+
+   The post-release E2E enforces the same distinction: MRTD/RTMR must match the
+   release policy *exactly*, while the probe's TCB status need only be **accepted
+   by** it. Asserting equality there was the third place that treated an
+   observation as the spec, and it would have rejected any corrected policy.
+   :::
 
 5. **`release-metadata`** — the assembly step:
    - Wait for and fetch the counterpart node release's `published-mrtds.json`.
@@ -178,6 +199,37 @@ version number, computed from the published tags, not hand-curated.
 | `release-auditor.yaml` | Weekly (Mon 03:30) / dispatch | Re-verifies recent releases' assets and cosign signatures. |
 | `post-release-kms-node-e2e.yaml` | `workflow_run` after Release mero-tee | KMS↔node compatibility e2e on the released artifacts. |
 | `post-release-mero-tee-node-e2e.yaml` | `workflow_run` after Release mero-tee | Boots fresh TDX VMs and checks their measurement candidates are covered by `published-mrtds.json` — without waiting on the KMS. |
+
+### When a post-release probe fails
+
+Both post-release workflows run *after* publication, triggered by
+`workflow_run`. A `workflow_run` result is attached to nothing a release
+consumer reads — there is no pull request, it does not appear on the release
+page, and it sets no commit status on the tag. Left alone, a failure against a
+published artifact is one red row in the Actions tab.
+
+So each workflow ends with a `report_failure` job that opens a GitHub issue
+naming the release, the failing job, and the run
+(`scripts/ci/report_post_release_failure.py`). Repeat failures for the same
+release comment on the existing issue instead of opening another, matched on a
+marker in the issue body rather than on its title.
+
+<Aside type="note">
+The issue is **not** closed automatically when a later run goes green. The
+published artifact does not change when CI is re-run, so "it passed the second
+time" is a finding for a human to weigh, not a resolution.
+
+Two limits worth knowing: a failure *before* the release is resolved (a bad
+checkout, say) files nothing, because at that point the run has no release to
+name and the problem is CI's rather than the release's; and if issue creation
+itself fails the step warns rather than failing, so a permissions problem
+cannot mask the probe failure underneath it.
+
+Act on the issue quickly. The probe workflows upload their diagnostics with a
+short `retention-days` — 3 for the node probe, 14 for the KMS probe — so the
+artifact naming the failed assertion expires within days, while the release it
+concerns stays published indefinitely. The issue outlives the evidence.
+</Aside>
 
 ## Degraded policy state (`policy_not_ready`)
 

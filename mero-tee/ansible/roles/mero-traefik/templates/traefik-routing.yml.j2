@@ -1,0 +1,139 @@
+{#
+  Traefik routing for a merod TEE node.
+
+  Every `/admin-api/` path goes through `auth-node` forwardAuth (the `node-api`
+  router) except the handful given their own router above it. Adding a path to
+  that exempt set is a security decision, so each one carries its reason here.
+#}
+http:
+  routers:
+{% if fleet_delegated_execution | default(false) | bool %}
+    # Delegated execution. The one write path on this node that a caller with
+    # no account here may reach, and the reason it is exempt from `auth-node`
+    # is that it carries its own credential:
+    #
+    #   * the body holds a WARRANT signed by the author's device key, which
+    #     commits to this context, this method and these exact arguments;
+    #   * merod refuses it unless the warrant is unexpired, its nonce unspent,
+    #     and this node holds `CAN_AUTHOR_ON_BEHALF` on the group owning the
+    #     context — all before anything is executed or published;
+    #   * the resulting delta is attributed to the AUTHOR, and every peer
+    #     re-checks both signature layers and re-authorizes it at the cut.
+    #
+    # A node token would prove none of that, and requiring one makes the
+    # feature unreachable for exactly the callers it exists for: a browser tab
+    # or an agent holding one signing key and no relationship with this node.
+    #
+    # `PathRegexp` pins the shape rather than a prefix: a 64-hex context id and
+    # the literal `intents`, anchored at both ends. A `PathPrefix` on
+    # `/admin-api/contexts/` would have exempted every context route on the
+    # node, `DELETE` included.
+    #
+    # This router exists only when the image is built as a relay
+    # (`fleet_delegated_execution`), and it is paired with merod's own
+    # `server.admin.public_intents` — set from the same variable in
+    # calimero-init. Both edges move together or the posture is decided in one
+    # place and documented in another.
+    node-api-intents:
+      rule: "PathRegexp(`^/admin-api/contexts/[0-9a-f]{64}/intents$`) && (Method(`GET`) || Method(`POST`) || Method(`OPTIONS`))"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 98
+
+{% endif %}
+    node-api-health:
+      rule: "Path(`/admin-api/health`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 100
+
+    node-api-tee:
+      rule: "PathPrefix(`/admin-api/tee`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 99
+
+    node-api:
+      rule: "PathPrefix(`/jsonrpc`) || PathPrefix(`/admin-api/`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+        - auth-node
+      priority: 10
+
+    node-ws:
+      rule: "PathPrefix(`/ws`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+        - auth-node
+
+    node-dashboard:
+      rule: "PathPrefix(`/admin-dashboard`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+
+    auth-public:
+      rule: "PathPrefix(`/auth/`) || PathPrefix(`/admin/`)"
+      entryPoints:
+        - web
+      service: auth-service
+      middlewares:
+        - cors
+
+    metrics:
+      rule: "Path(`/metrics`)"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - metrics-auth
+
+  services:
+    node-core:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:2428"
+
+    auth-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:3001"
+
+  middlewares:
+    cors:
+      headers:
+        accessControlAllowMethods: GET,OPTIONS,PUT,POST,DELETE
+        accessControlAllowHeaders: "*"
+        accessControlAllowOriginList: "*"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+        accessControlExposeHeaders: X-Auth-Error
+
+    auth-node:
+      forwardAuth:
+        address: "http://127.0.0.1:3001/auth/validate"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Auth-User
+          - X-Auth-Permissions
+
+    metrics-auth:
+      basicAuth:
+        usersFile: "/etc/traefik/metrics-users"

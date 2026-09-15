@@ -1,0 +1,528 @@
+---
+title: Fleet HA Sidecar
+description: The high-availability sidecar baked into ReadOnly fleet node images — its one-second reconcile loop, how it discovers its own PeerId and MRTD, polls MDMA for namespace assignments, joins via meroctl, confirms back, and leaves on disable so Core purges keys.
+sidebar:
+  order: 5
+---
+
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
+The **fleet HA sidecar** is the Mero TEE half of hardware-attested fleet
+admission. It is a Bash script
+(`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`) baked into the
+ReadOnly TEE node image and run as a **systemd service alongside `merod`**. Its
+job is to keep this node's Calimero **namespace** membership in sync with what
+the fleet control plane (**MDMA**) currently assigns to it: join the namespaces
+MDMA wants it in, and leave the ones it withdraws.
+
+The admission handshake itself — quote generation, `TeeAttestationAnnounce`,
+MRTD-gated admission — lives in Calimero **Core**, not here. The sidecar is only
+the trigger: it drives `merod` through `meroctl` and reports back to MDMA. See
+[Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/)
+for the protocol it drives.
+
+:::note[This is fleet admission, not the KMS storage key]
+Do not conflate this with the [storage-key release flow](/flows/key-release/).
+Those are two **different, unrelated key mechanisms**:
+
+- The **storage key** decrypts a node's on-disk state. The node fetches it once
+  from the **KMS** via a TDX challenge–response. The KMS never sees group keys.
+- The **per-group encryption keys** a `ReadOnlyTee` replica receives are
+  delivered by **Core on admission**, driven by this sidecar. Core's fleet
+  admission never touches the storage key.
+
+The [system overview](/understand/system-overview/) walks through both flows
+side by side.
+:::
+
+## What it reads at startup
+
+Before it can poll, the sidecar has to know two things about itself, plus where
+to talk to MDMA. Configuration is **baked at image build time via Ansible** (so
+it is measured into the MRTD), not read from instance metadata; TLS to MDMA is
+always verified.
+
+| Value | Source | Notes |
+| --- | --- | --- |
+| `MDMA_URL` | Ansible build-time var (`fleet_mdma_url`) | Sidecar exits if unset. |
+| `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`, optional) | Sent as the `X-Fleet-Token` header when present. |
+| **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
+| **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
+| **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
+| **Relay URL** | Instance metadata key `relay-url` | The one value **not** baked at build time — it is per-node. See below. |
+
+### Discovering the PeerId
+
+`get_peer_id()` reads the node's PeerId straight from its config file at
+`/mnt/data/calimero/default/config.toml`, under `[identity].peer_id` (via
+`tomllib`, falling back to a `grep`/`sed` parse). It does **not** shell out to
+`meroctl` for this — an earlier version that tried `meroctl peers list` failed
+because `peers` takes no arguments and returns only a count.
+
+### Discovering its own MRTD
+
+`get_mrtd()` reads this TDX guest's own **MRTD** (the SHA-384 measurement of the
+initial VM image) directly from the kernel-exposed sysfs attribute:
+
+```bash
+/sys/class/misc/tdx_guest/measurements/mrtd:sha384
+```
+
+This is the same 48-byte value the Intel Quoting Enclave writes into a TDX quote
+(`quote.mrtd()`), but the kernel surfaces it read-only, so **no quote generation
+or configfs-tsm round-trip is required**. The script hex-encodes it to 96
+lowercase hex characters with no `0x` prefix — exactly the shape MDMA's MRTD
+allowlist compares against. MRTD is computed **once** at startup because it is
+fixed for the life of the immutable node image.
+
+:::caution[MRTD is required for MRTD-gated assignments]
+MDMA's `should_join` skips every MRTD-allowlisted HA request whose `mrtd` field
+does not match. If the sysfs attribute can't be read, the sidecar logs an error
+and continues posting the PeerId only — but MDMA will not assign any MRTD-gated
+namespace until this is resolved.
+:::
+
+## The reconcile loop
+
+After a one-time `wait_for_merod()` (which blocks until
+`meroctl --output-format json peers` exits `0`) and the PeerId/MRTD reads above,
+the sidecar enters an infinite loop with a **one-second poll interval**
+(`POLL_INTERVAL=1`). Each cycle:
+
+1. **Poll MDMA.** `POST {MDMA_URL}/api/fleet/should-join` with body
+   `{"peer_id": "...", "mrtd": "..."}` (`curl -sf --max-time 10`, plus the
+   `X-Fleet-Token` header if a token is configured).
+2. **Gate on poll success.** The response must be HTTP 200 **and** parse as an
+   object with an `assignments` array. Any curl error, non-2xx, timeout, or
+   unparseable/wrong-shape 200 body aborts the cycle *before* any state change —
+   the loop sleeps and `continue`s, leaving the confirmed set untouched (see the
+   safety gate below).
+3. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
+   namespace MDMA currently assigns this node to.
+4. **Join toward `desired`.** For each assigned namespace **not already in the
+   local confirmed set**, run `join_group` (see below). On admission, `POST`
+   `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
+   A namespace is added to `fleet-confirmed.json` **only when both** local
+   admission **and** the MDMA confirm succeed.
+5. **Leave dropped namespaces.** Compute `to_leave = confirmed − desired` and
+   `leave_group` each one (see below). This runs *before* the prune, so the diff
+   is taken while `confirmed` still holds the dropped entries.
+6. **Prune the confirmed set.** Set `confirmed = confirmed ∩ desired` and persist
+   it, so a future re-add is recognized as new.
+7. **Report the context inventory**, over the pruned set — but on its own much
+   slower clock than this loop, and immediately when the confirmed set itself
+   changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
+8. **Sleep** one second and repeat.
+
+The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
+(a deliberately separate path from any pre-upgrade legacy state file, and a
+different semantics: it records "admitted **and** confirmed", not merely
+"attempted"). Two more files alongside it record what MDMA has already been
+told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
+and `fleet-inventory.json` for the context inventory. Each is advanced **only
+after** the POST it describes succeeded, so a transient MDMA blip is retried
+rather than lost. Activity is logged to `/var/log/fleet-sidecar.log`.
+
+<SeqDiagram
+  id="d-fleet-reconcile"
+  title="Fleet sidecar reconcile loop (1s poll)"
+  lanes={[
+    { label: 'Fleet sidecar', color: '#3fb950' },
+    { label: 'MDMA', color: '#58a6ff' },
+    { label: 'merod / Core', color: '#a371f7' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'POST /api/fleet/should-join { peer_id, mrtd }', color: '#a5ff11' },
+    { from: 1, to: 0, label: '200 { assignments: [...] }', color: '#58a6ff', dashed: true },
+    { from: 0, to: 0, label: 'gate: HTTP 200 + valid shape, else skip cycle' },
+    { from: 0, to: 0, label: 'desired = sorted group_ids; diff vs confirmed' },
+    { from: 0, to: 2, label: 'meroctl tee fleet-join <GROUP_ID>', color: '#a371f7' },
+    { from: 2, to: 2, label: 'TDX quote + TeeAttestationAnnounce, MRTD-gated admission' },
+    { from: 2, to: 0, label: '{ admitted: true }', color: '#a371f7', dashed: true },
+    { from: 0, to: 1, label: 'POST /api/fleet/confirm { peer_id, group_id }', color: '#a5ff11' },
+    { from: 0, to: 0, label: 'add to fleet-confirmed.json (admitted AND confirmed)' },
+    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (confirmed − desired)', dashed: true },
+    { from: 2, to: 2, label: 'MemberLeft → evict + purge keys' },
+    { type: 'divider', label: 'confirmed = confirmed ∩ desired; persist, sleep 1s, repeat' },
+  ]}
+/>
+
+### Joining a namespace
+
+`join_group()` runs:
+
+```bash
+meroctl --home /mnt/data/calimero --node default \
+  --output-format json tee fleet-join <GROUP_ID>
+```
+
+The group id is passed **positionally** (an earlier `--group-id` flag form
+failed clap parsing; the positional form matches the `GROUP_ID` argument in the
+baked core release — see the CHANGELOG for the exact core version).
+
+Under the hood `meroctl tee fleet-join` generates a TDX quote, broadcasts
+`TeeAttestationAnnounce` on the namespace topic, and polls for admission for up
+to roughly 30 seconds. Critically, **`meroctl` exits `0` whether or not the node
+was admitted** — process success is not admission success. So the sidecar parses
+the JSON response and only treats `admitted: true` as success (it is tolerant of
+both a flat `{"admitted": ...}` shape and a `{"data": {...}}` wrapper). If
+`fleet-join` completes without admission, the namespace is left unconfirmed and
+retried next cycle — `fleet-join` is idempotent in Core (an already-admitted
+group returns `admitted: true` immediately), so retrying is cheap. This retry
+convergence is what an earlier "try once, mark done" design lacked: if the group
+owner was offline during the first ~30s window, the old code marked the
+assignment tried and never retried.
+
+### Leaving a namespace (disable path)
+
+When a namespace the node previously confirmed is no longer in `desired` — HA
+disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar
+self-leaves it:
+
+```bash
+meroctl --home /mnt/data/calimero --node default \
+  --output-format json namespace leave <HEX_NAMESPACE_ID>
+```
+
+This publishes `MemberLeft` at the namespace root, which cascades through every
+descendant subgroup where this node has a direct row. `leave_group` is
+**idempotent and non-fatal**: leaving a namespace the node already left (or was
+never a direct member of) returns a benign error (`nothing to leave` /
+`not a direct member`) that is logged, and the loop continues — it never aborts
+the sidecar.
+
+:::note[Core owns the eviction and key purge]
+The sidecar only issues the `leave`. **Core** performs the actual eviction from
+the namespace and all subgroups and purges the node's local data and keys in
+response to `MemberLeft`. The key-deletion half of that purge requires a
+sufficiently recent core (baked as `merodVersion` in `mero-tee/versions.json`;
+the CHANGELOG tracks the exact rc). On older merod the sidecar still issues the
+leave, but keys may not be purged. This is where mero-tee's responsibility ends
+and Core's begins.
+:::
+
+## Delegated execution: the node as a relay
+
+A fleet node does more than replicate. It is also the **relay** through which a
+Calimero Cloud account holder who runs no node at all can write.
+
+That user holds one signing key. They cannot execute — the runtime is a WASM JIT
+running against materialized state under an execution lock — and they cannot
+decrypt, because they never received the group's scope key. So they sign a
+**warrant** locally (their consent for one specific intent, once), present it to
+this node, and this node runs the method **as their principal**. The resulting
+delta is attributed to *their* account and device; the node's key only signs the
+envelope. See
+[Core → Delegated Authorship](https://calimero-network.github.io/core/protocol/delegated-authorship/)
+for the protocol.
+
+Four facts have to reach that client before it can mint a usable warrant, and
+**none of them is derivable anywhere but here**. Reporting them is the sidecar's
+second job:
+
+| Fact | Why only the node can say it | Where it goes |
+| --- | --- | --- |
+| **Executor account** | It is derived from an account root minted inside the TEE. MDMA never sees inside; the client has no way to compute it. A warrant naming the wrong executor is refused — after the author has spent a nonce on it. | `executor_account` on every should-join poll |
+| **Relay URL** | `merod` terminates no TLS and sits behind Traefik on a host it was never told about, so it cannot derive its own external address. MDMA holds only the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
+| **Authorship grant** | `CAN_AUTHOR_ON_BEHALF` is a governance capability, granted by an **admin of the namespace** and readable only by a node holding that group's key. MDMA does not grant it and cannot observe it. | `authorship_ready` on `/api/fleet/confirm` |
+| **Context inventory** | Which contexts exist inside a namespace, and which *group* each one hangs off, is governance state readable only by a member holding that group's key. MDMA stores an assignment per **namespace**, which is one level too coarse to route a write. | `namespaces[].groups[]` on `/api/fleet/inventory` |
+
+### Why the grant is re-reported, not reported once
+
+Core implies `CAN_AUTHOR_ON_BEHALF` from **nothing** — not membership, not
+admin, and it is deliberately not propagated by the subgroup-admit cascade. So
+every namespace is authorship-closed until an admin publishes the op, which
+typically happens minutes, hours or days *after* this node was admitted.
+
+A join-time answer alone would therefore be frozen at `false` forever, and the
+cloud would never advertise this relay to anyone. `reconcile_authorship` closes
+that: each cycle it re-reads the grant for every confirmed namespace with
+
+```bash
+meroctl --home /mnt/data/calimero --node default --output-format json \
+  group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>
+```
+
+and tests bit 9 (`512`) of the returned `capabilities` bitmask. It re-`POST`s
+`/api/fleet/confirm` **only when the answer changed** — the loop runs once a
+second and `/confirm` is a write — and records the new state only after that
+POST succeeded, so a transient MDMA blip is retried rather than lost. A revoked
+grant travels back the same way, so the cloud stops advertising the relay.
+
+For this reason MDMA's `/api/fleet/confirm` accepts an **already-active**
+assignment rather than 404'ing it: a node makes its one `assigned → active`
+transition at admission, and requiring that state would mean a grant made five
+minutes later could never be reported without evicting and rejoining the node.
+
+### The context inventory, and why it is per group
+
+`fleet_assignments` records which **namespaces** this node replicates. That is
+not enough to answer the only question a client actually asks — *can this node
+execute for context X?* — because core scopes `CAN_AUTHOR_ON_BEHALF` per
+**group**, and contexts belong to groups. A node can hold the namespace root's
+key and grant while being no member at all of a restricted subgroup beneath it.
+Advertising it for that subgroup's context makes the client discover the truth
+by minting a warrant, which spends a nonce it cannot get back.
+
+So `reconcile_inventory` walks the namespace's group tree — breadth-first from
+the root, since the namespace is itself a group and holds contexts of its own —
+and reports each context under **its own group id**, with the authorship grant
+re-asked for that group rather than inherited from the namespace:
+
+```bash
+meroctl ... group subgroups        <GROUP_ID>   # the walk
+meroctl ... group contexts list    <GROUP_ID>   # what hangs off it
+meroctl ... group members list     <NAMESPACE>  # a COUNT, never a roster
+```
+
+MDMA writes the result to `relay_contexts`, which is what
+`GET /api/cloud/contexts/{id}/relays` reads. Without this report that table is
+empty and **every** context answers `servable: false`.
+
+The counts (`member_count`, `context_count`) ride the same report and are
+aggregated **on the node**, inside the group's key. No account id crosses the
+wire, which is a stronger guarantee than MDMA choosing not to store one: there
+is nothing there to store. A count that could not be read is *omitted*, never
+sent as `0` — `NULL` means "no node has told us", and a namespace always has at
+least its admin.
+
+#### On change, with a slow full reconcile
+
+Core exposes no "contexts changed" signal, so the walk is polled: once a minute,
+posting only when the payload differs from the last post MDMA acknowledged. A
+steady-state node therefore posts nothing at all. Every 15 minutes, and
+immediately whenever the confirmed set changes, it posts with `full: true`.
+
+Both halves are load-bearing. Walking at the loop's 1 Hz would be dozens of
+`meroctl` subprocesses a second for data that moves a few times a day; and an
+incremental post can only *add*, so without the periodic full pass a context the
+node has left would be advertised forever.
+
+#### A partial read is never posted as authoritative
+
+`full: true` makes MDMA **prune** every context row the report does not mention,
+per namespace. So a full report assembled from partial reads deletes rows for
+contexts this node is serving perfectly well, and un-advertises a healthy relay
+because one `meroctl` call happened to fail.
+
+The walk therefore tracks whether it saw everything, and anything that could
+hide a context clears that flag: a failed or unparseable read, or a list that
+came back at core's 100-row page limit — `meroctl` passes no offset/limit, so a
+full page is indistinguishable from a truncated one. Namespaces that came back
+complete are posted with the requested `full`; the rest are posted additively in
+a second request, and MDMA keeps what it already has for them.
+
+The distinction is deliberately narrow: only a read that could hide a *context*
+counts. A failed capability or member-count read is a worse answer about
+contexts that are still being reported, so it degrades to `false`/absent without
+blocking the prune — otherwise a namespace whose member list merely exceeds one
+page could never be pruned at all.
+
+### Attested registration, and why nothing here signs anything
+
+Everything the sidecar tells MDMA about itself — peer id, executor account,
+relay URL, MRTD — was taken on trust. The only credential is a fleet-wide shared
+token, which identifies *some* node and never *which* node, so MDMA could not
+tell one node's claims from another's. Two things rested on that:
+
+- `should_join` compared the **reported** MRTD against a customer's
+  `allowed_measurements`. That value is a hex string the caller types, so the
+  allowlist meant to restrict a namespace to nodes running a known image was
+  satisfied by asserting the right answer.
+- relay identity was keyed on the claimed peer id, and `relay_url` /
+  `executor_account` are what `GET /api/cloud/contexts/{id}/relays` hands
+  clients — so naming yourself the relay for a context bought denial of service
+  and disclosure of intent contents.
+
+`GET /api/fleet/nodes/challenge` → `POST /api/fleet/nodes/register` closes both.
+See [mdma#225](https://github.com/calimero-network/mdma/issues/225).
+
+**No signature, and no core change was needed.** The executor account is minted
+*inside* the TEE and never leaves it, so an allowlisted image saying what its
+account is is precisely what attestation is for. The binding rides the quote's
+report data: the sidecar computes
+`SHA256(challenge | peer_id | executor_account | relay_url)`, asks merod's
+`POST /admin-api/tee/attest` for a quote over that nonce, and MDMA recomputes
+the same hash from the request body. A quote therefore commits to exactly one
+identity and one challenge — a genuine quote from one node cannot be presented
+alongside another's claim, and neither can be replayed.
+
+`/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
+`protected_service()`), which is why the sidecar reaches it over loopback with
+no token and why none of this needed a change in core. No `application_id` is
+sent: `build_report_data(nonce, None)` leaves the second half of report data as
+zeros, and the whole binding lives in the nonce.
+
+Four things this has to get right, each covered by
+`scripts/ci/tests/fleet-sidecar-registration-test.sh`:
+
+- **The hash is a contract computed twice.** Field order and separator are part
+  of it; get either wrong and every registration is refused as bound to a
+  different identity — indistinguishable from a genuinely bad attestation.
+- **Only an accepted registration is recorded.** State is written after MDMA
+  says yes, so a refusal or an outage is retried rather than remembered as done.
+- **`503` is not `403`.** MDMA answers `503` when the quote could not be
+  *evaluated* — Intel collateral unreachable, verifier missing — which is not a
+  verdict about this node. Treating it as a refusal would leave a healthy fleet
+  unregistered through someone else's outage.
+- **Re-register on change, not on a timer.** A registration does not expire, and
+  the identity it binds is fixed for the life of the node unless it re-keys or
+  moves behind a different ingress.
+
+Until a node registers it **replicates but does not relay**: MDMA records no
+identity for it and never advertises it, which is the same posture every other
+failure on this path takes.
+
+### Account recovery envelopes, and who they are written for
+
+Holding an account root recovers the **account**. It does not recover the
+**list of namespaces** that account belongs to: namespaces are separate
+keypairs, and the local governance state left with the lost device. Without a
+record somewhere, those namespaces keep existing on other people's nodes and are
+permanently unaddressable — and the loss is only discovered at the moment the
+last device dies, when no retroactive fix exists.
+
+A relay is the only party that can write that record. It holds the group key, so
+it can enumerate the membership, and since
+[core#3918](https://github.com/calimero-network/core/pull/3918) it can seal to a
+member's account **root** via `meroctl account seal-to`. The recipient being the
+root rather than a device key is the whole point: a device is exactly what is
+gone in the case worth sealing for, so an envelope addressed to one is valid,
+opaque, and unopenable precisely when it is needed.
+
+**One envelope per `(account, namespace)` this node serves**, never one per
+account. A relay only ever sees the namespaces it serves, so a per-account
+envelope would be a partial list overwriting other relays' partial lists — which
+is [mdma#228](https://github.com/calimero-network/mdma/issues/228), fixed by
+keying MDMA's table per namespace.
+
+Four things this writer has to get right, none of which fail loudly:
+
+- **Only linked accounts.** The sidecar reports member *counts* and never
+  rosters, so no account id crosses the wire. Writing an envelope per member
+  would undo that by naming every member of every served namespace. Instead
+  `GET /api/fleet/linked-accounts` says which accounts hold a cloud login, and
+  the node intersects that against the roster it already holds. The link is also
+  the same predicate that authorizes the read, so an envelope for an unlinked
+  account could never be fetched by anyone anyway.
+- **Incomplete means write nothing.** A shorter list overwriting a longer one at
+  a higher version is the same data loss as a stale clobber, with a valid version
+  number on it. Any failed read in the walk aborts that namespace's pass.
+- **The version is durable.** It lives in `/var/lib/calimero/fleet-recovery.json`,
+  not in memory and not in wall-clock. MDMA answers `409` to a version that goes
+  backwards, so a counter that reset on restart would strand the envelope at
+  whatever MDMA last accepted.
+- **Change is detected on the plaintext.** Sealing mints a fresh ephemeral sender
+  key every call, so identical data seals to different bytes. Comparing
+  ciphertexts would see a change on every pass, burn a version each time, and
+  rewrite MDMA forever for data that never moved.
+
+MDMA's `ciphertext` field is a single opaque string, while a sealed envelope is
+four values (`accountRootEpoch`, `ephemeralPublicKey`, `nonce`, `ciphertext`) and
+a recovering holder needs all four. The whole envelope is JSON-encoded into that
+string; MDMA stores it without looking, as it does everything else here.
+
+### Every failure lands on "replicates but does not relay"
+
+None of these reads is fatal, and they degrade in the same safe direction.
+A node that cannot read its account, has no `relay-url` metadata, fails the
+capability read, or cannot walk its group tree reports the missing value as
+empty/`false`/absent. MDMA then does not
+offer it as a writable relay, so clients are never sent to mint warrants it
+would refuse — they see "no relay available" rather than a refusal after
+burning a nonce. The node keeps replicating throughout.
+
+An **empty** report never erases a value MDMA already holds (only a different
+non-empty one overwrites), which is what lets an older and a newer sidecar be
+live at once during a fleet roll.
+
+### The two edges the image opens
+
+Being a relay means accepting a write from a caller with no account on this
+node, so the image has to open exactly one path — and it is a path that carries
+its own credential. `merod` refuses an intent, before executing anything, unless
+the warrant is genuinely the member's, commits to this exact context, method and
+arguments, has not expired, has an unspent nonce, and this node holds the
+authorship grant on the owning group. A node token would prove none of that, and
+requiring one would make the feature unreachable for exactly the callers it
+exists for.
+
+Both edges are driven by the single Ansible variable `fleet_delegated_execution`
+(defined at play level in `mero-tee/playbook.yml`; on for the ReadOnly fleet
+profiles, off for `debug`):
+
+| Edge | What it does |
+| --- | --- |
+| Traefik (`traefik-routing.yml.j2`) | Adds a `node-api-intents` router for `PathRegexp(^/admin-api/contexts/[0-9a-f]{64}/intents$)`, `GET`/`POST`/`OPTIONS` only, at a higher priority than the auth-guarded `node-api` catch-all and **without** the `auth-node` forwardAuth middleware. A `PathPrefix` on `/admin-api/contexts/` would have exempted every context route on the node, `DELETE` included. |
+| `merod` (`calimero-init.sh.j2`) | Sets `server.admin.public_intents=true`, which moves those same two routes onto core's public router. |
+
+They are one variable rather than two defaults on purpose: these nodes run
+`merod` in proxy auth mode, so **Traefik is the only gate**. An exemption added
+there without the matching `merod` setting still opens the path — the drift is
+silent in the unsafe direction.
+
+## The poll-success safety gate
+
+The step-2 gate is safety-critical, not a nicety. Because a **missing assignment
+now triggers an irreversible `namespace leave` + key purge**, a transient MDMA
+outage must never be mistaken for "all namespaces disabled" — that would shred
+keys on every healthy replica at once.
+
+So `poll_mdma` captures curl's body and exit status separately and returns:
+
+- **`0` + a validated body** only on HTTP 200 whose body parses as an
+  `{"assignments": [...]}` object; or
+- **`1` with no stdout** on any curl error, non-2xx, timeout, or
+  unparseable/wrong-shape body.
+
+On a `1`, the main loop skips the entire reconcile — no `desired` computed, no
+join, no leave, no prune — and preserves `fleet-confirmed.json` untouched.
+Preserving `confirmed` across a failed poll is itself load-bearing: if a failed
+poll pruned `confirmed`, a genuine disable on the next good poll would no longer
+appear in the `confirmed − desired` diff, and the node would never leave.
+
+Symmetrically, `confirm_assignment` returns curl's real exit code (rather than
+swallowing errors), so a transient blip on the confirm step leaves the namespace
+out of `confirmed` and is simply retried next cycle instead of being lost.
+
+## MDMA endpoints and paths at a glance
+
+| Item | Value |
+| --- | --- |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url"}` |
+| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready"}` |
+| Join command | `meroctl … tee fleet-join <GROUP_ID>` (positional) |
+| Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
+| Authorship probe | `meroctl … group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>` → bit 9 (`512`) |
+| Readiness probe | `meroctl --output-format json peers` |
+| PeerId source | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` |
+| MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
+| Executor account source | `meroctl --output-format json account show` → `accountId` |
+| Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
+| Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
+| Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
+| Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
+| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote"}` |
+| Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
+| Registration state | `/var/lib/calimero/fleet-registration.json` |
+| Linked accounts | `GET {MDMA_URL}/api/fleet/linked-accounts` → `{"accounts": [...]}` |
+| Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
+| Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
+| Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |
+| Log | `/var/log/fleet-sidecar.log` |
+| Poll interval | 1 second |
+| Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set) |
+
+## Where to go next
+
+- [System overview](/understand/system-overview/) — the two trust flows, and
+  where the sidecar sits in fleet admission.
+- [Key release flow](/flows/key-release/) — the *other* key mechanism (KMS
+  storage key), kept deliberately separate from fleet admission.
+- [Trust model](/understand/trust-model/) — what MRTD and the other measurements
+  pin.
+- [Glossary](/understand/glossary/) — MRTD, MDMA, namespace, `ReadOnlyTee`, and
+  the rest of the vocabulary.
+- Operate: [runbooks](/operate/runbooks/) and
+  [release pipeline](/operate/release-pipeline/) — how the node image carrying
+  this sidecar is built and rolled out.

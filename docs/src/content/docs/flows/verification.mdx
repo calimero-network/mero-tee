@@ -5,6 +5,8 @@ sidebar:
   order: 3
 ---
 
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
 Getting a quote back is not the same as trusting it. **Verification** is the set of
 checks that turn a raw TDX quote into a verdict: that it was produced by genuine Intel
 TDX hardware, that it is fresh (not replayed), that its measurements are the ones you
@@ -64,6 +66,28 @@ verifier ◀── { quoteB64, reportDataHex, eventLog } ──
    replay RTMR0-3 from event log, compare          -> measurement integrity
 4. compose-hash (imr==3) vs release compat map     -> known-release policy match
 ```
+
+<SeqDiagram
+  id="d-verify"
+  title="Verification — quote to verdict via Intel Trust Authority"
+  lanes={[
+    { label: 'Operator / Browser', color: '#3fb950' },
+    { label: 'Verifier', color: '#58a6ff' },
+    { label: 'Intel Trust Authority', color: '#f0883e' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'verify request (kms_url / node_url)', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'fresh 32-byte nonce, fetch /attest → quote + eventLog' },
+    { from: 1, to: 1, label: 'reportDataHex[0..32] == nonce ? (freshness / anti-replay)' },
+    { from: 1, to: 2, label: 'submit quote for appraisal', color: '#f0883e' },
+    { from: 2, to: 1, label: 'signed JWT', color: '#f0883e', dashed: true },
+    { from: 1, to: 1, label: 'verify JWT signature vs Intel JWKS (authenticity)' },
+    { from: 1, to: 1, label: 'read MRTD / RTMR0-3 / tcb_status; replay RTMR0-3 from event log' },
+    { from: 1, to: 1, label: 'compose-hash (imr==3) vs release compatibility map' },
+    { from: 1, to: 0, label: 'verdict', color: '#58a6ff' },
+    { type: 'divider', label: 'trustworthy only when all four properties hold' },
+  ]}
+/>
 
 ## Inputs the verifier accepts
 

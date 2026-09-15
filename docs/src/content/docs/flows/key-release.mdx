@@ -5,6 +5,8 @@ sidebar:
   order: 2
 ---
 
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
 The KMS releases a `merod` node's storage-encryption key only after the node proves,
 against the hardware, that it is running an approved measurement. This is a two-round
 challenge-response: the node first gets a fresh nonce, then presents a TDX quote and a
@@ -131,6 +133,34 @@ node ──POST /get-key { challengeId, quoteB64,
                                                  KMS: key = dstack.get_key(path)
 node ◀─{ key }────────────────────────────────── KMS
 ```
+
+<SeqDiagram
+  id="d-key-release"
+  title="Key release — challenge, quote, get-key"
+  lanes={[
+    { label: 'merod node', color: '#3fb950' },
+    { label: 'KMS', color: '#58a6ff' },
+    { label: 'dstack', color: '#a371f7' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'POST /challenge { peerId }', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'mint 32-byte nonce + challengeId, store' },
+    { from: 1, to: 0, label: '{ challengeId, nonceB64, expiresAt }', color: '#58a6ff' },
+    { from: 0, to: 0, label: 'report_data = nonce || SHA-256(peerId)' },
+    { from: 0, to: 2, label: 'get_quote(report_data)', color: '#a371f7' },
+    { from: 2, to: 0, label: 'raw TDX quote', color: '#a371f7', dashed: true },
+    { from: 0, to: 0, label: 'sign { challengeId, nonceHex, quoteHash, peerId }' },
+    { from: 0, to: 1, label: 'POST /get-key { quoteB64, peerId, pubKey, sig }', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'consume challenge (single-use)' },
+    { from: 1, to: 1, label: 'verify peer signature → identity' },
+    { from: 1, to: 1, label: 'verify quote + nonce + peer binding' },
+    { from: 1, to: 1, label: 'enforce TCB + MRTD + RTMR0-3 policy' },
+    { from: 1, to: 2, label: 'get_key(namespace/profile/peerId)', color: '#a371f7' },
+    { from: 2, to: 1, label: 'derived key material', color: '#a371f7', dashed: true },
+    { from: 1, to: 0, label: '{ key }', color: '#3fb950' },
+    { type: 'divider', label: 'storage key released only on fresh quote + matching measurement policy' },
+  ]}
+/>
 
 ## Security properties
 
