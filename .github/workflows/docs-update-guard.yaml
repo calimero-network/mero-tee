@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -44,11 +44,39 @@ jobs:
           fi
           mapfile -t changed_files <<< "${changed_files_output}"
 
+          # A workflow file whose diff touches ONLY `uses:` lines is an action
+          # version pin bump -- there is no behaviour to document, so demanding a
+          # docs update asks for a line nobody can honestly write. Dependabot
+          # opens these constantly and every one of them was stuck: eight were
+          # open at once, the oldest since July, which is both a supply-chain
+          # staleness problem and a good way to teach people that this guard is
+          # noise. It is not noise about real workflow changes, which is exactly
+          # why the exemption is content-based and narrow: change one line that
+          # is not a `uses:` and the guard re-arms for that file.
+          only_action_pin_bump() {
+            local file="$1" changed
+            changed="$(git diff "${BASE_SHA}...${HEAD_SHA}" -- "${file}" \
+              | grep -E '^[+-]' \
+              | grep -vE '^(\+\+\+|---)' || true)"
+            # No +/- lines at all (mode change, rename) is not a pin bump.
+            [[ -n "${changed}" ]] || return 1
+            # Any changed line that is not a `uses:` line disqualifies the file.
+            # `uses:` appears both as a bare key and as a YAML list item
+            # (`- uses: ...`); the optional dash covers the latter.
+            ! grep -qvE '^[+-][[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\S' <<< "${changed}"
+          }
+
           requires_docs_update="false"
           has_docs_update="false"
 
           for file in "${changed_files[@]}"; do
-            if [[ "${file}" == .github/workflows/* || "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
+            if [[ "${file}" == .github/workflows/* ]]; then
+              if only_action_pin_bump "${file}"; then
+                ci_info "docs guard: ${file} changes only \`uses:\` pins; no docs required for it."
+              else
+                requires_docs_update="true"
+              fi
+            elif [[ "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 
