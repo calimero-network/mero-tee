@@ -43,6 +43,7 @@ http:
         - cors
       priority: 98
 
+{% endif %}
     # Direct admission. The other path a caller with no account here may reach,
     # and exempt for the same reason: the request carries its own authority.
     #
@@ -66,12 +67,24 @@ http:
     # certificate signed offline, with no node of its own to publish from. That
     # is the whole case direct admission exists for.
     #
-    # Gated on `fleet_delegated_execution` rather than a knob of its own: the
-    # playbook already defines that variable as the replicas mdma assigns to a
-    # namespace, "whose whole job is to be available for other people's writes",
-    # and publishing a join someone else signed is an instance of exactly that.
-    # A separate variable nobody sets would leave the route closed and the
-    # capability unreachable.
+    # UNGATED, unlike `/intents` above, because the two are different kinds of
+    # capability. Delegated execution is a HOSTED service: the node authors on
+    # someone's behalf, which is what a fleet relay is assigned and paid to do,
+    # so it belongs behind `fleet_delegated_execution`. Admission is not hosted
+    # and involves no cloud at all — the `admitters` list is chosen by the
+    # INVITER, who may name any node, including a peer's self-hosted one. Two
+    # people running their own nodes can invite and admit with no account
+    # anywhere, and gating this on a fleet variable would have made a
+    # peer-to-peer flow a cloud-only feature.
+    #
+    # Serving it everywhere grants no node any authority it did not already
+    # have: a node named in no invitation's `admitters` list refuses every
+    # request to this route, whatever image it runs.
+    #
+    # The cost of the wider exposure is that any node will verify signatures for
+    # an unauthenticated caller, so this is a request-rate surface like any other
+    # public route. It is bounded by the same checks refusing early, but a node
+    # under load is worth watching.
     #
     # `PathRegexp` pins the shape for the same reason as above: a 64-hex
     # namespace id (merod parses it as hex-encoded 32 bytes) and the literal
@@ -94,7 +107,6 @@ http:
         - cors
       priority: 97
 
-{% endif %}
     node-api-health:
       rule: "Path(`/admin-api/health`)"
       entryPoints:

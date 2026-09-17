@@ -239,30 +239,44 @@
 # routing file without the exemption would look configured and serve nothing —
 # and one with the exemption but no merod support is the case above. Asserting
 # the rendered file keeps a template regression from reaching a release.
+#
+# Read unconditionally, because one of the two exemptions below is asserted on
+# every image rather than only on relays.
 - name: Read the rendered traefik routing file
   slurp:
     path: /etc/traefik/routing.yml
   register: traefik_routing
-  when: fleet_delegated_execution | default(false) | bool
 
-- name: Assert traefik exempts exactly the delegated-execution paths
+# Admission is not a hosted capability and is served by EVERY node: the
+# `admitters` list is chosen by the inviter, who may name a peer's self-hosted
+# node, so gating this would make a peer-to-peer flow cloud-only. A node named
+# in no invitation refuses every request to the route, so serving it grants no
+# authority — which is why this assertion is not conditioned on the profile.
+- name: Assert traefik exempts the direct-admission path on every image
+  assert:
+    that:
+      - "'node-api-admit' in (traefik_routing.content | b64decode)"
+      - "'/admin-api/namespaces/[0-9a-f]{64}/admit' in (traefik_routing.content | b64decode)"
+      # The catch-all must stay guarded: the exemption is one anchored path, not
+      # a prefix over every namespace route.
+      - "'auth-node' in (traefik_routing.content | b64decode)"
+    fail_msg: >-
+      /etc/traefik/routing.yml does not carry the anchored node-api-admit
+      exemption (or has lost the auth-node guard on the catch-all), so a joiner
+      holding only an invitation cannot reach direct admission on this node.
+
+# Delegated execution IS hosted — the node authors on someone else's behalf —
+# so this half is asserted only where the image was built to relay.
+- name: Assert traefik exempts the delegated-execution path on a relay
   assert:
     that:
       - "'node-api-intents' in (traefik_routing.content | b64decode)"
       - "'/admin-api/contexts/[0-9a-f]{64}/intents' in (traefik_routing.content | b64decode)"
-      # Direct admission, the other self-authenticating path. Asserted by the
-      # same anchored shape: a joiner with no node of its own reaches this to
-      # have an admitter publish the join it signed, and merod still refuses
-      # unless this node is on the invitation's signed `admitters` list.
-      - "'node-api-admit' in (traefik_routing.content | b64decode)"
-      - "'/admin-api/namespaces/[0-9a-f]{64}/admit' in (traefik_routing.content | b64decode)"
-      # The catch-all must stay guarded: the exemptions are anchored paths, not
-      # a prefix over every context or namespace route.
       - "'auth-node' in (traefik_routing.content | b64decode)"
     fail_msg: >-
       This image enables delegated execution but /etc/traefik/routing.yml does
-      not carry both anchored exemptions (node-api-intents, node-api-admit), or
-      has lost the auth-node guard on the catch-all.
+      not carry the anchored node-api-intents exemption (or has lost the
+      auth-node guard on the catch-all).
   when: fleet_delegated_execution | default(false) | bool
 
 # --- Recovery-envelope conformance -------------------------------------------
