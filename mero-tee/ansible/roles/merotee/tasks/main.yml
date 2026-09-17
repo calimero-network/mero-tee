@@ -245,18 +245,24 @@
   register: traefik_routing
   when: fleet_delegated_execution | default(false) | bool
 
-- name: Assert traefik exempts exactly the delegated-execution path
+- name: Assert traefik exempts exactly the delegated-execution paths
   assert:
     that:
       - "'node-api-intents' in (traefik_routing.content | b64decode)"
       - "'/admin-api/contexts/[0-9a-f]{64}/intents' in (traefik_routing.content | b64decode)"
-      # The catch-all must stay guarded: the exemption is one anchored path, not
-      # a prefix over every context route.
+      # Direct admission, the other self-authenticating path. Asserted by the
+      # same anchored shape: a joiner with no node of its own reaches this to
+      # have an admitter publish the join it signed, and merod still refuses
+      # unless this node is on the invitation's signed `admitters` list.
+      - "'node-api-admit' in (traefik_routing.content | b64decode)"
+      - "'/admin-api/namespaces/[0-9a-f]{64}/admit' in (traefik_routing.content | b64decode)"
+      # The catch-all must stay guarded: the exemptions are anchored paths, not
+      # a prefix over every context or namespace route.
       - "'auth-node' in (traefik_routing.content | b64decode)"
     fail_msg: >-
       This image enables delegated execution but /etc/traefik/routing.yml does
-      not carry the anchored node-api-intents exemption (or has lost the
-      auth-node guard on the catch-all).
+      not carry both anchored exemptions (node-api-intents, node-api-admit), or
+      has lost the auth-node guard on the catch-all.
   when: fleet_delegated_execution | default(false) | bool
 
 # --- Recovery-envelope conformance -------------------------------------------
