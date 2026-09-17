@@ -173,6 +173,41 @@ node's merod config, both of which are covered by the image root hash — so it
 exactly the kind of change an attestation policy should notice.
 </Aside>
 
+#### The two paths exempt from `auth-node`
+
+Every `/admin-api/` path goes through the `auth-node` forwardAuth except two,
+and they are exempt for the same reason: the request carries its own authority
+rather than borrowing the node's. They differ in **who serves them**.
+
+| Path | Served by | Why it is exempt |
+| --- | --- | --- |
+| `POST /admin-api/namespaces/<ns>/admit` | **every** node image | The join op arrives already signed by the joiner's device key, and merod refuses it unless this node's account is on the invitation's `admitters` list — which the inviter signed. |
+| `GET`/`POST /admin-api/contexts/<ctx>/intents` | relays only (`fleet_delegated_execution`) | The body holds a warrant signed by the author's device key, committing to this context, method and arguments. |
+
+Admission is **not** gated on `fleet_delegated_execution`, and that asymmetry is
+deliberate. Delegated execution is a *hosted* capability — the node authors on
+someone else's behalf, which is what a fleet relay is assigned to do. Admission
+is not hosted and involves no cloud at all: the `admitters` list is chosen by
+the **inviter**, who may name any node, including a peer's self-hosted one. Two
+people running their own nodes can invite and admit each other with no account
+anywhere, so gating admission on a fleet variable would have made a
+peer-to-peer flow a cloud-only feature.
+
+Serving admission everywhere grants no node authority it did not already have:
+a node named in no invitation's `admitters` list refuses every request to that
+route, whatever image it runs. The signed list is the gate, not the build flag.
+
+The cost of the wider exposure is that any node will verify signatures for an
+unauthenticated caller, so this is a request-rate surface like any other public
+route.
+
+Both exemptions are anchored regexes (a 64-hex id and a literal final segment),
+never prefixes: a `PathPrefix` on `/admin-api/namespaces/` would have exempted
+namespace creation and deletion along with admission. The rendered file is
+asserted at build time — admission on every image, delegated execution only
+where the image was built to relay — so a template regression cannot reach a
+release.
+
 The base image is hardcoded for reproducibility: `source_image_family =
 ubuntu-2604-lts-amd64` from `ubuntu-os-cloud` (Ubuntu 26.04 LTS, comfortably past
 the kernel 6.17+ that RTMR3 sysfs support needs), `disk_size = 20` GB `pd-ssd`.

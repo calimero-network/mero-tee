@@ -44,6 +44,69 @@ http:
       priority: 98
 
 {% endif %}
+    # Direct admission. The other path a caller with no account here may reach,
+    # and exempt for the same reason: the request carries its own authority.
+    #
+    #   * the body holds a join op ALREADY SIGNED by the joiner's device key,
+    #     and every peer checks `signer == credential.statement.sign_pk` when
+    #     applying it — so this node cannot admit anyone but the signer;
+    #   * merod refuses it unless THIS node's account appears in the
+    #     invitation's `admitters` list, which the inviter signed. That list is
+    #     the per-namespace gate: a relay can publish joins into a namespace
+    #     whose admin named it, and into no other;
+    #   * the invitation itself must verify — inviter's signature, the group
+    #     really in this namespace, the inviter permitted to invite, unexpired.
+    #
+    # So a hostile caller gains nothing by reaching this route, and a hostile
+    # ADMITTER can only refuse to publish: it cannot admit a different account,
+    # alter the group, or grant itself a role, because all of that sits inside a
+    # signature it does not hold.
+    #
+    # Requiring a node credential here would make the feature unreachable for
+    # exactly its intended caller — a joiner holding an account key and a device
+    # certificate signed offline, with no node of its own to publish from. That
+    # is the whole case direct admission exists for.
+    #
+    # UNGATED, unlike `/intents` above, because the two are different kinds of
+    # capability. Delegated execution is a HOSTED service: the node authors on
+    # someone's behalf, which is what a fleet relay is assigned and paid to do,
+    # so it belongs behind `fleet_delegated_execution`. Admission is not hosted
+    # and involves no cloud at all — the `admitters` list is chosen by the
+    # INVITER, who may name any node, including a peer's self-hosted one. Two
+    # people running their own nodes can invite and admit with no account
+    # anywhere, and gating this on a fleet variable would have made a
+    # peer-to-peer flow a cloud-only feature.
+    #
+    # Serving it everywhere grants no node any authority it did not already
+    # have: a node named in no invitation's `admitters` list refuses every
+    # request to this route, whatever image it runs.
+    #
+    # The cost of the wider exposure is that any node will verify signatures for
+    # an unauthenticated caller, so this is a request-rate surface like any other
+    # public route. It is bounded by the same checks refusing early, but a node
+    # under load is worth watching.
+    #
+    # `PathRegexp` pins the shape for the same reason as above: a 64-hex
+    # namespace id (merod parses it as hex-encoded 32 bytes) and the literal
+    # `admit`, anchored at both ends. A `PathPrefix` on `/admin-api/namespaces/`
+    # would have exempted namespace creation and deletion with it. Lowercase
+    # hex only, matching the intents router; an uppercase id falls through to
+    # `node-api` and is refused, which is the safe direction.
+    #
+    # No merod-side pair exists for this one, and none is needed: `/admit` sits
+    # in merod's protected router, but these nodes run merod in its default
+    # proxy auth mode, so that router carries no guard and traefik is the only
+    # gate. A deployment running merod with `--auth-mode embedded` would need a
+    # core-side opener as `public_intents` is for intents.
+    node-api-admit:
+      rule: "PathRegexp(`^/admin-api/namespaces/[0-9a-f]{64}/admit$`) && (Method(`POST`) || Method(`OPTIONS`))"
+      entryPoints:
+        - web
+      service: node-core
+      middlewares:
+        - cors
+      priority: 97
+
     node-api-health:
       rule: "Path(`/admin-api/health`)"
       entryPoints:
