@@ -164,7 +164,7 @@ value), and overridable at build time with `-e`.
 | --- | --- | --- |
 | `fleet_delegated_execution` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives *both* edges of the posture — the Traefik router exempting `/admin-api/contexts/<ctx>/intents` from `auth-node`, and merod's `server.admin.public_intents`. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
 | `fleet_mdma_url` | `https://manager.cloud.calimero.network` | Where the fleet sidecar polls for assignments. Baked (and so measured); the sidecar exits if unset. |
-| `fleet_auth_token` | `""` | Sent as `X-Fleet-Token` on sidecar requests when set. |
+| `fleet_auth_token` | `""` | Sent as `X-Fleet-Token` on sidecar requests when set. Supplied by the release workflow from the `FLEET_AUTH_TOKEN` repository secret (`PKR_VAR_fleet_auth_token`). Baked and so measured — rotating it is an image release, not a restart — and nodes must roll before the manager gets its matching `MDMA_FLEET_AUTH_TOKEN`. See [Supplying the fleet token](/understand/fleet-sidecar/#supplying-the-fleet-token). |
 
 <Aside type="caution">
 Changing `fleet_delegated_execution` changes `/etc/traefik/routing.yml` and the

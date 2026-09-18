@@ -45,11 +45,47 @@ always verified.
 | Value | Source | Notes |
 | --- | --- | --- |
 | `MDMA_URL` | Ansible build-time var (`fleet_mdma_url`) | Sidecar exits if unset. |
-| `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`, optional) | Sent as the `X-Fleet-Token` header when present. |
+| `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`), from the `FLEET_AUTH_TOKEN` repository secret | Sent as the `X-Fleet-Token` header when present. Empty builds a token-less image; see [Supplying the fleet token](#supplying-the-fleet-token). |
 | **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
 | **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
 | **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
 | **Relay URL** | Instance metadata key `relay-url` | The one value **not** baked at build time — it is per-node. See below. |
+
+### Supplying the fleet token
+
+`FLEET_TOKEN` authenticates this node to `/api/fleet/*`. It is one secret for
+the whole fleet: it proves "some fleet node", never *which* node — that is what
+attested registration is for.
+
+The release workflow reads it from the `FLEET_AUTH_TOKEN` repository secret and
+hands it to packer as `PKR_VAR_fleet_auth_token`. Through the environment rather
+than `-var`, so it never reaches a process argument list, and the packer
+variable is declared `sensitive`, which keeps it out of the build log the
+workflow uploads as an artifact when a build fails.
+
+Empty is a valid build and produces an image whose sidecar sends no token at
+all. That is correct for local and CI builds, and it is what the fleet carried
+before this existed.
+
+Two consequences are easy to meet late:
+
+**It is measured.** Like everything else baked in at build time, the token is
+part of the MRTD. Rotating it is an image release and a republished
+`published-mrtds.json`, not a restart and not a config change.
+
+**Nodes roll first.** On the MDMA side the matching value is
+`MDMA_FLEET_AUTH_TOKEN` — note the `MDMA_` prefix, which is what the manager's
+settings actually read. A manager with no token configured ignores the header
+entirely, so nodes can carry a token while the old manager is still serving; a
+manager holding one rejects every node that omits it. So: build and roll the
+node images, *then* give the manager its token. The reverse order takes the
+fleet offline.
+
+A missing header is invisible until that second step, because every header is
+gated on the token being non-empty — a dropped one changes nothing observable
+until the manager requires it, at which point the failure is 401s from VMs in
+the field. `scripts/ci/check-fleet-token-headers.py` runs in the lint workflow
+and requires every function calling `/api/fleet/*` to offer the header.
 
 ### Discovering the PeerId
 
@@ -511,7 +547,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |
 | Log | `/var/log/fleet-sidecar.log` |
 | Poll interval | 1 second |
-| Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set) |
+| Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set); manager side is `MDMA_FLEET_AUTH_TOKEN` |
 
 ## Where to go next
 
