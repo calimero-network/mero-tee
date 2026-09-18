@@ -784,39 +784,6 @@ print(json.dumps({'namespaces': namespaces, 'last_full': last_full}, sort_keys=T
 # would be a partial list overwriting other relays' partial lists
 # (calimero-network/mdma#228, fixed by keying mdma's table per namespace).
 
-# Account ids that hold a cloud login, per mdma.
-#
-# The relay must not report its rosters: `member_count` aggregates inside the
-# TEE precisely so no account id crosses the wire, and writing an envelope per
-# member would name every member of every served namespace. So the intersection
-# happens HERE — mdma says which accounts are linked, this node matches that
-# against the roster it already holds, and only the overlap is written back.
-#
-# The link is also exactly who can read an envelope: mdma authorizes the read
-# through `CloudAccountLink`, so one written for an unlinked account could never
-# be fetched by anyone.
-fetch_linked_accounts() {
-  local headers=()
-  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
-
-  local body
-  body=$(curl -sf --max-time 15 "${headers[@]}" \
-    "${MDMA_URL}/api/fleet/linked-accounts" 2>>"$LOG") || {
-    log "WARN: GET /api/fleet/linked-accounts failed; writing no envelopes this pass"
-    return 1
-  }
-  echo "$body" | python3 -c "
-import json, sys
-payload = json.load(sys.stdin)
-accounts = payload.get('accounts')
-if not isinstance(accounts, list):
-    sys.exit(1)
-print(json.dumps(sorted({str(a).strip().lower() for a in accounts if str(a).strip()})))
-" 2>>"$LOG" || {
-    log "WARN: /api/fleet/linked-accounts returned an unusable body; writing no envelopes this pass"
-    return 1
-  }
-}
 
 # Assemble, for one namespace, the plaintext each linked member's envelope
 # should carry. Emits {"complete": bool, "accounts": {<account>: {...}}}.
@@ -827,10 +794,8 @@ print(json.dumps(sorted({str(a).strip().lower() for a in accounts if str(a).stri
 # number on it.
 collect_recovery_plan() {
   local namespace_id="$1"
-  local linked_json="$2"
   MEROCTL_CMD="$MEROCTL" \
   NAMESPACE_ID="$namespace_id" \
-  LINKED_JSON="$linked_json" \
   PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
   MAX_GROUPS="$MAX_GROUP_WALK" \
   WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
@@ -845,7 +810,6 @@ import time
 
 MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
 NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip().lower()
-LINKED = set(json.loads(os.environ["LINKED_JSON"]))
 PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
 MAX_GROUPS = int(os.environ["MAX_GROUPS"])
 DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
@@ -964,13 +928,24 @@ while queue and len(seen) < MAX_GROUPS:
 if len(seen) >= MAX_GROUPS and queue:
     incomplete("hit the " + str(MAX_GROUPS) + "-group walk ceiling")
 
-# Invert to per-account. Only LINKED accounts are kept: everyone else's
-# membership stays inside the TEE, and an envelope for them could never be read.
+# Invert to per-account, for EVERY member.
+#
+# This used to keep only accounts linked to a cloud login, on the grounds that
+# nobody else could read an envelope: the only read path went through
+# `/api/cloud/me/accounts/{id}/recovery-envelope`, which needs a cloud session
+# and a link. That premise is gone -- mdma now serves
+# `POST /api/cloud/accounts/recovery-envelope` against a root signature, so the
+# holder of the account root can read its own envelopes whether or not it has
+# ever seen a cloud login.
+#
+# Writing only for linked accounts meant an unlinked keyholder who lost their
+# last device had nothing to recover from, and would find that out at the one
+# moment no retroactive fix exists. The cost of the wider write is storage and
+# mdma learning the (account, namespace) edge for non-customers -- an edge it
+# could already derive, since it assigned the relay that would write the row.
 accounts = {}
 for group_id, members, contexts in per_group:
     for account in members:
-        if account not in LINKED:
-            continue
         record = accounts.setdefault(account, {"groups": set(), "contexts": set()})
         record["groups"].add(group_id)
         record["contexts"].update(contexts)
@@ -1084,14 +1059,6 @@ reconcile_recovery() {
   local confirmed="$2"
   local force_full="${3:-false}"
 
-  local linked
-  linked=$(fetch_linked_accounts) || return 0
-  if [[ "$linked" == "[]" ]]; then
-    # Nothing to do, and importantly NOT a reason to fall back to writing for
-    # every member: no cloud login means no reader.
-    return 0
-  fi
-
   local state now last_full want_full
   state=$(load_recovery)
   now=$(date +%s)
@@ -1109,7 +1076,7 @@ except Exception:
 
   local namespace_id plan wrote_any=false
   for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
-    plan=$(collect_recovery_plan "$namespace_id" "$linked") || plan=""
+    plan=$(collect_recovery_plan "$namespace_id") || plan=""
     if [[ -z "$plan" ]]; then
       log "WARN: could not assemble recovery plans for $namespace_id; leaving mdma's copies untouched"
       continue

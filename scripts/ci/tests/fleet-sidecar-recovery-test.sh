@@ -109,7 +109,7 @@ done
 exit 1
 STUB
 
-# `curl`: GET /linked-accounts answers from ${SB}/linked; PUT /recovery-envelope
+# `curl`: PUT /recovery-envelope
 # appends its body to ${SB}/put-log, or fails while ${SB}/put-fails exists.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -122,10 +122,6 @@ for a in "$@"; do
   prev="${a}"
 done
 case "${url}" in
-  *linked-accounts*)
-    [[ -f "${SB}/linked-fails" ]] && exit 22
-    printf '{"accounts":[%s],"count":0}\n' "$(cat "${SB}/linked" 2>/dev/null)"
-    exit 0 ;;
   *recovery-envelope*)
     [[ -f "${SB}/put-fails" ]] && exit 22
     printf '%s\n' "${body}" >> "${SB}/put-log"
@@ -147,7 +143,6 @@ source "${SB}/functions.sh"
 : > "${SB}/contexts"
 : > "${SB}/put-log"
 : > "${SB}/sealed-plaintexts"
-: > "${SB}/linked"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 puts() { awk 'NF{n++} END{print n+0}' "${SB}/put-log"; }
@@ -160,20 +155,27 @@ print(json.loads(sys.stdin.read().strip().split(chr(10))[int(sys.argv[1])])[sys.
 NS="ns01"
 CONFIRMED='["ns01"]'
 
-# --- only linked accounts are written for ----------------------------------
-# The decision this endpoint exists for: a member with no cloud login could
-# never fetch an envelope, so writing one stores an unreadable payload AND
-# discloses that the account exists.
+# --- every member is written for, linked or not -----------------------------
+# This used to keep only accounts with a cloud login, because the only read path
+# went through `/api/cloud/me/accounts/{id}/recovery-envelope`, which needs a
+# session and a link -- so an envelope for anyone else was unreadable by
+# construction.
+#
+# mdma now serves `POST /api/cloud/accounts/recovery-envelope` against a ROOT
+# signature, so a keyholder can read its own envelopes having never seen a cloud
+# login. Filtering now means an unlinked member who loses their last device has
+# nothing to recover from, and learns that at the one moment no retroactive fix
+# exists.
 reset_state
 echo "${NS}=alice,bob,carol" > "${SB}/members"
 echo "${NS}=ctx1" > "${SB}/contexts"
-printf '"alice","carol"' > "${SB}/linked"
 reconcile_recovery "peer1" "${CONFIRMED}" false
 
-[[ "$(puts)" == "2" ]] || fail "expected one envelope per LINKED member, got $(puts)"
-grep -q '"account_id": *"alice"' "${SB}/put-log" || fail "alice is linked and should have an envelope"
-grep -q '"account_id": *"carol"' "${SB}/put-log" || fail "carol is linked and should have an envelope"
-grep -q 'bob' "${SB}/put-log" && fail "bob has no cloud login; his membership must not reach mdma"
+[[ "$(puts)" == "3" ]] || fail "expected one envelope per member, got $(puts)"
+for who in alice bob carol; do
+  grep -q "\"account_id\": *\"${who}\"" "${SB}/put-log" \
+    || fail "${who} is a member and must have an envelope, cloud login or not"
+done
 grep -q '"namespace_id": *"ns01"' "${SB}/put-log" || fail "the envelope must name its namespace (mdma#228)"
 
 # --- the sealed payload is the plaintext, and carries the namespace ---------
@@ -192,7 +194,7 @@ reconcile_recovery "peer1" "${CONFIRMED}" false
 : > "${SB}/put-log"
 echo "${NS}=ctx1,ctx2" > "${SB}/contexts"
 reconcile_recovery "peer1" "${CONFIRMED}" false
-[[ "$(puts)" == "2" ]] || fail "a changed context list should be rewritten, got $(puts)"
+[[ "$(puts)" == "3" ]] || fail "a changed context list should be rewritten, got $(puts)"
 [[ "$(field 0 version)" == "2" ]] || fail "version should advance to 2, got $(field 0 version)"
 
 # --- the version survives a restart ---------------------------------------
@@ -225,19 +227,13 @@ reconcile_recovery "peer1" "${CONFIRMED}" false
 [[ "$(puts)" == "1" ]] || fail "a failed PUT must be retried, not recorded as done (got $(puts))"
 [[ "$(field 0 version)" == "1" ]] || fail "a failed write must not burn a version, got $(field 0 version)"
 
-# --- no linked accounts means no writes, not a fallback -------------------
+# --- a namespace with no members writes nothing ----------------------------
+# The replacement for the old "no linked accounts" case. There is still a state
+# that writes nothing; it is now "nobody is a member here" rather than "nobody
+# has paid", and it must stay distinguishable from a failure to enumerate.
 reset_state
-printf '' > "${SB}/linked"
-echo "${NS}=alice,bob" > "${SB}/members"
+echo "${NS}=" > "${SB}/members"
 reconcile_recovery "peer1" "${CONFIRMED}" false
-[[ "$(puts)" == "0" ]] || fail "with no cloud logins there is no reader; writing for everyone is the bug"
-
-# --- mdma being unreachable writes nothing --------------------------------
-reset_state
-printf '"alice"' > "${SB}/linked"
-touch "${SB}/linked-fails"
-reconcile_recovery "peer1" "${CONFIRMED}" false
-rm -f "${SB}/linked-fails"
-[[ "$(puts)" == "0" ]] || fail "an unreadable linked-account list must not fall back to writing for all"
+[[ "$(puts)" == "0" ]] || fail "no members means no envelopes, got $(puts)"
 
 echo "PASS: fleet sidecar recovery-envelope behaviour"
