@@ -432,15 +432,48 @@ envelope would be a partial list overwriting other relays' partial lists — whi
 is [mdma#228](https://github.com/calimero-network/mdma/issues/228), fixed by
 keying MDMA's table per namespace.
 
+#### What the sealed body carries
+
+```json
+{
+  "v": 2,
+  "namespace_id": "<64 hex>",
+  "groups": ["<64 hex>", "..."],
+  "contexts": ["<64 hex>", "..."],
+  "devices": [{ "device_id": "<hex>", "signing_key": "<64 hex>" }]
+}
+```
+
+`namespace_id` is repeated **inside** the sealed body so an envelope is
+interpretable without trusting the cleartext key it arrived under.
+
+`devices` holds only the **recipient's own** devices, deduplicated across the
+groups they appear in and sorted. It is there because `device_id` is what
+`POST /namespaces/:id/account/revoke` takes, and a holder who lost every device
+cannot obtain it from a node afterwards:
+`GET /admin-api/account/devices` is unmapped in core's permission validator, so
+it falls to default-deny and needs `admin`, while the session a recovering
+holder can actually get is `account_proof` — `context:query`, `context:intent`
+and `context:subscribe`, and deliberately nothing else. The envelope is the only
+path, so the list is sealed into it rather than looked up later.
+
+Another member's device ids are not carried. They are no use to a recovering
+holder, and would widen what a single envelope discloses about everyone else in
+the namespace — the opposite of what sealing per account is for.
+
 Four things this writer has to get right, none of which fail loudly:
 
-- **Only linked accounts.** The sidecar reports member *counts* and never
-  rosters, so no account id crosses the wire. Writing an envelope per member
-  would undo that by naming every member of every served namespace. Instead
-  `GET /api/fleet/linked-accounts` says which accounts hold a cloud login, and
-  the node intersects that against the roster it already holds. The link is also
-  the same predicate that authorizes the read, so an envelope for an unlinked
-  account could never be fetched by anyone anyway.
+- **Every member, linked or not.** This used to write only for accounts holding
+  a cloud login, on the grounds that nobody else could read an envelope: the
+  only read path went through `/api/cloud/me/accounts/{id}/recovery-envelope`,
+  which needs a session and a link. That premise is gone — MDMA now serves
+  `POST /api/cloud/accounts/recovery-envelope` against a **root signature**, so
+  a keyholder can read its own envelopes having never seen a cloud login.
+  Filtering would mean an unlinked member who loses their last device has
+  nothing to recover from, and finds that out at the one moment no retroactive
+  fix exists. The cost is storage, and MDMA learning the `(account, namespace)`
+  edge for non-customers — an edge it could already derive, since it assigned
+  the relay that would write the row.
 - **Incomplete means write nothing.** A shorter list overwriting a longer one at
   a higher version is the same data loss as a stale clobber, with a valid version
   number on it. Any failed read in the walk aborts that namespace's pass.
@@ -541,7 +574,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote"}` |
 | Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
 | Registration state | `/var/lib/calimero/fleet-registration.json` |
-| Linked accounts | `GET {MDMA_URL}/api/fleet/linked-accounts` → `{"accounts": [...]}` |
+| Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
 | Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |

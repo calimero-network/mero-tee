@@ -888,6 +888,56 @@ def group_members(group_id):
     return out
 
 
+def member_devices(group_id):
+    """`{account: [{"device_id", "signing_key"}]}` for one group.
+
+    The account is the authorization subject and the device is what signs, so
+    this is the only thing that maps a member back to the keys that will appear
+    on their ops — and, for recovery, back to the `device_id` that
+    `POST /namespaces/:id/account/revoke` takes.
+
+    A holder who lost every device cannot get this from a node afterwards.
+    `GET /admin-api/account/devices` is unmapped in core's permission validator,
+    so it falls to default-deny and needs `admin`; the session a recovering
+    holder can actually obtain is `account_proof`, which carries `context:query`,
+    `context:intent` and `context:subscribe` and nothing else. The envelope is
+    the only path, which is why the list is sealed into it rather than looked up
+    later.
+    """
+    response = meroctl("group", "member-devices", group_id)
+    if response is None:
+        return {}
+    entries = response.get("members")
+    if not isinstance(entries, list) and isinstance(response.get("data"), dict):
+        entries = response["data"].get("members")
+    if not isinstance(entries, list):
+        incomplete("group member-devices " + group_id + " had no 'members' array")
+        return {}
+    page_complete(entries, "group member-devices " + group_id)
+    out = {}
+    for entry in entries:
+        account = entry.get("account") or entry.get("identity")
+        if not isinstance(account, str) or not account.strip():
+            continue
+        devices = entry.get("devices")
+        if not isinstance(devices, list):
+            continue
+        # Paginated per MEMBER, and the device count per member is unbounded
+        # where the member count is not. A member at the page limit is the same
+        # undercount as a truncated member list and counts the same way.
+        page_complete(devices, "devices of " + account[:12] + " in " + group_id)
+        rows = []
+        for device in devices:
+            device_id = device.get("device_id") or device.get("deviceId")
+            signing_key = device.get("signing_key") or device.get("signingKey")
+            if isinstance(device_id, str) and device_id.strip():
+                rows.append({
+                    "device_id": device_id.strip().lower(),
+                    "signing_key": (signing_key or "").strip().lower(),
+                })
+        out[account.strip().lower()] = rows
+    return out
+
 def group_contexts(group_id):
     response = meroctl("group", "contexts", "list", group_id)
     if response is None:
@@ -920,7 +970,9 @@ while queue and len(seen) < MAX_GROUPS:
     if group_id in seen:
         continue
     seen.add(group_id)
-    per_group.append((group_id, group_members(group_id), group_contexts(group_id)))
+    per_group.append(
+        (group_id, group_members(group_id), group_contexts(group_id), member_devices(group_id))
+    )
     for child in child_groups(group_id):
         if child not in seen:
             queue.append(child)
@@ -944,11 +996,23 @@ if len(seen) >= MAX_GROUPS and queue:
 # mdma learning the (account, namespace) edge for non-customers -- an edge it
 # could already derive, since it assigned the relay that would write the row.
 accounts = {}
-for group_id, members, contexts in per_group:
+for group_id, members, contexts, devices in per_group:
     for account in members:
-        record = accounts.setdefault(account, {"groups": set(), "contexts": set()})
+        record = accounts.setdefault(
+            account, {"groups": set(), "contexts": set(), "devices": {}}
+        )
         record["groups"].add(group_id)
         record["contexts"].update(contexts)
+        # ONLY this account's own devices. Another member's device ids are no
+        # use to a recovering holder and would widen what one envelope
+        # discloses about everyone else in the namespace, which is the opposite
+        # of what sealing per account is for.
+        #
+        # Keyed by device id so a device appearing in several groups is carried
+        # once: a device is certified by the account root, not by a group, and
+        # revocation is per namespace -- which this envelope already is.
+        for device in devices.get(account) or []:
+            record["devices"][device["device_id"]] = device
 
 plans = {}
 for account, record in accounts.items():
@@ -956,10 +1020,17 @@ for account, record in accounts.items():
     # body so an envelope is interpretable without trusting the cleartext key it
     # arrived under. `v` so the shape can move without guessing.
     payload = {
-        "v": 1,
+        # v2 adds `devices`. Nothing decodes this payload in production yet, so
+        # the bump costs nothing today and is what stops a future reader from
+        # guessing whether an absent `devices` means "no devices" or "written
+        # before the field existed".
+        "v": 2,
         "namespace_id": NAMESPACE_ID,
         "groups": sorted(record["groups"]),
         "contexts": sorted(record["contexts"]),
+        "devices": [
+            record["devices"][key] for key in sorted(record["devices"])
+        ],
     }
     plaintext = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     plans[account] = {
