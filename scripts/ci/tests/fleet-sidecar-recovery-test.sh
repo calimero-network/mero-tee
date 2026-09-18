@@ -61,6 +61,8 @@ fi
 #   ${SB}/subgroups  "<parent>=<child>,<child>"
 #   ${SB}/members    "<group>=<account>,<account>"  (absent => the read FAILS)
 #   ${SB}/contexts   "<group>=<ctx>,<ctx>"          (ERR => the read fails)
+#   ${SB}/devices    "<group>=<account>:<dev>|<dev>,<account>:<dev>"
+#                                                    (ERR => the read fails)
 # and `account seal-to <group> <account>`, which reads the plaintext on stdin.
 cat > "${SB}/bin/meroctl" <<'STUB'
 #!/usr/bin/env bash
@@ -96,6 +98,27 @@ for ((i = 0; i < ${#args[@]}; i++)); do
       raw="$(lookup contexts "${args[i + 2]}")"
       [[ "${raw}" == "ERR" ]] && exit 1
       emit_list "${raw}" data '{"contextId":"@@"}'
+      exit 0 ;;
+    member-devices)
+      raw="$(lookup devices "${args[i + 1]}")"
+      [[ "${raw}" == "ERR" ]] && exit 1
+      out=""
+      if [[ -n "${raw}" ]]; then
+        IFS=',' read -ra pairs <<< "${raw}"
+        for pair in "${pairs[@]}"; do
+          account="${pair%%:*}"; devs="${pair#*:}"
+          devout=""
+          IFS='|' read -ra ids <<< "${devs}"
+          for id in "${ids[@]}"; do
+            [[ -z "${id}" ]] && continue
+            [[ -n "${devout}" ]] && devout+=","
+            devout+="{\"deviceId\":\"${id}\",\"signingKey\":\"sk-${id}\"}"
+          done
+          [[ -n "${out}" ]] && out+=","
+          out+="{\"account\":\"${account}\",\"devices\":[${devout}]}"
+        done
+      fi
+      printf '{"members":[%s]}\n' "${out}"
       exit 0 ;;
     list)
       if [[ "${args[i - 1]}" == "members" ]]; then
@@ -141,6 +164,7 @@ source "${SB}/functions.sh"
 : > "${SB}/subgroups"
 : > "${SB}/members"
 : > "${SB}/contexts"
+: > "${SB}/devices"
 : > "${SB}/put-log"
 : > "${SB}/sealed-plaintexts"
 
@@ -169,6 +193,7 @@ CONFIRMED='["ns01"]'
 reset_state
 echo "${NS}=alice,bob,carol" > "${SB}/members"
 echo "${NS}=ctx1" > "${SB}/contexts"
+echo "${NS}=alice:d1|d2,bob:d3,carol:" > "${SB}/devices"
 reconcile_recovery "peer1" "${CONFIRMED}" false
 
 [[ "$(puts)" == "3" ]] || fail "expected one envelope per member, got $(puts)"
@@ -181,7 +206,26 @@ grep -q '"namespace_id": *"ns01"' "${SB}/put-log" || fail "the envelope must nam
 # --- the sealed payload is the plaintext, and carries the namespace ---------
 grep -q '"namespace_id":"ns01"' "${SB}/sealed-plaintexts" \
   || fail "the sealed body should repeat the namespace so it is interpretable alone"
-grep -q '"v":1' "${SB}/sealed-plaintexts" || fail "the sealed body should be versioned"
+grep -q '"v":2' "${SB}/sealed-plaintexts" || fail "the sealed body should be versioned"
+
+# --- the payload carries the recipient's OWN devices ------------------------
+# The device id is what `POST /namespaces/:id/account/revoke` takes, and a
+# holder who lost every device cannot get it from a node afterwards:
+# `GET /admin-api/account/devices` needs `admin`, and the session a recovering
+# holder can obtain is `account_proof`. The envelope is the only path.
+grep -q '"devices":\[{"device_id":"d1","signing_key":"sk-d1"},{"device_id":"d2","signing_key":"sk-d2"}\]' \
+  "${SB}/sealed-plaintexts" || fail "alice's envelope should carry both of alice's devices, sorted"
+
+# Nobody else's. Another member's device ids are no use to a recovering holder
+# and would widen what one envelope discloses about everyone in the namespace.
+alice_line="$(grep -c '"device_id":"d3"' "${SB}/sealed-plaintexts" || true)"
+[[ "${alice_line}" == "1" ]] \
+  || fail "d3 is bob's and must appear in exactly one envelope, saw ${alice_line}"
+
+# A member with no devices gets an empty list, not a missing key: absent would
+# be indistinguishable from "written before the field existed".
+grep -q '"devices":\[\]' "${SB}/sealed-plaintexts" \
+  || fail "carol has no devices and should still carry an empty list"
 
 # --- an unchanged list is not rewritten ------------------------------------
 # The ciphertext differs on every seal, so this only passes if change detection
