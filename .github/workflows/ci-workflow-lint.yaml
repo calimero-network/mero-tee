@@ -81,6 +81,17 @@ jobs:
           python3 -m pip install --quiet jinja2 pyyaml
           python3 scripts/ci/check-ansible-templates.py
 
+      # Static, because the token is optional by construction: every header is
+      # gated on a non-empty FLEET_TOKEN so an image built without one still
+      # works against a manager that requires none. A dropped header therefore
+      # changes nothing observable until the manager has a token configured, at
+      # which point the node is a TEE VM in the field returning 401s. Cheaper to
+      # assert here that every fleet-calling function offers it.
+      - name: Check the sidecar offers its fleet token on every fleet call
+        id: fleet_token_headers
+        shell: bash
+        run: python3 scripts/ci/check-fleet-token-headers.py
+
       # Runs here rather than in a probe workflow because it needs neither a TDX
       # node nor an MDMA: it renders the sidecar template and drives its
       # authorship-reporting logic against stubbed `meroctl` / `curl`. That logic

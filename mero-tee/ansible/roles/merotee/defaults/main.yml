@@ -3,4 +3,15 @@
 lockdown_profile: "debug"
 merod_mode: "{{ 'read-only' if lockdown_profile in ['debug-read-only', 'locked-read-only'] else 'full' }}"
 fleet_mdma_url: "https://manager.cloud.calimero.network"
+# The shared secret the sidecar presents to MDMA as `X-Fleet-Token`, supplied at
+# build time (packer: `PKR_VAR_fleet_auth_token`, from the FLEET_AUTH_TOKEN
+# repository secret). Empty means the sidecar sends no token at all, which is
+# what every image in the fleet carries today and what keeps local and CI builds
+# working.
+#
+# It is baked in, so it is MEASURED INTO THE MRTD: rotating it is an image
+# release and a republished `published-mrtds.json`, not a config change. Pair a
+# change here with MDMA_FLEET_AUTH_TOKEN on the manager, and roll the nodes
+# first -- a manager with no token configured ignores the header entirely, so
+# nodes can start sending one before the manager starts requiring it.
 fleet_auth_token: ""
