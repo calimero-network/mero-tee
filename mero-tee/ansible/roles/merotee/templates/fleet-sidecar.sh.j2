@@ -1552,15 +1552,20 @@ print(json.dumps(payload))
 # Re-read the executor account while it is still unavailable.
 #
 # Its VALUE is fixed for the life of the node, which is why it is read once at
-# startup — but its AVAILABILITY at boot is not, and conflating the two is what
-# made this a silent, permanent failure. The unit is `After=merod.service`, and
-# `After` orders a start; it does not wait for merod to be READY. On a boot
-# where `meroctl account show` was not answering yet, `EXECUTOR_ACCOUNT` stayed
-# empty for the life of the process — and `reconcile_registration` returns
-# immediately without one, so the node never registered, never had a
-# certificate ordered, never had its name published in DNS, and never appeared
-# as a relay. The node looked healthy the whole time: it replicated, it polled,
-# and nothing in any log said why it was not a relay.
+# startup — but its AVAILABILITY at that moment is not, and conflating the two
+# is what made this a silent, permanent failure.
+#
+# `wait_for_merod` runs first and does block until merod answers, so this is NOT
+# the unit merely being `After=merod.service`. The gap is narrower and easier to
+# miss: `wait_for_merod` polls `meroctl peers`, while this reads
+# `meroctl account show`. A merod that serves `peers` has not necessarily minted
+# this node's account yet, so the one call can succeed while the other does not.
+#
+# When it did not, `EXECUTOR_ACCOUNT` stayed empty for the life of the process —
+# and `reconcile_registration` returns immediately without one, so the node
+# never registered, never had a certificate ordered, never had its name
+# published in DNS, and never appeared as a relay. The node looked healthy the
+# whole time: it replicated, it polled, and nothing said why it was not a relay.
 #
 # Costs one `meroctl` fork per ACCOUNT_RETRY_INTERVAL until it answers, and
 # nothing whatsoever after that.

@@ -2,7 +2,20 @@
 sources:
   app_journal:
     type: journald
-    include_units: ["merod.service", "mero-auth.service"]
+    # `fleet-sidecar.service` is here because on a locked image this is the ONLY
+    # way its output ever leaves the node. There is no shell on a confidential
+    # VM -- that is the point of one -- so `/var/log/fleet-sidecar.log` is
+    # unreadable by anyone, forever, and a unit missing from this list is a
+    # subsystem that cannot be debugged at all.
+    #
+    # The sidecar is the whole of a node's relay lifecycle: reading its account,
+    # attested registration, the CSR, certificate install, joins and leaves.
+    # When a node silently failed to appear as a relay, every one of those steps
+    # had already logged its reason on the box, and none of it was reachable.
+    #
+    # Cheap: `log` is called on events, not per cycle, so a healthy node is
+    # quiet. A node in trouble is exactly the one whose lines are worth having.
+    include_units: ["merod.service", "mero-auth.service", "fleet-sidecar.service"]
     data_dir: "/etc/vector/data"
 
 transforms:
