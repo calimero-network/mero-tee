@@ -45,7 +45,7 @@ always verified.
 | Value | Source | Notes |
 | --- | --- | --- |
 | `MDMA_URL` | Ansible build-time var (`fleet_mdma_url`) | Sidecar exits if unset. |
-| `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`), from the `FLEET_AUTH_TOKEN` repository secret | Sent as the `X-Fleet-Token` header when present. Empty builds a token-less image; see [Supplying the fleet token](#supplying-the-fleet-token). |
+| `FLEET_TOKEN` | **Issued by MDMA on attested registration**, stored at `/var/lib/calimero/fleet-token` | Never baked into the image. Sent as `X-Fleet-Token` once held; the two bootstrap routes take none. See [How the node gets its fleet token](#how-the-node-gets-its-fleet-token). |
 | **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
 | **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
 | **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. Read at startup and, if merod is not answering yet, **retried on the loop every `ACCOUNT_RETRY_INTERVAL` (15s) until it does** — see [When the account is not readable at boot](#when-the-account-is-not-readable-at-boot). See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
@@ -147,41 +147,59 @@ The destination is the public `victoria-lb` front end, read back through
 Grafana; the internal `victoria-logs-int` ALB resolves to private addresses in
 the AWS VPC and is not reachable from a GCP node.
 
-### Supplying the fleet token
+### How the node gets its fleet token
 
-`FLEET_TOKEN` authenticates this node to `/api/fleet/*`. It is one secret for
-the whole fleet: it proves "some fleet node", never *which* node — that is what
-attested registration is for.
+**No credential is baked into the image.** A node boots holding nothing and
+*earns* its token by attesting.
 
-The release workflow reads it from the `FLEET_AUTH_TOKEN` repository secret and
-hands it to packer as `PKR_VAR_fleet_auth_token`. Through the environment rather
-than `-var`, so it never reaches a process argument list, and the packer
-variable is declared `sensitive`, which keeps it out of the build log the
-workflow uploads as an artifact when a build fails.
+```
+boot (no secret)
+  → GET  /api/fleet/nodes/challenge     unauthenticated
+  → POST /api/fleet/nodes/register      unauthenticated; carries a TDX quote
+  ← { "fleet_token": "f1.<peer id>.<hmac>" }
+  → every other /api/fleet/* call        X-Fleet-Token: <that token>
+```
 
-Empty is a valid build and produces an image whose sidecar sends no token at
-all. That is correct for local and CI builds, and it is what the fleet carried
-before this existed.
+The token is stored at `/var/lib/calimero/fleet-token`, mode 0600, and survives
+restarts so a node does not re-register on every boot.
 
-Two consequences are easy to meet late:
+**Why the bootstrap routes are open.** They have to be — requiring a token to
+obtain a token is circular. It costs nothing, because the shared secret that
+used to sit in front of them was strictly weaker than the check behind them: a
+challenge is a sealed nonce, worthless without a quote, and registration
+verifies a TDX quote whose MRTD must be in `published-mrtds.json`. Every other
+route still requires a token, and
+`scripts/ci/check-fleet-token-headers.py` enforces that every function calling
+`/api/fleet/*` offers the header.
 
-**It is measured.** Like everything else baked in at build time, the token is
-part of the MRTD. Rotating it is an image release and a republished
-`published-mrtds.json`, not a restart and not a config change.
+**What this replaced, and why.** One shared secret for the whole fleet, baked in
+at build time. It was never the security boundary — it proved "some fleet node",
+never *which* one; that is what attestation is for, and everything that mattered
+(certificate issuance, relay identity, assignment confirmation) was already
+gated on the quote. But it sat in an artifact whose distribution is not fully
+controlled, and being measured into the MRTD meant rotating it was an image
+release plus a republished `published-mrtds.json`.
 
-**Nodes roll first.** On the MDMA side the matching value is
-`MDMA_FLEET_AUTH_TOKEN` — note the `MDMA_` prefix, which is what the manager's
-settings actually read. A manager with no token configured ignores the header
-entirely, so nodes can carry a token while the old manager is still serving; a
-manager holding one rejects every node that omits it. So: build and roll the
-node images, *then* give the manager its token. The reverse order takes the
-fleet offline.
+Per-node tokens fix both ends:
 
-A missing header is invisible until that second step, because every header is
-gated on the token being non-empty — a dropped one changes nothing observable
-until the manager requires it, at which point the failure is 401s from VMs in
-the field. `scripts/ci/check-fleet-token-headers.py` runs in the lint workflow
-and requires every function calling `/api/fleet/*` to offer the header.
+| | shared, baked | per-node, issued |
+| --- | --- | --- |
+| in the image | yes | **no** |
+| scope | whole fleet | one peer id |
+| one node compromised | fleet-wide access | that node only |
+| rotation | rebuild every image, re-allowlist MRTD | rotate `MDMA_FLEET_TOKEN_SIGNING_KEY` |
+
+On the MDMA side the value is `MDMA_FLEET_TOKEN_SIGNING_KEY` — note the `MDMA_`
+prefix, which is what the manager's settings actually read. It signs the tokens
+it issues; rotating it invalidates every token at once, and nodes re-register on
+their next cycle and are issued new ones, with no image involved.
+
+**Retry is on a clock.** A node with no token registers regardless of whether
+its identity changed, since registering is the only way to get one — but at most
+once per `REGISTRATION_RETRY_INTERVAL` (30s). Each attempt costs a TDX quote and
+spends a single-use challenge, so a node MDMA will not issue to (measurement not
+yet published, or no signing key configured there) would otherwise generate a
+quote a second, forever.
 
 ### Discovering the PeerId
 
@@ -774,7 +792,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
 | Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
-| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}` |
+| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}`; returns `{"fleet_token"}` |
 | Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
 | Registration state | `/var/lib/calimero/fleet-registration.json` |
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
@@ -785,7 +803,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | TLS reload | `systemctl restart traefik` (it watches its config file, not the certificate files that file names) |
 | Log | `/var/log/fleet-sidecar.log` |
 | Poll interval | 1 second |
-| Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set); manager side is `MDMA_FLEET_AUTH_TOKEN` |
+| Auth header | `X-Fleet-Token`, once registration has issued one; manager signs with `MDMA_FLEET_TOKEN_SIGNING_KEY`. The two `nodes/*` bootstrap routes take none. |
 
 ## Where to go next
 

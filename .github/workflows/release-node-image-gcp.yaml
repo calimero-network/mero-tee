@@ -283,17 +283,6 @@ jobs:
         working-directory: mero-tee
         env:
           PACKER_LOG: 1
-          # The fleet sidecar's X-Fleet-Token, read by packer as a variable and
-          # measured into the image. Passed through the environment rather than
-          # `-var` so it never appears in a process argument list; the variable
-          # is declared `sensitive`, which keeps it out of the PACKER_LOG=1
-          # output this job uploads as an artifact on failure.
-          #
-          # An unset secret builds an image whose sidecar sends no token, which
-          # is what the whole fleet carries today. That stays a working image
-          # against a manager with no token configured, so this is safe to merge
-          # before the secret exists.
-          PKR_VAR_fleet_auth_token: ${{ secrets.FLEET_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           export PACKER_FORCE_BUILD=true

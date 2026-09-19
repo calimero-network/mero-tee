@@ -2,7 +2,9 @@
 # Fleet HA sidecar: polls MDMA for group assignments and drives merod via meroctl.
 # Runs as a systemd service alongside merod on ReadOnly TEE fleet nodes.
 #
-# MDMA_URL and FLEET_TOKEN are baked at image build time via Ansible (measured into MRTD).
+# MDMA_URL is baked at image build time via Ansible (measured into MRTD).
+# NO CREDENTIAL IS BAKED: the fleet token is issued by mdma when this node's
+# attestation verifies, and stored at $FLEET_TOKEN_FILE.
 # TLS is always verified.
 set -euo pipefail
 
@@ -40,6 +42,11 @@ INVENTORY_FULL_INTERVAL=900
 # short enough that a node is registered and certifiable within a minute of
 # merod answering.
 ACCOUNT_RETRY_INTERVAL=15
+# How often a node with no fleet token retries registration. Each attempt costs
+# a TDX quote and spends a single-use challenge, so this is not something to do
+# on the 1 Hz loop; long enough to be cheap, short enough that a node is usable
+# within a minute of mdma being able to issue it one.
+REGISTRATION_RETRY_INTERVAL=30
 # Per (namespace, account): the envelope version last accepted by mdma, and a
 # hash of the PLAINTEXT it was sealed from. Sealing is non-deterministic — every
 # call mints a fresh ephemeral sender key, so two seals of identical data differ
@@ -96,7 +103,20 @@ mkdir -p "$(dirname "$CONFIRMED_FILE")"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
-FLEET_TOKEN="{{ fleet_auth_token | default('') }}"
+# The token authenticating this node to /api/fleet/*. NOT baked into the image:
+# it is issued by `POST /api/fleet/nodes/register` once mdma has verified a TDX
+# quote whose MRTD is allowlisted, and is scoped to this peer id.
+#
+# The image used to carry one shared fleet-wide secret. It was never the
+# security boundary -- it proved "some fleet node" while the quote proved which
+# one, and everything that mattered was already gated on the quote -- but it did
+# sit in an artifact whose distribution is not fully controlled, and rotating it
+# meant rebuilding every image and re-allowlisting the MRTD.
+#
+# Survives restarts so a node does not re-register on every boot; a lost or
+# rejected token simply means registering again, which costs one quote.
+FLEET_TOKEN_FILE="/var/lib/calimero/fleet-token"
+FLEET_TOKEN="$(cat "$FLEET_TOKEN_FILE" 2>/dev/null || true)"
 
 if [[ -z "${MDMA_URL:-}" ]]; then
   log "ERROR: fleet_mdma_url not set at build time. Fleet sidecar cannot start."
@@ -1519,6 +1539,21 @@ save_registration() {
   echo "$1" > "$REGISTRATION_FILE"
 }
 
+# Persist the token mdma issued, and start using it immediately.
+#
+# 0600 and written via a temp file so a crash mid-write cannot leave a truncated
+# credential that would 401 every call until the next registration.
+save_fleet_token() {
+  local token="$1"
+  [[ -n "$token" ]] || return 0
+  mkdir -p "$(dirname "$FLEET_TOKEN_FILE")"
+  local tmp="${FLEET_TOKEN_FILE}.$$"
+  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$FLEET_TOKEN_FILE"
+  FLEET_TOKEN="$token"
+}
+
 # Ask merod for a quote committing to `nonce_hex`.
 #
 # `/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
@@ -1628,24 +1663,50 @@ if sys.argv[6]:
 print(json.dumps(payload))
 ' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" 2>>"$LOG") || return 1
 
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+  # The response body matters now: this call is where the fleet token is
+  # ISSUED. mdma mints one scoped to this peer id once the quote verifies, so
+  # the node boots holding no credential and earns one by proving what it is.
+  local code out
+  out="$(mktemp)"
+  code=$(curl -s -o "$out" -w '%{http_code}' --max-time 30 -X POST \
     -H "Content-Type: application/json" "${headers[@]}" \
     -d "$body" "${MDMA_URL}/api/fleet/nodes/register" 2>>"$LOG") || code="000"
 
   case "$code" in
     2*)
-      log "Registered with mdma (peer=$peer_id)"
+      local issued
+      issued=$(python3 -c "
+import json, sys
+try:
+    value = json.load(open(sys.argv[1])).get('fleet_token')
+except Exception:
+    value = ''
+print(value if isinstance(value, str) else '')
+" "$out" 2>>"$LOG") || issued=""
+      rm -f "$out"
+      if [[ -n "$issued" ]]; then
+        save_fleet_token "$issued"
+        log "Registered with mdma (peer=$peer_id); fleet token issued"
+      else
+        # mdma accepted the registration but issued nothing, which means it has
+        # no signing key configured. Say so: every later fleet call will 401 and
+        # would otherwise look like a network problem.
+        log "WARN: registered (peer=$peer_id) but mdma issued no fleet token; \
+/api/fleet/* will reject this node until MDMA_FLEET_TOKEN_SIGNING_KEY is set"
+      fi
       return 0 ;;
     403)
+      rm -f "$out"
       # A verdict against this node: the quote did not verify, its measurement
       # is not published for this release/profile, or the challenge was spent.
       # Retried on the next pass anyway — a published-policy update is exactly
       # the kind of thing that turns this into a pass without the node changing.
       log "WARN: mdma refused this node's registration (403); it replicates but will not relay" ;;
     503)
+      rm -f "$out"
       log "mdma could not evaluate the attestation (503); will retry" ;;
     *)
+      rm -f "$out"
       log "WARN: registration POST returned ${code}; will retry" ;;
   esac
   return 1
@@ -1701,6 +1762,32 @@ reconcile_registration() {
   # advertised as a relay anyway, so registering a half-identity would only
   # record something that has to be replaced.
   [[ -z "$peer_id" || -z "$account" ]] && return 0
+
+  # No token means no access to /api/fleet/*, whatever the recorded identity
+  # says. Registration is the only thing that issues one, so a node that has
+  # lost its token (or is booting for the first time) must register regardless
+  # of whether anything about it changed.
+  #
+  # ON A CLOCK, not every cycle. This loop runs at 1 Hz and each attempt costs a
+  # TDX quote and spends a challenge, so a node mdma will not issue a token to --
+  # measurement not yet published, or no signing key configured there -- would
+  # otherwise generate a quote a second indefinitely. The identity-change path
+  # below needs no such guard: it is a string compare that settles immediately.
+  if [[ -z "${FLEET_TOKEN:-}" ]]; then
+    local now_ts
+    now_ts=$(date +%s)
+    # `:-0` so this function stands alone: the loop prologue sets the clock, but
+    # the test harness sources only the functions section, and `set -u` would
+    # abort on the bare name.
+    (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
+    LAST_REGISTRATION_ATTEMPT="$now_ts"
+    register_with_mdma "$peer_id" "$account" "$relay_url" "$port" || return 0
+    save_registration "$(python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
+' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    return 0
+  fi
 
   local recorded want
   recorded=$(load_registration | python3 -c "
@@ -1884,6 +1971,9 @@ LAST_RECOVERY_CONFIRMED=""
 # when the startup read came up empty, rather than sitting out a full interval
 # on the one boot where merod was only a moment behind.
 LAST_ACCOUNT_ATTEMPT=0
+# Registration retry clock. 0 so a node with no token registers on its first
+# pass rather than waiting out an interval on every boot.
+LAST_REGISTRATION_ATTEMPT=0
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.

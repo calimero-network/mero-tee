@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Every fleet call the sidecar makes must carry `X-Fleet-Token`.
 
-The token is the only thing authenticating a node to `/api/fleet/*`. It is
-optional in the sidecar by construction -- `[[ -n "${FLEET_TOKEN:-}" ]]` gates
-each header, because an image built without one has to keep working against a
-manager that requires none. That makes a MISSING header invisible: the call
-still succeeds today, and only starts failing once the manager has a token
-configured, on a fleet of TEE VMs, long after the change that dropped it.
+The token is the only thing authenticating a node to `/api/fleet/*`. It is no
+longer baked into the image: mdma issues one, scoped to this peer id, when the
+node's attestation verifies, and the sidecar stores it. Each header stays gated
+on `[[ -n "${FLEET_TOKEN:-}" ]]`, because a node has none until it has
+registered -- which is precisely what makes a MISSING header invisible. The
+call still succeeds on the two bootstrap routes, which take no token by design,
+and only fails on the rest, on a fleet of TEE VMs, long after the change that
+dropped it.
 
 So the invariant is checked statically instead: a function that calls
 `${MDMA_URL}/api/fleet/...` must also build the header. One function may make
