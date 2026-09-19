@@ -139,6 +139,20 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-registration-test.sh
 
+      # The executor account's availability at boot. Its VALUE is fixed for the
+      # life of the node, which is why it is read once -- but `After=merod.service`
+      # orders this unit's start without waiting for merod to be READY, so a boot
+      # that lost that race left the account empty for the life of the process.
+      # `reconcile_registration` returns immediately without one, and everything
+      # downstream hangs off that registration: no certificate row, so no A record
+      # and no certificate, so the node's name answered NXDOMAIN and it was never
+      # advertised as a relay -- while replicating and polling perfectly happily,
+      # with nothing on either side saying why.
+      - name: Run fleet-sidecar executor-account retry test
+        id: sidecar_account_retry_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-account-retry-test.sh
+
       # Node TLS. Without it a browser cannot reach a fleet node at all -- a
       # page on an HTTPS origin may not call `http://`, and mixed content is
       # blocked with no override. Each failure mode here is silent: the
@@ -169,6 +183,8 @@ jobs:
             --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
             --checks-line "- fleet-sidecar recovery test: ${{ steps.sidecar_recovery_test.outcome }}" \
             --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
+            --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
+            --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

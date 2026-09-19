@@ -48,8 +48,39 @@ always verified.
 | `FLEET_TOKEN` | Ansible build-time var (`fleet_auth_token`), from the `FLEET_AUTH_TOKEN` repository secret | Sent as the `X-Fleet-Token` header when present. Empty builds a token-less image; see [Supplying the fleet token](#supplying-the-fleet-token). |
 | **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
 | **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
-| **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
+| **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. Read at startup and, if merod is not answering yet, **retried on the loop every `ACCOUNT_RETRY_INTERVAL` (15s) until it does** — see [When the account is not readable at boot](#when-the-account-is-not-readable-at-boot). See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
 | **Relay URL** | Instance metadata key `relay-url` | The one value **not** baked at build time — it is per-node. See below. |
+
+### When the account is not readable at boot
+
+The executor account's *value* is fixed for the life of the node. Its
+*availability* at boot is not, and conflating the two used to make a node
+permanently, silently useless as a relay.
+
+`fleet-sidecar.service` is `After=calimero-init.service merod.service`, and
+systemd's `After=` **orders** a start — it does not wait for merod to be
+*ready*. On a boot that lost that race, `meroctl account show` failed, the
+startup read left `EXECUTOR_ACCOUNT` empty, and nothing ever read it again.
+
+Everything downstream hangs off that one value:
+
+1. `reconcile_registration` returns immediately without an account — there is
+   no identity to bind — so the node **never registers**.
+2. No registration means MDMA creates no `NodeCertificate` row.
+3. No certificate row means the dispatcher **publishes no A record and orders
+   no certificate**, so the node's `*.relay.<zone>` name answers `NXDOMAIN`.
+4. `_record_relay_identity` refuses to record a relay URL for an unregistered
+   peer, so the node is **never advertised as a relay**.
+
+Throughout, the node replicates and polls perfectly happily. It looks healthy
+from every angle except the one that matters, which is why this is worth
+stating explicitly rather than leaving to the code.
+
+`reconcile_executor_account` closes it: while the account is still unreadable
+it re-reads once every `ACCOUNT_RETRY_INTERVAL` (15s), logs
+`Fleet node executor account: … (readable after Ns)` when it succeeds, and then
+costs nothing at all for the life of the process. Covered by
+`scripts/ci/tests/fleet-sidecar-account-retry-test.sh`.
 
 ### Supplying the fleet token
 
