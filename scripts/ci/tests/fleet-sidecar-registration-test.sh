@@ -62,6 +62,7 @@ done
 case "${url}" in
   *metadata.google.internal*server-port*) echo "2428"; exit 0 ;;
   *metadata.google.internal*relay-url*)   echo "https://relay-01.test"; exit 0 ;;
+  *metadata.google.internal*enrolment-token*) echo "enrolment-token-for-this-instance"; exit 0 ;;
   *metadata.google.internal*)             exit 1 ;;
   *nodes/challenge*)
     printf '{"challenge":"%s","expires_at_ms":1}\n' "$(cat "${SB}/challenge")"
@@ -147,6 +148,10 @@ sent="$(python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['non
 [[ "${sent}" == "${expected}" ]] \
   || fail "the attested nonce is not what mdma will recompute: ${sent} != ${expected}"
 [[ "$(field 0 challenge)" == "chal-one" ]] || fail "the challenge must travel with the registration"
+# Proof of provenance: a quote shows a genuine enclave, not an instance of
+# mdma's. Without this field mdma refuses, and the node never joins the fleet.
+[[ "$(field 0 enrolment_token)" == "enrolment-token-for-this-instance" ]] \
+  || fail "the enrolment token must travel with the registration"
 [[ "$(field 0 quote)" == "cXVvdGUtYnl0ZXM=" ]] || fail "the quote must be forwarded verbatim"
 
 # --- no CSR falls back to the four-field binding --------------------------

@@ -184,6 +184,18 @@ print(account.strip().lower())
 ' 2>>"$LOG"
 }
 
+# Proof that this instance is one mdma created, presented once at registration.
+#
+# Per-node and stamped as instance metadata at creation, so it is NOT in the
+# image -- which is the whole point. A TDX quote proves a genuine enclave
+# running a measured image; it does not prove the machine is mdma's. Without
+# this, anyone with TDX hardware could register and be issued a fleet token.
+get_enrolment_token() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/enrolment-token" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
 # The URL clients present intents to.
 #
 # From instance metadata rather than derived: merod terminates no TLS and sits
@@ -1657,11 +1669,12 @@ payload = {"peer_id": sys.argv[1],
            "executor_account": sys.argv[2],
            "relay_url": sys.argv[3],
            "challenge": sys.argv[4],
-           "quote": sys.argv[5]}
+           "quote": sys.argv[5],
+           "enrolment_token": sys.argv[7]}
 if sys.argv[6]:
     payload["csr"] = sys.argv[6]
 print(json.dumps(payload))
-' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" 2>>"$LOG") || return 1
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" "$(get_enrolment_token)" 2>>"$LOG") || return 1
 
   # The response body matters now: this call is where the fleet token is
   # ISSUED. mdma mints one scoped to this peer id once the quote verifies, so
