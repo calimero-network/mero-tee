@@ -54,13 +54,17 @@ always verified.
 ### When the account is not readable at boot
 
 The executor account's *value* is fixed for the life of the node. Its
-*availability* at boot is not, and conflating the two used to make a node
-permanently, silently useless as a relay.
+*availability* at the moment it is first read is not, and conflating the two
+used to make a node permanently, silently useless as a relay.
 
-`fleet-sidecar.service` is `After=calimero-init.service merod.service`, and
-systemd's `After=` **orders** a start — it does not wait for merod to be
-*ready*. On a boot that lost that race, `meroctl account show` failed, the
-startup read left `EXECUTOR_ACCOUNT` empty, and nothing ever read it again.
+The subtlety is worth stating, because the obvious explanation is the wrong
+one: this is **not** merely `After=merod.service` ordering a start without
+waiting for readiness. `wait_for_merod` runs first and does block until merod
+answers. The gap is narrower — `wait_for_merod` polls `meroctl peers`, while
+the account is read with `meroctl account show`. A merod that already serves
+`peers` has not necessarily minted this node's account yet, so one call can
+succeed while the other still fails. When it did, the startup read left
+`EXECUTOR_ACCOUNT` empty and nothing ever read it again.
 
 Everything downstream hangs off that one value:
 
@@ -81,6 +85,20 @@ it re-reads once every `ACCOUNT_RETRY_INTERVAL` (15s), logs
 `Fleet node executor account: … (readable after Ns)` when it succeeds, and then
 costs nothing at all for the life of the process. Covered by
 `scripts/ci/tests/fleet-sidecar-account-retry-test.sh`.
+
+### Reading a locked node's sidecar log
+
+There is no shell on a confidential VM, so `/var/log/fleet-sidecar.log` is
+unreadable by anyone once an image is running — including whoever is trying to
+work out why a node never became a relay.
+
+`log` tees to stdout as well as that file, and the unit sets no
+`StandardOutput=`, so every line also reaches journald under
+`_SYSTEMD_UNIT=fleet-sidecar.service`. What decides whether it leaves the box is
+`include_units` in
+`ansible/roles/merotee/files/vector-partial-merod.yaml`, which Vector ships to
+VictoriaLogs. `fleet-sidecar.service` is in that list; a unit left out of it is
+a subsystem nobody can debug on a locked image, whatever it writes locally.
 
 ### Supplying the fleet token
 
