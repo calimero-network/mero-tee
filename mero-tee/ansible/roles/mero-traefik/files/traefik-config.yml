@@ -5,8 +5,22 @@ api:
   insecure: true
 
 entryPoints:
+  # Kept alongside `websecure`, not replaced by it. A CLI, the desktop app or a
+  # merobox scenario reaches a node by raw IP over plain HTTP and needs no
+  # certificate; only a browser does, because a page served over HTTPS cannot
+  # call an `http://` origin. Dropping `:80` would break the non-browser callers
+  # to fix nothing for the browser ones.
   web:
     address: ":80"
+  # TLS is declared on the entrypoint rather than per router, so a router opts
+  # in to HTTPS by listing `websecure` and nothing else. A router that named the
+  # entrypoint but forgot its own `tls` block would otherwise serve cleartext on
+  # :443 — a silent downgrade, and exactly the kind of per-router detail that
+  # drifts as routers are added.
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
 
 providers:
   file:
