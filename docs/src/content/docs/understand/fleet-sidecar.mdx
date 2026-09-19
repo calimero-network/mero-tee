@@ -259,7 +259,7 @@ second job:
 | Fact | Why only the node can say it | Where it goes |
 | --- | --- | --- |
 | **Executor account** | It is derived from an account root minted inside the TEE. MDMA never sees inside; the client has no way to compute it. A warrant naming the wrong executor is refused — after the author has spent a nonce on it. | `executor_account` on every should-join poll |
-| **Relay URL** | `merod` terminates no TLS and sits behind Traefik on a host it was never told about, so it cannot derive its own external address. MDMA holds only the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
+| **Relay URL** | `merod` sits behind Traefik on a host it was never told about, so it cannot derive its own external address — and whoever provisioned the DNS is the only party that knows the name. MDMA holds the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
 | **Authorship grant** | `CAN_AUTHOR_ON_BEHALF` is a governance capability, granted by an **admin of the namespace** and readable only by a node holding that group's key. MDMA does not grant it and cannot observe it. | `authorship_ready` on `/api/fleet/confirm` |
 | **Context inventory** | Which contexts exist inside a namespace, and which *group* each one hangs off, is governance state readable only by a member holding that group's key. MDMA stores an assignment per **namespace**, which is one level too coarse to route a write. | `namespaces[].groups[]` on `/api/fleet/inventory` |
 
@@ -530,6 +530,113 @@ They are one variable rather than two defaults on purpose: these nodes run
 there without the matching `merod` setting still opens the path — the drift is
 silent in the unsafe direction.
 
+## TLS: the certificate a browser needs
+
+A relay URL is useless to the audience delegated execution exists for unless it
+is `https://`. The client is a page served over HTTPS, and a page served over
+HTTPS **may not call an `http://` origin** — mixed content is blocked outright,
+with no user override and nothing the site can opt into. `https://<public-ip>`
+does not help either: no publicly-trusted certificate matches a raw address that
+the fleet re-assigns on every stop/start.
+
+So the node terminates TLS itself, on Traefik's `websecure` entrypoint, and the
+sidecar is what gets a certificate onto it.
+
+### The key never leaves the enclave
+
+`calimero-init` generates an EC P-256 key and a self-signed placeholder at
+`/mnt/data/tls/` **before Traefik starts**, so the TLS store always loads. What
+travels to MDMA is a **CSR** over that key; what comes back is a signed
+certificate. MDMA holds no private key for any node, and a compromise of its
+certificate table leaks only material already public in Certificate
+Transparency.
+
+The placeholder deliberately reports **no expiry** to MDMA. It is valid for ten
+years, and reporting that would tell the control plane this node is covered
+until 2036 — no certificate would ever be ordered, and the node would serve an
+untrusted certificate forever with nobody told.
+
+### Why Traefik has no ACME resolver
+
+This is the constraint that shapes the whole design, and it is invisible from
+outside the role.
+
+Traefik's own certificate resolver needs **this node's hostname in its config** —
+a `certificatesResolvers` block, `tls.domains`, or a `Host()` rule on each
+router. `traefik-routing.yml` is rendered into the image, so a per-node name
+there changes the image's root hash and therefore its **measurements**. A fleet
+whose MRTD differs per machine cannot be allowlisted, which is the entire point
+of measuring it.
+
+The rule that survives is narrower than "no certificates on nodes":
+
+:::caution[No per-node value may enter a measured file]
+A certificate *delivered at runtime to a fixed path* breaks nothing.
+`tls.stores.default.defaultCertificate` names `/mnt/data/tls/{cert,key}.pem` —
+the same string on every node, with only the bytes behind it differing, on a
+volume that was never measured. Every router still matches on **path**, never on
+host, so the measured config stays byte-identical across the fleet.
+:::
+
+`:80` stays open beside `:443` for the same reason it always was: a CLI, the
+desktop app and merobox reach a node by raw IP and need no certificate.
+
+### Issuance is authorised by two independent facts
+
+MDMA orders the certificate over **ACME DNS-01**, which means proving control of
+the *name* by writing a DNS record — the node is never contacted, so a
+certificate can be issued for a node that is firewalled, still booting or
+briefly down. Two things have to hold before it will order one:
+
+1. **The CSR's digest is inside the attestation quote.** It joins the
+   registration nonce as a fifth field —
+   `SHA256(challenge || peer_id || executor_account || relay_url || sha256(csr))`
+   — so the quote commits to the *key being certified*, not only to the identity
+   asking. Without it, a quote is a valid identity claim that says nothing about
+   the key travelling beside it.
+2. **The hostname is recomputed by MDMA**, from the node's own record and the
+   deployment's relay template — never taken from the `relay_url` this node
+   reports. A node chooses what it reports and its quote is genuine either way,
+   so the binding alone cannot stop it asking for someone else's name.
+
+A CSR failing either check leaves the node registered and replicating. It asked
+for something it may not have; it is not an impostor.
+
+The four-field binding is still accepted, because that is what a node image from
+before node TLS sends and what a node with no relay URL sends today. Refusing it
+would unregister the fleet to roll out a feature that fleet does not use.
+
+### Delivery and renewal ride the poll
+
+No new endpoint and no blocking call. Issuance is asynchronous on MDMA's side —
+it has to order and wait for validation — so the chain simply appears in the
+`tls_certificate` field of whichever `should-join` response follows it. Renewal
+takes the identical path: the poll reports `tls_cert_not_after`, MDMA orders one
+for a node reporting none and renews one whose expiry is near, and the chain is
+returned only while the two disagree.
+
+Before installing anything, the sidecar checks the returned chain's public key
+against the key it holds. A mismatched certificate fails nowhere visible —
+Traefik loads it happily and **every client handshake breaks**, on a node MDMA
+has already advertised as a relay.
+
+Traefik is then **restarted**, not reloaded: it watches its dynamic config file,
+not the certificate files that file names, and the config sits on the measured
+read-only root where it must not be rewritten to provoke a reload. Identical
+bytes are a no-op, so a poll that runs every second does not restart it every
+second.
+
+:::note[Reusing a node name costs more than a fresh one]
+Recreating a node under a name that has held a certificate before is detected by
+the CA as a renewal: exempt from the per-registered-domain limit, but capped by
+the **duplicate-certificate** limit of five per identical name per week, with no
+overrides. A fresh name each time counts against the far larger
+50-per-registered-domain limit, which *can* be raised on request. For repeated
+test provisioning, point the control plane at the CA's **staging** directory
+instead — or stop/start rather than delete/create, which keeps the data volume
+and therefore the key and the existing certificate.
+:::
+
 ## The poll-success safety gate
 
 The step-2 gate is safety-critical, not a nicety. Because a **missing assignment
@@ -558,7 +665,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 
 | Item | Value |
 | --- | --- |
-| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url"}` |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` |
 | Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready"}` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID>` (positional) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
@@ -571,13 +678,15 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
 | Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
-| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote"}` |
+| Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}` |
 | Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
 | Registration state | `/var/lib/calimero/fleet-registration.json` |
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
 | Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |
+| TLS key and certificate | `/mnt/data/tls/key.pem`, `/mnt/data/tls/cert.pem` — key generated by `calimero-init` before Traefik starts; never leaves the node |
+| TLS reload | `systemctl restart traefik` (it watches its config file, not the certificate files that file names) |
 | Log | `/var/log/fleet-sidecar.log` |
 | Poll interval | 1 second |
 | Auth header | `X-Fleet-Token` (when `FLEET_TOKEN` is set); manager side is `MDMA_FLEET_AUTH_TOKEN` |

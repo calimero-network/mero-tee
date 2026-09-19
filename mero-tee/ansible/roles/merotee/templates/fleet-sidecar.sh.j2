@@ -1505,13 +1505,11 @@ print(hashlib.sha256('|'.join(parts).encode()).hexdigest())
   local body
   body=$(python3 -c '
 import json, sys
-payload = {
-    "peer_id": sys.argv[1],
-    "executor_account": sys.argv[2],
-    "relay_url": sys.argv[3],
-    "challenge": sys.argv[4],
-    "quote": sys.argv[5],
-}
+payload = {"peer_id": sys.argv[1],
+           "executor_account": sys.argv[2],
+           "relay_url": sys.argv[3],
+           "challenge": sys.argv[4],
+           "quote": sys.argv[5]}
 if sys.argv[6]:
     payload["csr"] = sys.argv[6]
 print(json.dumps(payload))
