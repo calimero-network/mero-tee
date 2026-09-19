@@ -43,6 +43,7 @@ sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
     -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/etc/vector@${SB}/vector@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 
 # Only the function half: the main loop polls forever.

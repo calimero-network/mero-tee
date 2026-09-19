@@ -86,6 +86,41 @@ it re-reads once every `ACCOUNT_RETRY_INTERVAL` (15s), logs
 costs nothing at all for the life of the process. Covered by
 `scripts/ci/tests/fleet-sidecar-account-retry-test.sh`.
 
+### The observability credential comes from MDMA, not the image
+
+**No secret is baked into the node image**, and the bearer token vector presents
+to VictoriaLogs is the worked example of that rule.
+
+The image is an artifact whose distribution is not fully controlled, so treat
+anything inside it as readable. What the image carries is the *code to ask* for
+a credential. MDMA releases one only to a peer holding a verified
+`NodeRegistration` — the same attestation gate the TLS certificate and the relay
+identity already sit behind. A node proves what it is with a quote whose MRTD is
+allowlisted, and only then is it told anything.
+
+Secret Manager is not an alternative, and not for policy reasons: MDMA creates
+these instances with **no `serviceAccounts` field at all**, so an MDMA node has
+no GCP identity. Neither `gcloud` nor the metadata server's token endpoint has
+anything to authenticate as.
+
+The split is worth stating exactly:
+
+| value | travels as | why |
+| --- | --- | --- |
+| `logs-endpoint` | instance metadata | not a secret; an address, set at creation |
+| bearer token | `should-join` response | a credential, released only after attestation |
+
+Delivery rides the poll the node already makes, like the certificate. The node
+reports `logs_token_fp` — the **SHA-256 of the token it holds**, never the token
+— and MDMA sends one only while that disagrees with the configured value. At
+1 Hz, re-sending would put the credential on the wire 86,400 times a day.
+
+Rotation is therefore a config change on MDMA (`MDMA_OBSERVABILITY_LOGS_TOKEN`)
+that reaches every node on its next poll — not an image release and an MRTD
+re-allowlist, which is what baking would have cost.
+
+Covered by `scripts/ci/tests/fleet-sidecar-logs-token-test.sh`.
+
 ### Reading a locked node's sidecar log
 
 There is no shell on a confidential VM, so `/var/log/fleet-sidecar.log` is
@@ -99,6 +134,18 @@ work out why a node never became a relay.
 `ansible/roles/merotee/files/vector-partial-merod.yaml`, which Vector ships to
 VictoriaLogs. `fleet-sidecar.service` is in that list; a unit left out of it is
 a subsystem nobody can debug on a locked image, whatever it writes locally.
+
+Two things have to be true before any of it leaves the node, and until they are
+the config above is inert:
+
+1. `logs-endpoint` instance metadata is set — the dispatcher writes it only when
+   `MDMA_TEE_METADATA_LOGS_ENDPOINT` is configured, and metadata is set at
+   creation only, so an existing node never picks it up.
+2. MDMA has delivered the bearer token, per the section above.
+
+The destination is the public `victoria-lb` front end, read back through
+Grafana; the internal `victoria-logs-int` ALB resolves to private addresses in
+the AWS VPC and is not reachable from a GCP node.
 
 ### Supplying the fleet token
 

@@ -179,6 +179,94 @@ get_relay_url() {
     2>/dev/null | tr -d '\r\n' || true
 }
 
+# --- Observability credential ------------------------------------------------
+#
+# The bearer token vector presents to the VictoriaLogs front end. It is HANDED
+# TO THIS NODE BY MDMA over the attested fleet channel, and deliberately not
+# baked into the image: the image is an artifact whose distribution is not
+# fully controlled, so anything inside it should be assumed readable. What the
+# image carries is the code to ask; the credential arrives only after this node
+# has proved what it is with a quote whose MRTD is allowlisted.
+#
+# Secret Manager is not an option either, and not for policy reasons: mdma
+# creates these instances with no service account at all, so there is no cloud
+# identity here for `gcloud` or the metadata server's token endpoint to use.
+LOGS_TOKEN_FILE="/etc/vector/provided_token"
+
+# Where vector ships to. Instance metadata, like the relay URL, and NOT a
+# secret -- only the credential comes down the fleet channel. `get_meta` lives
+# in calimero-init, not here, so this reads the metadata server directly the
+# same way `get_relay_url` does.
+logs_endpoint() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/logs-endpoint" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
+# SHA-256 of the token this node holds, or empty. Reported on every poll so
+# mdma can send the token only when ours is wrong -- never the token itself,
+# which must not travel back up.
+logs_token_fp() {
+  [[ -s "$LOGS_TOKEN_FILE" ]] || return 0
+  sha256sum "$LOGS_TOKEN_FILE" 2>/dev/null | awk '{print $1}' || true
+}
+
+# Memoised on mtime, like the certificate expiry: the poll runs once a second
+# and would otherwise hash a file that changes about never.
+LOGS_TOKEN_MTIME=""
+LOGS_TOKEN_FP=""
+cached_logs_token_fp() {
+  local mtime
+  mtime=$(stat -c %Y "$LOGS_TOKEN_FILE" 2>/dev/null || echo "0")
+  if [[ "$mtime" != "$LOGS_TOKEN_MTIME" ]]; then
+    LOGS_TOKEN_MTIME="$mtime"
+    LOGS_TOKEN_FP="$(logs_token_fp)"
+  fi
+  echo "$LOGS_TOKEN_FP"
+}
+
+# Install a token mdma delivered, then (re)configure and start vector.
+#
+# The endpoint is NOT a secret and stays in instance metadata; only the
+# credential comes down this channel. With no endpoint there is nowhere to send
+# anything, so the token is stored and nothing is started -- an operator can set
+# the metadata and recreate without mdma having to re-deliver.
+install_logs_token() {
+  local token="$1"
+  [[ -n "$token" ]] || return 0
+
+  local endpoint
+  endpoint=$(logs_endpoint)
+  mkdir -p /etc/vector
+
+  local tmp="${LOGS_TOKEN_FILE}.$$"
+  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$LOGS_TOKEN_FILE"
+  logq "Observability token installed ($(cached_logs_token_fp))"
+
+  if [[ -z "$endpoint" ]]; then
+    logq "WARN: no logs-endpoint instance metadata; token stored but vector not started \
+(set MDMA_TEE_METADATA_LOGS_ENDPOINT on the dispatcher and recreate the node)"
+    return 0
+  fi
+
+  if [[ ! -x /etc/vector/configure_vector.sh || ! -f /etc/vector/vector_partial.yaml ]]; then
+    logq "WARN: vector config or script missing; token stored but vector not started"
+    return 0
+  fi
+
+  if /etc/vector/configure_vector.sh \
+      /etc/vector/vector_partial.yaml "$endpoint" "true" "provided" "$LOGS_TOKEN_FILE" >>"$LOG" 2>&1; then
+    systemctl restart vector >>"$LOG" 2>&1 \
+      && logq "vector restarted against $endpoint" \
+      || logq "WARN: vector restart failed; see $LOG"
+  else
+    logq "WARN: configure_vector.sh failed; see $LOG"
+  fi
+  return 0
+}
+
 # --- TLS -------------------------------------------------------------------
 #
 # The node holds a key it generated itself, in the enclave, before traefik
@@ -389,7 +477,8 @@ print(json.dumps({
   "executor_account": sys.argv[3],
   "relay_url": sys.argv[4],
   "tls_cert_not_after": sys.argv[5],
-}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+  "logs_token_fp": sys.argv[6],
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "$body" \
@@ -431,6 +520,19 @@ print(value if isinstance(value, str) else '')
 " 2>>"$LOG") || pem=""
   if [[ -n "$pem" ]]; then
     install_certificate "$pem" >/dev/null || true
+  fi
+
+  # The observability token rides the same response, for the same reasons, and
+  # with the same stdout discipline: this function's stdout IS the assignments
+  # payload, so the install must not print to it.
+  local logs_token
+  logs_token=$(echo "$response" | python3 -c "
+import json, sys
+value = json.load(sys.stdin).get('logs_token')
+print(value if isinstance(value, str) else '')
+" 2>>"$LOG") || logs_token=""
+  if [[ -n "$logs_token" ]]; then
+    install_logs_token "$logs_token" >/dev/null || true
   fi
 
   echo "$response"

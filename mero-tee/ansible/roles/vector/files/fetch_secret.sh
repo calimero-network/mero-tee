@@ -19,6 +19,21 @@ case "$PROVIDER" in
       --output text
     ;;
 
+  provided)
+    # The token was handed to this node by mdma over the attested fleet channel
+    # and written to disk by the sidecar. Nothing to fetch: it is already here,
+    # and there is no cloud identity on these instances to fetch it with.
+    #
+    # `$2` is an absolute path rather than a secret name. Read it as-is; an
+    # unreadable or empty file is a hard failure, because configuring vector
+    # with an empty Authorization header would send every log line unauthorized
+    # and look like a sink problem rather than a credential one.
+    if [[ ! -s "$2" ]]; then
+      echo "provided token file $2 is missing or empty" >&2
+      exit 1
+    fi
+    cat "$2"
+    ;;
   gcp)
     # Use gcloud to fetch secret
     gcloud secrets versions access latest \

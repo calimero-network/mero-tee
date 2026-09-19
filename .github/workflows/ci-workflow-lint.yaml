@@ -153,6 +153,20 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-account-retry-test.sh
 
+      # The observability credential, which is HANDED TO THE NODE BY MDMA and
+      # deliberately not baked into the image: the image is an artifact whose
+      # distribution is not fully controlled, so anything in it should be assumed
+      # readable. Secret Manager is not an alternative -- mdma creates these
+      # instances with no service account, so there is no cloud identity to fetch
+      # with. Every failure here is quiet: reporting the token instead of its
+      # fingerprint sends a secret back up the wire once a second, and printing to
+      # stdout from the install corrupts the assignments payload that drives the
+      # LEAVE path, which purges keys.
+      - name: Run fleet-sidecar observability token test
+        id: sidecar_logs_token_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-logs-token-test.sh
+
       # Node TLS. Without it a browser cannot reach a fleet node at all -- a
       # page on an HTTPS origin may not call `http://`, and mixed content is
       # blocked with no override. Each failure mode here is silent: the
@@ -185,6 +199,7 @@ jobs:
             --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
             --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
+            --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
