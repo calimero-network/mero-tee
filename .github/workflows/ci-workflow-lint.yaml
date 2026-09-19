@@ -139,6 +139,20 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-registration-test.sh
 
+      # Node TLS. Without it a browser cannot reach a fleet node at all -- a
+      # page on an HTTPS origin may not call `http://`, and mixed content is
+      # blocked with no override. Each failure mode here is silent: the
+      # self-signed placeholder reporting its ten-year expiry means MDMA never
+      # orders a real certificate; a chain that does not match the node's key
+      # loads in traefik and breaks every handshake on a node already
+      # advertised as a relay; and `log` tees to stdout, so a warning inside a
+      # value-returning function is captured AS the value and MDMA is asked to
+      # sign it.
+      - name: Run fleet-sidecar TLS test
+        id: sidecar_tls_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-tls-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
