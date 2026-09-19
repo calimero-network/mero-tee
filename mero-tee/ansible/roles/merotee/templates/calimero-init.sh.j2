@@ -171,6 +171,46 @@ log "Enabling delegated execution (public intents) on the admin API..."
   || log "WARN: failed to enable public intents; this node will replicate but not relay"
 {% endif %}
 
+# TLS material for traefik.
+#
+# The key is generated HERE, inside the enclave, and never leaves it: the fleet
+# sidecar builds a CSR from it and mdma returns only a signed certificate. So no
+# private key for a publicly-trusted certificate ever crosses the wire, and mdma
+# stores none.
+#
+# The self-signed placeholder exists so traefik's TLS store always loads. Its
+# `defaultCertificate` names a fixed path (see traefik-routing.yml), and this
+# runs before traefik starts. Until mdma issues the real chain the node serves
+# :80 as it always did and :443 with an untrusted certificate that nothing is
+# pointed at -- mdma advertises no relay URL for a node whose certificate has
+# not been issued, so no client is ever sent to it.
+#
+# Both files are left alone once present: the key is the node's long-lived TLS
+# identity, and cert.pem is whatever the sidecar last installed. Regenerating
+# either on a reboot would invalidate the certificate issued for this key.
+TLS_DIR="/mnt/data/tls"
+mkdir -p "$TLS_DIR"
+chmod 0700 "$TLS_DIR"
+if [[ ! -s "$TLS_DIR/key.pem" ]]; then
+  log "Generating node TLS key (stays in the enclave; only a CSR ever leaves)"
+  if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
+      -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1; then
+    chmod 0600 "$TLS_DIR/key.pem"
+    chmod 0644 "$TLS_DIR/cert.pem"
+  else
+    log "WARN: TLS key generation failed; traefik will fall back to its own self-signed default"
+  fi
+elif [[ ! -s "$TLS_DIR/cert.pem" ]]; then
+  # Key survived but the certificate did not (an interrupted install). Put a
+  # placeholder back so the TLS store still loads; the sidecar reinstalls.
+  log "TLS key present but certificate missing; regenerating placeholder"
+  openssl req -x509 -new -nodes -key "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" \
+    -days 3650 -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1 \
+    || log "WARN: placeholder certificate regeneration failed"
+  chmod 0644 "$TLS_DIR/cert.pem"
+fi
+
 log "Starting services..."
 systemctl daemon-reload
 systemctl enable merod mero-auth traefik

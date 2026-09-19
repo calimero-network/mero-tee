@@ -168,6 +168,143 @@ get_relay_url() {
     2>/dev/null | tr -d '\r\n' || true
 }
 
+# --- TLS -------------------------------------------------------------------
+#
+# The node holds a key it generated itself, in the enclave, before traefik
+# started (calimero-init). That key never leaves: what travels is a CSR, what
+# comes back is a signed certificate. mdma orders it over ACME DNS-01 for the
+# name this node committed to in its attestation quote, so the hostname on the
+# certificate is bound to the measurement rather than merely claimed.
+TLS_DIR="/mnt/data/tls"
+TLS_KEY="$TLS_DIR/key.pem"
+TLS_CERT="$TLS_DIR/cert.pem"
+
+# `log`, minus the copy on stdout.
+#
+# `log` tees, so anything it prints lands in the command substitution of a
+# caller reading a function's value. The functions below RETURN on stdout, so a
+# warning logged the usual way is captured AS the value -- a CSR field holding
+# "WARN: no TLS key at ...". The record still reaches $LOG.
+logq() { log "$@" >/dev/null; }
+
+# The hostname inside a relay URL. Empty when none is configured, which is also
+# when there is nothing to certify.
+relay_host() {
+  python3 -c '
+import sys
+from urllib.parse import urlsplit
+print(urlsplit(sys.argv[1]).hostname or "")
+' "${1:-}" 2>/dev/null || true
+}
+
+# A CSR over the node key for `host`, base64 DER.
+#
+# Cached beside the key: it is deterministic for (key, host), and regenerating
+# it every  pass would change the value the registration nonce commits to for no
+# reason. Keyed on the host so a node that moves behind a different name asks
+# for the new one instead of re-presenting its old certificate.
+node_csr_b64() {
+  local host="$1"
+  [[ -n "$host" ]] || return 1
+  [[ -s "$TLS_KEY" ]] || { logq "WARN: no TLS key at $TLS_KEY; cannot request a certificate"; return 1; }
+
+  local cached="$TLS_DIR/csr-${host}.b64"
+  if [[ ! -s "$cached" ]]; then
+    local der="$TLS_DIR/.csr.der.$$"
+    if ! openssl req -new -key "$TLS_KEY" -subj "/CN=${host}" \
+        -addext "subjectAltName=DNS:${host}" -outform DER -out "$der" >>"$LOG" 2>&1; then
+      rm -f "$der"
+      logq "WARN: could not build a CSR for ${host}"
+      return 1
+    fi
+    if ! base64 -w0 "$der" > "$cached" 2>>"$LOG"; then
+      rm -f "$der" "$cached"
+      return 1
+    fi
+    rm -f "$der"
+    find "$TLS_DIR" -maxdepth 1 -name 'csr-*.b64' ! -name "csr-${host}.b64" -delete 2>/dev/null || true
+  fi
+  cat "$cached"
+}
+
+# When the installed certificate expires (RFC3339), or empty.
+#
+# Empty is what drives issuance: mdma orders a certificate for any node that
+# reports no expiry, and renews one reporting an expiry close at hand. The
+# placeholder calimero-init writes is self-signed, so issuer == subject, and it
+# is reported as empty on purpose -- reporting its real notAfter would tell mdma
+# this node is covered for ten years and no certificate would ever be ordered.
+installed_cert_not_after() {
+  [[ -s "$TLS_CERT" ]] || return 0
+  local issuer subject enddate
+  issuer=$(openssl x509 -in "$TLS_CERT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+  subject=$(openssl x509 -in "$TLS_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')
+  [[ -n "$issuer" ]] || return 0
+  [[ "$issuer" != "$subject" ]] || return 0
+  enddate=$(openssl x509 -in "$TLS_CERT" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')
+  [[ -n "$enddate" ]] || return 0
+  date -u -d "$enddate" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true
+}
+
+# `installed_cert_not_after`, memoised on the certificate file's mtime.
+#
+# The poll below runs once a second and would otherwise fork three openssl
+# processes every time to re-read a value that changes twice a quarter.
+TLS_CERT_MTIME=""
+TLS_CERT_NOT_AFTER=""
+cached_cert_not_after() {
+  local mtime
+  mtime=$(stat -c %Y "$TLS_CERT" 2>/dev/null || echo "0")
+  if [[ "$mtime" != "$TLS_CERT_MTIME" ]]; then
+    TLS_CERT_MTIME="$mtime"
+    TLS_CERT_NOT_AFTER="$(installed_cert_not_after)"
+  fi
+  echo "$TLS_CERT_NOT_AFTER"
+}
+
+# Install a chain mdma returned -- but only if it matches the key we hold.
+#
+# A mismatched certificate fails nowhere visible: traefik loads it happily and
+# every client handshake breaks, on a node mdma has already advertised as a
+# relay. Comparing the two public keys costs one openssl call and turns a silent
+# fleet-wide outage into a refusal in the log.
+install_certificate() {
+  local pem="$1"
+  [[ -n "$pem" ]] || return 0
+  [[ -s "$TLS_KEY" ]] || return 1
+
+  local tmp="$TLS_DIR/.cert.pem.$$"
+  printf '%s\n' "$pem" > "$tmp" 2>>"$LOG" || { rm -f "$tmp"; return 1; }
+
+  local from_cert from_key
+  from_cert=$(openssl x509 -in "$tmp" -noout -pubkey 2>>"$LOG" | openssl sha256 2>/dev/null || true)
+  from_key=$(openssl pkey -in "$TLS_KEY" -pubout 2>>"$LOG" | openssl sha256 2>/dev/null || true)
+  if [[ -z "$from_cert" || "$from_cert" != "$from_key" ]]; then
+    log "WARN: mdma returned a certificate that does not match this node's key; not installing"
+    rm -f "$tmp"
+    return 1
+  fi
+
+  if cmp -s "$tmp" "$TLS_CERT"; then
+    rm -f "$tmp"
+    return 0
+  fi
+
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$TLS_CERT" 2>>"$LOG" || { rm -f "$tmp"; return 1; }
+
+  # Traefik watches its dynamic CONFIG file, not the certificate files that
+  # file names, so replacing the bytes behind `defaultCertificate` is invisible
+  # to it. The config sits on the measured, read-only root and must not be
+  # rewritten to provoke a reload, so a restart is how a new chain takes effect:
+  # about a second, at first issuance and at each renewal.
+  if systemctl restart traefik >>"$LOG" 2>&1; then
+    log "Installed TLS certificate (expires $(installed_cert_not_after))"
+  else
+    log "WARN: certificate installed but traefik restart failed; it serves the old one until restarted"
+  fi
+}
+
 # Whether this node holds CAN_AUTHOR_ON_BEHALF on a namespace — i.e. whether it
 # can actually serve delegated execution there.
 #
@@ -227,6 +364,11 @@ poll_mdma() {
   # `relay_url` are node-level facts mdma cannot derive, and this is the one
   # request it already makes every second. Empty values are skipped mdma-side,
   # so a node with no relay URL configured still polls and still replicates.
+  # It also carries when this node's certificate expires, which is what drives
+  # issuance and renewal: mdma orders one for a node reporting no expiry, and
+  # renews one whose expiry is close. Empty covers both "never issued" and "the
+  # self-signed placeholder", so a fresh node asks for a certificate simply by
+  # polling, and renewal needs no separate request from here at all.
   local body rc response
   body=$(python3 -c '
 import json, sys
@@ -235,7 +377,8 @@ print(json.dumps({
   "mrtd": sys.argv[2],
   "executor_account": sys.argv[3],
   "relay_url": sys.argv[4],
-}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+  "tls_cert_not_after": sys.argv[5],
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "$body" \
@@ -259,6 +402,24 @@ if not isinstance(data.get('assignments'), list):
 " 2>>"$LOG"; then
     log "WARN: /api/fleet/should-join returned an unparseable/unexpected body; skipping reconcile this cycle (state preserved)"
     return 1
+  fi
+
+  # Certificate delivery rides this response. No new endpoint and no blocking
+  # call: issuance is asynchronous on mdma's side, so the chain simply appears
+  # on whichever poll follows it, and renewal takes the identical path.
+  #
+  # stdout is the assignments payload this function returns, and `log` tees to
+  # stdout — so the install runs with stdout closed. Its log lines still reach
+  # $LOG; letting them reach the caller would corrupt the JSON that drives the
+  # leave path.
+  local pem
+  pem=$(echo "$response" | python3 -c "
+import json, sys
+value = json.load(sys.stdin).get('tls_certificate')
+print(value if isinstance(value, str) else '')
+" 2>>"$LOG") || pem=""
+  if [[ -n "$pem" ]]; then
+    install_certificate "$pem" >/dev/null || true
   fi
 
   echo "$response"
@@ -1309,14 +1470,34 @@ print(value.strip())
     return 1
   }
 
+  # A CSR for the name in the relay URL, so the certificate mdma orders is for a
+  # key this enclave generated. Absent when there is no relay URL: nothing to
+  # certify, and the four-field binding below is what an older node image sent.
+  local csr_b64=""
+  local host
+  host=$(relay_host "$relay_url")
+  if [[ -n "$host" ]]; then
+    csr_b64=$(node_csr_b64 "$host" || true)
+  fi
+
   # The binding mdma recomputes from the request body. Field order and the
   # separator are part of the contract — get either wrong and the quote is
   # rejected as bound to a different identity, which is the mechanism working.
+  #
+  # The CSR digest joins it as a fifth field so the quote proves not just WHICH
+  # NODE is asking but WHICH KEY gets certified; without it a quote is a valid
+  # identity claim that says nothing about the key travelling beside it. Omitted
+  # entirely when there is no CSR, which is the shape mdma accepts from a node
+  # image that predates this — a fleet node that only replicates still registers.
   local nonce_hex
   nonce_hex=$(python3 -c "
 import hashlib, sys
-print(hashlib.sha256('|'.join(sys.argv[1:5]).encode()).hexdigest())
-" "$challenge" "$peer_id" "$account" "$relay_url" 2>>"$LOG") || return 1
+parts = list(sys.argv[1:5])
+csr = sys.argv[5]
+if csr:
+    parts.append(hashlib.sha256(csr.encode()).hexdigest())
+print(hashlib.sha256('|'.join(parts).encode()).hexdigest())
+" "$challenge" "$peer_id" "$account" "$relay_url" "$csr_b64" 2>>"$LOG") || return 1
 
   local quote
   quote=$(attest_quote "$nonce_hex" "$port") || return 1
@@ -1324,14 +1505,15 @@ print(hashlib.sha256('|'.join(sys.argv[1:5]).encode()).hexdigest())
   local body
   body=$(python3 -c '
 import json, sys
-print(json.dumps({
-    "peer_id": sys.argv[1],
-    "executor_account": sys.argv[2],
-    "relay_url": sys.argv[3],
-    "challenge": sys.argv[4],
-    "quote": sys.argv[5],
-}))
-' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" 2>>"$LOG") || return 1
+payload = {"peer_id": sys.argv[1],
+           "executor_account": sys.argv[2],
+           "relay_url": sys.argv[3],
+           "challenge": sys.argv[4],
+           "quote": sys.argv[5]}
+if sys.argv[6]:
+    payload["csr"] = sys.argv[6]
+print(json.dumps(payload))
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" 2>>"$LOG") || return 1
 
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \

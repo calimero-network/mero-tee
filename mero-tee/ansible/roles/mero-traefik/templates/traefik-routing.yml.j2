@@ -38,6 +38,7 @@ http:
       rule: "PathRegexp(`^/admin-api/contexts/[0-9a-f]{64}/intents$`) && (Method(`GET`) || Method(`POST`) || Method(`OPTIONS`))"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -102,6 +103,7 @@ http:
       rule: "PathRegexp(`^/admin-api/namespaces/[0-9a-f]{64}/admit$`) && (Method(`POST`) || Method(`OPTIONS`))"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -111,6 +113,7 @@ http:
       rule: "Path(`/admin-api/health`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -120,6 +123,7 @@ http:
       rule: "PathPrefix(`/admin-api/tee`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -129,6 +133,7 @@ http:
       rule: "PathPrefix(`/jsonrpc`) || PathPrefix(`/admin-api/`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -139,6 +144,7 @@ http:
       rule: "PathPrefix(`/ws`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -148,6 +154,7 @@ http:
       rule: "PathPrefix(`/admin-dashboard`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - cors
@@ -156,6 +163,7 @@ http:
       rule: "PathPrefix(`/auth/`) || PathPrefix(`/admin/`)"
       entryPoints:
         - web
+        - websecure
       service: auth-service
       middlewares:
         - cors
@@ -164,6 +172,7 @@ http:
       rule: "Path(`/metrics`)"
       entryPoints:
         - web
+        - websecure
       service: node-core
       middlewares:
         - metrics-auth
@@ -200,3 +209,33 @@ http:
     metrics-auth:
       basicAuth:
         usersFile: "/etc/traefik/metrics-users"
+
+# The certificate served on `websecure`, for every hostname.
+#
+# A FIXED PATH, not a hostname, and that is the point. Traefik's own ACME
+# resolver would need this node's name in config — a `certificatesResolvers`
+# block, `tls.domains`, or a `Host()` rule on each router — and this file is
+# rendered into the image, so a per-node name here gives every node a different
+# root hash and therefore a different MRTD. A fleet whose measurement differs
+# per machine cannot be allowlisted, which is what attestation is for.
+#
+# The rule that survives: no per-node value may enter a measured file. This path
+# is identical on every node; only the bytes behind it differ, and `/mnt/data`
+# was never measured. So the certificate is issued elsewhere — mdma orders it
+# over ACME DNS-01 for the name the node committed to in its attestation quote,
+# and the fleet sidecar installs the chain here.
+#
+# `defaultCertificate` rather than a `certificates` list because the node does
+# not know its own name: it answers on whatever SNI arrives, and the one
+# certificate it holds is the right one by construction.
+#
+# calimero-init generates the key and a self-signed placeholder before traefik
+# starts, so this store always loads. Until mdma issues, the node serves :80
+# normally and :443 with an untrusted certificate that nothing is pointed at —
+# mdma advertises no relay URL until the real chain is in place.
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /mnt/data/tls/cert.pem
+        keyFile: /mnt/data/tls/key.pem

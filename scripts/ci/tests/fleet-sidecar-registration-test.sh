@@ -35,6 +35,7 @@ sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
     -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/mnt/data/tls@${SB}/tls@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/functions.sh"
 
@@ -101,22 +102,73 @@ import json,sys
 print(json.loads(sys.stdin.read().strip().split(chr(10))[int(sys.argv[1])])[sys.argv[2]])
 " "$1" "$2" < "${SB}/register-log"; }
 
+# The node key calimero-init generates before traefik starts. Present here
+# because its CSR is part of what the quote commits to.
+mkdir -p "${SB}/tls"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout "${SB}/tls/key.pem" -out "${SB}/tls/cert.pem" -days 3650 \
+  -subj "/CN=calimero-fleet-node" 2>/dev/null
+
 # --- the binding MDMA recomputes ------------------------------------------
-# The contract. MDMA computes SHA256(challenge|peer|account|relay) from the
-# request body and requires the quote to carry it, so the nonce the sidecar
-# asked merod to attest over must match that exactly.
+# The contract. MDMA computes SHA256(challenge|peer|account|relay|sha256(csr))
+# from the request body and requires the quote to carry it, so the nonce the
+# sidecar asked merod to attest over must match that exactly.
+#
+# The CSR digest is in there because a quote that commits only to the identity
+# proves WHICH NODE is asking and says nothing about the key travelling beside
+# it -- mdma would then sign a certificate for whatever key reached it. With the
+# digest bound, the certificate provably belongs to a key born in this enclave.
 reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "1" ]] || fail "expected one registration, got $(registrations)"
 
+csr="$(field 0 csr)"
+[[ -n "${csr}" ]] || fail "the CSR must travel with the registration"
+echo "${csr}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:relay-01.test" || fail "the CSR must be for the relay hostname"
+
 expected="$(python3 -c "
-import hashlib
-print(hashlib.sha256('|'.join(['chal-one', '${PEER}', '${ACCOUNT}', '${RELAY}']).encode()).hexdigest())
-")"
+import hashlib, sys
+csr_digest = hashlib.sha256(sys.argv[1].encode()).hexdigest()
+print(hashlib.sha256('|'.join(['chal-one', '${PEER}', '${ACCOUNT}', '${RELAY}', csr_digest]).encode()).hexdigest())
+" "${csr}")"
 sent="$(python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['nonce'])" < "${SB}/attest-log")"
 [[ "${sent}" == "${expected}" ]] \
   || fail "the attested nonce is not what mdma will recompute: ${sent} != ${expected}"
 [[ "$(field 0 challenge)" == "chal-one" ]] || fail "the challenge must travel with the registration"
 [[ "$(field 0 quote)" == "cXVvdGUtYnl0ZXM=" ]] || fail "the quote must be forwarded verbatim"
+
+# --- no CSR falls back to the four-field binding --------------------------
+# What a node image from before this change sends, and what a node with no
+# relay URL sends today. mdma accepts both shapes; a node that only replicates
+# must keep registering, or rolling out relay TLS would unregister the fleet.
+rm -f "${SB}/fleet-registration.json" "${SB}/tls/key.pem"
+rm -f "${SB}"/tls/csr-*.b64
+: > "${SB}/attest-log"
+: > "${SB}/register-log"
+echo "chal-nokey" > "${SB}/challenge"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" == "1" ]] || fail "a node with no TLS key must still register"
+[[ -z "$(python3 -c "
+import json,sys
+print(json.loads(sys.stdin.readline()).get('csr',''))
+" < "${SB}/register-log")" ]] || fail "no key means no csr field at all"
+expected="$(python3 -c "
+import hashlib
+print(hashlib.sha256('|'.join(['chal-nokey', '${PEER}', '${ACCOUNT}', '${RELAY}']).encode()).hexdigest())
+")"
+sent="$(python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['nonce'])" < "${SB}/attest-log")"
+[[ "${sent}" == "${expected}" ]] \
+  || fail "without a CSR the binding must stay four fields: ${sent} != ${expected}"
+
+# Restore the key and the starting state for the cases below.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+  -keyout "${SB}/tls/key.pem" -out "${SB}/tls/cert.pem" -days 3650 \
+  -subj "/CN=calimero-fleet-node" 2>/dev/null
+rm -f "${SB}/fleet-registration.json"
+: > "${SB}/attest-log"
+: > "${SB}/register-log"
+echo "chal-one" > "${SB}/challenge"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 
 # --- an unchanged identity does not re-register ---------------------------
 reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
