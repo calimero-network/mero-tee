@@ -33,6 +33,13 @@ INVENTORY_SCAN_INTERVAL=60
 # can only add, so a context the node no longer holds is removed from mdma here
 # or not at all.
 INVENTORY_FULL_INTERVAL=900
+# How often the executor account is re-read while it is still unavailable.
+# Only ever runs before the first successful read: once the account is known it
+# is fixed for the life of the node and this stops costing anything. Long
+# enough that a merod slow to come up does not fork `meroctl` once a second,
+# short enough that a node is registered and certifiable within a minute of
+# merod answering.
+ACCOUNT_RETRY_INTERVAL=15
 # Per (namespace, account): the envelope version last accepted by mdma, and a
 # hash of the PLAINTEXT it was sealed from. Sealing is non-deterministic — every
 # call mints a fresh ephemeral sender key, so two seals of identical data differ
@@ -96,6 +103,10 @@ if [[ -z "${MDMA_URL:-}" ]]; then
   exit 1
 fi
 
+# Only used to report how long the executor account took to become readable,
+# which is the difference between "merod was a little slow" and "something is
+# wrong with this node".
+SIDECAR_STARTED_AT=$(date +%s)
 log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
 
 wait_for_merod() {
@@ -1538,6 +1549,38 @@ print(json.dumps(payload))
   return 1
 }
 
+# Re-read the executor account while it is still unavailable.
+#
+# Its VALUE is fixed for the life of the node, which is why it is read once at
+# startup — but its AVAILABILITY at boot is not, and conflating the two is what
+# made this a silent, permanent failure. The unit is `After=merod.service`, and
+# `After` orders a start; it does not wait for merod to be READY. On a boot
+# where `meroctl account show` was not answering yet, `EXECUTOR_ACCOUNT` stayed
+# empty for the life of the process — and `reconcile_registration` returns
+# immediately without one, so the node never registered, never had a
+# certificate ordered, never had its name published in DNS, and never appeared
+# as a relay. The node looked healthy the whole time: it replicated, it polled,
+# and nothing in any log said why it was not a relay.
+#
+# Costs one `meroctl` fork per ACCOUNT_RETRY_INTERVAL until it answers, and
+# nothing whatsoever after that.
+#
+# Mutates the globals `EXECUTOR_ACCOUNT` and `LAST_ACCOUNT_ATTEMPT`.
+reconcile_executor_account() {
+  [[ -z "$EXECUTOR_ACCOUNT" ]] || return 0
+
+  local now_ts
+  now_ts=$(date +%s)
+  (( now_ts - LAST_ACCOUNT_ATTEMPT >= ACCOUNT_RETRY_INTERVAL )) || return 0
+  LAST_ACCOUNT_ATTEMPT="$now_ts"
+
+  EXECUTOR_ACCOUNT=$(get_executor_account || true)
+  if [[ -n "$EXECUTOR_ACCOUNT" ]]; then
+    log "Fleet node executor account: $EXECUTOR_ACCOUNT (readable after $((now_ts - SIDECAR_STARTED_AT))s)"
+  fi
+  return 0
+}
+
 # Register when the identity mdma holds is not the one this node now has.
 #
 # Re-registers on CHANGE rather than on a timer: a registration does not expire,
@@ -1703,8 +1746,9 @@ fi
 # clients are never sent to mint warrants it could not honour.
 EXECUTOR_ACCOUNT=$(get_executor_account || true)
 if [[ -z "$EXECUTOR_ACCOUNT" ]]; then
-  log "WARN: could not read this node's account from 'meroctl account show'; \
-delegated execution will not be offered for this node (it will still replicate)"
+  log "WARN: could not read this node's account from 'meroctl account show' yet; \
+retrying every ${ACCOUNT_RETRY_INTERVAL}s (the node replicates meanwhile, and is not \
+offered for delegated execution until it answers)"
 else
   log "Fleet node executor account: $EXECUTOR_ACCOUNT"
 fi
@@ -1729,6 +1773,10 @@ LAST_INVENTORY_SCAN=0
 LAST_INVENTORY_CONFIRMED=""
 LAST_RECOVERY_SCAN=0
 LAST_RECOVERY_CONFIRMED=""
+# Executor-account retry clock. 0 so the first loop pass retries immediately
+# when the startup read came up empty, rather than sitting out a full interval
+# on the one boot where merod was only a moment behind.
+LAST_ACCOUNT_ATTEMPT=0
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
@@ -1847,6 +1895,10 @@ print(json.dumps(sorted(con & des)))
   # long after admission, so it has to be re-read for namespaces we already
   # hold. Runs after the prune so a namespace we just left is not re-reported.
   reconcile_authorship "$PEER_ID" "$confirmed"
+
+  # The account, if the startup read came up empty. Must precede the
+  # registration below, which cannot bind an identity without it.
+  reconcile_executor_account
 
   # Attested registration. Cheap when nothing changed — a string compare
   # against the recorded identity — so it sits on the 1 Hz loop rather than a
