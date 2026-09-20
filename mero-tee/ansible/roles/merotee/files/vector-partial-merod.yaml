@@ -15,7 +15,36 @@ sources:
     #
     # Cheap: `log` is called on events, not per cycle, so a healthy node is
     # quiet. A node in trouble is exactly the one whose lines are worth having.
-    include_units: ["merod.service", "mero-auth.service", "fleet-sidecar.service"]
+    #
+    # `calimero-init.service` is here for the same reason and is the one that
+    # matters most, because it is the unit that starts every other unit in this
+    # list. It launches the sidecar with `systemctl start --no-block`, which
+    # logs "Queued non-blocking start" whether the unit then came up or died on
+    # its first line -- so a sidecar that never ran at all is INVISIBLE from
+    # anywhere else. It is also where the node is initialised, where the TLS key
+    # is generated and where vector itself is configured, so a node that is
+    # wrong before any of the services start says so only here.
+    #
+    # `traefik.service` fronts the admin API and terminates TLS. Every request
+    # the sidecar makes to merod goes through it, so a node that looks like it
+    # is refusing its own credentials is diagnosed here and nowhere else.
+    #
+    # `vector.service` and `vmagent.service` collect themselves. That is less
+    # circular than it sounds: a shipper that fails at startup leaves nothing
+    # behind, but one that starts and then degrades -- a rejected write, a full
+    # buffer, a sink that stopped resolving -- reports it, and that is the
+    # common case. The alternative is that the observability stack is the one
+    # subsystem with no account of itself.
+    include_units:
+      [
+        "calimero-init.service",
+        "merod.service",
+        "mero-auth.service",
+        "traefik.service",
+        "fleet-sidecar.service",
+        "vector.service",
+        "vmagent.service",
+      ]
     data_dir: "/etc/vector/data"
 
 transforms:

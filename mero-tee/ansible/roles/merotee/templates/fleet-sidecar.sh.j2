@@ -129,12 +129,49 @@ fi
 SIDECAR_STARTED_AT=$(date +%s)
 log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
 
+# Wait for merod to answer, but never forever, and never in silence.
+#
+# This was `while ! meroctl peers >/dev/null 2>&1; do sleep 1; done`: no bound,
+# no line inside the loop, and stderr discarded. A node whose merod never came
+# up stopped here permanently and said nothing at all -- no poll, no
+# registration, no certificate, no DNS record, no relay -- while looking
+# perfectly healthy from outside, because merod's own port was answering and
+# only `meroctl` was not. On a profile with no shell there is then no way left
+# to ask what happened.
+#
+# Three changes, each closing one of those:
+#
+#   * BOUNDED. Past the budget this returns non-zero and the caller carries on.
+#     Carrying on is right: `get_peer_id` reads config.toml directly rather than
+#     through merod, so the sidecar can still register, still poll, and still be
+#     SEEN by mdma -- and `reconcile_executor_account` keeps retrying the read
+#     that failed. Blocking here converts a merod that is slow, or a single
+#     broken subcommand, into a node that is permanently invisible.
+#   * PROGRESS. A line every `MEROD_WAIT_LOG_EVERY` attempts, so the journal
+#     distinguishes "still waiting, 90s in" from "died before it got here".
+#   * STDERR KEPT. `meroctl`'s own complaint is the whole diagnosis -- a missing
+#     home directory, a refused connection, an unparseable config all look
+#     identical once `2>/dev/null` has eaten them.
+MEROD_WAIT_TIMEOUT=600
+MEROD_WAIT_LOG_EVERY=30
 wait_for_merod() {
+  local waited=0 err
   log "Waiting for merod..."
-  while ! $MEROCTL --output-format json peers >/dev/null 2>&1; do
+  while true; do
+    err=$($MEROCTL --output-format json peers 2>&1 >/dev/null) && break
+    if (( waited >= MEROD_WAIT_TIMEOUT )); then
+      log "ERROR: merod did not answer 'meroctl peers' within ${MEROD_WAIT_TIMEOUT}s; \
+continuing anyway so this node is at least visible to mdma. Last error: ${err:-<none>}"
+      return 1
+    fi
+    if (( waited > 0 && waited % MEROD_WAIT_LOG_EVERY == 0 )); then
+      log "Still waiting for merod after ${waited}s: ${err:-<no stderr>}"
+    fi
     sleep 1
+    waited=$(( waited + 1 ))
   done
-  log "merod is ready"
+  log "merod is ready (after ${waited}s)"
+  return 0
 }
 
 get_peer_id() {
@@ -213,16 +250,31 @@ get_relay_url() {
 
 # --- Observability credential ------------------------------------------------
 #
-# The bearer token vector presents to the VictoriaLogs front end. It is HANDED
-# TO THIS NODE BY MDMA over the attested fleet channel, and deliberately not
-# baked into the image: the image is an artifact whose distribution is not
-# fully controlled, so anything inside it should be assumed readable. What the
-# image carries is the code to ask; the credential arrives only after this node
-# has proved what it is with a quote whose MRTD is allowlisted.
+# The bearer token vector and vmagent present to the observability front end.
 #
-# Secret Manager is not an option either, and not for policy reasons: mdma
-# creates these instances with no service account at all, so there is no cloud
-# identity here for `gcloud` or the metadata server's token endpoint to use.
+# TWO SOURCES, AND THE SPLIT IS THE POINT. Instance metadata is the BOOTSTRAP:
+# calimero-init reads `observability-token` and writes this very file before any
+# unit starts, so a node ships logs whether or not the sidecar ever runs. This
+# poll is the REFRESH: it is how a rotated token reaches a node that is already
+# running, without recreating it -- and recreation is the only other way, since
+# instance metadata is written at creation and never backfilled.
+#
+# The refresh existed first and was the only source, which made the
+# observability path depend on the thing it observes: this poll needs a fleet
+# token, that needs attested registration, and that needs this loop to be
+# running. A node that never reached its first poll could never ship the logs
+# that would say why. calimero-init reading the same credential at boot is what
+# breaks that circle; this half stays because rotation still has to land.
+#
+# The two agree by construction: both write THIS file, with `printf '%s'` and no
+# trailing newline, and mdma decides whether to re-send by comparing SHA-256 of
+# its token against the fingerprint reported from this file. A node booted with
+# a current token reports a matching fingerprint and the credential never rides
+# the poll at all.
+#
+# Secret Manager is not a third option, and not for policy reasons: mdma creates
+# these instances with no service account at all, so there is no cloud identity
+# here for `gcloud` or the metadata server's token endpoint to use.
 LOGS_TOKEN_FILE="/etc/vector/provided_token"
 
 # Where vector ships to. Instance metadata, like the relay URL, and NOT a
@@ -232,6 +284,16 @@ LOGS_TOKEN_FILE="/etc/vector/provided_token"
 logs_endpoint() {
   curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/logs-endpoint" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
+# Where vmagent ships to. Same shape, same reasoning, different signal -- and
+# read here for the same reason the logs endpoint is: a rotation has to
+# reconfigure BOTH shippers, or metrics keep presenting the superseded token
+# while logs move on, and the node half-authenticates.
+metrics_endpoint() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/metrics-endpoint" \
     2>/dev/null | tr -d '\r\n' || true
 }
 
@@ -257,18 +319,27 @@ cached_logs_token_fp() {
   echo "$LOGS_TOKEN_FP"
 }
 
-# Install a token mdma delivered, then (re)configure and start vector.
+# Install a token mdma delivered, then (re)configure and restart both shippers.
 #
-# The endpoint is NOT a secret and stays in instance metadata; only the
-# credential comes down this channel. With no endpoint there is nowhere to send
-# anything, so the token is stored and nothing is started -- an operator can set
-# the metadata and recreate without mdma having to re-deliver.
+# The endpoints are NOT secrets and stay in instance metadata; only the
+# credential comes down this channel. With no endpoint for a signal there is
+# nowhere to send it, so the token is stored and that shipper is left alone --
+# an operator can set the metadata and recreate without mdma having to
+# re-deliver.
+#
+# BOTH shippers, not just vector. They present the same bearer token to the same
+# vmauth front end, so a rotation that reconfigured only vector would leave
+# vmagent holding the superseded one and every sample would start being rejected
+# -- silently, at the sink, on a node with no shell to notice it from. The two
+# are configured together or the node is half-authenticated.
+#
+# `logq` throughout: this function is reachable from the poll's response
+# handler, whose STDOUT IS the assignments payload. A stray line on stdout
+# corrupts the parse and drives the LEAVE path, which purges keys.
 install_logs_token() {
   local token="$1"
   [[ -n "$token" ]] || return 0
 
-  local endpoint
-  endpoint=$(logs_endpoint)
   mkdir -p /etc/vector
 
   local tmp="${LOGS_TOKEN_FILE}.$$"
@@ -280,6 +351,16 @@ install_logs_token() {
   chmod 600 "$tmp"
   mv -f "$tmp" "$LOGS_TOKEN_FILE"
   logq "Observability token installed ($(cached_logs_token_fp))"
+
+  configure_vector_with_token
+  configure_vmagent_with_token
+  return 0
+}
+
+# (Re)point vector at the logs endpoint with the token this node now holds.
+configure_vector_with_token() {
+  local endpoint
+  endpoint=$(logs_endpoint)
 
   if [[ -z "$endpoint" ]]; then
     logq "WARN: no logs-endpoint instance metadata; token stored but vector not started \
@@ -299,6 +380,34 @@ install_logs_token() {
       || logq "WARN: vector restart failed; see $LOG"
   else
     logq "WARN: configure_vector.sh failed; see $LOG"
+  fi
+  return 0
+}
+
+# (Re)point vmagent at the metrics endpoint with the same token.
+#
+# `configure_vmagent.sh` rewrites the unit file and restarts the service itself,
+# so unlike vector there is no separate restart to do here.
+configure_vmagent_with_token() {
+  local endpoint
+  endpoint=$(metrics_endpoint)
+
+  if [[ -z "$endpoint" ]]; then
+    logq "No metrics-endpoint instance metadata; vmagent not started \
+(set MDMA_TEE_METADATA_METRICS_ENDPOINT on the dispatcher and recreate the node)"
+    return 0
+  fi
+
+  if [[ ! -x /etc/vmagent/configure_vmagent.sh || ! -f /etc/vmagent/scrape_config.yml ]]; then
+    logq "WARN: vmagent config or script missing; token stored but vmagent not started"
+    return 0
+  fi
+
+  if /etc/vmagent/configure_vmagent.sh \
+      /etc/vmagent/scrape_config.yml "$endpoint" "true" "provided" "$LOGS_TOKEN_FILE" >>"$LOG" 2>&1; then
+    logq "vmagent reconfigured against $endpoint"
+  else
+    logq "WARN: configure_vmagent.sh failed; see $LOG"
   fi
   return 0
 }
@@ -1780,7 +1889,34 @@ reconcile_registration() {
   # Nothing to bind yet. Not an error: a node with no account reported cannot be
   # advertised as a relay anyway, so registering a half-identity would only
   # record something that has to be replaced.
-  [[ -z "$peer_id" || -z "$account" ]] && return 0
+  #
+  # EDGE-TRIGGERED, like `reconcile_authorship`'s change detection: this runs at
+  # 1 Hz, so a line per cycle would be 86,400 a day of the same sentence and the
+  # signal would be worse than the silence. One line when the block starts, one
+  # when it clears, and nothing in between.
+  #
+  # The silence is what made this expensive. A node sitting here registers
+  # never, is issued no certificate, has no name published and never appears as
+  # a relay -- and every external measure of it (merod serving, correct image,
+  # MRTD matching the allowlist, metadata stamped) says healthy, because all of
+  # those are true. The only thing that was ever wrong was a field this function
+  # returns on without a word.
+  if [[ -z "$peer_id" || -z "$account" ]]; then
+    local missing=""
+    [[ -z "$peer_id" ]] && missing="peer_id"
+    [[ -z "$account" ]] && missing="${missing:+$missing and }executor account"
+    if [[ "${REGISTRATION_BLOCKED_ON:-}" != "$missing" ]]; then
+      REGISTRATION_BLOCKED_ON="$missing"
+      log "Registration is blocked: no ${missing} yet. This node will not register, \
+will not be issued a certificate, will not have a name published and will not be \
+advertised as a relay until it has one."
+    fi
+    return 0
+  fi
+  if [[ -n "${REGISTRATION_BLOCKED_ON:-}" ]]; then
+    log "Registration is no longer blocked (${REGISTRATION_BLOCKED_ON} now known); proceeding"
+    REGISTRATION_BLOCKED_ON=""
+  fi
 
   # No token means no access to /api/fleet/*, whatever the recorded identity
   # says. Registration is the only thing that issues one, so a node that has
@@ -1929,7 +2065,10 @@ save_confirmed() {
 
 # --- Main loop ---
 
-wait_for_merod
+# Non-fatal by design -- see the note on the function. A node that cannot talk
+# to its own merod is still worth having registered and polling, because that is
+# the state someone will need to look at.
+wait_for_merod || true
 
 PEER_ID=$(get_peer_id)
 if [[ -z "$PEER_ID" ]]; then
