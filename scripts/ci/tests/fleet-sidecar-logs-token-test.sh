@@ -114,6 +114,38 @@ install_logs_token "$NEW" >/dev/null 2>/dev/null
 [[ "$(cat "${SB}/vector/provided_token")" == "$NEW" ]] || fail "a rotated token must replace the old one"
 [[ "$(cached_logs_token_fp)" != "$WANT_FP" ]] || fail "the reported fingerprint must follow rotation"
 
+# --- the token is never briefly world-readable -----------------------------
+#
+# `chmod 600` AFTER the write closes the window; it does not prevent it. The
+# unit sets no `UMask=`, so systemd's default 0022 would create the temp file
+# 0644 and the secret would sit world-readable on disk until the chmod landed.
+#
+# Shadowing `chmod` observes the mode AS CREATED, which is the only moment that
+# matters and the one a `stat` of the final file cannot see.
+observed_create_mode() {
+  local target="$1" token="$2"
+  rm -f "${SB}/created_mode"
+  # shellcheck disable=SC2317  # invoked indirectly: this shadows the builtin
+  chmod() {
+    # $1 is the mode, $2 the path -- record what the file looked like before
+    # this call tightened it, then do the real thing.
+    [[ -e "${2:-}" ]] && stat -c %a "$2" >> "${SB}/created_mode"
+    command chmod "$@"
+  }
+  ( umask 022; "$target" "$token" ) >/dev/null 2>/dev/null
+  unset -f chmod
+  cat "${SB}/created_mode" 2>/dev/null || echo "MISSING"
+}
+
+mode="$(observed_create_mode install_logs_token "umask-probe-logs-token")"
+[[ "$mode" == "600" ]]   || fail "the logs token was created ${mode}, not 600: world-readable until chmod"
+
+mode="$(observed_create_mode save_fleet_token "umask-probe-fleet-token")"
+[[ "$mode" == "600" ]]   || fail "the fleet token was created ${mode}, not 600: world-readable until chmod"
+
+# Restore the token the rotation tests left in place, so ordering stays free.
+install_logs_token "$NEW" >/dev/null 2>/dev/null
+
 # --- an empty delivery is a no-op, not a wipe ------------------------------
 install_logs_token "" >/dev/null 2>/dev/null
 [[ "$(cat "${SB}/vector/provided_token")" == "$NEW" ]] \

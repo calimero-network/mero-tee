@@ -272,7 +272,11 @@ install_logs_token() {
   mkdir -p /etc/vector
 
   local tmp="${LOGS_TOKEN_FILE}.$$"
-  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  # `umask` in a subshell, not `chmod` afterwards: the unit sets no UMask, so
+  # systemd's default 0022 creates this 0644 and a post-hoc chmod only closes
+  # the window after the secret is already on disk world-readable. The chmod
+  # stays as a belt-and-braces assertion of the final mode.
+  ( umask 077; printf '%s' "$token" > "$tmp" ) || { rm -f "$tmp"; return 1; }
   chmod 600 "$tmp"
   mv -f "$tmp" "$LOGS_TOKEN_FILE"
   logq "Observability token installed ($(cached_logs_token_fp))"
@@ -1560,7 +1564,9 @@ save_fleet_token() {
   [[ -n "$token" ]] || return 0
   mkdir -p "$(dirname "$FLEET_TOKEN_FILE")"
   local tmp="${FLEET_TOKEN_FILE}.$$"
-  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  # See `install_logs_token`: created under a restrictive umask rather than
+  # chmod-ed down after the fact, so the token is never briefly world-readable.
+  ( umask 077; printf '%s' "$token" > "$tmp" ) || { rm -f "$tmp"; return 1; }
   chmod 600 "$tmp"
   mv -f "$tmp" "$FLEET_TOKEN_FILE"
   FLEET_TOKEN="$token"
