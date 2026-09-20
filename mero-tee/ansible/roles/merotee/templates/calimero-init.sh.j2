@@ -276,7 +276,15 @@ OBS_TOKEN_FILE="/etc/vector/provided_token"
 if [[ -n "${OBSERVABILITY_TOKEN:-}" ]]; then
   mkdir -p /etc/vector
   OBS_TOKEN_TMP="${OBS_TOKEN_FILE}.$$"
-  if printf '%s' "$OBSERVABILITY_TOKEN" > "$OBS_TOKEN_TMP"; then
+  # `umask` in a subshell, not `chmod` afterwards. This unit sets no `UMask=`,
+  # so systemd's default 0022 creates the file 0644 and a post-hoc chmod closes
+  # the window only after the secret is already on disk world-readable. The
+  # chmod stays as a belt-and-braces assertion of the final mode.
+  #
+  # Same reasoning, and the same fix, as the sidecar's two token writes. Both
+  # files are the SAME credential at the same path, so a difference in how they
+  # are created would be a difference nobody would think to look for.
+  if ( umask 077; printf '%s' "$OBSERVABILITY_TOKEN" > "$OBS_TOKEN_TMP" ); then
     chmod 600 "$OBS_TOKEN_TMP"
     mv -f "$OBS_TOKEN_TMP" "$OBS_TOKEN_FILE"
     # The FINGERPRINT, never the token. Enough to tell "this node holds the same

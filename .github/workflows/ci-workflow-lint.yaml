@@ -181,6 +181,22 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-tls-test.sh
 
+      # Secrets must be CREATED restricted, not created loose and tightened.
+      # None of these units set `UMask=`, so systemd's default 0022 makes a
+      # token 0644 and a later `chmod` closes the window only after the secret
+      # is already on disk world-readable.
+      #
+      # The sidecar's writes are covered behaviourally by the logs-token test,
+      # which shadows `chmod` to observe the mode AS CREATED. calimero-init
+      # cannot be: it is a linear boot script with nothing to source. It is also
+      # where the observability token is written on every node at boot, so it is
+      # where this matters most -- and it is exactly where the check was missing
+      # when the sidecar was fixed.
+      - name: Check every token file is created under a restrictive umask
+        id: secret_umask_test
+        shell: bash
+        run: scripts/ci/tests/secret-file-umask-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -200,6 +216,7 @@ jobs:
             --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
+            --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
