@@ -2,7 +2,7 @@
 # fetch_secret.sh
 # Usage: ./fetch_secret.sh <provider> <secret_name>
 #
-# Providers: aws, gcp
+# Providers: aws, gcp, provided
 # Example: ./fetch_secret.sh aws /merotee-instance-1/vmagent-token
 
 set -euo pipefail
@@ -43,7 +43,7 @@ case "$PROVIDER" in
 
   *)
     echo "Unknown provider: $PROVIDER" >&2
-    echo "Supported providers: aws, gcp" >&2
+    echo "Supported providers: aws, gcp, provided" >&2
     exit 1
     ;;
 esac

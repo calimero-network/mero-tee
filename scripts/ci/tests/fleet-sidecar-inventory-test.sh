@@ -42,6 +42,7 @@ sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
     -e "s@/var/lib/calimero/@${SB}/@g" \
     -e "s@/etc/vector@${SB}/vector@g" \
+    -e "s@/etc/vmagent@${SB}/vmagent@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 
 if ! grep -q '^# --- Main loop ---$' "${SB}/rendered.sh"; then

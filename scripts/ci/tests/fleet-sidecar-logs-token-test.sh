@@ -17,7 +17,10 @@
 #     assignments payload, and corrupting it drives the LEAVE path, which purges
 #     keys;
 #   * storing the token but silently never starting vector when no endpoint is
-#     configured.
+#     configured;
+#   * rotating the token into vector and leaving vmagent holding the superseded
+#     one, so metrics start being rejected at the sink while logs keep flowing
+#     and the node is half-authenticated with nothing to say so.
 #
 # Usage: scripts/ci/tests/fleet-sidecar-logs-token-test.sh
 set -euo pipefail
@@ -28,7 +31,7 @@ TEMPLATE="${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh
 SB="$(mktemp -d)"
 trap 'rm -rf "${SB}"' EXIT
 export SB
-mkdir -p "${SB}/bin" "${SB}/vector"
+mkdir -p "${SB}/bin" "${SB}/vector" "${SB}/vmagent"
 
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
@@ -36,10 +39,11 @@ sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@/var/lib/calimero/@${SB}/@g" \
     -e "s@/mnt/data/tls@${SB}/tls@g" \
     -e "s@/etc/vector@${SB}/vector@g" \
+    -e "s@/etc/vmagent@${SB}/vmagent@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/functions.sh"
 
-# Metadata stub: logs-endpoint answers only once ${SB}/endpoint exists.
+# Metadata stub: each endpoint answers only once its fixture file exists.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 url=""
@@ -48,6 +52,9 @@ case "${url}" in
   *metadata.google.internal*logs-endpoint*)
     [[ -f "${SB}/endpoint" ]] || exit 1
     cat "${SB}/endpoint"; exit 0 ;;
+  *metadata.google.internal*metrics-endpoint*)
+    [[ -f "${SB}/metrics_endpoint" ]] || exit 1
+    cat "${SB}/metrics_endpoint"; exit 0 ;;
   *metadata.google.internal*) exit 1 ;;
 esac
 exit 1
@@ -62,6 +69,14 @@ exit 0
 STUB
 chmod +x "${SB}/vector/configure_vector.sh"
 : > "${SB}/vector/vector_partial.yaml"
+
+cat > "${SB}/vmagent/configure_vmagent.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${SB}/vmagent_configured"
+exit 0
+STUB
+chmod +x "${SB}/vmagent/configure_vmagent.sh"
+: > "${SB}/vmagent/scrape_config.yml"
 
 cat > "${SB}/bin/systemctl" <<'STUB'
 #!/usr/bin/env bash
@@ -88,7 +103,9 @@ install_logs_token "$TOKEN" >"${SB}/stdout" 2>/dev/null
 [[ ! -s "${SB}/stdout" ]] || fail "install_logs_token must print nothing to stdout"
 [[ -s "${SB}/vector/provided_token" ]] || fail "the token must be stored even with no endpoint"
 [[ ! -f "${SB}/configured" ]] || fail "vector must not be configured with no endpoint"
+[[ ! -f "${SB}/vmagent_configured" ]] || fail "vmagent must not be configured with no endpoint"
 grep -q "no logs-endpoint" "${SB}/fleet.log" || fail "a missing endpoint must say so in the log"
+grep -q "No metrics-endpoint" "${SB}/fleet.log" || fail "a missing metrics endpoint must say so in the log"
 
 perms=$(stat -c %a "${SB}/vector/provided_token")
 [[ "$perms" == "600" ]] || fail "the token file must be 0600, got ${perms}"
@@ -108,11 +125,32 @@ grep -q "victoria-lb.test" "${SB}/configured" \
   || fail "vector must be configured against the metadata endpoint"
 grep -q "restart vector" "${SB}/systemctl" || fail "vector must be restarted after install"
 
+# --- metrics ride the same credential --------------------------------------
+#
+# vector and vmagent present the SAME bearer token to the SAME vmauth front
+# end. A rotation that reconfigured only vector would leave vmagent holding the
+# superseded one, and every sample would be rejected at the sink -- silently,
+# on a node with no shell to notice it from.
+echo "https://victoria-lb.test/api/v1/write" > "${SB}/metrics_endpoint"
+: > "${SB}/vmagent_configured"
+install_logs_token "$TOKEN" >"${SB}/stdout" 2>/dev/null
+[[ ! -s "${SB}/stdout" ]] || fail "install_logs_token must print nothing to stdout"
+grep -q "provided" "${SB}/vmagent_configured" \
+  || fail "vmagent must be configured with the 'provided' secret provider"
+grep -q "victoria-lb.test/api/v1/write" "${SB}/vmagent_configured" \
+  || fail "vmagent must be configured against the metrics metadata endpoint"
+grep -q "${SB}/vector/provided_token" "${SB}/vmagent_configured" \
+  || fail "vmagent must read the SAME token file vector does, or rotation desynchronises them"
+
 # --- rotation --------------------------------------------------------------
 NEW="a-rotated-token"
+: > "${SB}/configured"
+: > "${SB}/vmagent_configured"
 install_logs_token "$NEW" >/dev/null 2>/dev/null
 [[ "$(cat "${SB}/vector/provided_token")" == "$NEW" ]] || fail "a rotated token must replace the old one"
 [[ "$(cached_logs_token_fp)" != "$WANT_FP" ]] || fail "the reported fingerprint must follow rotation"
+[[ -s "${SB}/configured" ]] || fail "a rotation must reconfigure vector"
+[[ -s "${SB}/vmagent_configured" ]] || fail "a rotation must reconfigure vmagent too"
 
 # --- an empty delivery is a no-op, not a wipe ------------------------------
 install_logs_token "" >/dev/null 2>/dev/null
