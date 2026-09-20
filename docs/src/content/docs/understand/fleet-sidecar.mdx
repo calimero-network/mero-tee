@@ -904,8 +904,34 @@ nodes already emit, so one dashboard covers both kinds. `instance_name` is the
 FQDN, which is exactly the value Vector writes into the logs' `hostname` field —
 **that is the join between a node's logs and its metrics.**
 
-Covered by `scripts/ci/tests/vmagent-node-identity-test.sh`, which runs the real
-script and reads the systemd unit it generates.
+Both signals also carry **which image the node runs**, as `instance_profile`:
+
+| | |
+| --- | --- |
+| metrics | `-remoteWrite.label=instance_profile=<profile>` |
+| logs | `.instance_profile`, and listed in `VL-Stream-Fields` so it is indexed |
+
+`locked-read-only` is production. The debug profiles are rebuilt freely and
+their certificates come from Let's Encrypt **staging**, so they are not publicly
+trusted — and `directory_for_profile()` keys that off the profile rather than a
+deployment setting, so a debug node physically cannot spend the production CA's
+issuance budget. Without the field, telemetry from a throwaway node reads
+exactly like production's and the only way to tell them apart is to
+cross-reference `nodes.image_profile` in MDMA's database, which nobody does
+before believing a graph.
+
+Both read `/etc/calimero/image-profile`, which the playbook writes at build time
+and the measured root hash covers, so a node cannot misreport it. Vector's VRL
+cannot read a file, so the partial config carries a `__IMAGE_PROFILE__`
+placeholder that `configure_vector.sh` substitutes — a placeholder that shipped
+unsubstituted would make every node report that literal string, which is what
+its test pins. A missing file yields `unknown`, never an empty value: blank
+would silently drop the dimension for that node alone while every other node
+still reported one.
+
+Covered by `scripts/ci/tests/vmagent-node-identity-test.sh` and
+`scripts/ci/tests/vector-image-profile-test.sh`, both of which run the real
+scripts and read what they generate.
 
 ### Registration runs before the poll, and must
 

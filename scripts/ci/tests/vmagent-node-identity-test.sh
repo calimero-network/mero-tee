@@ -29,8 +29,11 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Redirect the two absolute paths the script writes to, then stub the commands
 # that would touch the host.
+mkdir -p "${SB}/calimero"
+printf 'debug-read-only\n' > "${SB}/calimero/image-profile"
 sed -e "s@/etc/systemd/system@${SB}/systemd@g" \
     -e "s@/etc/vmagent@${SB}/vmagent@g" \
+    -e "s@/etc/calimero@${SB}/calimero@g" \
     "$SRC" > "${SB}/configure.sh"
 chmod +x "${SB}/configure.sh"
 
@@ -67,6 +70,14 @@ $(grep ExecStart -A4 "$unit")"
 grep -q -- '-remoteWrite.label=instance_type=merotee' "$unit" \
   || fail "the unit carries no instance_type label"
 
+# WHICH IMAGE. `locked-read-only` is production; the debug profiles are rebuilt
+# freely and their certificates come from Let's Encrypt staging. Without this,
+# telemetry from a throwaway node and from production read identically.
+grep -q -- '-remoteWrite.label=instance_profile=debug-read-only' "$unit" \
+  || fail "the unit carries no instance_profile label, so a debug node's metrics
+       are indistinguishable from production's:
+$(grep ExecStart -A4 "$unit")"
+
 # The credential must still be wired -- the labels are appended to the same line.
 grep -q -- '-remoteWrite.bearerTokenFile=' "$unit" \
   || fail "the bearer token flag was lost when the labels were added"
@@ -83,4 +94,15 @@ rm -f "$unit"
 grep -q -- '-remoteWrite.label=instance_name=' "$unit" \
   || fail "labels are missing when auth is disabled; identity does not depend on the credential"
 
-echo "PASS: vmagent is started with instance_name and instance_type labels"
+# A missing profile file must degrade to `unknown`, never to an empty label:
+# `instance_profile=""` would silently drop the dimension for that node only.
+rm -f "${SB}/calimero/image-profile" "$unit"
+"${SB}/configure.sh" "${SB}/vmagent/scrape_config.yml" \
+  "https://victoria-lb.test/api/v1/write" false gcp "" >"${SB}/out3" 2>&1 \
+  || { cat "${SB}/out3" >&2; fail "configure_vmagent.sh failed with no profile file"; }
+grep -q -- '-remoteWrite.label=instance_profile=unknown' "$unit" \
+  || fail "a missing /etc/calimero/image-profile must yield instance_profile=unknown,
+       not an empty label:
+$(grep ExecStart -A4 "$unit")"
+
+echo "PASS: vmagent is started with instance_name, instance_type and instance_profile labels"

@@ -56,3 +56,9 @@ transforms:
       .hostname = .host
       .instance_name = "merotee"
       .instance_type = "gcp"
+      # Substituted by configure_vector.sh from /etc/calimero/image-profile,
+      # which the playbook writes at build time and the root hash measures. A
+      # literal placeholder rather than a lookup because Vector's VRL cannot
+      # read a file, and because a value baked here would be wrong on every
+      # profile but one.
+      .instance_profile = "__IMAGE_PROFILE__"

@@ -71,6 +71,17 @@ echo "Step 3: Creating final Vector configuration..."
 # Read partial config content
 PARTIAL_CONFIG=$(cat "$PARTIAL_CONFIG_PATH")
 
+# Stamp which image this node runs. `locked-read-only` is production; the debug
+# profiles are not publicly trusted and are rebuilt freely. Without it, a log
+# line from a throwaway debug node reads identically to one from production.
+#
+# Written by the playbook at build time and covered by the measured root hash,
+# so a node cannot misreport it. `unknown` rather than a guess if it is absent.
+NODE_PROFILE=$(tr -d '\r\n' < /etc/calimero/image-profile 2>/dev/null || true)
+NODE_PROFILE=${NODE_PROFILE:-unknown}
+PARTIAL_CONFIG=${PARTIAL_CONFIG//__IMAGE_PROFILE__/$NODE_PROFILE}
+echo "Image profile: ${NODE_PROFILE}"
+
 # Create final config with partial content + sink section
 cat > "$VECTOR_CONFIG_PATH" <<EOFVECTOR
 ${PARTIAL_CONFIG}
@@ -93,7 +104,7 @@ ${AUTH_HEADER_LINE}
         AccountID: "0"
         ProjectID: "0"
         VL-Msg-Field: message
-        VL-Stream-Fields: stream,hostname,unit,instance_name,instance_type
+        VL-Stream-Fields: stream,hostname,unit,instance_name,instance_type,instance_profile
         VL-Time-Field: timestamp
 EOFVECTOR
 
