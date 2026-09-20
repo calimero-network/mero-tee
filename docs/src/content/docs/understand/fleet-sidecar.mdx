@@ -189,6 +189,34 @@ What caps it:
 Against that: a node with no logs cannot be debugged at all, on a profile with
 no shell to debug it from.
 
+#### How it is written to disk
+
+Both writers create the token inside `( umask 077; ... )`, and neither relies on
+a `chmod` afterwards.
+
+That distinction is the whole point. `chmod 600` after the write *closes* the
+window; it does not prevent it. Neither `calimero-init.service` nor
+`fleet-sidecar.service` sets `UMask=`, so systemd's default 0022 applies and the
+file is created **0644** — the credential sits world-readable on disk until the
+chmod lands. The chmod is kept, but as a belt-and-braces assertion of the final
+mode rather than as the thing that sets it.
+
+It applies to both writers because they write **the same file**. A difference in
+how `/etc/vector/provided_token` is created depending on which code path got
+there first would be a difference nobody would think to look for.
+
+Low severity on a locked image — there is no shell and no unprivileged user with
+a reason to be looking — so this is hygiene rather than an exploited hole. The
+cost of getting it right is one subshell.
+
+Two guards, because one of them could not reach both cases.
+`fleet-sidecar-logs-token-test.sh` shadows `chmod` to observe the mode **as
+created**, which a `stat` of the final file cannot see — but it can only test
+what it can call, and `calimero-init` is a linear boot script with no sourceable
+functions. `secret-file-umask-test.sh` therefore checks both templates
+statically. CSRs and certificates are deliberately excluded: they are public
+material.
+
 #### Rotation
 
 Change `MDMA_OBSERVABILITY_LOGS_TOKEN` on both the manager and the dispatcher —
