@@ -871,6 +871,42 @@ instead — or stop/start rather than delete/create, which keeps the data volume
 and therefore the key and the existing certificate.
 :::
 
+### Metrics carry the node's identity
+
+vmagent scrapes `localhost:9100`, which is the same target string on every node
+in the fleet. Without identifying labels every node therefore produces the
+identical series identity:
+
+```
+{instance="localhost:9100", job="node_exporter"}
+```
+
+Two nodes and their samples **interleave into one series** — a counter that
+appears to reset, a gauge that flips between machines. That reads as plausible
+data and is wrong, which is worse than having no metrics at all. With a single
+node in the fleet it is invisible; the second node starts corrupting every query
+silently.
+
+`configure_vmagent.sh` therefore starts vmagent with:
+
+```
+-remoteWrite.label=instance_name=<fqdn>
+-remoteWrite.label=instance_type=merotee
+```
+
+Derived inside that script rather than passed in, so its two callers cannot
+drift: it runs from `calimero-init` at boot **and** from the fleet sidecar when
+MDMA rotates the observability token, and a rotation that dropped the labels
+would orphan the node's metrics from that moment on.
+
+`instance_name` and `instance_type` are the same labels the Terraform-managed
+nodes already emit, so one dashboard covers both kinds. `instance_name` is the
+FQDN, which is exactly the value Vector writes into the logs' `hostname` field —
+**that is the join between a node's logs and its metrics.**
+
+Covered by `scripts/ci/tests/vmagent-node-identity-test.sh`, which runs the real
+script and reads the systemd unit it generates.
+
 ### Registration runs before the poll, and must
 
 `/api/fleet/should-join` requires a fleet token. A node is **issued** one by

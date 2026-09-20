@@ -60,9 +60,31 @@ else
     echo "Step 2: Skipping bearer token (auth disabled)"
 fi
 
-# 3. Create systemd service file
+# 3. Identify this node on every sample it ships.
+#
+# WITHOUT THIS, METRICS ARE WORSE THAN ABSENT. The scrape config targets
+# `localhost:9100`, so every node in the fleet produces the identical series
+# identity `{instance="localhost:9100", job="node_exporter"}`. Two nodes and
+# their samples interleave into one series -- a counter that appears to reset,
+# a gauge that flips between machines -- which reads as plausible data and is
+# wrong. One node hides it; the second one silently corrupts every query.
+#
+# Derived HERE rather than passed in, so both callers cannot drift: it is run by
+# `calimero-init` at boot AND by the fleet sidecar when mdma rotates the
+# observability token, and a rotation that dropped these labels would silently
+# orphan the node's metrics from that moment on.
+#
+# `instance_name` and `instance_type` match what the Terraform-managed nodes
+# already emit, so one dashboard covers both kinds. `instance_name` is the FQDN,
+# which is exactly the value Vector puts in the logs' `hostname` field -- that
+# is the join between a node's logs and its metrics.
+NODE_FQDN="$(hostname 2>/dev/null || echo unknown)"
+EXTRA_LABELS="-remoteWrite.label=instance_name=${NODE_FQDN} -remoteWrite.label=instance_type=merotee"
+echo "Identifying labels: instance_name=${NODE_FQDN} instance_type=merotee"
+
+# 4. Create systemd service file
 echo ""
-echo "Step 3: Creating systemd service..."
+echo "Step 4: Creating systemd service..."
 cat > /etc/systemd/system/vmagent.service <<EOFSERVICE
 [Unit]
 Description=vmagent - VictoriaMetrics Agent
@@ -74,7 +96,7 @@ Type=simple
 ExecStart=/usr/local/bin/vmagent \\
   -promscrape.config=$CONFIG_FILE \\
   -remoteWrite.url=$REMOTE_WRITE_URL \\
-  -httpListenAddr=:8429 $BEARER_TOKEN_FLAG
+  -httpListenAddr=:8429 $BEARER_TOKEN_FLAG $EXTRA_LABELS
 Restart=always
 RestartSec=10
 
@@ -84,9 +106,9 @@ EOFSERVICE
 
 echo "Systemd service created at /etc/systemd/system/vmagent.service"
 
-# 4. Reload systemd and enable service
+# 5. Reload systemd and enable service
 echo ""
-echo "Step 4: Enabling and starting vmagent service..."
+echo "Step 5: Enabling and starting vmagent service..."
 systemctl daemon-reload
 systemctl enable vmagent
 systemctl restart vmagent
