@@ -2,7 +2,9 @@
 # Fleet HA sidecar: polls MDMA for group assignments and drives merod via meroctl.
 # Runs as a systemd service alongside merod on ReadOnly TEE fleet nodes.
 #
-# MDMA_URL and FLEET_TOKEN are baked at image build time via Ansible (measured into MRTD).
+# MDMA_URL is baked at image build time via Ansible (measured into MRTD).
+# NO CREDENTIAL IS BAKED: the fleet token is issued by mdma when this node's
+# attestation verifies, and stored at $FLEET_TOKEN_FILE.
 # TLS is always verified.
 set -euo pipefail
 
@@ -40,6 +42,11 @@ INVENTORY_FULL_INTERVAL=900
 # short enough that a node is registered and certifiable within a minute of
 # merod answering.
 ACCOUNT_RETRY_INTERVAL=15
+# How often a node with no fleet token retries registration. Each attempt costs
+# a TDX quote and spends a single-use challenge, so this is not something to do
+# on the 1 Hz loop; long enough to be cheap, short enough that a node is usable
+# within a minute of mdma being able to issue it one.
+REGISTRATION_RETRY_INTERVAL=30
 # Per (namespace, account): the envelope version last accepted by mdma, and a
 # hash of the PLAINTEXT it was sealed from. Sealing is non-deterministic — every
 # call mints a fresh ephemeral sender key, so two seals of identical data differ
@@ -96,7 +103,20 @@ mkdir -p "$(dirname "$CONFIRMED_FILE")"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
-FLEET_TOKEN="{{ fleet_auth_token | default('') }}"
+# The token authenticating this node to /api/fleet/*. NOT baked into the image:
+# it is issued by `POST /api/fleet/nodes/register` once mdma has verified a TDX
+# quote whose MRTD is allowlisted, and is scoped to this peer id.
+#
+# The image used to carry one shared fleet-wide secret. It was never the
+# security boundary -- it proved "some fleet node" while the quote proved which
+# one, and everything that mattered was already gated on the quote -- but it did
+# sit in an artifact whose distribution is not fully controlled, and rotating it
+# meant rebuilding every image and re-allowlisting the MRTD.
+#
+# Survives restarts so a node does not re-register on every boot; a lost or
+# rejected token simply means registering again, which costs one quote.
+FLEET_TOKEN_FILE="/var/lib/calimero/fleet-token"
+FLEET_TOKEN="$(cat "$FLEET_TOKEN_FILE" 2>/dev/null || true)"
 
 if [[ -z "${MDMA_URL:-}" ]]; then
   log "ERROR: fleet_mdma_url not set at build time. Fleet sidecar cannot start."
@@ -164,6 +184,18 @@ print(account.strip().lower())
 ' 2>>"$LOG"
 }
 
+# Proof that this instance is one mdma created, presented once at registration.
+#
+# Per-node and stamped as instance metadata at creation, so it is NOT in the
+# image -- which is the whole point. A TDX quote proves a genuine enclave
+# running a measured image; it does not prove the machine is mdma's. Without
+# this, anyone with TDX hardware could register and be issued a fleet token.
+get_enrolment_token() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/enrolment-token" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
 # The URL clients present intents to.
 #
 # From instance metadata rather than derived: merod terminates no TLS and sits
@@ -177,6 +209,94 @@ get_relay_url() {
   curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/relay-url" \
     2>/dev/null | tr -d '\r\n' || true
+}
+
+# --- Observability credential ------------------------------------------------
+#
+# The bearer token vector presents to the VictoriaLogs front end. It is HANDED
+# TO THIS NODE BY MDMA over the attested fleet channel, and deliberately not
+# baked into the image: the image is an artifact whose distribution is not
+# fully controlled, so anything inside it should be assumed readable. What the
+# image carries is the code to ask; the credential arrives only after this node
+# has proved what it is with a quote whose MRTD is allowlisted.
+#
+# Secret Manager is not an option either, and not for policy reasons: mdma
+# creates these instances with no service account at all, so there is no cloud
+# identity here for `gcloud` or the metadata server's token endpoint to use.
+LOGS_TOKEN_FILE="/etc/vector/provided_token"
+
+# Where vector ships to. Instance metadata, like the relay URL, and NOT a
+# secret -- only the credential comes down the fleet channel. `get_meta` lives
+# in calimero-init, not here, so this reads the metadata server directly the
+# same way `get_relay_url` does.
+logs_endpoint() {
+  curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/logs-endpoint" \
+    2>/dev/null | tr -d '\r\n' || true
+}
+
+# SHA-256 of the token this node holds, or empty. Reported on every poll so
+# mdma can send the token only when ours is wrong -- never the token itself,
+# which must not travel back up.
+logs_token_fp() {
+  [[ -s "$LOGS_TOKEN_FILE" ]] || return 0
+  sha256sum "$LOGS_TOKEN_FILE" 2>/dev/null | awk '{print $1}' || true
+}
+
+# Memoised on mtime, like the certificate expiry: the poll runs once a second
+# and would otherwise hash a file that changes about never.
+LOGS_TOKEN_MTIME=""
+LOGS_TOKEN_FP=""
+cached_logs_token_fp() {
+  local mtime
+  mtime=$(stat -c %Y "$LOGS_TOKEN_FILE" 2>/dev/null || echo "0")
+  if [[ "$mtime" != "$LOGS_TOKEN_MTIME" ]]; then
+    LOGS_TOKEN_MTIME="$mtime"
+    LOGS_TOKEN_FP="$(logs_token_fp)"
+  fi
+  echo "$LOGS_TOKEN_FP"
+}
+
+# Install a token mdma delivered, then (re)configure and start vector.
+#
+# The endpoint is NOT a secret and stays in instance metadata; only the
+# credential comes down this channel. With no endpoint there is nowhere to send
+# anything, so the token is stored and nothing is started -- an operator can set
+# the metadata and recreate without mdma having to re-deliver.
+install_logs_token() {
+  local token="$1"
+  [[ -n "$token" ]] || return 0
+
+  local endpoint
+  endpoint=$(logs_endpoint)
+  mkdir -p /etc/vector
+
+  local tmp="${LOGS_TOKEN_FILE}.$$"
+  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$LOGS_TOKEN_FILE"
+  logq "Observability token installed ($(cached_logs_token_fp))"
+
+  if [[ -z "$endpoint" ]]; then
+    logq "WARN: no logs-endpoint instance metadata; token stored but vector not started \
+(set MDMA_TEE_METADATA_LOGS_ENDPOINT on the dispatcher and recreate the node)"
+    return 0
+  fi
+
+  if [[ ! -x /etc/vector/configure_vector.sh || ! -f /etc/vector/vector_partial.yaml ]]; then
+    logq "WARN: vector config or script missing; token stored but vector not started"
+    return 0
+  fi
+
+  if /etc/vector/configure_vector.sh \
+      /etc/vector/vector_partial.yaml "$endpoint" "true" "provided" "$LOGS_TOKEN_FILE" >>"$LOG" 2>&1; then
+    systemctl restart vector >>"$LOG" 2>&1 \
+      && logq "vector restarted against $endpoint" \
+      || logq "WARN: vector restart failed; see $LOG"
+  else
+    logq "WARN: configure_vector.sh failed; see $LOG"
+  fi
+  return 0
 }
 
 # --- TLS -------------------------------------------------------------------
@@ -389,7 +509,8 @@ print(json.dumps({
   "executor_account": sys.argv[3],
   "relay_url": sys.argv[4],
   "tls_cert_not_after": sys.argv[5],
-}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+  "logs_token_fp": sys.argv[6],
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "$body" \
@@ -431,6 +552,19 @@ print(value if isinstance(value, str) else '')
 " 2>>"$LOG") || pem=""
   if [[ -n "$pem" ]]; then
     install_certificate "$pem" >/dev/null || true
+  fi
+
+  # The observability token rides the same response, for the same reasons, and
+  # with the same stdout discipline: this function's stdout IS the assignments
+  # payload, so the install must not print to it.
+  local logs_token
+  logs_token=$(echo "$response" | python3 -c "
+import json, sys
+value = json.load(sys.stdin).get('logs_token')
+print(value if isinstance(value, str) else '')
+" 2>>"$LOG") || logs_token=""
+  if [[ -n "$logs_token" ]]; then
+    install_logs_token "$logs_token" >/dev/null || true
   fi
 
   echo "$response"
@@ -1417,6 +1551,21 @@ save_registration() {
   echo "$1" > "$REGISTRATION_FILE"
 }
 
+# Persist the token mdma issued, and start using it immediately.
+#
+# 0600 and written via a temp file so a crash mid-write cannot leave a truncated
+# credential that would 401 every call until the next registration.
+save_fleet_token() {
+  local token="$1"
+  [[ -n "$token" ]] || return 0
+  mkdir -p "$(dirname "$FLEET_TOKEN_FILE")"
+  local tmp="${FLEET_TOKEN_FILE}.$$"
+  printf '%s' "$token" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$FLEET_TOKEN_FILE"
+  FLEET_TOKEN="$token"
+}
+
 # Ask merod for a quote committing to `nonce_hex`.
 #
 # `/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
@@ -1520,30 +1669,57 @@ payload = {"peer_id": sys.argv[1],
            "executor_account": sys.argv[2],
            "relay_url": sys.argv[3],
            "challenge": sys.argv[4],
-           "quote": sys.argv[5]}
+           "quote": sys.argv[5],
+           "enrolment_token": sys.argv[7]}
 if sys.argv[6]:
     payload["csr"] = sys.argv[6]
 print(json.dumps(payload))
-' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" 2>>"$LOG") || return 1
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" "$(get_enrolment_token)" 2>>"$LOG") || return 1
 
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST \
+  # The response body matters now: this call is where the fleet token is
+  # ISSUED. mdma mints one scoped to this peer id once the quote verifies, so
+  # the node boots holding no credential and earns one by proving what it is.
+  local code out
+  out="$(mktemp)"
+  code=$(curl -s -o "$out" -w '%{http_code}' --max-time 30 -X POST \
     -H "Content-Type: application/json" "${headers[@]}" \
     -d "$body" "${MDMA_URL}/api/fleet/nodes/register" 2>>"$LOG") || code="000"
 
   case "$code" in
     2*)
-      log "Registered with mdma (peer=$peer_id)"
+      local issued
+      issued=$(python3 -c "
+import json, sys
+try:
+    value = json.load(open(sys.argv[1])).get('fleet_token')
+except Exception:
+    value = ''
+print(value if isinstance(value, str) else '')
+" "$out" 2>>"$LOG") || issued=""
+      rm -f "$out"
+      if [[ -n "$issued" ]]; then
+        save_fleet_token "$issued"
+        log "Registered with mdma (peer=$peer_id); fleet token issued"
+      else
+        # mdma accepted the registration but issued nothing, which means it has
+        # no signing key configured. Say so: every later fleet call will 401 and
+        # would otherwise look like a network problem.
+        log "WARN: registered (peer=$peer_id) but mdma issued no fleet token; \
+/api/fleet/* will reject this node until MDMA_FLEET_TOKEN_SIGNING_KEY is set"
+      fi
       return 0 ;;
     403)
+      rm -f "$out"
       # A verdict against this node: the quote did not verify, its measurement
       # is not published for this release/profile, or the challenge was spent.
       # Retried on the next pass anyway — a published-policy update is exactly
       # the kind of thing that turns this into a pass without the node changing.
       log "WARN: mdma refused this node's registration (403); it replicates but will not relay" ;;
     503)
+      rm -f "$out"
       log "mdma could not evaluate the attestation (503); will retry" ;;
     *)
+      rm -f "$out"
       log "WARN: registration POST returned ${code}; will retry" ;;
   esac
   return 1
@@ -1599,6 +1775,32 @@ reconcile_registration() {
   # advertised as a relay anyway, so registering a half-identity would only
   # record something that has to be replaced.
   [[ -z "$peer_id" || -z "$account" ]] && return 0
+
+  # No token means no access to /api/fleet/*, whatever the recorded identity
+  # says. Registration is the only thing that issues one, so a node that has
+  # lost its token (or is booting for the first time) must register regardless
+  # of whether anything about it changed.
+  #
+  # ON A CLOCK, not every cycle. This loop runs at 1 Hz and each attempt costs a
+  # TDX quote and spends a challenge, so a node mdma will not issue a token to --
+  # measurement not yet published, or no signing key configured there -- would
+  # otherwise generate a quote a second indefinitely. The identity-change path
+  # below needs no such guard: it is a string compare that settles immediately.
+  if [[ -z "${FLEET_TOKEN:-}" ]]; then
+    local now_ts
+    now_ts=$(date +%s)
+    # `:-0` so this function stands alone: the loop prologue sets the clock, but
+    # the test harness sources only the functions section, and `set -u` would
+    # abort on the bare name.
+    (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
+    LAST_REGISTRATION_ATTEMPT="$now_ts"
+    register_with_mdma "$peer_id" "$account" "$relay_url" "$port" || return 0
+    save_registration "$(python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
+' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    return 0
+  fi
 
   local recorded want
   recorded=$(load_registration | python3 -c "
@@ -1782,6 +1984,9 @@ LAST_RECOVERY_CONFIRMED=""
 # when the startup read came up empty, rather than sitting out a full interval
 # on the one boot where merod was only a moment behind.
 LAST_ACCOUNT_ATTEMPT=0
+# Registration retry clock. 0 so a node with no token registers on its first
+# pass rather than waiting out an interval on every boot.
+LAST_REGISTRATION_ATTEMPT=0
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.

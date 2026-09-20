@@ -52,26 +52,6 @@ variable "merod_version" {
   default = ""
 }
 
-# The shared secret the fleet sidecar presents to MDMA as `X-Fleet-Token`.
-#
-# Baked in at build time and therefore MEASURED INTO THE MRTD, which is the
-# consequence worth knowing before rotating it: a new token is a new image and a
-# new measurement, not a config change, so rotation means an image release and a
-# republished `published-mrtds.json`, not a restart.
-#
-# Supply it as `PKR_VAR_fleet_auth_token` rather than `-var`, so it never lands
-# in a process argument list. `sensitive` keeps it out of the packer log, which
-# matters here because the release workflow runs with `PACKER_LOG=1` and uploads
-# that log as an artifact when a build fails.
-#
-# Defaults to empty, which builds an image whose sidecar sends no token at all.
-# That is the right default for local and CI builds, and it is what every image
-# in the fleet carries today.
-variable "fleet_auth_token" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
 
 variable "lockdown_profile" {
   type    = string
@@ -157,7 +137,6 @@ build {
       "--scp-extra-args", "'-O'",
       "-e", "cpu_architecture=${var.cpu_architecture}",
       "-e", "lockdown_profile=${var.lockdown_profile}",
-      "-e", "fleet_auth_token=${var.fleet_auth_token}",
       "-e", "merod_version=${var.merod_version}",
       "-e", "traefik_version=${var.traefik_version}",
       "-e", "node_exporter_version=${var.node_exporter_version}",

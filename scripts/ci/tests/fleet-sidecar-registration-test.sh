@@ -36,6 +36,7 @@ sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
     -e "s@/var/lib/calimero/@${SB}/@g" \
     -e "s@/mnt/data/tls@${SB}/tls@g" \
+    -e "s@/var/lib/calimero/@${SB}/@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/functions.sh"
 
@@ -61,6 +62,7 @@ done
 case "${url}" in
   *metadata.google.internal*server-port*) echo "2428"; exit 0 ;;
   *metadata.google.internal*relay-url*)   echo "https://relay-01.test"; exit 0 ;;
+  *metadata.google.internal*enrolment-token*) echo "enrolment-token-for-this-instance"; exit 0 ;;
   *metadata.google.internal*)             exit 1 ;;
   *nodes/challenge*)
     printf '{"challenge":"%s","expires_at_ms":1}\n' "$(cat "${SB}/challenge")"
@@ -73,7 +75,18 @@ case "${url}" in
   *nodes/register*)
     printf '%s\n' "${body}" >> "${SB}/register-log"
     code="$(cat "${SB}/register-code" 2>/dev/null || echo 200)"
-    # Mirrors the real call: -o /dev/null -w '%{http_code}' prints the status.
+    # The real call writes the body with `-o <file>` and prints the status with
+    # `-w '%{http_code}'`. The body matters now: registration is where mdma
+    # ISSUES the fleet token, so a stub that returned none would leave the node
+    # tokenless and re-registering on its retry clock forever.
+    out=""
+    prev=""
+    for a in "$@"; do
+      [[ "${prev}" == "-o" ]] && out="${a}"
+      prev="${a}"
+    done
+    [[ -n "${out}" ]] && printf '{"status":"registered","fleet_token":"f1.%s.deadbeef"}' \
+      "12D3KooWSidecarRegistrationPeer" > "${out}"
     for a in "$@"; do [[ "${a}" == "%{http_code}" ]] && { echo "${code}"; exit 0; }; done
     exit 0 ;;
 esac
@@ -135,6 +148,10 @@ sent="$(python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['non
 [[ "${sent}" == "${expected}" ]] \
   || fail "the attested nonce is not what mdma will recompute: ${sent} != ${expected}"
 [[ "$(field 0 challenge)" == "chal-one" ]] || fail "the challenge must travel with the registration"
+# Proof of provenance: a quote shows a genuine enclave, not an instance of
+# mdma's. Without this field mdma refuses, and the node never joins the fleet.
+[[ "$(field 0 enrolment_token)" == "enrolment-token-for-this-instance" ]] \
+  || fail "the enrolment token must travel with the registration"
 [[ "$(field 0 quote)" == "cXVvdGUtYnl0ZXM=" ]] || fail "the quote must be forwarded verbatim"
 
 # --- no CSR falls back to the four-field binding --------------------------
@@ -216,5 +233,36 @@ rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
 reconcile_registration "${PEER}" "" "${RELAY}" 2428
 [[ "$(registrations)" == "0" ]] || fail "an identity with no account must not register"
+
+# --- the token is EARNED, never baked --------------------------------------
+# The image carries no fleet credential. mdma issues one scoped to this peer
+# when the quote verifies, and the sidecar stores it 0600. A node that has none
+# must register whatever its recorded identity says -- that is the only way to
+# get one -- but on a clock, because each attempt costs a quote and spends a
+# single-use challenge, and a 1 Hz retry against a manager that will not issue
+# one is a quote per second forever.
+[[ -s "${SB}/fleet-token" ]] || fail "registration must store the issued fleet token"
+grep -q "^f1\." "${SB}/fleet-token" || fail "the stored token must be the one mdma issued"
+perms=$(stat -c %a "${SB}/fleet-token")
+[[ "${perms}" == "600" ]] || fail "the fleet token must be 0600, got ${perms}"
+
+grep -q "fleet_auth_token\|FLEET_AUTH_TOKEN" "${SB}/rendered.sh" \
+  && fail "no fleet credential may be baked into the rendered sidecar"
+
+# shellcheck disable=SC2034  # both are read by reconcile_registration, sourced above
+FLEET_TOKEN=""
+rm -f "${SB}/fleet-token"
+# shellcheck disable=SC2034  # ditto
+LAST_REGISTRATION_ATTEMPT=$(date +%s)
+before="$(registrations)"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" == "${before}" ]] \
+  || fail "a tokenless node must not re-register faster than REGISTRATION_RETRY_INTERVAL"
+
+# shellcheck disable=SC2034  # ditto
+LAST_REGISTRATION_ATTEMPT=0
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" -gt "${before}" ]] \
+  || fail "a tokenless node must register once the retry interval has passed"
 
 echo "PASS: fleet sidecar attested registration"
