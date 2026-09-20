@@ -871,6 +871,42 @@ instead — or stop/start rather than delete/create, which keeps the data volume
 and therefore the key and the existing certificate.
 :::
 
+### Registration runs before the poll, and must
+
+`/api/fleet/should-join` requires a fleet token. A node is **issued** one by
+registering, and `/api/fleet/nodes/register` is a bootstrap route that takes
+none. So the order of those two inside the reconcile loop decides whether a
+fresh node can join the fleet at all:
+
+```
+poll first      401 -> `continue` -> registration never runs -> no token
+                -> poll 401s again, forever. A closed loop.
+
+register first  token issued -> poll succeeds -> everything else runs.
+```
+
+The closed version is also **silent**. `poll_mdma` returns 1 with no output by
+design, so a node stuck in it logs nothing after its startup lines while looking
+healthy from every outside angle: merod serving, correct image, MRTD in the
+published allowlist, metadata stamped. It replicates, and it is never advertised
+as a relay, and nothing says why.
+
+This was unreachable while the image carried a baked fleet token. `FLEET_TOKEN`
+was already set at boot, the first poll succeeded, and the loop fell through to
+registration. Removing that secret from the image — which was right, and is what
+`fleet-sidecar-logs-token-test.sh` exists to protect — left the ordering behind,
+and every node created afterwards stopped registering.
+
+Pinned by `scripts/ci/tests/fleet-sidecar-bootstrap-order-test.sh`, which
+asserts the loop line of `reconcile_registration` precedes the `should-join`
+gate, that `reconcile_executor_account` precedes it in turn, and that the gate
+still `continue`s — the safety property below has to survive the reorder.
+
+The poll failure is no longer silent either: it logs once on a state change,
+distinguishing "no token yet" (bootstrapping, or registration is being refused)
+from "token rejected" (mdma rotated its signing key, and re-registration will
+issue a new one).
+
 ## The poll-success safety gate
 
 The step-2 gate is safety-critical, not a nicety. Because a **missing assignment

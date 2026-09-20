@@ -2142,9 +2142,54 @@ while true; do
   # failed poll is load-bearing for the leave logic: if a failed poll pruned
   # `confirmed`, a genuine disable on the next good poll would no longer show
   # up in `confirmed − desired` and the node would never leave.
+  # BEFORE THE POLL, and that ordering is load-bearing.
+  #
+  # `/api/fleet/should-join` requires a fleet token. A node is ISSUED one by
+  # registering, and registration is a bootstrap route that takes no token. So
+  # with these below the gate, a node that has not registered yet polls, gets
+  # 401, `continue`s, and never reaches the code that would register it —
+  # never gets a token, never polls successfully, forever. That is a closed
+  # loop, and it is silent: `poll_mdma` returns 1 with no output by design, so
+  # a node in it logs nothing after startup while looking perfectly healthy.
+  #
+  # It was not reachable while the image carried a baked fleet token: with
+  # `FLEET_TOKEN` already set the first poll succeeded and the loop fell
+  # through to registration. Removing that secret from the image left the
+  # ordering behind, which is why every node created since stops here.
+  #
+  # Both are cheap on the steady-state path — `reconcile_executor_account`
+  # returns immediately once the account is known, and `reconcile_registration`
+  # is a string compare against the recorded identity — so running them first
+  # costs a registered node nothing.
+  reconcile_executor_account
+  reconcile_registration "$PEER_ID" "$EXECUTOR_ACCOUNT" "$RELAY_URL" "$SERVER_PORT"
+
   if ! response=$(poll_mdma "$PEER_ID" "$MRTD"); then
+    # Edge-triggered, because this runs at 1 Hz. Says WHICH of the two shapes
+    # of failure this is: no token at all (bootstrapping, or registration is
+    # being refused) versus a token that mdma did not accept.
+    if [[ -z "${FLEET_TOKEN:-}" ]]; then
+      poll_state="untokened"
+    else
+      poll_state="rejected"
+    fi
+    if [[ "${LAST_POLL_STATE:-ok}" != "$poll_state" ]]; then
+      LAST_POLL_STATE="$poll_state"
+      if [[ "$poll_state" == "untokened" ]]; then
+        log "should-join is failing and this node holds no fleet token yet; \
+it is issued one by registering, so this is expected at boot and means \
+registration is not succeeding if it persists"
+      else
+        log "should-join is failing despite holding a fleet token; mdma may have \
+rotated its signing key, in which case re-registration will issue a new one"
+      fi
+    fi
     sleep "$POLL_INTERVAL"
     continue
+  fi
+  if [[ "${LAST_POLL_STATE:-ok}" != "ok" ]]; then
+    log "should-join is succeeding again"
+    LAST_POLL_STATE="ok"
   fi
 
   # Desired state: every group mdma currently assigns this fleet node
@@ -2250,16 +2295,6 @@ print(json.dumps(sorted(con & des)))
   # long after admission, so it has to be re-read for namespaces we already
   # hold. Runs after the prune so a namespace we just left is not re-reported.
   reconcile_authorship "$PEER_ID" "$confirmed"
-
-  # The account, if the startup read came up empty. Must precede the
-  # registration below, which cannot bind an identity without it.
-  reconcile_executor_account
-
-  # Attested registration. Cheap when nothing changed — a string compare
-  # against the recorded identity — so it sits on the 1 Hz loop rather than a
-  # timer of its own: until this succeeds mdma will not advertise the node as a
-  # relay at all, so there is nothing to gain by waiting.
-  reconcile_registration "$PEER_ID" "$EXECUTOR_ACCOUNT" "$RELAY_URL" "$SERVER_PORT"
 
   # Context inventory, also over the pruned set. Walking the group tree costs a
   # `meroctl` subprocess per group, so it runs on its own much slower clock than

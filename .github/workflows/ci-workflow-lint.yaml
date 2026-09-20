@@ -197,6 +197,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/secret-file-umask-test.sh
 
+      # A node with no fleet token must still be able to register. should-join
+      # requires a token; registration ISSUES one and takes none. Poll first and
+      # a fresh node 401s, `continue`s, and never reaches the code that would
+      # register it -- a closed, silent loop that only became reachable when the
+      # baked fleet token was removed from the image.
+      - name: Check registration runs before the should-join gate
+        id: bootstrap_order_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-bootstrap-order-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -217,6 +227,7 @@ jobs:
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
+            --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
