@@ -207,6 +207,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-bootstrap-order-test.sh
 
+      # Node metrics must say which node they came from. The scrape target is
+      # `localhost:9100` on every node, so without identifying labels the whole
+      # fleet collapses into one series and samples interleave -- plausible,
+      # wrong, and invisible until a second node exists.
+      - name: Check vmagent labels its samples with the node identity
+        id: vmagent_identity_test
+        shell: bash
+        run: scripts/ci/tests/vmagent-node-identity-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -228,6 +237,7 @@ jobs:
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
+            --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
