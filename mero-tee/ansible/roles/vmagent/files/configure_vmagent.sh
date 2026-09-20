@@ -79,8 +79,21 @@ fi
 # which is exactly the value Vector puts in the logs' `hostname` field -- that
 # is the join between a node's logs and its metrics.
 NODE_FQDN="$(hostname 2>/dev/null || echo unknown)"
-EXTRA_LABELS="-remoteWrite.label=instance_name=${NODE_FQDN} -remoteWrite.label=instance_type=merotee"
-echo "Identifying labels: instance_name=${NODE_FQDN} instance_type=merotee"
+# Which image this node runs. `locked-read-only` is production; the debug
+# profiles order certificates from Let's Encrypt STAGING and are not publicly
+# trusted. Without this, telemetry from a throwaway debug node and from a
+# production node are indistinguishable, and the only way to tell them apart is
+# to cross-reference `nodes.image_profile` in mdma's database -- which is
+# exactly the kind of lookup nobody does before believing a graph.
+#
+# Written by the playbook at build time (`/etc/calimero/image-profile`) and
+# measured, so a node cannot misreport it. The trailing newline is stripped.
+NODE_PROFILE="$(tr -d '\r\n' < /etc/calimero/image-profile 2>/dev/null || true)"
+NODE_PROFILE="${NODE_PROFILE:-unknown}"
+EXTRA_LABELS="-remoteWrite.label=instance_name=${NODE_FQDN}"
+EXTRA_LABELS="${EXTRA_LABELS} -remoteWrite.label=instance_type=merotee"
+EXTRA_LABELS="${EXTRA_LABELS} -remoteWrite.label=instance_profile=${NODE_PROFILE}"
+echo "Identifying labels: instance_name=${NODE_FQDN} instance_type=merotee instance_profile=${NODE_PROFILE}"
 
 # 4. Create systemd service file
 echo ""

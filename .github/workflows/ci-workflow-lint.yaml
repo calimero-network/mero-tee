@@ -216,6 +216,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/vmagent-node-identity-test.sh
 
+      # Which image a node runs. `locked-read-only` is production; the debug
+      # profiles are rebuilt freely and use Let's Encrypt staging. Without the
+      # field, a log line from a throwaway node reads exactly like one from
+      # production -- and the placeholder shipping unsubstituted would be worse
+      # still, since every node would report the literal string.
+      - name: Check vector stamps and indexes the image profile
+        id: vector_profile_test
+        shell: bash
+        run: scripts/ci/tests/vector-image-profile-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -238,6 +248,7 @@ jobs:
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
+            --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
