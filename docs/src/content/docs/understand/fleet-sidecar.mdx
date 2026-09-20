@@ -86,38 +86,120 @@ it re-reads once every `ACCOUNT_RETRY_INTERVAL` (15s), logs
 costs nothing at all for the life of the process. Covered by
 `scripts/ci/tests/fleet-sidecar-account-retry-test.sh`.
 
+And `reconcile_registration` now **says** when it is in that state. It opens by
+returning early if it has no PeerId or no account, which was correct but silent:
+at 1 Hz, a node could sit there for its whole life without a word. It is
+edge-triggered, like the authorship re-report — one line when it starts
+blocking, naming which field is missing and what that costs, one when it clears,
+and nothing in between.
+
+### Waiting for merod, with a bound and a voice
+
+`wait_for_merod` polls `meroctl peers` until it answers. It used to do so
+forever, with no line inside the loop and `stderr` discarded, so a node whose
+merod never came up stopped there permanently and said nothing — no poll, no
+registration, no certificate, no DNS record, no relay — while looking healthy
+from outside, because merod's own port was answering and only `meroctl` was not.
+On a profile with no shell there is then no way left to ask what happened.
+
+Three properties now:
+
+- **Bounded.** Past `MEROD_WAIT_TIMEOUT` (600s) it gives up and the caller
+  carries on. Carrying on is deliberate: `get_peer_id` reads `config.toml`
+  directly rather than through merod, so the sidecar can still register, still
+  poll, and still be *seen* by MDMA, while `reconcile_executor_account` keeps
+  retrying the read that failed. Blocking here turns a slow merod, or one broken
+  subcommand, into a node that is permanently invisible.
+- **Progress.** A line every `MEROD_WAIT_LOG_EVERY` (30) attempts, so the
+  journal distinguishes "still waiting, 90s in" from "died before it got here".
+- **`stderr` kept.** `meroctl`'s own complaint is the whole diagnosis — a
+  missing home directory, a refused connection and an unparseable config all
+  look identical once `2>/dev/null` has eaten them.
+
 ### The observability credential comes from MDMA, not the image
 
-**No secret is baked into the node image**, and the bearer token vector presents
-to VictoriaLogs is the worked example of that rule.
+**No secret is baked into the node image**, and the bearer token vector and
+vmagent present to the observability front end is the worked example of that
+rule.
 
 The image is an artifact whose distribution is not fully controlled, so treat
 anything inside it as readable. What the image carries is the *code to ask* for
-a credential. MDMA releases one only to a peer holding a verified
-`NodeRegistration` — the same attestation gate the TLS certificate and the relay
-identity already sit behind. A node proves what it is with a quote whose MRTD is
-allowlisted, and only then is it told anything.
+a credential.
 
 Secret Manager is not an alternative, and not for policy reasons: MDMA creates
 these instances with **no `serviceAccounts` field at all**, so an MDMA node has
 no GCP identity. Neither `gcloud` nor the metadata server's token endpoint has
-anything to authenticate as.
+anything to authenticate as. That is what the `provided` provider in
+`fetch_secret.sh` exists for — it reads a token already on disk rather than
+fetching one.
 
-The split is worth stating exactly:
+#### Two delivery paths, and why there are two
 
-| value | travels as | why |
-| --- | --- | --- |
-| `logs-endpoint` | instance metadata | not a secret; an address, set at creation |
-| bearer token | `should-join` response | a credential, released only after attestation |
+| path | when | written by | reaches |
+| --- | --- | --- | --- |
+| `observability-token` instance metadata | at creation | the MDMA dispatcher | `calimero-init`, before any unit starts |
+| `should-join` response | on any poll | the MDMA manager | a node that is already running |
 
-Delivery rides the poll the node already makes, like the certificate. The node
-reports `logs_token_fp` — the **SHA-256 of the token it holds**, never the token
-— and MDMA sends one only while that disagrees with the configured value. At
-1 Hz, re-sending would put the credential on the wire 86,400 times a day.
+**Metadata is the bootstrap. The poll is the refresh.** Neither is sufficient
+alone.
 
-Rotation is therefore a config change on MDMA (`MDMA_OBSERVABILITY_LOGS_TOKEN`)
-that reaches every node on its next poll — not an image release and an MRTD
-re-allowlist, which is what baking would have cost.
+The poll was once the only path, and that made the observability path depend on
+the thing it observes:
+
+```
+the poll needs a fleet token
+  → the fleet token needs attested registration
+    → registration needs the sidecar's main loop running
+```
+
+A node whose sidecar never reached its first poll could therefore never ship a
+log line — which is exactly the node whose logs you need. `calimero-init`'s own
+journal, where such a node says why, was unreachable for the same reason.
+Reading the credential from instance metadata at boot breaks that circle
+completely: vector comes up authenticated whether or not the sidecar ever runs,
+ever registers, or can even reach MDMA.
+
+The poll stays because **instance metadata is written at creation and is never
+backfilled**, so it is the only way a rotated token reaches a running node
+without recreating it.
+
+The two agree by construction. Both write `/etc/vector/provided_token` with
+`printf '%s'` and no trailing newline, and the node reports `logs_token_fp` —
+the **SHA-256 of the token it holds**, never the token — so MDMA sends one only
+while that disagrees with the configured value. A node booted with a current
+token never has the credential ride the poll at all. At 1 Hz, re-sending
+unconditionally would put it on the wire 86,400 times a day.
+
+#### The trade-off
+
+Putting the token in instance metadata means **one fleet-wide bearer token in a
+place any process on the box can read**, rather than a per-node credential
+handed over an attested channel. That is weaker than delivery-by-attestation
+alone, and it was chosen deliberately.
+
+What caps it:
+
+- The standing rule holds. Instance metadata is **not the image**: it is
+  per-instance, and it rotates without a release or an MRTD re-allowlist.
+- The `vmauth` user the token names is scoped **write-only** — insert paths
+  only, no read access to logs or metrics. A node that leaks it lets someone add
+  to the store, not read the fleet's telemetry. That matters precisely because a
+  node is a machine nobody can log into to rotate a credential in place.
+
+Against that: a node with no logs cannot be debugged at all, on a profile with
+no shell to debug it from.
+
+#### Rotation
+
+Change `MDMA_OBSERVABILITY_LOGS_TOKEN` on both the manager and the dispatcher —
+**they must carry the same value**, or the fingerprint never matches and the
+credential rides every poll forever. Running nodes pick it up on their next poll
+and both shippers are reconfigured together; nodes created afterwards get it at
+boot.
+
+Reconfiguring only vector would leave vmagent presenting the superseded token,
+and every sample would be rejected at the sink — silently, on a node with no
+shell to notice it from. The sidecar therefore always does both.
 
 Covered by `scripts/ci/tests/fleet-sidecar-logs-token-test.sh`.
 
@@ -135,13 +217,23 @@ work out why a node never became a relay.
 VictoriaLogs. `fleet-sidecar.service` is in that list; a unit left out of it is
 a subsystem nobody can debug on a locked image, whatever it writes locally.
 
+`include_units` carries `calimero-init.service`, `merod.service`,
+`mero-auth.service`, `traefik.service`, `fleet-sidecar.service`,
+`vector.service` and `vmagent.service`.
+
+`calimero-init.service` is the one to know about. It starts every other unit in
+that list, and it starts the sidecar with `systemctl start --no-block`, which
+logs `Queued non-blocking start` whether the unit then came up or died on its
+first line. **A sidecar that never ran at all is invisible from anywhere else.**
+
 Two things have to be true before any of it leaves the node, and until they are
 the config above is inert:
 
 1. `logs-endpoint` instance metadata is set — the dispatcher writes it only when
    `MDMA_TEE_METADATA_LOGS_ENDPOINT` is configured, and metadata is set at
    creation only, so an existing node never picks it up.
-2. MDMA has delivered the bearer token, per the section above.
+2. The node holds the bearer token, per the section above — from
+   `observability-token` metadata at boot, or from a poll.
 
 The destination is the public `victoria-lb` front end, read back through
 Grafana; the internal `victoria-logs-int` ALB resolves to private addresses in

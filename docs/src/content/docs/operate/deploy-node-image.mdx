@@ -192,15 +192,37 @@ scripts. All are optional except where noted:
 | `server-port` | merod admin/server port | `2428` |
 | `swarm-port` | merod libp2p swarm port | `2528` |
 | `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped) | unset → env file removed |
-| `metrics-endpoint` | if set, configures and starts `vmagent` | unset → vmagent stays off |
-| `metrics-secret-name` | secret name for authenticated metrics push | none |
+| `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
+| `metrics-secret-name` | GCP Secret Manager name for authenticated metrics push — see the warning below | none |
 | `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
-| `logs-secret-name` | secret name for authenticated log push | none |
+| `logs-secret-name` | GCP Secret Manager name for authenticated log push — see the warning below | none |
+| `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the node falls back to the credential MDMA delivers on a `should-join` poll |
 | `merod-version` | **only** used to download binaries at boot if they were not baked into the image | required only when unbaked |
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
-present.
+present. `node_exporter` is started alongside `vmagent`, because it is the only
+thing the default scrape config targets — its unit file is installed by the
+image but is not enabled, so without that it would be a dead scrape target.
+
+:::caution[`*-secret-name` does not work on MDMA-created nodes]
+Those two keys make `fetch_secret.sh` read **GCP Secret Manager**, which needs a
+cloud identity. MDMA creates node instances with **no `serviceAccounts` field at
+all**, so such a node has none — both `gcloud` and the metadata server's token
+endpoint are dead ends on it.
+
+Use `observability-token` instead. It carries the credential itself, and the
+`provided` provider simply reads it from disk. The `*-secret-name` keys remain
+for nodes provisioned some other way, and `observability-token` wins when both
+are set.
+:::
+
+:::note[Instance metadata is set at creation only]
+It is never backfilled. A node created before any of these keys existed will
+never pick them up and must be **recreated**. The one exception is the
+observability credential, which MDMA also delivers on the `should-join` poll —
+that is how rotation reaches a node already running.
+:::
 
 ## The calimero-init boot sequence
 
