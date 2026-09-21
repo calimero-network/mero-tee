@@ -197,6 +197,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/secret-file-umask-test.sh
 
+      # The data disk has to be mounted before merod initialises into it, and
+      # must never be mounted over a node whose state is already sitting on the
+      # root filesystem -- that hides the state and merod mints a fresh
+      # identity. It cannot be a GCP startup script: `merod-lockdown` blocks
+      # those on `locked-read-only`.
+      - name: Check the data disk is mounted before use
+        id: data_disk_test
+        shell: bash
+        run: scripts/ci/tests/calimero-init-data-disk-test.sh
+
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and
       # a fresh node 401s, `continue`s, and never reaches the code that would
@@ -246,6 +256,7 @@ jobs:
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
+            --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
