@@ -137,6 +137,94 @@ init_node() {
   fi
 }
 
+# --- The data disk ----------------------------------------------------------
+#
+# Every node is created with a separate data disk (200 GB on the current plans)
+# and NOTHING WAS MOUNTING IT. `merod` initialised into `/mnt/data/calimero`,
+# which was a directory on the ~19 GB root filesystem, so a node had roughly
+# 15 GB of usable space while the console advertised 200 -- and when root fills
+# it takes merod, traefik, mero-auth, vector and vmagent with it, on a machine
+# with no shell to recover from.
+#
+# The mounting logic existed in mdma (`dispatcher/app/startup_script.py`) but
+# was never reachable: nothing attaches a `startup-script` to these instances,
+# and `merod-lockdown` blocks GCP startup scripts outright on `locked-read-only`
+# (R5). So it has to come from the image, which is here.
+#
+# `/dev/disk/by-id/google-data` rather than probing `/dev/nvme0n2`: GCP exposes
+# every attached disk under its `deviceName`, and mdma attaches this one as
+# `data` (`dispatcher/app/gcp/instances.py`). The by-id path is stable
+# regardless of NVMe enumeration or attach order; the device-name guessing in
+# the old script was not.
+DATA_DEVICE="/dev/disk/by-id/google-data"
+DATA_MOUNT="/mnt/data"
+
+mkdir -p "$DATA_MOUNT"
+
+if mountpoint -q "$DATA_MOUNT"; then
+  log "Data disk already mounted at $DATA_MOUNT"
+elif [[ -n "$(ls -A "$DATA_MOUNT" 2>/dev/null)" ]]; then
+  # A NODE THAT PREDATES THIS CHANGE. Its state is already sitting on the root
+  # filesystem under this path. Mounting the (empty) disk over it would hide
+  # that state, merod would find no node and initialise a fresh one, and the
+  # node would silently lose its identity -- peer id, account, keys.
+  #
+  # So: refuse, and say so. The node keeps working exactly as it did. Instance
+  # metadata is written at creation and never backfilled, so such a node has to
+  # be recreated for other reasons anyway; this is one more.
+  log "WARN: $DATA_MOUNT holds data but is NOT a mount point, so this node's \
+state is on the root filesystem. Not mounting the data disk over it -- that \
+would hide the existing state and merod would initialise a fresh identity. \
+This node has ~$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -d ' G')G \
+of usable space, not the provisioned disk size. Recreate the node to move onto \
+the data disk."
+else
+  # Wait for the device: the disk is attached at instance creation but udev may
+  # not have made the by-id symlink by the time this unit runs.
+  for _ in $(seq 1 30); do
+    [[ -b "$DATA_DEVICE" ]] && break
+    sleep 1
+  done
+
+  if [[ ! -b "$DATA_DEVICE" ]]; then
+    # No data disk at all. A legitimate shape for a deployment that provisions
+    # none, so this is not fatal -- but it is never what an mdma-created node
+    # should look like, and the capacity it reports will be the root disk's.
+    log "WARN: no data disk at $DATA_DEVICE after 30s; $CALIMERO_HOME will live \
+on the root filesystem. This is expected only where no data disk is provisioned."
+  else
+    # Format ONLY when there is no filesystem. Never reformat: on any boot after
+    # the first, this device holds the node's entire state, and a reformat here
+    # would be indistinguishable from a wipe.
+    DATA_FSTYPE="$(blkid -o value -s TYPE "$DATA_DEVICE" 2>/dev/null || true)"
+    if [[ -z "$DATA_FSTYPE" ]]; then
+      log "Data disk is unformatted; creating ext4 on $DATA_DEVICE"
+      mkfs.ext4 -q -F "$DATA_DEVICE" >>"$LOG" 2>&1 || log "WARN: mkfs.ext4 failed on $DATA_DEVICE"
+    fi
+
+    if mount "$DATA_DEVICE" "$DATA_MOUNT" >>"$LOG" 2>&1; then
+      log "Mounted $DATA_DEVICE at $DATA_MOUNT ($(df -h --output=size "$DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' '))"
+      # Survive a reboot without depending on this script running first.
+      # `nofail` so a missing disk degrades to the warning above rather than
+      # dropping the boot into emergency mode, which on a shell-less machine is
+      # indistinguishable from a brick.
+      DATA_UUID="$(blkid -o value -s UUID "$DATA_DEVICE" 2>/dev/null || true)"
+      if [[ -n "$DATA_UUID" ]] && ! grep -q "$DATA_UUID" /etc/fstab 2>/dev/null; then
+        printf 'UUID=%s %s ext4 defaults,nofail 0 2\n' "$DATA_UUID" "$DATA_MOUNT" >> /etc/fstab
+        log "Recorded the data disk in /etc/fstab"
+      fi
+    else
+      # The disk is THERE and will not mount. Refusing to continue is the whole
+      # point: the alternative is writing the node's state to root and finding
+      # out when root fills. calimero-init's journal ships now, so a node that
+      # stops here says why.
+      log "ERROR: $DATA_DEVICE exists but could not be mounted at $DATA_MOUNT. \
+Refusing to initialise onto the root filesystem -- see $LOG."
+      exit 1
+    fi
+  fi
+fi
+
 mkdir -p "$CALIMERO_HOME"
 if [[ ! -d "$CALIMERO_HOME/$CALIMERO_NODE" ]]; then
   log "Initializing Calimero node..."
