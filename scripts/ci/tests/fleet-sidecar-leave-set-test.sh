@@ -27,6 +27,12 @@
 # which SET the loop reads, so it reads the loop.
 #
 # Usage: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
+
+# Every pattern here greps the TEMPLATE for literal shell text, so `$group_id`
+# and `$confirmed` must stay unexpanded -- expanding them is exactly what would
+# make the checks vacuous. File-level, before the first command, because the
+# patterns appear throughout.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
