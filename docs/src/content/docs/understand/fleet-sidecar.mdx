@@ -370,15 +370,18 @@ the sidecar enters an infinite loop with a **one-second poll interval**
 3. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
    namespace MDMA currently assigns this node to.
 4. **Join toward `desired`.** For each assigned namespace **not already in the
-   local confirmed set**, run `join_group` (see below). On admission, `POST`
+   local confirmed set**, run `join_group` (see below). The moment local
+   admission succeeds the namespace is recorded in `fleet-admitted.json` — before
+   the confirm is attempted, and regardless of whether it succeeds. Then `POST`
    `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
    A namespace is added to `fleet-confirmed.json` **only when both** local
    admission **and** the MDMA confirm succeed.
-5. **Leave dropped namespaces.** Compute `to_leave = confirmed − desired` and
-   `leave_group` each one (see below). This runs *before* the prune, so the diff
-   is taken while `confirmed` still holds the dropped entries.
-6. **Prune the confirmed set.** Set `confirmed = confirmed ∩ desired` and persist
-   it, so a future re-add is recognized as new.
+5. **Leave dropped namespaces.** Compute `to_leave = admitted − desired` and
+   `leave_group` each one (see below). This runs *before* the prunes, so the diff
+   is taken while `admitted` still holds the dropped entries.
+6. **Prune both sets.** Set `confirmed = confirmed ∩ desired` and
+   `admitted = admitted ∩ desired`, and persist them — so a future re-add is
+   recognized as new, and a namespace just left is not left again every second.
 7. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
@@ -387,7 +390,21 @@ the sidecar enters an infinite loop with a **one-second poll interval**
 The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
 different semantics: it records "admitted **and** confirmed", not merely
-"attempted"). Two more files alongside it record what MDMA has already been
+"attempted").
+
+The admitted set lives beside it at `/var/lib/calimero/fleet-admitted.json`, and
+the difference between the two is load-bearing. **The leave diff is taken against
+`admitted`, not `confirmed`.** A namespace only enters `confirmed` when the MDMA
+confirm also succeeds, so a join that lands while its confirm is raced by the
+disable itself left this node a P2P member of a namespace in *neither* set —
+`confirmed − desired` was empty for it, so it was never left, and the node kept
+the namespace's key and its `ReadOnlyTee` membership indefinitely. `admitted`
+answers the question the leave actually asks: *what is this node a member of, if
+it stops being entitled?* — which is about P2P state, not about MDMA's record of
+it. `confirmed` keeps its own job, driving the confirm retry for a namespace MDMA
+has not acknowledged yet.
+
+Two more files alongside them record what MDMA has already been
 told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
 and `fleet-inventory.json` for the context inventory. Each is advanced **only
 after** the POST it describes succeeded, so a transient MDMA blip is retried
