@@ -202,6 +202,15 @@ jobs:
       # root filesystem -- that hides the state and merod mints a fresh
       # identity. It cannot be a GCP startup script: `merod-lockdown` blocks
       # those on `locked-read-only`.
+      # A namespace enters `confirmed` only when the local join AND mdma's
+      # /confirm both succeed, so a join whose confirm is raced by the disable
+      # itself left the node a p2p member of a namespace in neither set -- and
+      # `confirmed - desired` never named it, so it was never left.
+      - name: Check the leave diff follows admission, not mdma's record
+        id: leave_set_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
+
       - name: Check the data disk is mounted before use
         id: data_disk_test
         shell: bash
@@ -257,6 +266,7 @@ jobs:
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
+            --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \

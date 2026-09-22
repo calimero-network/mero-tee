@@ -15,6 +15,12 @@ LOG="/var/log/fleet-sidecar.log"
 # — and that's exactly what made the old design fire-once-and-give-up).
 # Different path so any pre-upgrade legacy state is ignored on first boot.
 CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
+# Namespaces this node was ADMITTED to locally, which is not the same set as
+# the ones mdma has acknowledged. A join that succeeds and a `/confirm` that
+# does not leaves the node a p2p member of a namespace absent from
+# CONFIRMED_FILE -- and the leave diff used to be computed from that file, so
+# such a namespace could never be left (calimero-network/mdma#155).
+ADMITTED_FILE="/var/lib/calimero/fleet-admitted.json"
 # Per-namespace record of the authorship grant we last told mdma about, so a
 # grant made (or revoked) AFTER admission gets re-reported exactly once per
 # change rather than on every one-second cycle. See `reconcile_authorship`.
@@ -2063,6 +2069,35 @@ save_confirmed() {
   echo "$1" > "$CONFIRMED_FILE"
 }
 
+load_admitted() {
+  cat "$ADMITTED_FILE" 2>/dev/null || echo '[]'
+}
+
+save_admitted() {
+  echo "$1" > "$ADMITTED_FILE"
+}
+
+# Record a namespace the local `fleet-join` admitted us to.
+#
+# Written the moment admission succeeds, BEFORE `/confirm` is attempted and
+# regardless of whether it succeeds, because this file answers "what must this
+# node leave if it stops being entitled" -- a question about p2p state, not
+# about mdma's bookkeeping.
+note_admitted() {
+  local group_id="$1"
+  local admitted
+  admitted=$(load_admitted)
+  save_admitted "$(echo "$admitted" | python3 -c "
+import sys, json
+try:
+  a = json.load(sys.stdin)
+except Exception:
+  a = []
+a.append('$group_id')
+print(json.dumps(sorted(set(a))))
+" 2>>"$LOG" || echo "$admitted")"
+}
+
 # --- Main loop ---
 
 # Non-fatal by design -- see the note on the function. A node that cannot talk
@@ -2221,6 +2256,10 @@ except:
       continue
     fi
     if join_group "$group_id"; then
+      # Admitted locally. Recorded FIRST and unconditionally: from here on
+      # this node is a p2p member of the namespace whether or not mdma ever
+      # acknowledges it, and it is that membership a later disable revokes.
+      note_admitted "$group_id"
       # Only mark confirmed-locally when BOTH local admission AND mdma's
       # /confirm POST succeed. If /confirm fails (transient mdma blip),
       # leave the group out of CONFIRMED_FILE so the next cycle's
@@ -2257,21 +2296,34 @@ print(json.dumps(state, sort_keys=True))
     # in this same poll cycle. fleet-join's 30s window is per-group.
   done
 
-  # Leave dropped namespaces: to_leave = confirmed − desired. These are
-  # namespaces we had confirmed membership in but which mdma no longer
-  # assigns — HA disabled, slot reclaimed, or MRTD distrust. All mean "no
-  # longer entitled", so we self-leave to make core evict us from the
-  # namespace + all subgroups and purge our data + keys.
+  # Leave dropped namespaces: to_leave = ADMITTED − desired. These are
+  # namespaces this node is a p2p MEMBER of but which mdma no longer assigns
+  # — HA disabled, slot reclaimed, or MRTD distrust. All mean "no longer
+  # entitled", so we self-leave to make core evict us from the namespace + all
+  # subgroups and purge our data + keys.
+  #
+  # ADMITTED, not `confirmed`. A namespace enters `confirmed` only when the
+  # local join AND mdma's `/confirm` BOTH succeed, so a join that lands while
+  # the `/confirm` is raced by the disable itself leaves this node a member of
+  # a namespace present in NEITHER set — and `confirmed − desired` is empty
+  # for it, so it was never left. Not hypothetical: that is the state captured
+  # in calimero-network/mdma#155, a prod replica still holding a disabled
+  # namespace with `confirmed_at = NULL`. Diffing what was actually ADMITTED
+  # closes it, because the leave then follows p2p membership rather than
+  # mdma's record of it.
+  #
+  # `confirmed` keeps its own meaning and its own prune below: it drives the
+  # `/confirm` retry, which must keep firing for a namespace mdma has not
+  # acknowledged yet.
   #
   # This runs ONLY after a successful poll (gated at the top of the loop), and
-  # BEFORE the intersection-prune below — we need the `confirmed − desired`
-  # diff while `confirmed` still contains the dropped entries; the prune then
-  # persists their removal. leave_group is idempotent / non-fatal.
+  # BEFORE the prunes below — the diff needs the dropped entries still there.
+  # leave_group is idempotent / non-fatal.
   to_leave=$(python3 -c "
 import json
 des = set(json.loads('''$desired'''))
-con = set(json.loads('''$confirmed'''))
-print(json.dumps(sorted(con - des)))
+adm = set(json.loads('''$(load_admitted)'''))
+print(json.dumps(sorted(adm - des)))
 " 2>>"$LOG" || echo '[]')
 
   for group_id in $(echo "$to_leave" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
@@ -2290,6 +2342,16 @@ print(json.dumps(sorted(con & des)))
 " 2>/dev/null || echo '[]')
 
   save_confirmed "$confirmed"
+
+  # Same prune for the admitted set: everything outside `desired` has just
+  # been left above, so keeping it would re-issue a leave every poll forever.
+  # After the leave, for the same reason the confirmed prune is.
+  save_admitted "$(python3 -c "
+import json
+des = set(json.loads('''$desired'''))
+adm = set(json.loads('''$(load_admitted)'''))
+print(json.dumps(sorted(adm & des)))
+" 2>/dev/null || echo '[]')"
 
   # Last, and over the pruned `confirmed` set: the authorship grant arrives
   # long after admission, so it has to be re-read for namespaces we already
