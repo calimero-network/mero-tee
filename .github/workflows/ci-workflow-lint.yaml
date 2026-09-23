@@ -245,6 +245,19 @@ jobs:
         shell: bash
         run: scripts/ci/tests/vector-image-profile-test.sh
 
+      # Every ingress router must carry a request-rate limit, first in its
+      # chain. Two of these routes verify signatures for callers holding no
+      # credential -- deliberately, since a credential would make both features
+      # unreachable for the callers they exist for -- so an unlimited ingress is
+      # a way to spend a node's CPU from anywhere. A limit placed after
+      # `auth-node` is worse than none in one respect: it pays for a forwardAuth
+      # subrequest per flooded request, so a flood of the node becomes a flood of
+      # its auth service.
+      - name: Check every ingress router is rate limited, first in its chain
+        id: traefik_rate_limit_test
+        shell: bash
+        run: scripts/ci/tests/traefik-rate-limit-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -270,6 +283,7 @@ jobs:
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
+            --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
