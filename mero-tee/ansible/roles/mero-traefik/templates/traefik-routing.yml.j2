@@ -40,7 +40,13 @@ http:
         - web
         - websecure
       service: node-core
+      # Rate limit BEFORE anything else: a middleware chain runs in order, so a
+      # limit placed after `cors` still pays for the headers, and one placed
+      # after `auth-node` would pay for a forwardAuth subrequest per flooded
+      # request — turning a flood of this node into a flood of its auth service
+      # too.
       middlewares:
+        - rate-limit-public
         - cors
       priority: 98
 
@@ -106,6 +112,7 @@ http:
         - websecure
       service: node-core
       middlewares:
+        - rate-limit-public
         - cors
       priority: 97
 
@@ -115,7 +122,11 @@ http:
         - web
         - websecure
       service: node-core
+      # On the generous tier, not exempt. Monitoring polls this a few times a
+      # minute, so 100/s never touches it — but an unlimited route is an
+      # unlimited route, and this one answers before any auth runs.
       middlewares:
+        - rate-limit
         - cors
       priority: 100
 
@@ -126,6 +137,7 @@ http:
         - websecure
       service: node-core
       middlewares:
+        - rate-limit
         - cors
       priority: 99
 
@@ -136,6 +148,7 @@ http:
         - websecure
       service: node-core
       middlewares:
+        - rate-limit
         - cors
         - auth-node
       priority: 10
@@ -147,6 +160,7 @@ http:
         - websecure
       service: node-core
       middlewares:
+        - rate-limit
         - cors
         - auth-node
 
@@ -157,6 +171,7 @@ http:
         - websecure
       service: node-core
       middlewares:
+        - rate-limit
         - cors
 
     auth-public:
@@ -165,7 +180,12 @@ http:
         - web
         - websecure
       service: auth-service
+      # The only unauthenticated route that mints state: a challenge is stored
+      # per request. On the generous tier rather than the tight one because the
+      # login flow is several round trips and the browser does them back to
+      # back, but it is limited, which it was not.
       middlewares:
+        - rate-limit
         - cors
 
     metrics:
@@ -174,7 +194,12 @@ http:
         - web
         - websecure
       service: node-core
+      # Limited as well as authenticated: basicAuth verifies a hash per request,
+      # so an unlimited route with a credential on it is still work an anonymous
+      # caller can command. The scraper polls on a schedule and never approaches
+      # this.
       middlewares:
+        - rate-limit
         - metrics-auth
 
   services:
@@ -189,6 +214,53 @@ http:
           - url: "http://127.0.0.1:3001"
 
   middlewares:
+    # Request-rate limits.
+    #
+    # Two routes on this ingress verify signatures for callers holding no
+    # credential at all — `node-api-intents` and `node-api-admit` — and that is
+    # deliberate: the request carries its own authority, so requiring a node
+    # credential would make both features unreachable for exactly the callers
+    # they exist for. The cost is that anyone can make a node do Ed25519 work,
+    # which the comments on those routers already name as a request-rate surface
+    # "worth watching". Nothing was watching it: until now this ingress had three
+    # middlewares and none of them limited anything.
+    #
+    # `sourceCriterion` is set EXPLICITLY rather than left to default, even
+    # though the default is the same. These VMs terminate their own TLS and see
+    # the real client address, so per-IP is per-caller. Put a load balancer or a
+    # CDN in front and every request arrives from one address: the per-IP limit
+    # silently becomes a global one and the fleet throttles itself under normal
+    # traffic. Whoever adds that hop must change this block, and an explicit
+    # value is what makes it visible enough to change.
+    #
+    # Traefik counts these in memory, per instance. One instance per node, so a
+    # limit here bounds one node rather than the fleet — which is the right
+    # granularity: the resource being protected is this node's CPU.
+    rate-limit-public:
+      rateLimit:
+        # Well above any real client — a delegated caller signs a warrant and
+        # submits it, it does not stream — and low enough that one address
+        # cannot keep a core busy verifying signatures.
+        average: 20
+        burst: 40
+        period: 1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 0
+
+    rate-limit:
+      rateLimit:
+        # Generous on purpose. A browser app can fire dozens of requests on one
+        # page load, and a limit that trips during ordinary use would be read as
+        # a node fault and worked around by raising it blindly. This bounds a
+        # flood without ever touching real traffic.
+        average: 100
+        burst: 200
+        period: 1s
+        sourceCriterion:
+          ipStrategy:
+            depth: 0
+
     cors:
       headers:
         accessControlAllowMethods: GET,OPTIONS,PUT,POST,DELETE
