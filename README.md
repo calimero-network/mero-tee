@@ -85,9 +85,9 @@ capability is granted by a namespace admin long after admission. Any failure
 degrades to "replicates but does not relay" — MDMA then never advertises the
 node, so clients are not sent to mint warrants it would refuse. The image opens
 exactly one path for this, driven by the single Ansible variable
-`fleet_delegated_execution`: a Traefik router exempting
+`fleet_delegated_access`: a Traefik router exempting
 `/admin-api/contexts/<ctx>/intents` from forwardAuth, and merod's
-`server.admin.public_intents`. Both from one variable because these nodes run
+`server.admin.delegated_access`. Both from one variable because these nodes run
 merod in proxy auth mode, so Traefik is the only gate and a drift between the
 two would be silent in the unsafe direction. See [Fleet HA
 sidecar](https://calimero-network.github.io/mero-tee/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay).

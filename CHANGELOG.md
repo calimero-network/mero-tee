@@ -6,6 +6,14 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Changed
+
+- **`fleet_delegated_execution` is now `fleet_delegated_access`, matching core's rename of the flag it drives.** Core renamed `--public-intents` to `--delegated-access` when the flag grew to decide more than two intent routes — it now also decides whether merod's guard accepts a request-carried proof, which reaches reads, and `GET /admin-api/namespaces` executes no intent. This repo's variable name followed.
+
+  **The build-time conformance probe now accepts either flag spelling, and that is required rather than lenient.** Core kept `--public-intents` as a **clap alias**, and a clap alias is *hidden from `--help`* — so the probe sees exactly one of the two names, and which one depends on the release pinned: a merod before the rename lists `--public-intents`, one after lists `--delegated-access`. Asserting either name alone would fail against half the releases that implement the feature perfectly well. Accepting both preserves what the assert is actually for: catching a `merodVersion` pinned at a release with no delegated execution at all, which lists neither. Tighten it to `--delegated-access` once `merodVersion` is past the rename and the alias is dropped upstream.
+
+  **`calimero-init` deliberately still writes `server.admin.public_intents=true`**, and moves last. Core added a serde alias on the config key, so the old spelling is read correctly by a new merod — but the reverse is not true: an *old* merod handed the *new* key ignores it, finds no `public_intents`, defaults to `false`, and silently replicates without relaying. No error, because a missing optional key is not an error. The old spelling is the one that works against both, so it stays until `merodVersion` is guaranteed past the rename.
+
 ### Added
 
 - **Every ingress router is rate limited, first in its chain.** Until now this ingress had three middlewares — `cors`, `auth-node`, `metrics-auth` — and **none of them limited anything**, while two routers deliberately serve callers holding no credential at all. `node-api-intents` and `node-api-admit` are exempt from `auth-node` because the request carries its own authority, which is what makes both features reachable for the keyholders they exist for; the cost is that anyone can make a node verify signatures, and the routers' own comments called that a request-rate surface "worth watching" with nothing watching it. Two tiers: `rate-limit-public` (20/s, burst 40) on exactly those two routes, far above any real client — a delegated caller signs a warrant and submits it, it does not stream — and `rate-limit` (100/s, burst 200) on everything else, generous enough that it can never trip during ordinary use, because a limit that fires on real traffic gets read as a node fault and raised blindly.

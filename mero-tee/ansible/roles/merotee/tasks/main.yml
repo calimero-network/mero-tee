@@ -209,30 +209,47 @@
 # ignored and the discovery read 404s. That failure appears in a browser, days
 # later, as "the relay does not answer".
 #
-# So the invariant is asserted here instead of documented. `--public-intents`
-# on `merod init` and `server.admin.public_intents` are the same feature, and
-# the flag is the part a CLI can be asked about without a node, a network or a
-# config file — which makes it a clean capability probe for the baked binary.
+# So the invariant is asserted here instead of documented. The flag on
+# `merod init` and the config key are the same feature, and the flag is the part
+# a CLI can be asked about without a node, a network or a config file — which
+# makes it a clean capability probe for the baked binary.
+#
+# EITHER SPELLING SATISFIES IT, and that is required rather than lenient. Core
+# renamed `--public-intents` to `--delegated-access` when the flag grew to
+# govern reads as well, keeping the old name as a clap alias — and a clap alias
+# is HIDDEN from `--help`. So the probe sees exactly one of the two names, and
+# which one depends on the release pinned:
+#
+#   merod before the rename   help lists --public-intents
+#   merod after the rename    help lists --delegated-access
+#
+# Asserting either name alone therefore fails against half the releases that
+# implement the feature perfectly well. Accepting both keeps what this assert is
+# actually for — catching a `merodVersion` pinned at a release with no delegated
+# execution at all, which lists neither. Tighten to `--delegated-access` once
+# `merodVersion` is past the rename and the alias has been dropped upstream.
 - name: Probe whether the baked merod supports delegated execution
   command: /usr/local/bin/merod --node conformance init --help
   register: merod_init_help
   changed_when: false
   failed_when: false
-  when: fleet_delegated_execution | default(false) | bool
+  when: fleet_delegated_access | default(false) | bool
 
 - name: Assert the baked merod can serve delegated execution
   assert:
     that:
       - merod_init_help.rc == 0
-      - "'--public-intents' in merod_init_help.stdout"
+      - >-
+        '--delegated-access' in merod_init_help.stdout
+        or '--public-intents' in merod_init_help.stdout
     fail_msg: >-
-      This image enables delegated execution (fleet_delegated_execution), but the
-      baked merod ({{ merod_version | default('unknown') }}) has no
-      --public-intents flag, so it does not implement
-      server.admin.public_intents or GET /admin-api/contexts/<ctx>/intents.
+      This image enables delegated execution (fleet_delegated_access), but the
+      baked merod ({{ merod_version | default('unknown') }}) lists neither
+      --delegated-access nor --public-intents, so it implements neither the
+      config key nor GET /admin-api/contexts/<ctx>/intents.
       Bump merodVersion in mero-tee/versions.json to a core release carrying
-      them, or build with -e fleet_delegated_execution=false.
-  when: fleet_delegated_execution | default(false) | bool
+      them, or build with -e fleet_delegated_access=false.
+  when: fleet_delegated_access | default(false) | bool
 
 # The other half of the posture. Traefik is the only gate on these nodes (merod
 # runs in proxy auth mode), so an image that set the merod key but shipped a
@@ -277,7 +294,7 @@
       This image enables delegated execution but /etc/traefik/routing.yml does
       not carry the anchored node-api-intents exemption (or has lost the
       auth-node guard on the catch-all).
-  when: fleet_delegated_execution | default(false) | bool
+  when: fleet_delegated_access | default(false) | bool
 
 # --- Recovery-envelope conformance -------------------------------------------
 #
