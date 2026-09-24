@@ -32,7 +32,7 @@
     mode: "0755"
 
 # A template, not a copy: the delegated-execution router is only present on an
-# image built as a relay (`fleet_delegated_execution`), so the routing file is
+# image built as a relay (`fleet_delegated_access`), so the routing file is
 # profile-specific — which also means it changes the image's root hash and
 # therefore its measurements, exactly as a security-relevant edge change should.
 - name: Render traefik routing file

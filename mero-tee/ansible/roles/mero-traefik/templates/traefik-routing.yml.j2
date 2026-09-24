@@ -7,7 +7,7 @@
 #}
 http:
   routers:
-{% if fleet_delegated_execution | default(false) | bool %}
+{% if fleet_delegated_access | default(false) | bool %}
     # Delegated execution. The one write path on this node that a caller with
     # no account here may reach, and the reason it is exempt from `auth-node`
     # is that it carries its own credential:
@@ -30,7 +30,7 @@ http:
     # node, `DELETE` included.
     #
     # This router exists only when the image is built as a relay
-    # (`fleet_delegated_execution`), and it is paired with merod's own
+    # (`fleet_delegated_access`), and it is paired with merod's own
     # `server.admin.public_intents` — set from the same variable in
     # calimero-init. Both edges move together or the posture is decided in one
     # place and documented in another.
@@ -77,7 +77,7 @@ http:
     # UNGATED, unlike `/intents` above, because the two are different kinds of
     # capability. Delegated execution is a HOSTED service: the node authors on
     # someone's behalf, which is what a fleet relay is assigned and paid to do,
-    # so it belongs behind `fleet_delegated_execution`. Admission is not hosted
+    # so it belongs behind `fleet_delegated_access`. Admission is not hosted
     # and involves no cloud at all — the `admitters` list is chosen by the
     # INVITER, who may name any node, including a peer's self-hosted one. Two
     # people running their own nodes can invite and admit with no account
