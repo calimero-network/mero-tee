@@ -2077,6 +2077,41 @@ save_admitted() {
   echo "$1" > "$ADMITTED_FILE"
 }
 
+# One-time bridge for a node upgrading from a build that had no ADMITTED_FILE.
+#
+# The join loop SKIPS any namespace already in CONFIRMED_FILE ("membership is
+# stable until mdma drops the assignment"), and `note_admitted` runs only inside
+# that loop. So on the first boot after the upgrade a node has a populated
+# confirmed set and an EMPTY admitted one, and nothing will ever fill it for the
+# namespaces it joined before: `admitted - desired` stays empty for them, and a
+# later HA disable never makes this node leave. That is exactly
+# calimero-network/mdma#155 -- the fix for new admissions did not reach the
+# installed base, because the file it depends on starts empty.
+#
+# Seeding from `confirmed` is safe in the direction that matters: a namespace
+# enters CONFIRMED_FILE only after a local `fleet-join` reported admitted=true,
+# so confirmed is a SUBSET of what this node is actually a p2p member of. The
+# seed can therefore only name namespaces it really joined -- it can under-count
+# (a join whose /confirm never landed is not in either file), never over-count,
+# and an over-count is the dangerous direction: it would make the node leave,
+# and purge keys for, a namespace it was never in.
+#
+# Guarded on the file's ABSENCE, not on its contents. An admitted set that is
+# legitimately empty -- a node that has never been assigned anything -- must not
+# be re-seeded on every boot, and `[[ -e ]]` is the only test that distinguishes
+# "no file yet" from "file says nothing".
+seed_admitted_from_confirmed() {
+  if [[ -e "$ADMITTED_FILE" ]]; then
+    return 0
+  fi
+
+  local confirmed
+  confirmed=$(load_confirmed)
+  save_admitted "$confirmed"
+  log "Seeded admitted set from confirmed on first run after upgrade: $confirmed"
+  return 0
+}
+
 # Record a namespace the local `fleet-join` admitted us to.
 #
 # Written the moment admission succeeds, BEFORE `/confirm` is attempted and
@@ -2167,6 +2202,10 @@ LAST_ACCOUNT_ATTEMPT=0
 # Registration retry clock. 0 so a node with no token registers on its first
 # pass rather than waiting out an interval on every boot.
 LAST_REGISTRATION_ATTEMPT=0
+
+# Before the first poll, so the very first `admitted - desired` diff already
+# knows about everything this node joined under the previous build.
+seed_admitted_from_confirmed
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.

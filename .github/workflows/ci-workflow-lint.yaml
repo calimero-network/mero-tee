@@ -211,6 +211,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
 
+      # The set that diff reads starts EMPTY on the first boot after the build
+      # that introduced it, and the join loop skips anything already confirmed --
+      # so nothing ever records the namespaces joined under the previous build,
+      # and a later disable never makes the node leave them. Seeding from
+      # `confirmed` (a subset of admitted, by construction) bridges that boot.
+      - name: Check the admitted set survives the upgrade that introduced it
+        id: admitted_seed_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-admitted-seed-test.sh
+
       - name: Check the data disk is mounted before use
         id: data_disk_test
         shell: bash
@@ -280,6 +290,7 @@ jobs:
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
+            --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \

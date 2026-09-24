@@ -404,6 +404,39 @@ it stops being entitled?* — which is about P2P state, not about MDMA's record 
 it. `confirmed` keeps its own job, driving the confirm retry for a namespace MDMA
 has not acknowledged yet.
 
+#### The first boot after the admitted set was introduced
+
+`fleet-admitted.json` is newer than `fleet-confirmed.json`, and the join loop
+**skips any namespace already in the confirmed set** — membership is stable
+until MDMA drops the assignment, so re-joining it every second would be waste.
+`note_admitted` runs only inside that loop.
+
+Those two facts combine badly on exactly one boot. Both files live in
+`/var/lib/calimero/`, so a node upgrading from a build that predates the
+admitted set comes up with a *populated* confirmed file and an *empty* admitted
+one — and every namespace it joined under the previous build is skipped, so
+nothing ever records it. `admitted − desired` stays empty for those namespaces
+forever, a later HA disable never makes the node leave them, and it keeps their
+keys and its `ReadOnlyTee` membership: the very state the admitted set exists to
+prevent, on every node that was already in the fleet.
+
+`seed_admitted_from_confirmed` runs once, before the first poll, and copies
+`confirmed` into `admitted` when the admitted file is **absent**.
+
+Seeding from `confirmed` is safe in the direction that matters. A namespace
+enters the confirmed set only after a local `fleet-join` returned
+`admitted=true`, so confirmed is a subset of what this node is really a P2P
+member of. The seed can therefore *under*-count — a join whose confirm never
+landed appears in neither file — but never *over*-count, and over-counting is
+the dangerous direction: it would make the node leave, and irreversibly purge
+keys for, a namespace it was never admitted to.
+
+The guard is on the file's absence rather than its contents, because a node
+that has never been assigned anything has a legitimately empty admitted set;
+testing for emptiness would re-seed it on every boot and resurrect namespaces it
+had since left. Once the file exists the seed never runs again, and the ordinary
+prune (`admitted = admitted ∩ desired`) keeps it honest from there.
+
 Two more files alongside them record what MDMA has already been
 told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
 and `fleet-inventory.json` for the context inventory. Each is advanced **only
@@ -428,9 +461,9 @@ rather than lost. Activity is logged to `/var/log/fleet-sidecar.log`.
     { from: 2, to: 0, label: '{ admitted: true }', color: '#a371f7', dashed: true },
     { from: 0, to: 1, label: 'POST /api/fleet/confirm { peer_id, group_id }', color: '#a5ff11' },
     { from: 0, to: 0, label: 'add to fleet-confirmed.json (admitted AND confirmed)' },
-    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (confirmed − desired)', dashed: true },
+    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (admitted − desired)', dashed: true },
     { from: 2, to: 2, label: 'MemberLeft → evict + purge keys' },
-    { type: 'divider', label: 'confirmed = confirmed ∩ desired; persist, sleep 1s, repeat' },
+    { type: 'divider', label: 'confirmed/admitted ∩= desired; persist, sleep 1s, repeat' },
   ]}
 />
 
@@ -1001,10 +1034,11 @@ So `poll_mdma` captures curl's body and exit status separately and returns:
   unparseable/wrong-shape body.
 
 On a `1`, the main loop skips the entire reconcile — no `desired` computed, no
-join, no leave, no prune — and preserves `fleet-confirmed.json` untouched.
+join, no leave, no prune — and preserves `fleet-confirmed.json` and
+`fleet-admitted.json` untouched.
 Preserving `confirmed` across a failed poll is itself load-bearing: if a failed
-poll pruned `confirmed`, a genuine disable on the next good poll would no longer
-appear in the `confirmed − desired` diff, and the node would never leave.
+poll pruned the sets, a genuine disable on the next good poll would no longer
+appear in the `admitted − desired` diff, and the node would never leave.
 
 Symmetrically, `confirm_assignment` returns curl's real exit code (rather than
 swallowing errors), so a transient blip on the confirm step leaves the namespace
