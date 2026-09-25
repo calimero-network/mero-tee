@@ -1047,6 +1047,61 @@ print(json.dumps({"namespace": namespace, "complete": complete}, sort_keys=True)
 PY
 }
 
+# On-disk bytes per namespace, from merod's `GET /admin-api/usage`, as one JSON
+# object keyed by lowercase namespace id:
+#   {"<ns>": {"state": N, "private_state": N, "delta": N, "governance": N, "total": N}}
+#
+# Reached over loopback with no token for the same reason `attest_quote` is:
+# these nodes run merod in its default proxy auth mode, whose admin router has
+# no guard, and traefik (which does gate it) is not in the path. meroctl has no
+# command for this route.
+#
+# Prints `{}` on any failure. A missing entry is "did not look", never zero:
+# mdma keeps whatever it last recorded, the same rule as `member_count`. None of
+# this touches `complete` — bytes say nothing about which contexts exist.
+collect_usage() {
+  local port="${1:-2428}"
+  local body
+  body=$(curl -sf --max-time 10 "http://127.0.0.1:${port}/admin-api/usage" 2>>"$LOG") || {
+    logq "WARN: /admin-api/usage did not answer; reporting the inventory without bytes"
+    echo '{}'
+    return 0
+  }
+  echo "$body" | python3 -c '
+import json, sys
+FIELDS = (("state", "state"), ("privateState", "private_state"), ("delta", "delta"),
+          ("governance", "governance"), ("total", "total"))
+payload = json.load(sys.stdin)
+data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+out = {}
+for row in data.get("namespaces") or []:
+    if not isinstance(row, dict):
+        continue
+    namespace_id = str(row.get("namespaceId") or "").strip().lower()
+    raw = row.get("bytes")
+    if not namespace_id or not isinstance(raw, dict):
+        continue
+    try:
+        out[namespace_id] = {ours: int(raw[theirs]) for theirs, ours in FIELDS}
+    except (KeyError, TypeError, ValueError):
+        # A partial breakdown would read as a real one; skip the namespace.
+        continue
+print(json.dumps(out, sort_keys=True))
+' 2>>"$LOG" || echo '{}'
+}
+
+# Attach this scan's bytes to one `collect_namespace_inventory` result.
+with_usage_bytes() {
+  python3 -c '
+import json, sys
+out, usage = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+bytes_ = usage.get(out["namespace"]["namespace_id"].lower())
+if bytes_ is not None:
+    out["namespace"]["bytes"] = bytes_
+print(json.dumps(out, sort_keys=True))
+' "$1" "$2" 2>>"$LOG" || echo "$1"
+}
+
 load_inventory() {
   cat "$INVENTORY_FILE" 2>/dev/null || echo '{"namespaces":{},"last_full":0}'
 }
@@ -1123,6 +1178,11 @@ except Exception:
     want_full=true
   fi
 
+  # One read covers every namespace, so it is taken once per scan, not per
+  # namespace.
+  local usage
+  usage=$(collect_usage "${SERVER_PORT:-2428}")
+
   local complete_batch=() partial_batch=()
   local namespace_id out rc
   for namespace_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(n) for n in json.loads(sys.stdin.read())]" 2>/dev/null); do
@@ -1132,6 +1192,7 @@ except Exception:
       log "WARN: could not read the context inventory for $namespace_id; leaving mdma's copy untouched"
       continue
     fi
+    out=$(with_usage_bytes "$out" "$usage")
     if echo "$out" | python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('complete') else 1)" 2>/dev/null; then
       complete_batch+=("$out")
     else
@@ -1142,15 +1203,21 @@ except Exception:
 
   # Whether anything actually moved since the last successful post. A `full`
   # pass posts regardless — that is what makes it a reconcile.
+  #
+  # `bytes` is left out of the comparison. It is a RocksDB estimate that drifts
+  # with every write and compaction, so counting it would turn every scan into a
+  # post; it rides whichever post happens anyway, which the full interval bounds.
   local changed
   changed=$(python3 -c "
 import json, sys
+def shape(namespace):
+    return {k: v for k, v in namespace.items() if k != 'bytes'}
 recorded = json.loads(sys.argv[1]).get('namespaces') or {}
 seen = {}
 for arg in sys.argv[2:]:
     namespace = json.loads(arg)['namespace']
     seen[namespace['namespace_id']] = namespace
-if any(recorded.get(k) != v for k, v in seen.items()):
+if any(k not in recorded or shape(recorded[k]) != shape(v) for k, v in seen.items()):
     print('true')
 else:
     print('false')
