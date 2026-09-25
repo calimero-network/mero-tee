@@ -142,13 +142,20 @@ done
 exit 1
 STUB
 
-# `curl`: appends each POST body to ${SB}/inventory-log, or fails while
-# ${SB}/post-fails exists so the retry path can be driven.
+# `curl`: answers merod's `GET /admin-api/usage` from ${SB}/usage (absent =>
+# the endpoint is unreachable); otherwise appends each POST body to
+# ${SB}/inventory-log, or fails while ${SB}/post-fails exists so the retry path
+# can be driven.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body=""
 prev=""
 for a in "$@"; do
+  if [[ "${a}" == */admin-api/usage ]]; then
+    [[ -f "${SB}/usage" ]] || exit 7
+    cat "${SB}/usage"
+    exit 0
+  fi
   [[ "${prev}" == "-d" ]] && body="${a}"
   prev="${a}"
 done
@@ -340,4 +347,64 @@ assert g['aa']['context_ids'] == ['ctx1'], g['aa']
 assert body['full'] is True, body
 " || fail "an unreadable capability must be false without blocking the prune: $(last_post)"
 
-echo "OK: fleet sidecar context inventory — 12 checks, $(posts) posts sent"
+# 13. Bytes from `/admin-api/usage` ride the report, under the reported
+#     namespace, renamed to the inventory's snake_case. The id is matched
+#     case-insensitively: merod hex-encodes, and nothing guarantees the case the
+#     assignment ledger was written in.
+usage_fixture() { # total
+  printf '{"namespaces":[{"namespaceId":"AA","contextCount":2,"memberCount":4,"subgroupCount":1,"bytes":{"state":%s,"privateState":1,"delta":2,"governance":3,"total":%s}},{"namespaceId":"zz","bytes":{"state":9,"privateState":9,"delta":9,"governance":9,"total":36}}]}' \
+    "$(( $1 - 6 ))" "$1" > "${SB}/usage"
+}
+usage_fixture 1006
+reconcile_inventory peer1 '["aa"]' true
+last_post | python3 -c "
+import json, sys
+body = json.load(sys.stdin)
+assert len(body['namespaces']) == 1, body
+ns = body['namespaces'][0]
+assert ns['bytes'] == {'state': 1000, 'private_state': 1, 'delta': 2, 'governance': 3, 'total': 1006}, ns
+assert body['full'] is True, body
+" || fail "usage bytes must be attached to the reported namespace: $(last_post)"
+grep -q '"zz"' "${SB}/inventory-log" \
+  && fail "usage for a namespace this node was not asked about must not be reported: $(last_post)"
+
+# 14. Bytes alone do not make a change. The estimate moves with every write and
+#     compaction; comparing it would post on every scan.
+before="$(posts)"
+usage_fixture 5006
+reconcile_inventory peer1 '["aa"]'
+expect_posts "${before}" "a bytes-only change must not trigger a post"
+
+# 15. ...but they ride the next post that happens anyway, so the periodic full
+#     pass bounds how stale mdma's number can get.
+reconcile_inventory peer1 '["aa"]' true
+last_post | python3 -c "
+import json, sys
+assert json.load(sys.stdin)['namespaces'][0]['bytes']['total'] == 5006
+" || fail "the full pass must carry the current bytes: $(last_post)"
+
+# 16. An unreachable `/usage` omits the bytes and changes nothing else: the
+#     report is still posted and still authoritative. Bytes say nothing about
+#     which contexts exist, so they must never block a prune.
+rm -f "${SB}/usage"
+reconcile_inventory peer1 '["aa"]' true
+last_post | python3 -c "
+import json, sys
+body = json.load(sys.stdin)
+ns = body['namespaces'][0]
+assert 'bytes' not in ns, ns
+assert body['full'] is True, body
+assert ns['context_count'] == 2, ns
+" || fail "an unreachable /usage must omit bytes without downgrading the post: $(last_post)"
+
+# 17. A malformed breakdown is dropped, not half-reported: a namespace missing
+#     a column would read as a real, smaller number.
+printf '{"namespaces":[{"namespaceId":"aa","bytes":{"state":1,"total":1}}]}' > "${SB}/usage"
+reconcile_inventory peer1 '["aa"]' true
+last_post | python3 -c "
+import json, sys
+assert 'bytes' not in json.load(sys.stdin)['namespaces'][0]
+" || fail "a partial byte breakdown must be omitted: $(last_post)"
+rm -f "${SB}/usage"
+
+echo "OK: fleet sidecar context inventory — 17 checks, $(posts) posts sent"

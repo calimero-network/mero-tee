@@ -606,6 +606,14 @@ is nothing there to store. A count that could not be read is *omitted*, never
 sent as `0` — `NULL` means "no node has told us", and a namespace always has at
 least its admin.
 
+On-disk bytes ride it too, as `bytes: {state, private_state, delta, governance,
+total}`, read once per scan from merod's `GET /admin-api/usage` over loopback
+(no token: merod runs in proxy auth mode, and traefik is not in that path).
+They are RocksDB estimates, so they are **excluded from change detection** —
+counting them would post on every scan — and refresh on whatever post happens
+next, at worst the 15-minute full pass. An unreachable `/usage` omits `bytes`
+and changes nothing else about the report; bytes never block a prune.
+
 #### On change, with a slow full reconcile
 
 Core exposes no "contexts changed" signal, so the walk is polled: once a minute,
