@@ -173,20 +173,17 @@ log "server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
 # enforces it (`MERO_TEE_MIN_VERSION`, semver); the comparison here is defence
 # in depth that fails the boot with a clear line before anything is fetched.
 #
-# `MERO_TEE_PROFILE` makes merod refuse a policy whose `profile` differs, so a
-# production node cannot be pointed at a debug release's policy. Set on
-# locked-read-only ONLY, and to that value, on purpose: merod fetches the
-# release's default policy asset, which is the locked-read-only KMS policy for
-# every node profile (`kms-phala-attestation-policy.json` is an alias of
-# `.locked-read-only.json`, see release-kms-phala.yaml). Pinning a debug node
-# to its own profile name would make every debug node with a KMS refuse the
-# only policy merod ever fetches.
+# `MERO_TEE_PROFILE` is this image's profile, on EVERY profile. merod fetches
+# that profile's signed policy (`kms-phala-attestation-policy.<profile>.json`,
+# see release-kms-phala.yaml) and refuses one whose `profile` differs, so a
+# node verifies its own profile's KMS against that KMS's measurements, and a
+# production node cannot be pointed at a debug release's policy. This needs a
+# merod that selects the per-profile asset (calimero-network/core#4069): an
+# older one fetches only the default asset, which is the locked-read-only
+# policy, and a debug node pinned to its own profile would refuse it.
 MIN_TEE_RELEASE_FILE="/etc/calimero/min-tee-release-version"
 MIN_TEE_RELEASE_VERSION="$(tr -d '[:space:]' < "$MIN_TEE_RELEASE_FILE" 2>/dev/null || true)"
-EXPECTED_TEE_POLICY_PROFILE=""
-if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-  EXPECTED_TEE_POLICY_PROFILE="locked-read-only"
-fi
+EXPECTED_TEE_POLICY_PROFILE="$IMAGE_PROFILE"
 
 # True when release $1 is OLDER than release $2. Semver-ish, like merod: the
 # `mero-kms-v` prefix is dropped, the numeric cores compare with `sort -V`, and
