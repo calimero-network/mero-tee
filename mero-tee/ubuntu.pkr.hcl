@@ -73,7 +73,7 @@ variable "image_suffix" {
 
   validation {
     condition     = var.image_suffix == "" || can(regex("^-[a-z0-9-]{1,40}$", var.image_suffix))
-    error_message = "image_suffix must be empty or a hyphen followed by lowercase letters, digits and hyphens."
+    error_message = "The image_suffix must be empty or a hyphen followed by lowercase letters, digits and hyphens."
   }
 }
 
@@ -136,6 +136,12 @@ source "googlecompute" "this" {
   disk_type            = "pd-ssd"
   subnetwork           = var.subnetwork != "" ? var.subnetwork : null
   ssh_username         = "ubuntu"
+  # Keep the base root partition at its base size during the build: the free
+  # space after it is where the last build step writes the dm-verity root (see
+  # the verity-root role). cloud-init would otherwise grow it to fill the disk.
+  metadata = {
+    user-data = "#cloud-config\ngrowpart:\n  mode: \"off\"\nresize_rootfs: false\n"
+  }
   tags                 = ["packer", "merotee"]
 }
 

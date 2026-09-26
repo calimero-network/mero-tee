@@ -47,8 +47,17 @@ log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
 # --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
 # RTMR3 is empty by default; extending with role+profile+root_hash makes each image unique.
-# Keep this best-effort at boot so merod can still start if kernel/sysfs support is unavailable.
 # Newer kernels (e.g. 6.17+ GCP) expose RTMR under tdx_guest/measurements/; older use tdx_guest/mr/.
+#
+# Fatal on locked-read-only: an unextended RTMR3 no longer names this image, so a
+# quote from it would not say which image is running. The debug profiles only warn,
+# so a kernel without the sysfs interface can still be debugged.
+rtmr3_problem() {
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "RTMR3 not extended: $*"
+  fi
+  log "WARN: RTMR3 not extended: $*"
+}
 ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
 RTMR3_EXTEND_FILE="$(mktemp)"
 if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary > "$RTMR3_EXTEND_FILE" 2>/dev/null; then
@@ -69,16 +78,16 @@ if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HA
       if cat "$RTMR3_EXTEND_FILE" > "${RTMR3_SYSFS}" 2>/dev/null; then
         log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}... via ${RTMR3_SYSFS})"
       else
-        log "WARN: RTMR3 extend write failed (${RTMR3_SYSFS})"
+        rtmr3_problem "write failed (${RTMR3_SYSFS})"
       fi
     else
-      log "RTMR3 extend skipped (no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/measurements/ or .../mr/)"
+      rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/measurements/ or .../mr/"
     fi
   else
-    log "WARN: RTMR3 extend input has unexpected size (${RTMR3_EXTEND_SIZE}, expected 48)"
+    rtmr3_problem "extend input has unexpected size (${RTMR3_EXTEND_SIZE}, expected 48)"
   fi
 else
-  log "WARN: Failed to generate RTMR3 extend input digest"
+  rtmr3_problem "failed to generate the extend input digest"
 fi
 rm -f "$RTMR3_EXTEND_FILE"
 

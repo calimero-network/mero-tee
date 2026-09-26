@@ -283,6 +283,18 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
+      # The root filesystem is sealed behind dm-verity as the image build's last
+      # step (mero-tee#334). Runs the seal against a disk image on a loop device,
+      # laid out like an ungrown GCP base image: the root is written as EROFS with
+      # the booted fstab and none of the build's scratch files, verity refuses a
+      # changed byte, grub.cfg boots the verity device, and a second seal fails.
+      - name: Check the root is sealed behind dm-verity
+        id: seal_root_test
+        shell: bash
+        run: |
+          sudo apt-get install -y -q erofs-utils cryptsetup-bin gdisk parted >/dev/null
+          sudo scripts/ci/tests/seal-root-test.sh
+
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and
       # a fresh node 401s, `continue`s, and never reaches the code that would

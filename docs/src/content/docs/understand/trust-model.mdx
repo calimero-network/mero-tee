@@ -191,7 +191,7 @@ admitting everything.
 | `MRTD` | SHA-384 of the initial VM image at launch | Pins the exact node/KMS image. |
 | `RTMR0` | Firmware (TDVF) measurement | Extended during early boot. |
 | `RTMR1` | OS kernel / boot measurement | Extended during kernel boot. |
-| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**: nothing at boot re-hashes those files against it, so it identifies the image but does not stop an offline edit of the boot disk ([#334](https://github.com/calimero-network/mero-tee/issues/334)). |
+| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**, so it names the build. The cmdline also carries the **dm-verity root hash**: the root filesystem is a read-only EROFS image sealed as the build's last step, and every block the booted system reads is checked against that hash, so an offline edit of the boot disk is a read error, not different code ([#334](https://github.com/calimero-network/mero-tee/issues/334); `verity-root` role). |
 | `RTMR3` | Runtime events after boot | Carries the profile/role separation: the KMS extends it with `calimero.kms.profile=<profile>`; the node image's `calimero-init` extends it with role + profile + root hash. |
 
 ### RTMR3 profile cohort separation
