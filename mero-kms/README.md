@@ -33,6 +33,8 @@ so a proxy in front of this service could otherwise read every key it releases.
 commits to it in the quote. A `/get-key` request carrying `sealToB64` — a one-time
 X25519 key its quote and signature commit to — gets the key back as
 `sealedKeyB64`/`sealNonceB64` (X25519 → HKDF-SHA256 → AES-256-GCM) instead of `key`.
+A request without `sealToB64` is refused unless `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE=false`
+(default `true`; the compose template sets it, so it is part of the compose hash).
 See `src/sealed.rs`; the format is merod's `kms::sealed`, pinned by shared vectors.
 
 ## Development

@@ -14,7 +14,7 @@
 //! | `MERO_KMS_PROFILE` | `String` | `locked-read-only` | KMS profile cohort (overrides `KMS_POLICY_PROFILE`) |
 //! | `KMS_POLICY_PROFILE` | `String` | *(deprecated)* | Legacy alias for `MERO_KMS_PROFILE` |
 //! | `KEY_NAMESPACE_PREFIX` | `String` | `merod/storage` | dstack key derivation namespace prefix |
-//! | `MERO_KMS_POLICY_SHA256` | `String` | *(none)* | Optional SHA-256 pin for fetched policy file |
+//! | `MERO_KMS_POLICY_SHA256` | `String` | *(none)* | Optional SHA-256 pin for the fetched policy file, checked in addition to its Sigstore signature |
 //! | `CORS_ALLOWED_ORIGINS` | `CSV` | *(none — CORS disabled)* | Comma-separated allowed CORS origins |
 //! | `ENFORCE_MEASUREMENT_POLICY` | `bool` | `true` | Whether TDX measurement checks are enforced |
 //! | `USE_ENV_POLICY` | `bool` | `false` | Load policy from `ALLOWED_*` env vars instead of release |
@@ -27,6 +27,7 @@
 
 pub mod env;
 pub mod policy_loader;
+mod policy_signature;
 
 use std::net::SocketAddr;
 
@@ -78,9 +79,10 @@ pub struct Config {
     /// Release version used for policy fetch (e.g. `"2.3.4"`).
     pub kms_version: Option<String>,
     /// Refuse `/get-key` requests that do not ask for a sealed key
-    /// (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`). An unsealed key is readable by
-    /// whatever terminates TLS in front of this service; accepting them is only
-    /// for nodes whose merod predates sealed release.
+    /// (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, default `true`). An unsealed key
+    /// is readable by whatever terminates TLS in front of this service. Setting
+    /// it `false` serves merods older than 0.11.0-rc.47, which cannot unseal,
+    /// and reopens that hole for them.
     pub require_sealed_key_release: bool,
 }
 
@@ -102,7 +104,7 @@ impl Default for Config {
             policy_ready: true,
             policy_unavailable_reason: None,
             kms_version: None,
-            require_sealed_key_release: false,
+            require_sealed_key_release: true,
         }
     }
 }
@@ -165,7 +167,7 @@ impl Config {
 
         let enforce_measurement_policy = parse_bool_env("ENFORCE_MEASUREMENT_POLICY", true)?;
         let require_sealed_key_release =
-            parse_bool_env("MERO_KMS_REQUIRE_SEALED_KEY_RELEASE", false)?;
+            parse_bool_env("MERO_KMS_REQUIRE_SEALED_KEY_RELEASE", true)?;
         let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
 
         let release_version = if use_env_policy {

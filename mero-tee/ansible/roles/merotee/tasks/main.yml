@@ -430,8 +430,8 @@
   shell: |
     set -euo pipefail
     cryptsetup --version
-    # The kernel the image will boot, not necessarily the build host's running
-    # one: the newest installed under /lib/modules.
+    # The kernel the image will boot, which need not be the kernel the build
+    # host is running: the newest one installed under /lib/modules.
     kver="$(ls -1 /lib/modules | sort -V | tail -n1)"
     echo "kernel=${kver}"
     modinfo -k "${kver}" dm_crypt >/dev/null

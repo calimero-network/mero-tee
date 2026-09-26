@@ -79,6 +79,11 @@ on:
         description: "Optional comma-separated acceptable probe result codes"
         required: false
         default: ""
+      secret_fetch_check:
+        description: "Boot the node with a service account and check it fetches its log token from Secret Manager (needs vars.GCP_PROBE_SECRET_SA)"
+        required: false
+        type: boolean
+        default: false
       log_verbosity:
         description: "Logging verbosity: compact (default) or debug"
         required: false
@@ -105,6 +110,10 @@ jobs:
       GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
       GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+      # Only used when `secret_fetch_check` is set: an existing service account
+      # with no project roles. The check grants it access to one throwaway
+      # secret for the length of the run.
+      GCP_PROBE_SECRET_SA: ${{ vars.GCP_PROBE_SECRET_SA }}
       CI_LOG_VERBOSITY: ${{ inputs.log_verbosity }}
     steps:
       - name: Checkout code
@@ -287,9 +296,45 @@ jobs:
             --target-tags "${{ steps.params.outputs.firewall_tag }}" \
             --description "Temporary node e2e ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
 
-      - name: Create ephemeral TDX VM
+      # The one probe path that boots a node WITH a cloud identity. Every other
+      # run uses `--no-service-account`, as mdma does, so fetch_secret.sh's
+      # `gcp` provider never ran against a real image. The mero-tee#339 fix
+      # rewrote it to work with snapd masked, and this is where that is proven.
+      - name: Set up Secret Manager fetch check
+        id: secret_fetch
+        if: ${{ inputs.secret_fetch_check }}
+        env:
+          PROBE_SERVICE_ACCOUNT: ${{ env.GCP_PROBE_SECRET_SA }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          VM_NETWORK: ${{ steps.params.outputs.vm_network }}
+          VM_SUBNETWORK: ${{ steps.params.outputs.vm_subnetwork }}
+          NODE_TAG: ${{ steps.params.outputs.firewall_tag }}
+          RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          if [[ -z "${PROBE_SERVICE_ACCOUNT}" ]]; then
+            echo "::error::secret_fetch_check needs repo variable GCP_PROBE_SECRET_SA (a service account with no project roles)."
+            exit 1
+          fi
+          bash scripts/ci/probes/node_secret_fetch_probe.sh setup
+
+      - name: Create ephemeral TDX VM
+        env:
+          SECRET_FETCH_CHECK: ${{ inputs.secret_fetch_check }}
+          PROBE_SERVICE_ACCOUNT: ${{ env.GCP_PROBE_SECRET_SA }}
+          SECRET_NAME: ${{ steps.secret_fetch.outputs.secret_name }}
+          RECEIVER_IP: ${{ steps.secret_fetch.outputs.receiver_ip }}
+        run: |
+          set -euo pipefail
+          identity=(--no-service-account --no-scopes)
+          metadata="merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true"
+          if [[ "${SECRET_FETCH_CHECK}" == "true" ]]; then
+            # `logs-secret-name` and no `observability-token`, so calimero-init
+            # picks the `gcp` provider; the receiver stands in for the log sink.
+            identity=(--service-account "${PROBE_SERVICE_ACCOUNT}" --scopes cloud-platform)
+            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,logs-secret-name=${SECRET_NAME}"
+          fi
           gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --zone "${{ steps.params.outputs.vm_zone }}" \
@@ -297,12 +342,11 @@ jobs:
             --confidential-compute-type "TDX" \
             --maintenance-policy "TERMINATE" \
             --min-cpu-platform "Intel Sapphire Rapids" \
-            --no-service-account \
-            --no-scopes \
+            "${identity[@]}" \
             --image "${{ steps.params.outputs.image_name }}" \
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
-            --metadata "merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true" \
+            --metadata "${metadata}" \
             --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
 
       - name: Wait for VM and admin API readiness
@@ -478,6 +522,16 @@ jobs:
         run: |
           bash scripts/ci/probes/node_runtime_kms_probe.sh
 
+      - name: Verify node fetched its log token from Secret Manager
+        id: verify_secret_fetch
+        if: ${{ inputs.secret_fetch_check }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/probes/node_secret_fetch_probe.sh verify
+
       - name: Verify quote externally and derive policy candidates
         id: verify_external
         run: |
@@ -532,6 +586,8 @@ jobs:
             --entry "attestation-context.json|Probe context metadata" \
             --entry "node-client-verification.json|Anti-fake verification outcomes" \
             --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
+            --entry "node-secret-fetch-result.json|Secret Manager fetch check: pushes seen by the receiver" \
+            --entry "log-auth-receiver-serial.log|Log-auth receiver serial console" \
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
             --entry "ita-ci-verification-summary.json|ITA JWT tdx fields + node quote SHA-256 (CI summary)" \
             --entry "external-attestation-token-claims.json|ITA JWT claims (full)" \
@@ -566,6 +622,12 @@ jobs:
           gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --quiet || true
+          if [[ "${{ inputs.secret_fetch_check }}" == "true" ]]; then
+            VM_PROJECT="${{ steps.params.outputs.vm_project }}" \
+            VM_ZONE="${{ steps.params.outputs.vm_zone }}" \
+            RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              bash scripts/ci/probes/node_secret_fetch_probe.sh cleanup
+          fi
 
       - name: Summarize node probe run
         if: ${{ always() }}
@@ -580,6 +642,8 @@ jobs:
               result_reason="ANTI_FAKE_CHECK_FAILED"
             elif [[ "${{ steps.runtime_probe.outcome }}" == "failure" ]]; then
               result_reason="KMS_PROBE_EXPECTATION_MISMATCH"
+            elif [[ "${{ steps.secret_fetch.outcome }}" == "failure" || "${{ steps.verify_secret_fetch.outcome }}" == "failure" ]]; then
+              result_reason="SECRET_FETCH_CHECK_FAILED"
             elif [[ "${{ steps.verify_external.outcome }}" == "failure" ]]; then
               result_reason="ITA_VERIFICATION_FAILURE"
             else
@@ -597,6 +661,7 @@ jobs:
             --arg endpoint_outcome "${{ steps.endpoint.outcome || 'skipped' }}" \
             --arg anti_fake_outcome "${{ steps.verify_anti_fake.outcome || 'skipped' }}" \
             --arg runtime_outcome "${{ steps.runtime_probe.outcome || 'skipped' }}" \
+            --arg secret_fetch_outcome "${{ steps.verify_secret_fetch.outcome || 'skipped' }}" \
             --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
             --arg job_status "${{ job.status }}" \
             --arg reason "${result_reason}" \
@@ -620,6 +685,7 @@ jobs:
                     ("- Endpoint readiness: " + $endpoint_outcome),
                     ("- Anti-fake checks: " + $anti_fake_outcome),
                     ("- Runtime node->KMS probe: " + $runtime_outcome),
+                    ("- Secret Manager fetch: " + $secret_fetch_outcome),
                     ("- External verification: " + $external_outcome)
                   ]
                 },

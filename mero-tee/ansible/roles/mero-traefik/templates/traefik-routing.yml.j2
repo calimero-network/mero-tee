@@ -284,10 +284,21 @@ http:
         addVaryHeader: true
         accessControlExposeHeaders: X-Auth-Error
 
+    # `trustForwardHeader: false` is what makes the route mero-auth checks the
+    # route the caller actually asked for. mero-auth's `/auth/validate` decides
+    # a scoped token from `X-Forwarded-Uri` / `X-Forwarded-Method`, and with
+    # `true` Traefik passes on whatever the CLIENT put in those headers. A token
+    # scoped to route A could then reach route B by sending
+    # `X-Forwarded-Uri: A`. With `false`, Traefik discards the client's values
+    # and sets them from the request it is routing.
+    #
+    # Nothing sits in front of this Traefik to be trusted: it is the node's
+    # ingress, and the caller is whoever connected. Pinned by
+    # scripts/ci/tests/traefik-forward-auth-test.sh (mero-tee#339).
     auth-node:
       forwardAuth:
         address: "http://127.0.0.1:3001/auth/validate"
-        trustForwardHeader: true
+        trustForwardHeader: false
         authResponseHeaders:
           - X-Auth-User
           - X-Auth-Permissions

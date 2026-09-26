@@ -10,6 +10,9 @@ services:
       CHALLENGE_TTL_SECS: "60"
       ACCEPT_MOCK_ATTESTATION: "false"
       ENFORCE_MEASUREMENT_POLICY: "true"
+      # Release keys only sealed to the requesting TD. Part of the compose
+      # hash, so a KMS that serves keys in the clear does not attest as this one.
+      MERO_KMS_REQUIRE_SEALED_KEY_RELEASE: "true"
       MERO_KMS_VERSION: "__MERO_KMS_VERSION__"
       MERO_KMS_PROFILE: "__MERO_KMS_PROFILE__"
     volumes:

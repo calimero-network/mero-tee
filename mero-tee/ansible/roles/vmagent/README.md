@@ -6,7 +6,7 @@ This Ansible role installs vmagent (VictoriaMetrics Agent) binary and setup scri
 
 - Ansible 2.9+
 - Ubuntu/Debian-based system
-- AWS CLI or gcloud CLI (when using authentication with secrets manager at runtime)
+- curl and python3 (for the `gcp` secret provider, which calls the metadata server and Secret Manager's REST API directly). No cloud CLI: `gcloud` is a snap on GCP Ubuntu images and cannot run on `locked-read-only`, where snapd is masked.
 
 ## Role Variables
 
@@ -94,40 +94,6 @@ EOF
   "victoria-lb-metrics-bearer-token"
 ```
 
-### With Authentication (AWS example)
-
-```bash
-#!/bin/bash
-
-# Step 1: Create scrape configuration
-cat > /etc/vmagent/scrape_config.yml <<'EOF'
-global:
-  scrape_interval: 15s
-  external_labels:
-    instance_name: "merod-instance-1"
-    instance_type: "merod"
-
-scrape_configs:
-  - job_name: "merod"
-    scrape_interval: "15s"
-    static_configs:
-      - targets: ["localhost:2428"]
-
-  - job_name: "node-exporter"
-    scrape_interval: "15s"
-    static_configs:
-      - targets: ["localhost:9100"]
-EOF
-
-# Step 2: Configure and start vmagent
-/etc/vmagent/configure_vmagent.sh \
-  "/etc/vmagent/scrape_config.yml" \
-  "https://victoria-lb.apps.dev.p2p.aws.calimero.network/api/v1/write" \
-  "true" \
-  "aws" \
-  "/merod/vmagent-bearer-token"
-```
-
 ### Without Authentication (for internal VPC endpoints)
 
 ```bash
@@ -164,7 +130,7 @@ The `configure_vmagent.sh` script takes 5 parameters:
 1. **config_file_path** - Path to the scrape configuration YAML file
 2. **remote_write_url** - VictoriaMetrics remote write endpoint
 3. **auth_enabled** - "true" or "false" for bearer token authentication
-4. **secret_provider** - "aws" or "gcp" (only used if auth_enabled=true)
+4. **secret_provider** - "gcp" (Secret Manager) or "provided" (a token file already on the node; `secret_name` is its path). Only used if auth_enabled=true
 5. **secret_name** - Secret name or path (only used if auth_enabled=true)
 
 The configure script will:
@@ -174,28 +140,6 @@ The configure script will:
 4. Enable and start vmagent service
 
 ## IAM/Permissions Requirements
-
-### AWS
-
-When using authentication with AWS, the EC2 instance must have an IAM role with permissions to read from Secrets Manager:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:DescribeSecret"
-      ],
-      "Resource": [
-        "arn:aws:secretsmanager:*:ACCOUNT_ID:secret:/merotee/*"
-      ]
-    }
-  ]
-}
-```
 
 ### GCP
 

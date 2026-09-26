@@ -482,7 +482,8 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
         "quoteB64": quote_b64,
         "peerId": peer_id,
         "peerPublicKeyB64": bad_public_key_b64,
-        "signatureB64": bad_signature_b64
+        "signatureB64": bad_signature_b64,
+        "sealToB64": base64::engine::general_purpose::STANDARD.encode([0x42u8; 32])
     });
 
     let first = app
@@ -503,4 +504,37 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
     assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
     let second_payload = read_json_body(second).await;
     assert_eq!(second_payload["error"], "invalid_challenge");
+}
+
+/// Sealed release is the default: a request that does not name a key to seal
+/// to (a merod older than 0.11.0-rc.47) is refused, because the key would cross
+/// the wire readable by whatever terminates TLS in front of this service.
+#[tokio::test]
+async fn an_unsealed_key_request_is_refused_by_default() {
+    let config = Config::default();
+    assert!(config.require_sealed_key_release);
+    let app = create_router(config).expect("router should build");
+    let request_body = serde_json::json!({
+        "challengeId": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d7",
+        "quoteB64": base64::engine::general_purpose::STANDARD.encode(b"quote"),
+        "peerId": Keypair::generate_ed25519().public().to_peer_id().to_base58(),
+        "peerPublicKeyB64": "",
+        "signatureB64": ""
+    });
+
+    let response = app
+        .oneshot(post_json_request("/get-key", &request_body))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = read_json_body(response).await;
+    assert_eq!(payload["error"], "invalid_attestation_request");
+    assert!(
+        payload["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sealed only"),
+        "{payload}"
+    );
 }
