@@ -44,6 +44,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The 2.3.72 node image failed to build on every profile**: Ansible refused `merotee/tasks/main.yml` ("failed at splitting arguments, either an unbalanced jinja2 block or quotes") because the dm-crypt/dm-integrity probe added in #335 had an apostrophe in a shell *comment*, and a free-form `shell: |` string is split into key=value arguments. The comment is reworded, and `ci-workflow-lint` now runs `ansible-playbook --syntax-check` for every profile, so a task file that cannot load fails the PR instead of a packer build (and the KMS release that waits on the image's measurements).
+
 - **Releases build again: the measurement VM keeps its store in memory.** The KMS-store rule above made `locked-read-only` refuse to boot without `kms-phala-url`, and the release pipeline's measurement VM has none. It cannot, because a release's KMS is published only after its image has been measured, so `calimero-init` failed, merod never served `/admin-api/tee/attest`, and "Release mero-tee" failed at "Collect TEE info" for the rc.45 image. The release and staging-probe VMs now set `ephemeral-store=true`. `calimero-init` then mounts a tmpfs over `/mnt/data` and may create the store without a KMS, but only after checking from the mount table that the home really is on tmpfs and no swap is active. The metadata key alone relaxes nothing. Instance metadata is not measured, so the image's published MRTD/RTMRs are unchanged. Three new cases in `calimero-init-store-encryption-test.sh`.
 
 ### Changed

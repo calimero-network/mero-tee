@@ -81,6 +81,28 @@ jobs:
           python3 -m pip install --quiet jinja2 pyyaml
           python3 scripts/ci/check-ansible-templates.py
 
+      # Parsing the templates is not loading the playbook. A task file can be
+      # valid YAML and still fail to load: a free-form `shell: |` string is split
+      # into key=value arguments, so one apostrophe in a shell COMMENT ("the build
+      # host's kernel") is an unbalanced quote and Ansible refuses the whole task
+      # file. That stopped every profile of the 2.3.72 node image in packer, and
+      # with it the KMS release that waits on the image's measurements. Loading
+      # the playbook per profile takes seconds and fails here instead.
+      - name: Check the playbook loads for every profile
+        id: ansible_syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet ansible-core
+          cd mero-tee
+          for profile in locked-read-only debug-read-only debug; do
+            ansible-playbook -i localhost, --syntax-check playbook.yml \
+              -e lockdown_profile="${profile}" -e image_version=0.0.0 \
+              -e merod_version=0.0.0 -e cpu_architecture=amd64 \
+              -e traefik_version=0.0.0 -e node_exporter_version=0.0.0 \
+              -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
+          done
+
       # Static, because the token is optional by construction: every header is
       # gated on a non-empty FLEET_TOKEN so an image built without one still
       # works against a manager that requires none. A dropped header therefore
