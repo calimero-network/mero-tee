@@ -45,7 +45,7 @@ always verified.
 | Value | Source | Notes |
 | --- | --- | --- |
 | `MDMA_URL` | Ansible build-time var (`fleet_mdma_url`) | Sidecar exits if unset. |
-| `FLEET_TOKEN` | **Issued by MDMA on attested registration**, stored at `/var/lib/calimero/fleet-token` | Never baked into the image. Sent as `X-Fleet-Token` once held; the two bootstrap routes take none. See [How the node gets its fleet token](#how-the-node-gets-its-fleet-token). |
+| `FLEET_TOKEN` | **Issued by MDMA on attested registration**, stored at `/mnt/data/fleet/fleet-token` | Never baked into the image. Sent as `X-Fleet-Token` once held; the two bootstrap routes take none. See [How the node gets its fleet token](#how-the-node-gets-its-fleet-token). |
 | **PeerId** | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` | Read after `merod` is ready; retried once after a short sleep. |
 | **MRTD** | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` | See below. |
 | **Executor account** | `meroctl --output-format json account show` → `accountId` | The account this node *writes as*. Read at startup and, if merod is not answering yet, **retried on the loop every `ACCOUNT_RETRY_INTERVAL` (15s) until it does** — see [When the account is not readable at boot](#when-the-account-is-not-readable-at-boot). See [Delegated execution](#delegated-execution-the-node-as-a-relay). |
@@ -233,7 +233,7 @@ Covered by `scripts/ci/tests/fleet-sidecar-logs-token-test.sh`.
 
 ### Reading a locked node's sidecar log
 
-There is no shell on a confidential VM, so `/var/log/fleet-sidecar.log` is
+There is no shell on a confidential VM, so `/run/calimero/fleet-sidecar.log` is
 unreadable by anyone once an image is running — including whoever is trying to
 work out why a node never became a relay.
 
@@ -280,7 +280,9 @@ boot (no secret)
   → every other /api/fleet/* call        X-Fleet-Token: <that token>
 ```
 
-The token is stored at `/var/lib/calimero/fleet-token`, mode 0600, and survives
+The token is stored at `/mnt/data/fleet/fleet-token` — on the **encrypted data
+disk**, never the boot disk (older images kept it under `/var/lib/calimero/`;
+`calimero-init` moves it on the first boot of a newer image) — mode 0600, and survives
 restarts so a node does not re-register on every boot.
 
 **Why the bootstrap routes are open.** They have to be — requiring a token to
@@ -387,12 +389,12 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
 8. **Sleep** one second and repeat.
 
-The confirmed set is persisted at `/var/lib/calimero/fleet-confirmed.json`
+The confirmed set is persisted at `/mnt/data/fleet/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
 different semantics: it records "admitted **and** confirmed", not merely
 "attempted").
 
-The admitted set lives beside it at `/var/lib/calimero/fleet-admitted.json`, and
+The admitted set lives beside it at `/mnt/data/fleet/fleet-admitted.json`, and
 the difference between the two is load-bearing. **The leave diff is taken against
 `admitted`, not `confirmed`.** A namespace only enters `confirmed` when the MDMA
 confirm also succeeds, so a join that lands while its confirm is raced by the
@@ -412,7 +414,7 @@ until MDMA drops the assignment, so re-joining it every second would be waste.
 `note_admitted` runs only inside that loop.
 
 Those two facts combine badly on exactly one boot. Both files live in
-`/var/lib/calimero/`, so a node upgrading from a build that predates the
+`/mnt/data/fleet/`, so a node upgrading from a build that predates the
 admitted set comes up with a *populated* confirmed file and an *empty* admitted
 one — and every namespace it joined under the previous build is skipped, so
 nothing ever records it. `admitted − desired` stays empty for those namespaces
@@ -441,7 +443,7 @@ Two more files alongside them record what MDMA has already been
 told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
 and `fleet-inventory.json` for the context inventory. Each is advanced **only
 after** the POST it describes succeeded, so a transient MDMA blip is retried
-rather than lost. Activity is logged to `/var/log/fleet-sidecar.log`.
+rather than lost. Activity is logged to `/run/calimero/fleet-sidecar.log`.
 
 <SeqDiagram
   id="d-fleet-reconcile"
@@ -798,7 +800,7 @@ Four things this writer has to get right, none of which fail loudly:
 - **Incomplete means write nothing.** A shorter list overwriting a longer one at
   a higher version is the same data loss as a stale clobber, with a valid version
   number on it. Any failed read in the walk aborts that namespace's pass.
-- **The version is durable.** It lives in `/var/lib/calimero/fleet-recovery.json`,
+- **The version is durable.** It lives in `/mnt/data/fleet/fleet-recovery.json`,
   not in memory and not in wall-clock. MDMA answers `409` to a version that goes
   backwards, so a counter that reset on restart would strand the envelope at
   whatever MDMA last accepted.
@@ -1095,19 +1097,19 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
 | Executor account source | `meroctl --output-format json account show` → `accountId` |
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
-| Confirmed state | `/var/lib/calimero/fleet-confirmed.json` |
-| Reported authorship state | `/var/lib/calimero/fleet-authorship.json` |
+| Confirmed state | `/mnt/data/fleet/fleet-confirmed.json` |
+| Reported authorship state | `/mnt/data/fleet/fleet-authorship.json` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
 | Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}`; returns `{"fleet_token"}` |
 | Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
-| Registration state | `/var/lib/calimero/fleet-registration.json` |
+| Registration state | `/mnt/data/fleet/fleet-registration.json` |
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
-| Recovery envelope state | `/var/lib/calimero/fleet-recovery.json` |
+| Recovery envelope state | `/mnt/data/fleet/fleet-recovery.json` |
 | TLS key and certificate | `/mnt/data/tls/key.pem`, `/mnt/data/tls/cert.pem` — key generated by `calimero-init` before Traefik starts; never leaves the node |
 | TLS reload | `systemctl restart traefik` (it watches its config file, not the certificate files that file names) |
-| Log | `/var/log/fleet-sidecar.log` |
+| Log | `/run/calimero/fleet-sidecar.log` |
 | Poll interval | 1 second |
 | Auth header | `X-Fleet-Token`, once registration has issued one; manager signs with `MDMA_FLEET_TOKEN_SIGNING_KEY`. The two `nodes/*` bootstrap routes take none. |
 

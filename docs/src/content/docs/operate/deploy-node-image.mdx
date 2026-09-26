@@ -191,13 +191,14 @@ scripts. All are optional except where noted:
 | --- | --- | --- |
 | `server-port` | merod admin/server port | `2428` |
 | `swarm-port` | merod libp2p swarm port | `2528` |
-| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped) | unset → env file removed |
+| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and, on `locked-read-only`, `MERO_TEE_PROFILE=locked-read-only`. **Refused if older than the image** (downgrade protection) | unset → env file removed |
+| `kms-phala-url` | the KMS the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
 | `metrics-secret-name` | GCP Secret Manager name for authenticated metrics push — see the warning below | none |
 | `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
 | `logs-secret-name` | GCP Secret Manager name for authenticated log push — see the warning below | none |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the node falls back to the credential MDMA delivers on a `should-join` poll |
-| `merod-version` | **only** used to download binaries at boot if they were not baked into the image | required only when unbaked |
+| `merod-version` | **only** used to download binaries at boot if they were not baked into the image — debug profiles only; `locked-read-only` refuses to boot rather than run an unmeasured binary | required only when unbaked |
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
@@ -229,7 +230,11 @@ that is how rotation reaches a node already running.
 `calimero-init.service` is a `oneshot` unit that runs
 `/usr/local/lib/calimero/init.sh` after `network-online.target`; `merod`,
 `mero-auth`, `traefik`, and (in read-only profiles) `fleet-sidecar` all order
-themselves `After=calimero-init.service`. The script
+themselves `After=calimero-init.service`, and `merod`, `mero-auth` and
+`fleet-sidecar` also `Require` it, so none of them writes to `/mnt/data` if the
+data disk could not be unlocked. Its log is `/run/calimero/calimero-init.log`
+(RAM) and the journal; the journal is volatile, so nothing it logs persists on
+the boot disk. The script
 (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
 
 <Steps>
@@ -247,24 +252,49 @@ themselves `After=calimero-init.service`. The script
    `vector`), then reads the metadata whitelist above.
 
 3. **Resolve binaries.** If `merod`/`meroctl`/`mero-auth` are baked in
-   `/usr/local/bin` (they are, for images built here), it uses them; otherwise
-   it downloads them from the `core` release matching `merod-version` metadata.
+   `/usr/local/bin` (they are, for images built here), it uses them; otherwise,
+   on the debug profiles only, it downloads them from the `core` release
+   matching `merod-version` metadata. `locked-read-only` stops instead: a
+   downloaded binary is in no measurement.
 
-4. **Apply `tee-release-version`.** If set, it writes
-   `MERO_TEE_VERSION=<value>` to `/etc/calimero/merod.env`, which the merod unit
-   loads via `EnvironmentFile`.
+4. **Apply `tee-release-version`.** If set, it refuses a release older than the
+   image's own version (`/etc/calimero/min-tee-release-version`, baked at
+   build), then writes `MERO_TEE_VERSION`, `MERO_TEE_MIN_VERSION` and (on
+   `locked-read-only`) `MERO_TEE_PROFILE` to `/etc/calimero/merod.env`, which
+   the merod unit loads via `EnvironmentFile`, and exports them for the steps
+   below.
 
-5. **Initialize the node** at `/mnt/data/calimero` (node `default`) if not
+5. **Unlock the data disk.** Swap must be off (it is refused on
+   `locked-read-only`). Then, for `/dev/disk/by-id/google-data`:
+   - **blank** (`blkid -p` finds no signature): fetch a key with
+     `merod kms disk-key --create-identity` into a dedicated tmpfs, `cryptsetup
+     luksFormat` LUKS2 (`aes-xts-plain64`, `--integrity hmac-sha256`), store the
+     disk-unlock identity in a `calimero-kms-identity` LUKS2 token, open it as
+     `/dev/mapper/calimero-data`, create ext4 on the mapper and mount it at
+     `/mnt/data`. The integrity wipe covers the whole disk, so **the first boot
+     is slow**. No fstab entry is written.
+   - **LUKS**: read the identity from the token, fetch its key, open, mount.
+   - **plain ext4** (a node from before disk encryption, or a debug node with no
+     KMS): mounted as before, with a loud warning. Never reformatted.
+   - **anything else**, a failed probe, a LUKS header with no token, or an
+     opened volume without ext4: the boot stops. Nothing is ever formatted.
+
+   The key is shredded as soon as the disk is open. `locked-read-only` refuses a
+   blank disk without `kms-phala-url` + `tee-release-version`, or on a merod
+   without `kms disk-key`. With `ephemeral-store=true`, a tmpfs is mounted over
+   `/mnt/data` instead and the disk is untouched.
+
+6. **Initialize the node** at `/mnt/data/calimero` (node `default`) if not
    already initialized, with `--advertise-address` and the resolved ports. In
    `read-only` mode it passes `--mode read-only`.
 
-6. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
+7. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
    `server.jsonrpc.enabled=false`, `server.sse.enabled=false`, and
    `server.websocket.enabled=false` — the client-facing write/subscribe
    surfaces are turned off, leaving only the read/admin path. In `full`
    (`debug`) mode these remain enabled.
 
-7. **Start services.** It `daemon-reload`s, enables and non-blocking-starts
+8. **Start services.** It `daemon-reload`s, enables and non-blocking-starts
    `merod`, `mero-auth`, and `traefik`; in read-only mode it also starts
    `fleet-sidecar` when that unit exists.
 

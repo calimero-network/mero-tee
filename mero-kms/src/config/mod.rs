@@ -77,6 +77,11 @@ pub struct Config {
     pub policy_unavailable_reason: Option<String>,
     /// Release version used for policy fetch (e.g. `"2.3.4"`).
     pub kms_version: Option<String>,
+    /// Refuse `/get-key` requests that do not ask for a sealed key
+    /// (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`). An unsealed key is readable by
+    /// whatever terminates TLS in front of this service; accepting them is only
+    /// for nodes whose merod predates sealed release.
+    pub require_sealed_key_release: bool,
 }
 
 impl Default for Config {
@@ -97,6 +102,7 @@ impl Default for Config {
             policy_ready: true,
             policy_unavailable_reason: None,
             kms_version: None,
+            require_sealed_key_release: false,
         }
     }
 }
@@ -158,6 +164,8 @@ impl Config {
         let cors_allowed_origins = parse_csv_env("CORS_ALLOWED_ORIGINS", false).unwrap_or_default();
 
         let enforce_measurement_policy = parse_bool_env("ENFORCE_MEASUREMENT_POLICY", true)?;
+        let require_sealed_key_release =
+            parse_bool_env("MERO_KMS_REQUIRE_SEALED_KEY_RELEASE", false)?;
         let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
 
         let release_version = if use_env_policy {
@@ -199,6 +207,7 @@ impl Config {
             policy_ready,
             policy_unavailable_reason,
             kms_version: release_version,
+            require_sealed_key_release,
         })
     }
 

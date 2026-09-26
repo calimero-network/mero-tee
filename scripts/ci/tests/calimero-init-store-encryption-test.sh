@@ -40,11 +40,24 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
 init_fn="$(awk '/^INIT_EXTRA_ARGS=\(\)$/,/^}$/' "$TEMPLATE")"
-decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} on{print} on && /^fi$/{n++} on && n==2{exit}' "$TEMPLATE")"
+# The block runs from NODE_CONFIG to the end of the init decision (its first
+# top-level `fi`). `fatal` and the MERO_TEE_VERSION export live earlier in the
+# script (the data disk needs both first), so the harness provides them -- and
+# checks below that the template still exports the release before init.
+decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} on{print} on && /^fi$/{n++} on && n==1{exit}' "$TEMPLATE")"
 [[ -n "$init_fn" ]] || fail "could not find init_node / INIT_EXTRA_ARGS in the template; this test slices on them"
 [[ -n "$decision" ]] || fail "could not find the storage-encryption block (NODE_CONFIG=...) in the template"
 grep -qF 'merod_can_encrypt_at_init' <<<"$decision" \
   || fail "the sliced block does not contain the decision it is meant to test"
+grep -qF 'init_node' <<<"$decision" \
+  || fail "the sliced block does not reach init_node; the slice boundary moved"
+# `merod init --kms-url` verifies the KMS against MERO_TEE_VERSION, so the
+# template must export it (from the sanitized metadata value) before init runs.
+export_line=$(grep -nF 'export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"' "$TEMPLATE" | head -1 | cut -d: -f1)
+node_config_line=$(grep -nF 'NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"' "$TEMPLATE" | head -1 | cut -d: -f1)
+if [[ -z "$export_line" || -z "$node_config_line" ]] || (( export_line > node_config_line )); then
+  fail "calimero-init must export MERO_TEE_VERSION before the storage-encryption decision"
+fi
 
 # One scenario: metadata + profile + node-home state in, exit code and the
 # stub's record of `merod init` out.
@@ -85,6 +98,8 @@ STUB
   cat >"$dir/run.sh" <<RUN
 set -euo pipefail
 log() { echo "\$*" >>"$dir/log"; }
+fatal() { log "ERROR: \$*"; exit 1; }
+if [[ -n "$release" ]]; then export MERO_TEE_VERSION="$release"; fi
 PATH="$dir/bin:\$PATH"
 BIN_DIR="$dir/bin"
 CALIMERO_HOME="$dir/home"

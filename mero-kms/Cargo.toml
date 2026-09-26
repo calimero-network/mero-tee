@@ -21,6 +21,8 @@ mock-attestation = ["calimero-tee-attestation/mock-attestation"]
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.23"
+# X25519 for sealed key release (see src/sealed.rs); ring for its HKDF and AEAD.
+curve25519-dalek = "5"
 dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "14b850d9da172cc6cf943365bc37771c550c881f" }
 dstack-attest = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "14b850d9da172cc6cf943365bc37771c550c881f" }
 eyre = "0.6"
@@ -35,6 +37,7 @@ hex = "0.4"
 # which is the direction that fails closed.
 libp2p-identity = { version = "0.3", features = ["ed25519", "peerid"] }
 rand = "0.10"
+ring = "0.17"
 redis = { version = "1.0", features = ["tokio-comp"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -43,6 +46,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = "1"
 
 # From calimero-network/core (git dependency; 0.11.0-rc.17)
 # rev 23cf02c9 is core's 0.11.0-rc.17 release commit. It contains #3269, which

@@ -39,9 +39,36 @@
     replace: ''
   register: grub_console_stripped
 
+# The GCP Ubuntu base sets `console=ttyS0` in a grub.d drop-in
+# (50-cloudimg-settings.cfg), not in /etc/default/grub, so the task above never
+# saw it. With it, the kernel and systemd write the boot log -- including every
+# line calimero-init echoes -- to serial port 1, which the cloud project reads
+# with `get-serial-port-output` without any of the attestation or log-endpoint
+# plumbing. getty on ttyS0 is masked above, so this is about output, not login.
+#
+# The kernel command line is measured into RTMR[2], so this CHANGES the
+# locked-read-only image's measurements (expected; the CHANGELOG says so). The
+# calimero drop-ins (50-calimero-profile, 60-calimero-root-hash) carry no
+# console= and are untouched by the regexp.
+- name: Find grub.d drop-ins
+  find:
+    paths: /etc/default/grub.d
+    patterns: "*.cfg"
+  register: grub_dropins
+
+- name: Strip console= from grub.d drop-ins
+  replace:
+    path: "{{ item.path }}"
+    regexp: 'console=[^ "]*\s*'
+    replace: ''
+  loop: "{{ grub_dropins.files }}"
+  register: grub_dropin_console_stripped
+
 - name: Update GRUB (after console removal)
   command: update-grub
-  when: grub_console_stripped.changed | default(false)
+  when: >-
+    (grub_console_stripped.changed | default(false))
+    or (grub_dropin_console_stripped.changed | default(false))
   changed_when: true
 
 # --- R3: No recovery/emergency shell ---
@@ -103,14 +130,105 @@
     mode: "0600"
 
 # --- R5: No GCP metadata script execution ---
-- name: Mask google-startup-scripts and cloud-init services
+#
+# Masked, not purged, throughout this section. Masking a unit that is not
+# installed is valid (it links the name to /dev/null), so the list can name
+# every spelling across Ubuntu/cloud-init/guest-agent releases -- and a mask
+# also blocks a package that later reinstalls the unit. Purging is avoided on
+# purpose for the GCP guest packages: the udev rules that create
+# /dev/disk/by-id/google-* (which calimero-init needs to find the data disk)
+# ship in those same packages.
+#
+# cloud-init 24.x split `cloud-init.service` into `cloud-init-main.service` and
+# `cloud-init-network.service`; the old names alone left the new ones live.
+# google-shutdown-scripts runs `shutdown-script` metadata as root, the same
+# hole startup scripts were. The guest agent (and its newer manager) acts on
+# metadata as root -- accounts, keys, and in newer releases metadata scripts
+# via its core plugin -- and calimero-init reads the metadata server directly
+# with curl, so nothing here needs it. osconfig applies patches and runs
+# arbitrary "OS policies" pushed by the project.
+- name: Mask google-startup-scripts, cloud-init and GCP guest agents
   systemd:
     name: "{{ item }}"
     masked: true
     daemon_reload: true
   loop:
     - google-startup-scripts.service
+    - google-shutdown-scripts.service
+    - google-guest-agent.service
+    - google-guest-agent-manager.service
+    - google-osconfig-agent.service
     - cloud-init.service
     - cloud-init-local.service
+    - cloud-init-main.service
+    - cloud-init-network.service
     - cloud-config.service
     - cloud-final.service
+    - cloud-init-hotplugd.service
+    - cloud-init-hotplugd.socket
+
+# Anything the explicit list above missed: every installed unit matching the
+# same families, whatever the base image calls it this release. The
+# conformance role then asserts that NO installed unit in these families is
+# left unmasked, so a rename fails the build rather than shipping live.
+- name: Mask every installed cloud-init / GCP metadata-agent / snapd unit
+  shell: |
+    set -euo pipefail
+    systemctl list-unit-files --no-legend --no-pager \
+        --type=service,socket,timer,path \
+        'cloud-init*' 'cloud-config*' 'cloud-final*' \
+        'google-startup-scripts*' 'google-shutdown-scripts*' \
+        'google-guest-agent*' 'google-osconfig*' 'snapd*' \
+      | awk '{print $1}' | { grep -v '@\.' || true; } \
+      | while read -r unit; do
+          [ -n "$unit" ] || continue
+          systemctl mask "$unit"
+          echo "masked $unit"
+        done
+  args:
+    executable: /bin/bash
+  register: lockdown_pattern_mask
+  changed_when: "'masked ' in lockdown_pattern_mask.stdout"
+
+# --- R8: No unmeasured code arriving at runtime ---
+#
+# The image's measurements say which code runs. Anything that installs or
+# updates code after boot makes them a statement about the image, not about
+# the running node: unattended-upgrades and apt's daily timers change packages,
+# snapd refreshes snaps. None of it is needed on a node that is replaced, not
+# patched, when its image changes.
+- name: Purge unattended-upgrades
+  apt:
+    name: unattended-upgrades
+    state: absent
+    purge: true
+
+- name: Mask apt's periodic update timers and snapd
+  systemd:
+    name: "{{ item }}"
+    masked: true
+    daemon_reload: true
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - apt-daily.service
+    - apt-daily-upgrade.service
+    - snapd.service
+    - snapd.socket
+    - snapd.seeded.service
+
+# --- R9: Nothing from memory reaches the boot disk ---
+#
+# journald is volatile (merotee role), but rsyslog reads the kernel log itself
+# (imklog) and would write it to /var/log/kern.log on the unencrypted boot disk.
+# swap.target is masked so no swap unit -- from fstab, a generator or a package
+# -- can activate; calimero-init also refuses to fetch keys with swap active.
+- name: Mask rsyslog and swap
+  systemd:
+    name: "{{ item }}"
+    masked: true
+    daemon_reload: true
+  loop:
+    - rsyslog.service
+    - syslog.socket
+    - swap.target

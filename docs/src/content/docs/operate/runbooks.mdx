@@ -102,6 +102,22 @@ who can snapshot the data disk.
   unencrypted. Encrypting afterwards cannot work (every read is decrypted) and
   would not un-expose keys that have already sat on the disk. Recreate them.
 
+**The data disk is encrypted as a whole, too.** The store is not everything on
+it: `config.toml`, the TLS key, mero-auth's database and the fleet token sit
+beside it. So a new node's data disk is LUKS2 with dm-integrity, keyed by
+`merod kms disk-key` from the same KMS (a dedicated disk-unlock identity, kept in
+the LUKS2 header). `locked-read-only` refuses to create a plaintext data disk
+under the same conditions it refuses a plaintext store. Existing plain-ext4 disks
+keep working, with a warning; recreate those nodes to encrypt them. See
+[the boot sequence](/operate/deploy-node-image/#the-calimero-init-boot-sequence).
+**Requires a core release with `merod kms disk-key`**; until `merodVersion`
+carries it, the build-time conformance assert fails `locked-read-only` image
+builds.
+
+`tee-release-version` cannot name a release older than the image: the image
+bakes its own version as the floor, and both `calimero-init` and merod
+(`MERO_TEE_MIN_VERSION`) refuse anything lower.
+
 For a node you set up by hand, do the same: `MERO_TEE_VERSION=<release> merod init
 --kms-url https://<kms-host>:8080/ ...`. The helper scripts below write attestation
 allowlists into an **existing** config, so they cannot encrypt a store that `init`

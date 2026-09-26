@@ -68,9 +68,16 @@ grep -qF 'ls -A "$DATA_MOUNT"' <<<"$body" \
        over it hides that state and merod initialises a fresh identity."
 
 # --- the disk is never reformatted once it holds state ----------------------
-grep -qF 'blkid -o value -s TYPE' <<<"$body" \
+# Gated on `blkid -p` (a probe of the device itself, not the cache) reporting
+# its explicit "nothing found" status. The behaviour -- including the encrypted
+# path and every signature that must NOT be formatted -- is executed in
+# calimero-init-disk-encryption-test.sh; this only pins the shape.
+grep -qF 'blkid -p -o export' <<<"$body" \
   || fail "mkfs must be gated on the device having NO filesystem; an
        unconditional mkfs on a later boot is a wipe"
+grep -qF 'if [[ "$DATA_SIG_RC" == 2 ]]; then' <<<"$body" \
+  || fail "formatting must key on blkid's explicit no-signature status (2); a
+       probe that failed is not a blank disk"
 
 # --- a present-but-unmountable disk is fatal, not ignored -------------------
 awk '/could not be mounted at/,/^fi$/' <<<"$body" | grep -qF 'exit 1' \

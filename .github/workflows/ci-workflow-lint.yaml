@@ -248,6 +248,19 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-store-encryption-test.sh
 
+      # The store is not the whole disk: config.toml, the TLS key, mero-auth's
+      # database and the fleet token sit beside it. So the data disk itself is
+      # LUKS2 with integrity, keyed from the KMS. Runs the disk block against
+      # stub cryptsetup/blkid/mount/merod: only a disk blkid reports blank is
+      # ever formatted, an existing LUKS disk is reopened from its header token,
+      # a plain one is mounted and warned about, anything else stops the boot,
+      # the key never outlives the script -- and tee-release-version cannot go
+      # below the image's own version.
+      - name: Check the data disk is encrypted and never reformatted
+        id: disk_encryption_test
+        shell: bash
+        run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
+
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and
       # a fresh node 401s, `continue`s, and never reaches the code that would
@@ -313,6 +326,7 @@ jobs:
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
+            --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \

@@ -9,6 +9,7 @@ mod handlers;
 mod measurement;
 mod policy;
 mod runtime_event;
+mod sealed;
 mod util;
 
 #[cfg(test)]

@@ -1,8 +1,17 @@
+# Logs are shipped to whatever `logs-endpoint` instance metadata names, which
+# the cloud project chooses. DEBUG logged per-request routing and forwardAuth
+# detail; INFO logs configuration and errors only.
 log:
-  level: DEBUG
+  level: INFO
+# No access log, deliberately: it would record every caller's address, path and
+# (with `fields.headers`) credentials, and ship them with the rest.
+#
+# No dashboard/API. Insecure mode served both, unauthenticated, on an extra
+# `traefik` entrypoint (:8080) on every interface: the full routing table and
+# middleware config to anyone the firewall let through. Nothing uses it.
 api:
-  dashboard: true
-  insecure: true
+  dashboard: false
+  insecure: false
 
 entryPoints:
   # Kept alongside `websecure`, not replaced by it. A CLI, the desktop app or a
