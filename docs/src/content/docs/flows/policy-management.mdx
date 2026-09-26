@@ -88,15 +88,26 @@ The policy source is resolved at startup:
    `kms-phala-attestation-policy.json` as a legacy fallback. There is **no** policy-URL
    environment variable — the URL is derived from the version and profile.
 
-2. **Optional integrity pin.** If `MERO_KMS_POLICY_SHA256` is set, the fetched bytes
-   must hash to that value or the load fails.
+2. **Signature verification (always).** The KMS also fetches the asset's
+   `<asset>.sig` and `<asset>.bundle.json` and verifies them with Sigstore before using
+   the policy: the Rekor signed entry timestamp, that the detached signature covers
+   exactly the fetched bytes, and that the Fulcio certificate was issued to the
+   `Release mero-kms` workflow (`push` to `refs/heads/master` of
+   `calimero-network/mero-tee`). This is the same check merod applies to the KMS
+   policy it consumes. A missing or non-verifying signature fails the load — it does
+   not fall through to the legacy asset — so a swapped release asset cannot change
+   which node measurements get keys. The Sigstore trust root is fetched via TUF
+   (`tuf-repo-cdn.sigstore.dev`), which the KMS must be able to reach.
+
+   **Optional integrity pin.** If `MERO_KMS_POLICY_SHA256` is set, the fetched bytes
+   must additionally hash to that value or the load fails.
 
 3. **Env / air-gapped mode.** With `USE_ENV_POLICY=true`, the allowlists come from
    `ALLOWED_TCB_STATUSES` / `ALLOWED_MRTD` / `ALLOWED_RTMR0..3` instead of a release
    asset, for development and air-gapped deployments.
 
-4. **Degraded start.** If `MERO_KMS_VERSION` is not set (and env mode is off), the KMS
-   still starts, but `policy_ready` is false: `/attest` keeps working while `/get-key`
+4. **Degraded start.** If `MERO_KMS_VERSION` is not set, or the release policy cannot
+   be fetched or verified (and env mode is off), the KMS still starts, but `policy_ready` is false: `/attest` keeps working while `/get-key`
    fails closed with `503 policy_not_ready` until a policy is available.
 
 See [Config Reference](/operate/config-reference/) for the full environment surface.

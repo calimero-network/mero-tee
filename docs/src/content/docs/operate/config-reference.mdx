@@ -69,7 +69,7 @@ disabled (`build_cors_layer`, `mero-kms/src/main.rs`).
 | `ENFORCE_MEASUREMENT_POLICY` | bool — `true` | Whether MRTD/RTMR/TCB measurement checks are enforced. `false` parses quotes but skips policy checks — never safe for production. |
 | `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE` | bool — `false` | Refuse `/get-key` requests that do not ask for the key to be sealed to the node (`sealToB64`). An unsealed key is readable by whatever terminates TLS in front of the KMS; accepting them exists only for nodes whose merod predates sealed release. Turn it on once every node runs a merod that seals. |
 | `USE_ENV_POLICY` | bool — `false` | Load the policy from `ALLOWED_*` env vars instead of a GitHub release. Intended for tests / air-gapped mode. |
-| `MERO_KMS_POLICY_SHA256` | `Option<String>` — *(unset)* | SHA-256 pin (64 hex chars; `0x` prefix and case are normalized) for the fetched policy file. When set, a hash mismatch aborts startup. |
+| `MERO_KMS_POLICY_SHA256` | `Option<String>` — *(unset)* | SHA-256 pin (64 hex chars; `0x` prefix and case are normalized) for the fetched policy file, checked in addition to its Sigstore signature (which is always verified). When set, a hash mismatch leaves the policy unloaded, so `/get-key` is fail-closed with `503 policy_not_ready`. |
 
 Booleans accept `1/true/yes/on` and `0/false/no/off` (case-insensitive).
 
@@ -264,6 +264,14 @@ with `node_allowed_tcb_statuses` / `node_allowed_mrtd` / `node_allowed_rtmr0..3`
 (older `allowed_*` keys are accepted as a fallback). The `tag` and `profile`
 must match what the KMS expects; the legacy profile-less document is only
 accepted for `locked-read-only`.
+
+Before the document is parsed, its keyless cosign signature is verified: the
+KMS fetches `<asset>.sig` and `<asset>.bundle.json` beside it and requires a
+valid Rekor entry, a detached signature over exactly these bytes, and a Fulcio
+certificate issued to the `Release mero-kms` workflow on `refs/heads/master` of
+`calimero-network/mero-tee` (`config/policy_signature.rs`). An asset whose
+signature is missing or does not verify is refused, and the KMS stays in the
+fail-closed `policy_not_ready` state.
 
 ## Next steps
 
