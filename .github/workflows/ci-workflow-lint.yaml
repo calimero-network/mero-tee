@@ -303,6 +303,21 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-rate-limit-test.sh
 
+      # mero-auth checks a scoped token against X-Forwarded-Uri/-Method. If
+      # traefik trusts the client's values, the caller picks the route its token
+      # is checked against (mero-tee#339).
+      - name: Check forwardAuth does not trust client X-Forwarded-* headers
+        id: traefik_forward_auth_test
+        shell: bash
+        run: scripts/ci/tests/traefik-forward-auth-test.sh
+
+      # locked-read-only masks snapd, and gcloud is a snap on the base image, so
+      # the gcp secret provider must fetch over REST with no cloud CLI.
+      - name: Check fetch_secret.sh fetches a gcp secret without a cloud CLI
+        id: fetch_secret_rest_test
+        shell: bash
+        run: scripts/ci/tests/fetch-secret-rest-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -333,6 +348,8 @@ jobs:
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
+            --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
+            --checks-line "- gcp secret fetched without a cloud CLI: ${{ steps.fetch_secret_rest_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

@@ -209,8 +209,14 @@ image but is not enabled, so without that it would be a dead scrape target.
 :::caution[`*-secret-name` does not work on MDMA-created nodes]
 Those two keys make `fetch_secret.sh` read **GCP Secret Manager**, which needs a
 cloud identity. MDMA creates node instances with **no `serviceAccounts` field at
-all**, so such a node has none — both `gcloud` and the metadata server's token
-endpoint are dead ends on it.
+all**, so such a node has none, and the metadata server's token endpoint has
+nothing to give it.
+
+On a node that does have a service account holding
+`roles/secretmanager.secretAccessor`, the `gcp` provider works on every profile,
+`locked-read-only` included. It calls the metadata server and Secret Manager's
+REST API with `curl` and uses no `gcloud`. That CLI is a snap on the GCP Ubuntu
+base image, and snapd is masked on `locked-read-only`.
 
 Use `observability-token` instead. It carries the credential itself, and the
 `provided` provider simply reads it from disk. The `*-secret-name` keys remain
