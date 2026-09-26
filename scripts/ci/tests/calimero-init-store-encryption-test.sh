@@ -22,6 +22,8 @@
 #   * an existing encrypted node -> no init; refuse on locked with no release
 #   * an existing plaintext node -> no init, keeps running, WARNs
 #   * a half-initialised home   -> init retried (keyed on config.toml)
+#   * no KMS, store on tmpfs    -> init without one (memory only, all profiles);
+#     refused on locked when swap is active
 #
 # Usage: scripts/ci/tests/calimero-init-store-encryption-test.sh
 # shellcheck disable=SC2016
@@ -48,6 +50,8 @@ grep -qF 'merod_can_encrypt_at_init' <<<"$decision" \
 # stub's record of `merod init` out.
 run_case() {
   local name="$1" profile="$2" kms_url="$3" release="$4" merod_kms="$5" home_state="$6"
+  # Where the node home lives, and what `swapon` reports. Defaults: a disk, no swap.
+  local store_fs="${7:-ext4}" swap="${8:-}"
   local dir="$WORK/$name"
   mkdir -p "$dir/bin" "$dir/home"
 
@@ -65,6 +69,9 @@ printf '%s\n' "\$*" >"$dir/init-args"
 printf '%s\n' "\${MERO_TEE_VERSION:-}" >"$dir/init-release"
 STUB
   chmod +x "$dir/bin/merod"
+  printf '#!/usr/bin/env bash\necho %s\n' "$store_fs" >"$dir/bin/findmnt"
+  printf '#!/usr/bin/env bash\n[[ -n "%s" ]] && echo "%s"\nexit 0\n' "$swap" "$swap" >"$dir/bin/swapon"
+  chmod +x "$dir/bin/findmnt" "$dir/bin/swapon"
 
   case "$home_state" in
     fresh) ;;
@@ -78,6 +85,7 @@ STUB
   cat >"$dir/run.sh" <<RUN
 set -euo pipefail
 log() { echo "\$*" >>"$dir/log"; }
+PATH="$dir/bin:\$PATH"
 BIN_DIR="$dir/bin"
 CALIMERO_HOME="$dir/home"
 CALIMERO_NODE="default"
@@ -138,6 +146,21 @@ run_case debug-old-merod debug "$URL" 2.3.70 no fresh
 [[ "$(rc debug-old-merod)" == 0 ]] || fail "a debug profile on an old merod should still initialise"
 init_args debug-old-merod | grep -qF -- '--kms-url' && fail "--kms-url passed to a merod that does not have it"
 logged debug-old-merod "UNENCRYPTED" || fail "a plaintext debug node must say so in the log"
+
+# --- a store held only in memory (the release measurement VM) --------------
+run_case memory-only locked-read-only "" "" yes fresh tmpfs
+[[ "$(rc memory-only)" == 0 ]] || fail "locked-read-only on a tmpfs with no swap should initialise without a KMS (rc=$(rc memory-only))"
+init_ran memory-only || fail "merod init was not run for a memory-only node"
+init_args memory-only | grep -q -- '--kms-url' && fail "a memory-only node with no KMS URL passed --kms-url"
+logged memory-only "TDX-encrypted memory" || fail "a memory-only node must say where its store is"
+
+run_case memory-swap locked-read-only "" "" yes fresh tmpfs "/dev/sdb partition 4G 0B -2"
+[[ "$(rc memory-swap)" != 0 ]] || fail "a tmpfs that can page out to swap is not memory-only; locked-read-only must refuse"
+init_ran memory-swap && fail "locked-read-only created a store that swap could write to disk"
+
+run_case memory-with-kms locked-read-only "$URL" 2.3.70 yes fresh tmpfs
+init_args memory-with-kms | grep -qF -- "--kms-url $URL" \
+  || fail "a memory-only node that is given a KMS must still use it"
 
 # --- existing nodes are never re-initialised --------------------------------
 run_case existing-encrypted locked-read-only "$URL" 2.3.70 yes encrypted

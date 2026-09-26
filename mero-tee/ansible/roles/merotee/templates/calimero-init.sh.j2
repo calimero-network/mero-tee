@@ -76,6 +76,13 @@ TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
 # before it accepts a key, so a wrong URL fails the boot rather than handing
 # the node a key someone else knows. See "Storage encryption" below.
 KMS_PHALA_URL=$(get_meta "kms-phala-url" | tr -d '\r\n')
+# `true` keeps the whole node in RAM (a tmpfs over the data disk's mount point)
+# for a VM meant to live minutes: the release pipeline's measurement VM, which
+# cannot have a KMS because a release's KMS is published only after its image
+# has been measured. Untrusted like all metadata; it relaxes nothing on its own.
+# The storage decision below checks that the store IS in memory before it
+# allows a node without a KMS. See "The data disk" and "Storage encryption".
+EPHEMERAL_STORE=$(get_meta "ephemeral-store" | tr -d '\r\n')
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
 METRICS_SECRET=$(get_meta "metrics-secret-name")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
@@ -173,7 +180,20 @@ DATA_MOUNT="/mnt/data"
 
 mkdir -p "$DATA_MOUNT"
 
-if mountpoint -q "$DATA_MOUNT"; then
+if [[ "$EPHEMERAL_STORE" == true ]]; then
+  # A tmpfs lives in guest memory, which TDX encrypts, so nothing merod writes
+  # reaches a disk the host can read. Everything is gone at power-off: the node
+  # comes back as a fresh identity, which is what a VM meant to live minutes
+  # wants. The data disk (if any) is left untouched.
+  if [[ "$(findmnt -n -o FSTYPE "$DATA_MOUNT" 2>/dev/null)" == tmpfs ]]; then
+    log "Ephemeral store: tmpfs already mounted at $DATA_MOUNT"
+  elif mount -t tmpfs -o mode=0755,size=50% tmpfs "$DATA_MOUNT" >>"$LOG" 2>&1; then
+    log "Ephemeral store: mounted a tmpfs at $DATA_MOUNT; this node's state is in memory only and does not survive a reboot"
+  else
+    log "ERROR: ephemeral-store is set but a tmpfs could not be mounted at $DATA_MOUNT. Refusing to continue."
+    exit 1
+  fi
+elif mountpoint -q "$DATA_MOUNT"; then
   log "Data disk already mounted at $DATA_MOUNT"
 elif [[ -n "$(ls -A "$DATA_MOUNT" 2>/dev/null)" ]]; then
   # A NODE THAT PREDATES THIS CHANGE. Its state is already sitting on the root
@@ -279,6 +299,16 @@ merod_can_encrypt_at_init() {
   "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- '--kms-url'
 }
 
+# The one case where locked-read-only may create a node with no KMS: the store
+# is on a tmpfs and nothing can page it out, so it only ever exists in memory
+# TDX encrypts. Checked from the mount table rather than taken from the
+# `ephemeral-store` metadata, so a host that sets that key on a normal node
+# gets a node whose state vanishes at reboot, never a plaintext disk.
+store_is_memory_only() {
+  [[ "$(findmnt -n -o FSTYPE --target "$CALIMERO_HOME" 2>/dev/null)" == tmpfs ]] \
+    && [[ -z "$(swapon --noheadings 2>/dev/null)" ]]
+}
+
 if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
   # For `merod init`. `merod run` reads the same value from merod.env above.
   export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"
@@ -303,6 +333,9 @@ locked-read-only profile. Bump merodVersion in versions.json."
       log "WARN: the baked merod does not support 'init --kms-url'; creating an \
 UNENCRYPTED store (allowed on profile=$IMAGE_PROFILE only)."
     fi
+  elif store_is_memory_only; then
+    log "No kms-phala-url metadata; the store is on a tmpfs with no swap, so it \
+exists only in TDX-encrypted memory. Initialising without a KMS (profile=$IMAGE_PROFILE)."
   elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
     fatal "no kms-phala-url metadata. The locked-read-only profile does not \
 create a node with an unencrypted store: its signing identity would sit in \
