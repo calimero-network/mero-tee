@@ -14,7 +14,7 @@
 //! | `MERO_KMS_PROFILE` | `String` | `locked-read-only` | KMS profile cohort (overrides `KMS_POLICY_PROFILE`) |
 //! | `KMS_POLICY_PROFILE` | `String` | *(deprecated)* | Legacy alias for `MERO_KMS_PROFILE` |
 //! | `KEY_NAMESPACE_PREFIX` | `String` | `merod/storage` | dstack key derivation namespace prefix |
-//! | `MERO_KMS_POLICY_SHA256` | `String` | *(none)* | Optional SHA-256 pin for fetched policy file |
+//! | `MERO_KMS_POLICY_SHA256` | `String` | *(none)* | Optional SHA-256 pin for the fetched policy file, checked in addition to its Sigstore signature |
 //! | `CORS_ALLOWED_ORIGINS` | `CSV` | *(none — CORS disabled)* | Comma-separated allowed CORS origins |
 //! | `ENFORCE_MEASUREMENT_POLICY` | `bool` | `true` | Whether TDX measurement checks are enforced |
 //! | `USE_ENV_POLICY` | `bool` | `false` | Load policy from `ALLOWED_*` env vars instead of release |
@@ -27,6 +27,7 @@
 
 pub mod env;
 pub mod policy_loader;
+mod policy_signature;
 
 use std::net::SocketAddr;
 
