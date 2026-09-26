@@ -191,7 +191,7 @@ scripts. All are optional except where noted:
 | --- | --- | --- |
 | `server-port` | merod admin/server port | `2428` |
 | `swarm-port` | merod libp2p swarm port | `2528` |
-| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and, on `locked-read-only`, `MERO_TEE_PROFILE=locked-read-only`. **Refused if older than the image** (downgrade protection) | unset → env file removed |
+| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and `MERO_TEE_PROFILE` (the image's profile), so merod verifies the KMS against that profile's signed policy. **Refused if older than the image** (downgrade protection) | unset → env file removed |
 | `kms-phala-url` | the KMS the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
 | `metrics-secret-name` | GCP Secret Manager name for authenticated metrics push — see the warning below | none |
@@ -265,8 +265,9 @@ the boot disk. The script
 
 4. **Apply `tee-release-version`.** If set, it refuses a release older than the
    image's own version (`/etc/calimero/min-tee-release-version`, baked at
-   build), then writes `MERO_TEE_VERSION`, `MERO_TEE_MIN_VERSION` and (on
-   `locked-read-only`) `MERO_TEE_PROFILE` to `/etc/calimero/merod.env`, which
+   build), then writes `MERO_TEE_VERSION`, `MERO_TEE_MIN_VERSION` and
+   `MERO_TEE_PROFILE` (the image's profile, which selects the release's
+   per-profile KMS policy) to `/etc/calimero/merod.env`, which
    the merod unit loads via `EnvironmentFile`, and exports them for the steps
    below.
 
