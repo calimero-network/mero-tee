@@ -14,6 +14,7 @@ mod measurement;
 mod policy;
 mod runtime_event;
 mod sealed;
+mod stateless_challenge;
 mod util;
 
 #[cfg(test)]

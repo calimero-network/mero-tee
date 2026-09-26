@@ -1,7 +1,8 @@
 //! Challenge storage abstraction used by `/challenge` and `/get-key`.
 //!
 //! Supports in-memory mode for local/dev and Redis-backed mode for shared,
-//! multi-instance deployments.
+//! multi-instance deployments. Used by the dstack backend only: a TDX cluster
+//! issues stateless challenges any replica can check (`stateless_challenge`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

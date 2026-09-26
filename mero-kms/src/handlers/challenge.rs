@@ -7,7 +7,9 @@ use base64::Engine;
 use rand::random;
 use serde::{Deserialize, Serialize};
 
+use crate::backend::Backend;
 use crate::challenge_store::{ChallengeStoreError, PendingChallenge};
+use crate::stateless_challenge;
 use crate::util::{unix_now_secs, CHALLENGE_ID_BYTES, MAX_PEER_ID_LENGTH};
 
 use super::errors::ServiceError;
@@ -41,11 +43,23 @@ pub(crate) async fn challenge_handler(
     Json(request): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServiceError> {
     validate_peer_id_shape(&request.peer_id)?;
-    let nonce: [u8; 32] = random();
-
-    let challenge_id = create_challenge_id();
     let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
+
+    // A TDX cluster issues challenges any of its replicas can check; see
+    // `stateless_challenge`. Nothing is stored.
+    if let Backend::Tdx(tdx) = &state.backend {
+        let key = tdx.challenge_key()?;
+        let (challenge_id, nonce) = stateless_challenge::issue(&key, &request.peer_id, expires_at);
+        return Ok(Json(ChallengeResponse {
+            challenge_id,
+            nonce_b64: BASE64.encode(nonce),
+            expires_at,
+        }));
+    }
+
+    let nonce: [u8; 32] = random();
+    let challenge_id = create_challenge_id();
     state
         .challenge_store
         .insert(

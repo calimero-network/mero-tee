@@ -15,6 +15,7 @@ use std::sync::Arc;
 use crate::backend::Backend;
 use crate::challenge_store::ChallengeStore;
 use crate::cluster::{self, JoinNonces};
+use crate::stateless_challenge::SpentChallenges;
 use crate::Config;
 
 pub(crate) use attest::decode_fixed_b64_32;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub(crate) backend: Backend,
     /// Nonces this replica issued to replicas joining its cluster.
     pub(crate) join_nonces: Arc<JoinNonces>,
+    /// On a TDX replica, the stateless challenges it has already accepted.
+    pub(crate) spent_challenges: Arc<SpentChallenges>,
 }
 
 /// Create the router with all endpoints.
@@ -43,6 +46,7 @@ pub(crate) fn create_router(config: Config, backend: Backend) -> eyre::Result<Ro
         challenge_store,
         backend,
         join_nonces: Arc::new(JoinNonces::default()),
+        spent_challenges: Arc::new(SpentChallenges::default()),
     };
 
     Ok(Router::new()
