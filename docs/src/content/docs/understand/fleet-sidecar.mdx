@@ -495,6 +495,35 @@ convergence is what an earlier "try once, mark done" design lacked: if the group
 owner was offline during the first ~30s window, the old code marked the
 assignment tried and never retried.
 
+#### Asking an admitter directly
+
+The broadcast only admits the node if a peer allowed to vouch — an admin, or a
+TEE already admitted — is in the namespace's gossip mesh to hear it. When the
+only such peer is an owner's laptop behind a relay, that mesh may form late or
+never, and the retry above just keeps announcing into it.
+
+So each `should-join` assignment carries `admitter_addrs`: libp2p multiaddrs for
+the fleet nodes already serving that namespace, then the owner's node (supplied
+with enable-ha). `join_group()` passes them as `--admitter-addr` flags, and core
+dials each in turn and asks it over a stream, getting a verdict back instead of
+a timeout. The broadcast still runs as the fallback. The addresses are dial
+hints, never authority: the peer asked applies the namespace's admission policy
+and vouching rule itself.
+
+The sidecar feeds the other half. Its poll reports `swarm_addrs` — merod's own
+external addresses from `meroctl network status`, each made to end in
+`/p2p/<its peer id>` (a relay-circuit address names the relay's peer first, so
+"contains `/p2p/`" is not the test). MDMA hands those to the next node joining
+the same namespace. They are cached in a file and re-read at most once a minute,
+because the poll runs at 1 Hz inside a command substitution that cannot update
+the parent shell's variables.
+
+The flags are only passed when the baked `meroctl tee fleet-join --help` lists
+`--admitter-addr`. An image on a merod that predates direct admission would
+otherwise fail every join on an unknown flag, which is strictly worse than the
+broadcast-only join it replaces. Covered by
+`scripts/ci/tests/fleet-sidecar-direct-admission-test.sh`.
+
 ### Leaving a namespace (disable path)
 
 When a namespace the node previously confirmed is no longer in `desired` — HA
@@ -1060,7 +1089,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | --- | --- |
 | Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` |
 | Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready"}` |
-| Join command | `meroctl … tee fleet-join <GROUP_ID>` (positional) |
+| Join command | `meroctl … tee fleet-join <GROUP_ID> [--admitter-addr <MULTIADDR>]…` (positional group id) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
 | Authorship probe | `meroctl … group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>` → bit 9 (`512`) |
 | Readiness probe | `meroctl --output-format json peers` |

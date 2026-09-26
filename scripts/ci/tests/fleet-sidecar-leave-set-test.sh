@@ -61,7 +61,7 @@ done
 # --- admission is recorded BEFORE, and independently of, /confirm ----------
 
 # `note_admitted` must sit between the successful join and the confirm attempt.
-join_line="$(grep -n 'if join_group "\$group_id"; then' <<< "${code}" | head -1 | cut -d: -f1)"
+join_line="$(grep -n 'if join_group "\$group_id"[^;]*; then' <<< "${code}" | head -1 | cut -d: -f1)"
 note_line="$(grep -n 'note_admitted "\$group_id"' <<< "${code}" | head -1 | cut -d: -f1)"
 # The confirm that FOLLOWS the join, not the unrelated earlier call inside
 # `reconcile_authorship` -- taking the first match in the file compared the
