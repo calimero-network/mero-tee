@@ -23,8 +23,21 @@
       - not etc_ssh.stat.exists
     fail_msg: "/etc/ssh should not exist in locked-read-only profile"
 
-- name: Verify masked lockout services (R2/R3/R5)
-  command: systemctl is-enabled {{ item }}
+# `systemctl show -p LoadState`, not `is-enabled`. `is-enabled` answers about
+# the unit FILE and its output for a unit that is not installed differs across
+# systemd releases (`not-found`, or nothing at all on stdout with the reason on
+# stderr), which made "is it masked?" and "does it exist?" easy to conflate.
+# LoadState is what the manager will actually do with the name:
+#
+#   masked     -> linked to /dev/null. Nothing can start it, and a package that
+#                 later installs the unit does not un-mask it. PASS, whether or
+#                 not the unit is installed -- the mask is the protection.
+#   not-found  -> not installed and NOT masked. FAIL: nothing stops a package
+#                 (or a renamed unit in the next base image) from bringing it
+#                 back live, so "absent today" is not the property required.
+#   loaded     -> installed and startable. FAIL.
+- name: Verify masked lockout services (R2/R3/R5/R8/R9)
+  command: systemctl show -p LoadState -p UnitFileState {{ item }}
   register: masked_units
   changed_when: false
   failed_when: false
@@ -42,17 +55,60 @@
     - rescue.service
     - debug-shell.service
     - google-startup-scripts.service
+    - google-shutdown-scripts.service
+    - google-guest-agent.service
+    - google-guest-agent-manager.service
+    - google-osconfig-agent.service
     - cloud-init.service
     - cloud-init-local.service
+    - cloud-init-main.service
+    - cloud-init-network.service
     - cloud-config.service
     - cloud-final.service
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - snapd.service
+    - snapd.socket
+    - rsyslog.service
+    - syslog.socket
+    - swap.target
+    - systemd-coredump.socket
 
-- name: Assert lockout services are masked (R2/R3/R5)
+- name: Assert lockout services are masked (R2/R3/R5/R8/R9)
   assert:
     that:
-      - (item.stdout | trim) == "masked"
-    fail_msg: "Expected {{ item.item }} to be masked, got '{{ item.stdout }}'"
+      - "'LoadState=masked' in item.stdout_lines"
+    fail_msg: >-
+      Expected {{ item.item }} to be masked, got
+      '{{ item.stdout_lines | join(' ') }}'. `LoadState=not-found` means the
+      unit is absent but NOT masked, which a later package install would undo.
   loop: "{{ masked_units.results }}"
+
+# Catches what a fixed list cannot: a unit in one of these families that this
+# base image names differently. merod-lockdown masks every match; this fails
+# the build if any installed match is still startable.
+- name: List installed units in the metadata-agent / cloud-init / snapd families
+  shell: |
+    set -euo pipefail
+    systemctl list-unit-files --no-legend --no-pager \
+        --type=service,socket,timer,path \
+        'cloud-init*' 'cloud-config*' 'cloud-final*' \
+        'google-startup-scripts*' 'google-shutdown-scripts*' \
+        'google-guest-agent*' 'google-osconfig*' 'snapd*' \
+      | awk '$1 !~ /@\./ && $2 != "masked" {print $1 " " $2}'
+  args:
+    executable: /bin/bash
+  register: unmasked_family_units
+  changed_when: false
+
+- name: Assert no such unit is left unmasked
+  assert:
+    that:
+      - unmasked_family_units.stdout | trim | length == 0
+    fail_msg: >-
+      These units can still run on a locked-read-only image:
+      {{ unmasked_family_units.stdout_lines | join(', ') }}. Mask them in
+      merod-lockdown (they act on instance metadata or install code at runtime).
 
 - name: Check root account status (R4)
   command: passwd -S root
@@ -106,7 +162,138 @@
       # to create a plaintext one.
       - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_PHALA_URL\")' in (baked_init.content | b64decode)"
       - "'The locked-read-only profile does not' in (baked_init.content | b64decode)"
+      # The data disk is LUKS2 with integrity, keyed from the KMS; a blank disk
+      # is the only thing ever formatted; the release cannot go below the image;
+      # binaries are never downloaded on this profile; swap is refused.
+      - "'--integrity hmac-sha256' in (baked_init.content | b64decode)"
+      - "'kms disk-key' in (baked_init.content | b64decode)"
+      - "'if [[ \"$DATA_SIG_RC\" == 2 ]]; then' in (baked_init.content | b64decode)"
+      - "'MERO_TEE_MIN_VERSION' in (baked_init.content | b64decode)"
+      - "'never downloads them at boot' in (baked_init.content | b64decode)"
+      - "'swap is still active after swapoff -a' in (baked_init.content | b64decode)"
+      - "'LUKS2 dm-crypt mapping with integrity' in (baked_init.content | b64decode)"
     fail_msg: "Baked init script does not satisfy expected R6/R7 invariants"
+
+- name: Check the baked release floor (downgrade protection)
+  slurp:
+    path: /etc/calimero/min-tee-release-version
+  register: baked_release_floor
+
+- name: Assert the release floor is this image's version
+  assert:
+    that:
+      - (baked_release_floor.content | b64decode | trim) == (image_version | default('') | trim)
+      - (baked_release_floor.content | b64decode | trim) | length > 0
+    fail_msg: >-
+      /etc/calimero/min-tee-release-version is
+      '{{ baked_release_floor.content | b64decode | trim }}', expected
+      '{{ image_version | default('') }}'.
+
+# --- Nothing from memory persists on the boot disk (R9) ---
+- name: Read journald, core-dump and swap configuration
+  slurp:
+    path: "{{ item }}"
+  register: persistence_config
+  loop:
+    - /etc/systemd/journald.conf.d/60-calimero-volatile.conf
+    - /etc/sysctl.d/60-calimero-no-coredump.conf
+    - /etc/systemd/system.conf.d/60-calimero-no-coredump.conf
+    - /etc/fstab
+
+- name: Assert the journal is volatile, core dumps are off and no swap is configured
+  assert:
+    that:
+      - "'Storage=volatile' in (persistence_config.results[0].content | b64decode)"
+      - "'ForwardToSyslog=no' in (persistence_config.results[0].content | b64decode)"
+      - "'kernel.core_pattern=|/bin/false' in (persistence_config.results[1].content | b64decode)"
+      - "'fs.suid_dumpable=0' in (persistence_config.results[1].content | b64decode)"
+      - "'DefaultLimitCORE=0' in (persistence_config.results[2].content | b64decode)"
+      - >-
+        (persistence_config.results[3].content | b64decode).splitlines()
+        | reject('match', '^\\s*#') | select('search', '\\sswap\\s') | list | length == 0
+    fail_msg: >-
+      A path from memory to the unencrypted boot disk is open: the journal must
+      be volatile (and not forwarded to syslog), core dumps disabled, and
+      /etc/fstab must carry no swap entry.
+
+- name: Check for swap files
+  stat:
+    path: "{{ item }}"
+  register: swap_files
+  loop:
+    - /swap.img
+    - /swapfile
+
+- name: Assert no swap file ships in the image
+  assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "{{ item.item }} exists; swap would page guest memory to a host-readable disk"
+  loop: "{{ swap_files.results }}"
+
+- name: Check no crash reporter is installed
+  assert:
+    that:
+      - "'apport' not in ansible_facts.packages"
+      - "'whoopsie' not in ansible_facts.packages"
+      - "'unattended-upgrades' not in ansible_facts.packages"
+      - "'cryptsetup' in ansible_facts.packages"
+    fail_msg: >-
+      apport/whoopsie (crash dumps) or unattended-upgrades (unmeasured runtime
+      code) are installed, or cryptsetup (the encrypted data disk) is missing.
+
+- name: Check no serial console on the kernel command line
+  shell: |
+    set -euo pipefail
+    grep -h '^[^#]*GRUB_CMDLINE_LINUX' /etc/default/grub /etc/default/grub.d/*.cfg 2>/dev/null \
+      | grep -o 'console=[^ "]*' || true
+  args:
+    executable: /bin/bash
+  register: grub_console
+  changed_when: false
+
+- name: Assert no console= is configured (R2)
+  assert:
+    that:
+      - grub_console.stdout | trim | length == 0
+    fail_msg: "console= is still set ({{ grub_console.stdout }}); the boot log would go to the serial port"
+
+# --- Services and ingress (log hygiene, auth) ---
+- name: Read the merod / mero-auth units, mero-auth config and traefik files
+  slurp:
+    path: "{{ item }}"
+  register: service_files
+  loop:
+    - /etc/systemd/system/merod.service
+    - /etc/systemd/system/mero-auth.service
+    - /etc/calimero/auth.toml
+    - /etc/traefik/config.yml
+    - /etc/traefik/routing.yml
+
+- name: Assert services cannot outrun the disk unlock and do not over-share
+  assert:
+    that:
+      - "'Requires=calimero-init.service' in (service_files.results[0].content | b64decode)"
+      - "'LimitCORE=0' in (service_files.results[0].content | b64decode)"
+      - "'Requires=calimero-init.service' in (service_files.results[1].content | b64decode)"
+      - "'LimitCORE=0' in (service_files.results[1].content | b64decode)"
+      - "'--verbose' not in (service_files.results[1].content | b64decode)"
+      - "'listen_addr = \"127.0.0.1:3001\"' in (service_files.results[2].content | b64decode)"
+      - "'level: DEBUG' not in (service_files.results[3].content | b64decode)"
+      - "'insecure: true' not in (service_files.results[3].content | b64decode)"
+      - "'dashboard: true' not in (service_files.results[3].content | b64decode)"
+      - "'accessLog' not in (service_files.results[3].content | b64decode)"
+      # fleet-join is a state change and must stay behind auth-node: the
+      # unauthenticated TEE router names exactly /info and /attest.
+      - "'PathPrefix(`/admin-api/tee`)' not in (service_files.results[4].content | b64decode)"
+      - "'Path(`/admin-api/tee/info`)' in (service_files.results[4].content | b64decode)"
+      - "'Path(`/admin-api/tee/attest`)' in (service_files.results[4].content | b64decode)"
+    fail_msg: >-
+      merod/mero-auth must Require calimero-init (so they never write to
+      /mnt/data before the encrypted disk is open) with core dumps off;
+      mero-auth must bind loopback without --verbose; traefik must not log at
+      DEBUG, keep an access log, or expose its API; and only /admin-api/tee/info
+      and /attest may bypass auth.
 
 - name: Check that observability services are not enabled by default (R7)
   command: systemctl is-enabled {{ item }}
@@ -117,9 +304,16 @@
     - vmagent.service
     - vector.service
 
+# Explicit about the three states that are acceptable, rather than "anything
+# but `enabled`": `enabled-runtime`, `static`, `linked` and `alias` can all
+# still start. `not-found` is correct for vmagent -- configure_vmagent.sh writes
+# its unit at boot, only when a metrics endpoint is set -- and for vector if the
+# role ever stops shipping one.
 - name: Assert observability services are not enabled by default (R7)
   assert:
     that:
-      - (item.stdout | trim) != "enabled"
-    fail_msg: "Service {{ item.item }} should not be enabled by default"
+      - >-
+        (item.stdout | trim) in ['disabled', 'masked', 'not-found']
+        or ((item.stdout | trim) == '' and 'No such file' in (item.stderr | default('')))
+    fail_msg: "Service {{ item.item }} should not start by default (is-enabled: '{{ item.stdout }}' {{ item.stderr | default('') }})"
   loop: "{{ observability_enabled.results }}"

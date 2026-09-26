@@ -33,10 +33,10 @@ mkdir -p "${SB}/bin"
 
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
-    -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
-    -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/run/calimero/fleet-sidecar.log@${SB}/fleet.log@" \
+    -e "s@/mnt/data/fleet/@${SB}/@g" \
     -e "s@/mnt/data/tls@${SB}/tls@g" \
-    -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/mnt/data/fleet/@${SB}/@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 sed -n '1,/^# --- Main loop ---$/p' "${SB}/rendered.sh" | sed '$d' > "${SB}/functions.sh"
 

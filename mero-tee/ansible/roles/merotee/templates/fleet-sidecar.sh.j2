@@ -8,27 +8,36 @@
 # TLS is always verified.
 set -euo pipefail
 
-LOG="/var/log/fleet-sidecar.log"
+# In RAM, not on the boot disk. Everything logged here is also on stdout, which
+# journald (volatile on this image) captures and vector ships; the file copy was
+# the one place these lines outlived the boot, on a disk the host can read.
+LOG="/run/calimero/fleet-sidecar.log"
+mkdir -p "$(dirname "$LOG")"
+# State, the fleet token included, lives on the ENCRYPTED data disk under
+# /mnt/data/fleet: it must survive reboots, and the data disk is the one
+# persistent place the host cannot read. calimero-init unlocks and mounts it,
+# and moves state left under /var/lib/calimero by an older image; this unit
+# Requires= calimero-init so it never starts against an unmounted /mnt/data.
 # CONFIRMED_FILE tracks the groups for which mdma's /confirm has been
 # called AFTER the local `fleet-join` returned admitted=true. Semantics
 # differ from the pre-retry STATE_FILE (which only tracked "we tried"
 # — and that's exactly what made the old design fire-once-and-give-up).
 # Different path so any pre-upgrade legacy state is ignored on first boot.
-CONFIRMED_FILE="/var/lib/calimero/fleet-confirmed.json"
+CONFIRMED_FILE="/mnt/data/fleet/fleet-confirmed.json"
 # Namespaces this node was ADMITTED to locally, which is not the same set as
 # the ones mdma has acknowledged. A join that succeeds and a `/confirm` that
 # does not leaves the node a p2p member of a namespace absent from
 # CONFIRMED_FILE -- and the leave diff used to be computed from that file, so
 # such a namespace could never be left (calimero-network/mdma#155).
-ADMITTED_FILE="/var/lib/calimero/fleet-admitted.json"
+ADMITTED_FILE="/mnt/data/fleet/fleet-admitted.json"
 # Per-namespace record of the authorship grant we last told mdma about, so a
 # grant made (or revoked) AFTER admission gets re-reported exactly once per
 # change rather than on every one-second cycle. See `reconcile_authorship`.
-AUTHORSHIP_FILE="/var/lib/calimero/fleet-authorship.json"
+AUTHORSHIP_FILE="/mnt/data/fleet/fleet-authorship.json"
 # The context inventory we last successfully POSTed, per namespace, plus when
 # the last authoritative (`full`) post landed. Change detection compares against
 # this, so a steady-state node posts nothing at all. See `reconcile_inventory`.
-INVENTORY_FILE="/var/lib/calimero/fleet-inventory.json"
+INVENTORY_FILE="/mnt/data/fleet/fleet-inventory.json"
 POLL_INTERVAL=1
 # How often the group tree is WALKED. Not the post interval — a walk that finds
 # nothing changed posts nothing. Core exposes no "contexts changed" signal, so
@@ -63,8 +72,8 @@ REGISTRATION_RETRY_INTERVAL=30
 # node's current identity each cycle, so a re-key or a new relay url
 # re-registers and anything else costs nothing. Written only after mdma
 # accepted, so a refusal or an outage is retried rather than recorded as done.
-REGISTRATION_FILE="/var/lib/calimero/fleet-registration.json"
-RECOVERY_FILE="/var/lib/calimero/fleet-recovery.json"
+REGISTRATION_FILE="/mnt/data/fleet/fleet-registration.json"
+RECOVERY_FILE="/mnt/data/fleet/fleet-recovery.json"
 # How often recovery envelopes are reconsidered. Far slower than the inventory
 # walk: this costs a `meroctl account seal-to` subprocess per changed account on
 # top of the walk, and the data behind it (which namespaces an account belongs
@@ -120,8 +129,10 @@ MDMA_URL="{{ fleet_mdma_url }}"
 # meant rebuilding every image and re-allowlisting the MRTD.
 #
 # Survives restarts so a node does not re-register on every boot; a lost or
-# rejected token simply means registering again, which costs one quote.
-FLEET_TOKEN_FILE="/var/lib/calimero/fleet-token"
+# rejected token simply means registering again, which costs one quote. On the
+# encrypted data disk, not the boot disk: a copy of this token lets anyone act
+# as this node towards mdma's fleet API.
+FLEET_TOKEN_FILE="/mnt/data/fleet/fleet-token"
 FLEET_TOKEN="$(cat "$FLEET_TOKEN_FILE" 2>/dev/null || true)"
 
 if [[ -z "${MDMA_URL:-}" ]]; then

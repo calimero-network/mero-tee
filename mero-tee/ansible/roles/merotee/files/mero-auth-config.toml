@@ -1,7 +1,12 @@
 # Calimero Authentication Service Configuration
 
 # Server configuration
-listen_addr = "0.0.0.0:3001"
+#
+# Loopback only. Traefik is the only client (`auth-service` and the `auth-node`
+# forwardAuth both dial http://127.0.0.1:3001), and the GCP firewall was the
+# only thing keeping mero-auth's own listener -- CORS allow-all, the token
+# endpoints -- off the network when it bound every interface.
+listen_addr = "127.0.0.1:3001"
 
 # JWT token settings
 [jwt]

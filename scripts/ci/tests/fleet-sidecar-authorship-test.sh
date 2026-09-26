@@ -30,7 +30,7 @@ export SB
 #
 # The state directory is redirected wholesale rather than file by file. A
 # per-file list silently misses any state file added to the sidecar later: the
-# sourced template then tries to create it under the real /var/lib/calimero,
+# sourced template then tries to create it under the real /mnt/data/fleet,
 # which does not exist on a CI runner, and the failure lands in THIS test rather
 # than in the change that caused it.
 if [[ ! -r "${TEMPLATE}" ]]; then
@@ -41,8 +41,8 @@ fi
 # filter pipe, which `s|…|…|` would read as the end of the pattern.
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
-    -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
-    -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/run/calimero/fleet-sidecar.log@${SB}/fleet.log@" \
+    -e "s@/mnt/data/fleet/@${SB}/@g" \
     -e "s@/etc/vector@${SB}/vector@g" \
     -e "s@/etc/vmagent@${SB}/vmagent@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
@@ -64,12 +64,12 @@ fi
 # Every state file the rendered sidecar touches must land in the sandbox.
 # Sourcing the template executes its top-level `[[ -f "$X" ]] || echo ... > "$X"`
 # initialisers, so one path outside ${SB} either writes to the developer's real
-# machine or -- on a CI runner, where /var/lib/calimero does not exist -- fails
+# machine or -- on a CI runner, where /mnt/data/fleet does not exist -- fails
 # the whole test with an error pointing at the harness rather than at the change
 # that caused it. That is exactly how adding `INVENTORY_FILE` broke this test.
 #
 # The wholesale substitution above already covers anything under
-# /var/lib/calimero; this catches a state file introduced somewhere else.
+# /mnt/data/fleet; this catches a state file introduced somewhere else.
 if leaked="$(grep -nE '^[A-Za-z_]+_FILE="[^"]*"' "${SB}/functions.sh" | grep -v "${SB}/")"; then
   echo "FAIL: the rendered sidecar keeps state outside the sandbox:" >&2
   echo "${leaked}" >&2

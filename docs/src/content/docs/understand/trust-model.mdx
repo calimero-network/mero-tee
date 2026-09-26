@@ -115,7 +115,7 @@ admitting everything.
 | `MRTD` | SHA-384 of the initial VM image at launch | Pins the exact node/KMS image. |
 | `RTMR0` | Firmware (TDVF) measurement | Extended during early boot. |
 | `RTMR1` | OS kernel / boot measurement | Extended during kernel boot. |
-| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). |
+| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**: nothing at boot re-hashes those files against it, so it identifies the image but does not stop an offline edit of the boot disk ([#334](https://github.com/calimero-network/mero-tee/issues/334)). |
 | `RTMR3` | Runtime events after boot | Carries the profile/role separation: the KMS extends it with `calimero.kms.profile=<profile>`; the node image's `calimero-init` extends it with role + profile + root hash. |
 
 ### RTMR3 profile cohort separation
@@ -135,6 +135,8 @@ being baked into the key-derivation path.
 | **Replay** | The challenge nonce is single-use and TTL-bound and is consumed before verification; the `/attest` nonce prevents quote reuse. |
 | **Peer-ID spoofing** | `get-key` requires a signature by the key that derives to the claimed `peerId`, and binds `SHA-256(peerId)` into the quote's `report_data`. |
 | **Profile escalation** | Distinct hardware-measured RTMR3 per profile; the policy rejects any RTMR3 not on its allowlist. |
+| **Host reads or edits a node's disk** | The data disk is LUKS2 with dm-integrity, keyed by `merod kms disk-key` from the KMS under the same attestation as the storage key; the disk-unlock identity sits in the LUKS2 header and is useless without a genuine TD. merod's store keeps its own KMS key on top. |
+| **Policy downgrade via metadata** | `tee-release-version` is operator-set, and every release's policy is validly signed. The image bakes its own version as a floor (`/etc/calimero/min-tee-release-version` → `MERO_TEE_MIN_VERSION`); `calimero-init` and merod both refuse an older release. |
 | **Policy tampering** | The release policy can be pinned by SHA-256 (`MERO_KMS_POLICY_SHA256`); a mismatch aborts loading. |
 
 Rejections surface as typed errors — `tcb_status_rejected` and

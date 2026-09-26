@@ -137,6 +137,9 @@ build {
       "--scp-extra-args", "'-O'",
       "-e", "cpu_architecture=${var.cpu_architecture}",
       "-e", "lockdown_profile=${var.lockdown_profile}",
+      # versions.json `imageVersion`. Baked as the image's minimum
+      # tee-release-version (downgrade floor); see the merotee role.
+      "-e", "image_version=${var.version}",
       "-e", "merod_version=${var.merod_version}",
       "-e", "traefik_version=${var.traefik_version}",
       "-e", "node_exporter_version=${var.node_exporter_version}",

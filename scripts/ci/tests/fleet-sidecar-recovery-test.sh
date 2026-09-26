@@ -40,8 +40,8 @@ if [[ ! -r "${TEMPLATE}" ]]; then
 fi
 sed -e 's@{{ fleet_mdma_url }}@https://mdma.test@' \
     -e "s@{{ fleet_auth_token | default('') }}@@" \
-    -e "s@/var/log/fleet-sidecar.log@${SB}/fleet.log@" \
-    -e "s@/var/lib/calimero/@${SB}/@g" \
+    -e "s@/run/calimero/fleet-sidecar.log@${SB}/fleet.log@" \
+    -e "s@/mnt/data/fleet/@${SB}/@g" \
     "${TEMPLATE}" > "${SB}/rendered.sh"
 
 if ! grep -q '^# --- Main loop ---$' "${SB}/rendered.sh"; then
