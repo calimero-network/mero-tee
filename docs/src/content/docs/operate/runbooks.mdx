@@ -59,7 +59,45 @@ release's attestation policy.
    derivation and quote generation fail. See the
    [configuration reference](/operate/config-reference/) for every knob.
 
-3. **Confirm health.** The health endpoint always returns `200` once the process
+3. **One dstack app per profile.** Deploy each profile's KMS
+   (`locked-read-only`, `debug-read-only`, `debug`) under its **own** dstack app
+   ID, and never run two profiles under one app. Node keys are derived from the
+   app key ([the derivation root](/understand/trust-model/#the-derivation-root-the-dstack-app)),
+   so a `debug` KMS — which has a shell — running under the locked app's ID can
+   derive every locked node's keys. Record each profile's app ID next to its
+   deployment; merod logs the `app_id` it sees in the KMS's event log on every
+   verified fetch (`KMS runs a released compose file`), so a mismatch shows up
+   in node logs.
+
+4. **Allowlist only the released compose hash for the locked app.** Register the
+   `locked-read-only` app with dstack's on-chain KMS and have its app contract
+   allow exactly the compose hash the release published for that profile —
+   `policy.kms_allowed_event_payload` in
+   `kms-phala-attestation-policy.locked-read-only.json`, also
+   `compatibility.profiles["locked-read-only"].event_payload` in
+   `kms-phala-compatibility-map.json`:
+
+   ```sh
+   jq -r '.policy.kms_allowed_event_payload[]' kms-phala-attestation-policy.locked-read-only.json
+   ```
+
+   The compose file you deploy must hash to that value byte for byte, so render
+   it from `scripts/kms/phala/kms-compose-template.yaml` exactly as the release
+   probe did. With the allowlist on-chain, an upgrade of the locked app to any
+   other compose file must first add its hash publicly, where it can be seen and
+   refused. Hold the app contract's owner key in a multisig, never a deployer's
+   hot wallet, and never add a `debug` or `debug-read-only` compose hash to the
+   locked app. Nodes enforce the same list independently: merod refuses a KMS
+   whose RTMR3 compose hash is not in the signed policy, whatever the contract
+   allows.
+
+   Do not provision the production locked KMS with
+   `scripts/kms/phala/provision_prod.py`: it uses `"kms": "PHALA"` (Phala's
+   centralized KMS) and a fresh app per run. That suits the release probe's
+   throwaway CVMs, but the centralized KMS puts no allowlist between the app
+   owner and a new compose file.
+
+5. **Confirm health.** The health endpoint always returns `200` once the process
    is up:
 
    ```sh
@@ -282,12 +320,19 @@ schedule, a version roll is a controlled restart.
    policy from probe candidates. Any change to `kms-phala-attestation-policy.<profile>.json`
    is reviewed and merged before production.
 
-4. **Deploy to production** with the new digest and `MERO_KMS_VERSION`, then
-   restart the container. The KMS refetches its policy on startup; existing node
-   sessions are unaffected until they re-attest.
+4. **Allow the new compose hash, then deploy.** A new digest or
+   `MERO_KMS_VERSION` changes the compose file, and so its hash. Add the new
+   release's `kms_allowed_event_payload` to the locked app's on-chain allowlist,
+   deploy with the new digest and `MERO_KMS_VERSION`, and restart the container.
+   The KMS refetches its policy on startup; existing node sessions are
+   unaffected until they re-attest. Nodes verify the KMS against the policy of
+   the release their `tee-release-version` names, so a node on the old release
+   refuses the new compose hash until it is moved to the new release.
 
-5. **Confirm.** Health-check the new instance and run a canary `challenge →
-   get-key` from a production node before removing the old instance.
+5. **Confirm, then retire the old hash.** Health-check the new instance and run
+   a canary `challenge → get-key` from a production node before removing the old
+   instance. Once no node's `tee-release-version` names the old release, remove
+   its compose hash from the app's on-chain allowlist.
 
 </Steps>
 
@@ -315,6 +360,8 @@ workflows validate the published artifacts end to end:
 | --- | --- | --- |
 | `/get-key` → `503 policy_not_ready` | `MERO_KMS_VERSION` unset or release-policy fetch failed | Set `MERO_KMS_VERSION`, confirm the release policy asset exists and is reachable, restart. |
 | Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node profile ≠ KMS profile, stale policy, or outdated TCB | Align profiles; re-probe and promote a policy covering the node's measurements. |
+| merod: `KMS compose hash … is not a released one` | The KMS runs a compose file that is not the one the node's release published (a hand-edited compose, the wrong profile, or a different release) | Redeploy from the template for the release the node's `tee-release-version` names, or move the node to the KMS's release. Never widen the policy to fit. |
+| merod: `KMS event log does not replay to the quote's RTMR3` / `carries no eventLog` | A proxy altered the `/attest` response, or the KMS predates event logs | Check nothing between the node and the KMS rewrites responses; upgrade mero-kms. |
 | Key release → `500 key_derivation_failed` | dstack socket not mounted / unreachable | Verify `/var/run/dstack.sock` is mounted into the container. |
 | `cargo audit` advisory flagged | Vulnerable dependency | Bump the dependency (see `security-audit.yaml` / `CHANGELOG.md` for the pattern). |
 
