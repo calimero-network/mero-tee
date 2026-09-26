@@ -12,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
+use crate::backend::Backend;
 use crate::policy::AttestationPolicy;
 use crate::sealed;
-use crate::util::CHALLENGE_ID_HEX_LEN;
+use crate::stateless_challenge;
+use crate::util::{unix_now_secs, CHALLENGE_ID_HEX_LEN};
 use crate::Config;
 
 use super::challenge::validate_peer_id_shape;
@@ -68,7 +70,9 @@ pub(crate) async fn get_key_handler(
     Json(request): Json<GetKeyRequest>,
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
     validate_peer_id_shape(&request.peer_id)?;
-    validate_challenge_id(&request.challenge_id)?;
+    if !matches!(state.backend, Backend::Tdx(_)) {
+        validate_challenge_id(&request.challenge_id)?;
+    }
     ensure_policy_ready_for_key_release(&state.config)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
@@ -89,13 +93,7 @@ pub(crate) async fn get_key_handler(
         ));
     }
 
-    let challenge_nonce = state
-        .challenge_store
-        .consume(&request.challenge_id, &request.peer_id)
-        .await
-        .map_err(|msg| {
-            ServiceError::InvalidChallenge(format!("Challenge validation failed: {}", msg))
-        })?;
+    let challenge_nonce = consume_challenge(&state, &request).await?;
 
     verify_peer_signature(
         &request.peer_id,
@@ -245,6 +243,41 @@ pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(peer_id.as_bytes());
     hasher.finalize().into()
+}
+
+/// The nonce `request`'s challenge was issued with, marking the challenge used.
+/// A TDX replica recomputes it from the challenge itself (`stateless_challenge`),
+/// so it accepts a challenge any replica of its cluster issued; the dstack
+/// backend looks it up in the challenge store.
+async fn consume_challenge(
+    state: &AppState,
+    request: &GetKeyRequest,
+) -> Result<[u8; 32], ServiceError> {
+    if let Backend::Tdx(tdx) = &state.backend {
+        let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
+        let key = tdx.challenge_key()?;
+        let (nonce, expires_at) = stateless_challenge::open(
+            &key,
+            &request.challenge_id,
+            &request.peer_id,
+            now,
+            state.config.challenge_ttl_secs,
+        )?;
+        state.spent_challenges.spend(
+            &request.challenge_id,
+            expires_at,
+            now,
+            state.config.max_pending_challenges,
+        )?;
+        return Ok(nonce);
+    }
+    state
+        .challenge_store
+        .consume(&request.challenge_id, &request.peer_id)
+        .await
+        .map_err(|msg| {
+            ServiceError::InvalidChallenge(format!("Challenge validation failed: {}", msg))
+        })
 }
 
 pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceError> {

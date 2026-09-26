@@ -101,11 +101,18 @@ cluster refuses to join. `/challenge` and `/get-key` keep today's protocol:
 single-use nonce, a quote bound to the peer ID, a libp2p signature, and sealed
 release.
 
-Challenges have to work across replicas behind one URL. Two ways: sticky
-routing per node, or a stateless challenge (`nonce = HMAC(root_challenge_key,
-challengeId ‖ expiry)`) that any replica can check, with a per-replica replay
-cache. With either, the TTL bounds the replay window. Redis goes away: it was
-never trusted.
+Challenges have to work across replicas behind one URL, so they are
+stateless: `challengeId` carries its own expiry, and `nonce =
+HMAC(challenge_key, challengeId ‖ peerId)`, where every replica derives
+`challenge_key` from the root under a salt of its own. Any replica can
+recompute the nonce, so a node's `/challenge` and `/get-key` may reach
+different replicas, and a replica restart mid-handshake costs nothing. A forged
+ID yields a nonce its forger cannot compute, so the signature and the quote
+refuse it. Each replica refuses a challenge it has already accepted; one replayed
+at another replica within the TTL gets past that check and gains nothing, since
+the key is sealed to the requesting node. Sticky routing was rejected: it fails
+the handshake whenever a replica restarts. Redis goes away: it was never
+trusted.
 
 ### What nodes check
 
@@ -231,10 +238,11 @@ Made:
 - 5 replicas, 3 zones, at least 2 regions.
 - Every upgrade ships new nodes and new keys; nothing re-keys an existing node.
 - Phala is removed entirely.
+- Challenges are stateless (above), not sticky.
+- The KMS is reachable only inside the VPC, behind an internal load balancer.
 
 Open:
 
-- Whether the KMS is reachable only inside the VPC.
 - Whether a debug KMS profile exists at all, or staging uses the locked one.
 - When to remove the Phala path: after the first release served by a GCP
   cluster, or earlier.

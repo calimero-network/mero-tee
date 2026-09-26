@@ -506,3 +506,116 @@ async fn an_unsealed_key_request_is_refused_by_default() {
         "{payload}"
     );
 }
+
+/// Two replicas of one TDX cluster behind a single URL: a node's `/challenge`
+/// and `/get-key` may reach different ones, so a challenge one issued must be
+/// accepted by another holding the same root. The bad signature makes the
+/// request fail right after the challenge check, which is what these tests look
+/// at: `invalid_peer_public_key` means the challenge was accepted,
+/// `invalid_challenge` that it was not.
+mod stateless_challenges {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::backend::{test_tdx_backend, Backend, Root};
+
+    fn replica(root: &[u8; 32]) -> axum::Router {
+        let tdx = test_tdx_backend(Some(Root::from_bytes(root).unwrap()));
+        create_router(Config::default(), Backend::Tdx(Arc::new(tdx))).unwrap()
+    }
+
+    async fn challenge(app: &axum::Router, peer_id: &str) -> String {
+        let response = app
+            .clone()
+            .oneshot(post_json_request(
+                "/challenge",
+                &serde_json::json!({ "peerId": peer_id }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        read_json_body(response).await["challengeId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn get_key_error(app: &axum::Router, challenge_id: &str, peer_id: &str) -> String {
+        let engine = base64::engine::general_purpose::STANDARD;
+        let body = serde_json::json!({
+            "challengeId": challenge_id,
+            "quoteB64": engine.encode(b"dummy-quote"),
+            "peerId": peer_id,
+            "peerPublicKeyB64": engine.encode(b"not-protobuf"),
+            "signatureB64": engine.encode(b"bad-signature"),
+            "sealToB64": engine.encode([0x42u8; 32])
+        });
+        let response = app
+            .clone()
+            .oneshot(post_json_request("/get-key", &body))
+            .await
+            .unwrap();
+        read_json_body(response).await["error"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn peer() -> String {
+        Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
+            .to_base58()
+    }
+
+    #[tokio::test]
+    async fn a_challenge_from_one_replica_is_accepted_by_another() {
+        let (a, b) = (replica(&[5; 32]), replica(&[5; 32]));
+        let peer_id = peer();
+        let id = challenge(&a, &peer_id).await;
+        assert_eq!(id.len(), crate::stateless_challenge::ID_HEX_LEN);
+        assert_eq!(
+            get_key_error(&b, &id, &peer_id).await,
+            "invalid_peer_public_key"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replica_refuses_a_challenge_it_already_accepted() {
+        let (a, b) = (replica(&[5; 32]), replica(&[5; 32]));
+        let peer_id = peer();
+        let id = challenge(&a, &peer_id).await;
+        assert_eq!(
+            get_key_error(&b, &id, &peer_id).await,
+            "invalid_peer_public_key"
+        );
+        assert_eq!(get_key_error(&b, &id, &peer_id).await, "invalid_challenge");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_challenge_id_is_refused() {
+        let b = replica(&[5; 32]);
+        let peer_id = peer();
+        assert_eq!(
+            get_key_error(&b, &"a".repeat(32), &peer_id).await,
+            "invalid_challenge"
+        );
+    }
+
+    /// A replica that has not joined yet has no challenge key. It must say so,
+    /// with the 503 a deployer's health check reads, not issue a challenge no
+    /// replica could honour.
+    #[tokio::test]
+    async fn a_replica_without_a_root_issues_no_challenge() {
+        let tdx = test_tdx_backend(None);
+        let app = create_router(Config::default(), Backend::Tdx(Arc::new(tdx))).unwrap();
+        let response = app
+            .oneshot(post_json_request(
+                "/challenge",
+                &serde_json::json!({ "peerId": peer() }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
