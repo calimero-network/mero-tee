@@ -181,6 +181,18 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-tls-test.sh
 
+      # Direct admission. The sidecar reports where its swarm can be dialed and
+      # asks the peers MDMA names for admission, instead of only broadcasting
+      # its attestation and hoping an owner's relayed laptop hears it. Wrong
+      # quietly in several ways: an external address with no `/p2p/<peer id>`
+      # cannot be dialed; a relay-circuit address contains the RELAY's peer id,
+      # not ours; and passing `--admitter-addr` to a meroctl that predates it
+      # fails every fleet-join on an unknown flag.
+      - name: Run fleet-sidecar direct admission test
+        id: sidecar_direct_admission_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-direct-admission-test.sh
+
       # Secrets must be CREATED restricted, not created loose and tightened.
       # None of these units set `UMask=`, so systemd's default 0022 makes a
       # token 0644 and a later `chmod` closes the window only after the secret
@@ -286,6 +298,7 @@ jobs:
             --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
             --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
+            --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \

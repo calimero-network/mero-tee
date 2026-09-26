@@ -502,6 +502,80 @@ installed_cert_not_after() {
 # processes every time to re-read a value that changes twice a quarter.
 TLS_CERT_MTIME=""
 TLS_CERT_NOT_AFTER=""
+# Where this node's swarm can be dialed, for mdma to hand to other fleet nodes
+# joining a namespace this one serves -- so they can ask it for admission
+# directly instead of hoping the gossip mesh reaches it.
+#
+# merod's own external addresses (`network status`), each made to end in
+# `/p2p/<our peer id>`: that is the shape core dials, and an external address
+# is usually reported without it. A relay-circuit address names the relay's
+# peer id first, so "contains /p2p/" is not the test; "ends in ours" is.
+#
+# Cached in a FILE, refreshed at most once a minute, because this is read inside
+# the poll body's command substitution at 1 Hz: a subshell cannot update the
+# parent's variables, so an in-memory cache would re-run meroctl every second.
+# Any failure reports an empty list, which mdma treats as "not reported" and
+# does not erase what it already holds.
+SWARM_ADDRS_FILE="/var/lib/calimero/fleet-swarm-addrs.json"
+SWARM_ADDRS_TTL=60
+cached_swarm_addrs() {
+  local mtime now
+  mtime=$(stat -c %Y "$SWARM_ADDRS_FILE" 2>/dev/null || echo "0")
+  now=$(date +%s)
+  if (( now - mtime >= SWARM_ADDRS_TTL )); then
+    if read_swarm_addrs >"${SWARM_ADDRS_FILE}.tmp" 2>>"$LOG"; then
+      mv -f "${SWARM_ADDRS_FILE}.tmp" "$SWARM_ADDRS_FILE"
+    else
+      rm -f "${SWARM_ADDRS_FILE}.tmp"
+    fi
+  fi
+  cat "$SWARM_ADDRS_FILE" 2>/dev/null || echo "[]"
+}
+
+read_swarm_addrs() {
+  local out
+  out=$($MEROCTL --output-format json network status 2>>"$LOG") || { echo "[]"; return 0; }
+  echo "$out" | python3 -c '
+import json, sys
+try:
+  obj = json.loads(sys.stdin.read())
+  data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+  peer = str((data or {}).get("localPeerId") or "").strip()
+  addrs = (data or {}).get("externalAddrs") or []
+except Exception as exc:
+  print(f"sidecar: failed to parse meroctl network status JSON: {exc}", file=sys.stderr)
+  peer, addrs = "", []
+out = []
+suffix = "/p2p/" + peer
+for addr in addrs if peer else []:
+  addr = str(addr).strip()
+  if not addr.startswith("/"):
+    continue
+  if not addr.endswith(suffix):
+    addr += suffix
+  if addr not in out:
+    out.append(addr)
+print(json.dumps(out[:16]))
+'
+}
+
+# Whether the bundled meroctl can pass `--admitter-addr` to fleet-join. Probed
+# once: an image baking a merod that predates direct admission would otherwise
+# fail EVERY fleet-join on an unknown flag, which is strictly worse than the
+# broadcast-only join it replaces.
+FLEET_JOIN_TAKES_ADMITTERS=""
+fleet_join_takes_admitters() {
+  if [[ -z "$FLEET_JOIN_TAKES_ADMITTERS" ]]; then
+    if $MEROCTL tee fleet-join --help 2>/dev/null | grep -q -- "--admitter-addr"; then
+      FLEET_JOIN_TAKES_ADMITTERS="yes"
+    else
+      FLEET_JOIN_TAKES_ADMITTERS="no"
+      log "meroctl tee fleet-join has no --admitter-addr; admission is broadcast-only on this image"
+    fi
+  fi
+  [[ "$FLEET_JOIN_TAKES_ADMITTERS" == "yes" ]]
+}
+
 cached_cert_not_after() {
   local mtime
   mtime=$(stat -c %Y "$TLS_CERT" 2>/dev/null || echo "0")
@@ -629,7 +703,8 @@ print(json.dumps({
   "relay_url": sys.argv[4],
   "tls_cert_not_after": sys.argv[5],
   "logs_token_fp": sys.argv[6],
-}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+  "swarm_addrs": json.loads(sys.argv[7] or "[]"),
+}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "$body" \
@@ -2039,7 +2114,32 @@ print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "rela
 
 join_group() {
   local group_id="$1"
+  # The should-join response this join is acting on; optional, so a caller
+  # without one still joins by broadcast.
+  local response="${2:-}"
   log "Attempting fleet-join for group $group_id..."
+
+  # Peers to ask for admission directly, as mdma named them for this group:
+  # fleet nodes already serving it, then the owner's node. A dial hint -- each
+  # peer asked applies the namespace's policy -- so a stale entry costs a dial.
+  local join_args=(tee fleet-join "$group_id")
+  if [[ -n "$response" ]] && fleet_join_takes_admitters; then
+    local addr
+    while IFS= read -r addr; do
+      [[ -n "$addr" ]] && join_args+=(--admitter-addr "$addr")
+    done < <(echo "$response" | python3 -c '
+import json, sys
+try:
+  data = json.load(sys.stdin)
+except Exception:
+  sys.exit(0)
+for entry in data.get("assignments", []) if isinstance(data, dict) else []:
+  if isinstance(entry, dict) and entry.get("group_id") == sys.argv[1]:
+    for addr in entry.get("admitter_addrs") or []:
+      if isinstance(addr, str) and addr.startswith("/") and "\n" not in addr:
+        print(addr)
+' "$group_id" 2>>"$LOG")
+  fi
 
   # `meroctl tee fleet-join` generates a TDX quote, broadcasts
   # TeeAttestationAnnounce on the namespace topic, and polls for
@@ -2062,7 +2162,7 @@ join_group() {
   # the next-line `rc=$?` can run. fleet-join is documented to exit 0, but
   # capture rc via `|| rc=$?` so a future non-zero exit can't kill the loop.
   rc=0
-  result=$($MEROCTL --output-format json tee fleet-join "$group_id" 2>>"$LOG") || rc=$?
+  result=$($MEROCTL --output-format json "${join_args[@]}" 2>>"$LOG") || rc=$?
 
   if [[ $rc -ne 0 ]]; then
     log "ERROR: fleet-join command failed for $group_id (rc=$rc): $result"
@@ -2361,7 +2461,7 @@ except:
     if echo "$confirmed" | python3 -c "import sys,json; sys.exit(0 if '$group_id' in json.load(sys.stdin) else 1)" 2>/dev/null; then
       continue
     fi
-    if join_group "$group_id"; then
+    if join_group "$group_id" "$response"; then
       # Admitted locally. Recorded FIRST and unconditionally: from here on
       # this node is a p2p member of the namespace whether or not mdma ever
       # acknowledges it, and it is that membership a later disable revokes.
