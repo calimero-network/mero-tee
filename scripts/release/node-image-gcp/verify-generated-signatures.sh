@@ -21,4 +21,10 @@ for asset in "${assets[@]}"; do
     --certificate-identity-regexp "${cert_identity_regex}" \
     --certificate-oidc-issuer "${cert_oidc_issuer}" \
     "${asset}"
+  # The bundle is what merod verifies, so check it on its own too.
+  cosign verify-blob \
+    --bundle "${asset}.bundle.json" \
+    --certificate-identity-regexp "${cert_identity_regex}" \
+    --certificate-oidc-issuer "${cert_oidc_issuer}" \
+    "${asset}"
 done

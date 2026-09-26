@@ -3,6 +3,11 @@ set -euo pipefail
 
 # Sign node-image release trust assets with keyless Sigstore.
 # Requires prepared artifact files in artifacts/.
+#
+# Each asset gets a `.bundle.json` beside its `.sig`/`.pem`: the Sigstore bundle
+# carries the Rekor inclusion proof, which is what lets a verifier check the
+# short-lived Fulcio certificate offline. merod verifies `published-mrtds.json`
+# through it when a namespace's TEE policy trusts signed releases.
 
 assets=(
   "artifacts/published-mrtds.json"
@@ -20,5 +25,6 @@ for asset in "${assets[@]}"; do
     --yes \
     --output-signature "${asset}.sig" \
     --output-certificate "${asset}.pem" \
+    --bundle "${asset}.bundle.json" \
     "${asset}"
 done
