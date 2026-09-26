@@ -1,6 +1,6 @@
 ---
 title: Attestation Flow
-description: How a Mero TEE component generates a fresh TDX quote from dstack, binds it to a caller-supplied nonce, and exposes it for verification.
+description: How a Mero TEE component generates a fresh TDX quote, binds it to a caller-supplied nonce, and exposes it for verification.
 sidebar:
   order: 1
 ---
@@ -20,12 +20,11 @@ For the Calimero Core view of the same primitive, see the core
 
 ## Where quotes come from
 
-Every quote in Mero TEE is produced by **dstack** over its Unix socket
-(`DSTACK_SOCKET_PATH`, default `/var/run/dstack.sock`). The service asks dstack for
-a quote over a 64-byte `report_data` value; dstack returns the raw quote bytes plus
-an **event log** and a VM config string. The service never fabricates measurements —
-MRTD and RTMR0–3 come from the hardware and firmware, and the caller only controls
-`report_data`.
+Every quote in Mero TEE comes from the TD's own hardware through the kernel's
+**configfs-tsm** interface (`/sys/kernel/config/tsm/report`): the service writes a
+64-byte `report_data` value and reads back the raw quote. The service never
+fabricates measurements — MRTD and RTMR0–3 come from the hardware, firmware and
+boot chain, and the caller only controls `report_data`.
 
 ## The 64-byte report_data
 
@@ -44,11 +43,11 @@ binding contains depends on which surface generated the quote:
 
 | Surface | `report_data[0..32]` | `report_data[32..64]` |
 | --- | --- | --- |
-| KMS `/attest` | caller nonce (`nonceB64`) | caller `bindingB64`, or the default `SHA-256("mero-kms-phala-attest-v1")` |
+| KMS `/attest` | caller nonce (`nonceB64`) | caller `bindingB64`, or the default `SHA-256("mero-kms-attest-v1")`; with `transportKey: true`, a binding that also commits to the KMS's transport key |
 | KMS key-release quote (from a node) | challenge nonce issued by the KMS | `SHA-256(peer_id)` |
 
 :::note
-The default KMS binding is a fixed domain separator, `SHA-256("mero-kms-phala-attest-v1")`,
+The default KMS binding is a fixed domain separator, `SHA-256("mero-kms-attest-v1")`,
 so the second half is never all-zeros even when the caller supplies no binding. It is
 **not** a hash of the KMS version.
 :::
@@ -64,29 +63,33 @@ runs the expected measurement.
    ```json
    {
      "nonceB64": "<base64 of 32 random bytes>",
-     "bindingB64": "<optional base64 of 32 bytes>"
+     "bindingB64": "<optional base64 of 32 bytes>",
+     "transportKey": true
    }
    ```
 
    `nonceB64` must decode to exactly 32 bytes; `bindingB64` is optional and must also
-   be 32 bytes when present.
+   be 32 bytes when present. `transportKey` (optional) asks for the KMS's X25519
+   transport key, which merod uses for sealed key release.
 
 2. **KMS builds report_data.** It sets `report_data = nonce || binding`, where
-   `binding` is the supplied value or the default domain-separated constant.
+   `binding` is the supplied value or the default domain-separated constant — and,
+   when the transport key was asked for, a binding that commits to it too.
 
-3. **KMS asks dstack for a quote** over that `report_data`, then decodes the returned
-   hex quote and parses the event-log JSON.
+3. **KMS takes a quote** over that `report_data` from configfs-tsm.
 
-4. **KMS returns the quote and its context:**
+4. **KMS returns the quote:**
 
    ```json
    {
      "quoteB64": "<base64 raw TDX quote>",
      "reportDataHex": "<hex of the 64-byte report_data>",
-     "eventLog": [ /* dstack event-log entries */ ],
-     "vmConfig": "<dstack VM config string>"
+     "transportPublicKeyB64": "<present when transportKey was asked for>"
    }
    ```
+
+   The transport key is derived from the cluster root, so every replica of a
+   cluster reports the same one.
 
 The caller confirms freshness by checking that the first 32 bytes of `reportDataHex`
 equal the nonce it sent.
@@ -115,9 +118,9 @@ verifier has checked the quote it produced:
 1. Verifier generates a fresh 32-byte nonce
 2. Verifier -> component: POST /attest        { nonceB64 }        (KMS)
                           POST /admin-api/tee/attest { nonce }    (node)
-3. Component -> dstack:   get_quote(nonce || binding)
-4. dstack   -> component: quote + event log
-5. Component -> verifier: { quoteB64, reportDataHex, eventLog, ... }
+3. Component -> TDX:      quote over (nonce || binding)   (configfs-tsm)
+4. TDX      -> component: quote
+5. Component -> verifier: { quoteB64, reportDataHex, ... }
 6. Verifier: report_data[0..32] == nonce ?     (freshness)
 7. Verifier: quote signature chain valid ?     (see Verification)
 8. Verifier: measurements match policy ?       (see Policy Management)
@@ -129,14 +132,14 @@ verifier has checked the quote it produced:
   lanes={[
     { label: 'Caller / Verifier', color: '#58a6ff' },
     { label: 'KMS', color: '#3fb950' },
-    { label: 'dstack', color: '#a371f7' },
+    { label: 'TDX (configfs-tsm)', color: '#a371f7' },
   ]}
   steps={[
-    { from: 0, to: 1, label: 'POST /attest { nonceB64, bindingB64? }', color: '#a5ff11' },
+    { from: 0, to: 1, label: 'POST /attest { nonceB64, bindingB64?, transportKey? }', color: '#a5ff11' },
     { from: 1, to: 1, label: 'report_data = nonce || binding (or default domain sep)' },
-    { from: 1, to: 2, label: 'get_quote(report_data)', color: '#a371f7' },
-    { from: 2, to: 1, label: 'quote + event log + vmConfig', color: '#a371f7', dashed: true },
-    { from: 1, to: 0, label: '{ quoteB64, reportDataHex, eventLog, vmConfig }', color: '#3fb950' },
+    { from: 1, to: 2, label: 'quote(report_data)', color: '#a371f7' },
+    { from: 2, to: 1, label: 'raw TDX quote', color: '#a371f7', dashed: true },
+    { from: 1, to: 0, label: '{ quoteB64, reportDataHex, transportPublicKeyB64? }', color: '#3fb950' },
     { from: 0, to: 0, label: 'reportDataHex[0..32] == nonce ? (freshness)' },
     { type: 'divider', label: 'fresh, identity-bound quote exists — no key released, policy not enforced' },
   ]}

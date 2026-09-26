@@ -1,6 +1,9 @@
 # Design: a frozen KMS on GCP TDX, without Phala
 
-Status: proposal. Tracks #338; replaces the dstack/Phala KMS.
+Status: implemented; phase 7 (removing the Phala path) is done in the same
+change that ships the cluster. Tracks #338; replaced the dstack/Phala KMS,
+which no longer exists in this repository. The sections below keep the
+rationale for the move.
 
 ## Goal
 
@@ -35,7 +38,7 @@ deployed by the same pipeline as the node image (`mero-tee/playbook.yml`,
   attested channel (below). A VM without `kms-bootstrap` never generates a
   root, so a network partition cannot split the cluster into two roots.
 - Node keys are `HKDF(root, "merod/storage/{profile}/{peerId}")` and the disk
-  key likewise, the same paths mero-kms derives through dstack today. The
+  key likewise, the same paths mero-kms used to derive through dstack. The
   transport key for sealed release is derived from the root too, so every
   replica holds the same one.
 
@@ -105,14 +108,19 @@ Challenges have to work across replicas behind one URL. Two ways: sticky
 routing per node, or a stateless challenge (`nonce = HMAC(root_challenge_key,
 challengeId ‖ expiry)`) that any replica can check, with a per-replica replay
 cache. With either, the TTL bounds the replay window. Redis goes away: it was
-never trusted.
+never trusted. **Chosen: stateless.** The challenge key is HKDF'd from the
+root, the challenge carries its expiry and the peer ID it was issued to, and
+each replica keeps an in-memory replay set until expiry, so no routing
+stickiness is needed and the `/challenge` and `/get-key` wire format is
+unchanged.
 
 ### What nodes check
 
-merod pins the KMS by its measurements from the node release's signed policy
-(`kms_allowed_mrtd` and `kms_allowed_rtmr0..3` already exist). For this KMS
-type the dstack event-log and compose-hash check does not apply: RTMR3 carries
-the image's own boot measurement instead.
+merod pins the KMS by its measurements from the release's signed policy
+(`kms_allowed_mrtd` and `kms_allowed_rtmr0..3` in
+`kms-attestation-policy[.<profile>].json` of `mero-kms-v<ver>`). The dstack
+event-log and compose-hash check is gone with dstack: RTMR3 carries the
+image's own boot measurement instead, so the five registers pin the image.
 
 ### Lifecycle
 
@@ -217,9 +225,9 @@ modified KMS that still attests as genuine would be handed the root:
 | 2 | mero-kms | Join protocol (mutual attestation, HPKE), bootstrap mode, stateless or sticky challenges. |
 | 3 | mero-tee | KMS image: a `kms` role in the playbook, locked profile with the same lockdown as the node, a debug profile for staging. |
 | 4 | mero-tee | Release pipeline: build and measure the node image, bake its measurements into the KMS image, build and measure that, then publish the KMS measurements in the node release's signed policy. |
-| 5 | core (merod) | Pin a GCP KMS by measurements; no dstack event-log requirement for this type. A generic `kms-url` metadata key alongside `kms-phala-url`. |
+| 5 | core (merod) | Pin a GCP KMS by measurements; no dstack event-log requirement for this type. A generic `kms-url` metadata key (it replaced `kms-phala-url` outright in phase 7). |
 | 6 | mdma | Deploy a cluster per release (bootstrap one VM, join the rest, one internal URL); keep the replica count, act on maintenance notices; roll nodes over; recreate a lost cluster; delete old clusters and destroy old disks. |
-| 7 | all | Remove the Phala path: `release-kms-phala.yaml`, dstack code in mero-kms, `kms-phala-*` assets, MDMA's Phala provider. |
+| 7 | all | Remove the Phala path: `release-kms-phala.yaml`, dstack code in mero-kms, `kms-phala-*` assets, MDMA's Phala provider. **Done in the change that ships the cluster** (see Decisions). |
 
 ## Decisions
 
@@ -232,9 +240,19 @@ Made:
 - Every upgrade ships new nodes and new keys; nothing re-keys an existing node.
 - Phala is removed entirely.
 
+- The KMS is reachable only inside the VPC: one VPC-internal URL in front of
+  a release's replicas, plain HTTP on port 8080. Nodes reach it from the same
+  network; nothing outside the VPC needs it.
+- The Phala path is removed now, in the same change that ships the GCP
+  cluster, not after a first release served by both. Every upgrade is new
+  nodes plus a new KMS anyway, so there is nothing to stay compatible with.
+  The crate and binary are `mero-kms`, the release workflow file is
+  `release-kms.yaml` (still named `Release mero-kms`), the policy asset is
+  `kms-attestation-policy[.<profile>].json`, merod's section is `[tee.kms]`,
+  and the node metadata key is `kms-url`. Redis and the release-policy fetch
+  went with dstack: challenges are stateless across replicas, and the node
+  allowlist is only ever the one baked into the image.
+
 Open:
 
-- Whether the KMS is reachable only inside the VPC.
 - Whether a debug KMS profile exists at all, or staging uses the locked one.
-- When to remove the Phala path: after the first release served by a GCP
-  cluster, or earlier.

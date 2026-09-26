@@ -1,6 +1,6 @@
 ---
 title: Runbooks
-description: Operational procedures for Mero TEE — deploy the Phala KMS, deploy and verify GCP node images, probe staging, verify release assets, and roll a new KMS version safely.
+description: Operational procedures for Mero TEE — deploy a release's KMS cluster, point nodes at it, probe images, verify release assets, recover a lost cluster, and retire a release.
 sidebar:
   order: 4
 ---
@@ -13,120 +13,104 @@ scripts and workflows in this repository; confirm exact flags against
 
 <Aside type="caution">
 Mero TEE is pre-1.0. Commands, asset names, and defaults can change between
-releases. Test each procedure against a non-production KMS / node first.
+releases. Test each procedure against a non-production cluster and node first.
 </Aside>
 
-## Deploy the Phala KMS
+## The model in one paragraph
 
-Deploy `mero-kms-phala` on a Phala Cloud CVM using a digest-pinned image and the
-release's attestation policy.
+Each release ships a node image and a KMS image, both frozen GCP TDX images
+sealed behind dm-verity. The KMS image (`merotee-kms-<profile>-<version>`, family
+`merotee-kms-<profile>`) runs as **one cluster per release**: five replicas
+across three zones in at least two regions, behind one VPC-internal URL. The
+cluster's root key is generated in RAM by the bootstrap replica and reaches the
+others only by attested join. It is never written anywhere and never backed up.
+Nothing in a running cluster is ever reconfigured, patched or restarted in
+place: an upgrade is a new node image, a new KMS image, a new cluster and new
+keys; a dead replica is replaced by a new VM that joins. MDMA runs all of these
+procedures; the steps below say what it does, so you can check it or do it by
+hand in staging. The [design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md)
+has the rationale.
+
+## Deploy a release's KMS cluster
 
 <Steps>
 
 1. **Verify the release assets first.** Never deploy an unverified artifact:
 
    ```sh
-   scripts/release/verify-kms-phala-release-assets.sh mero-kms-v<version>
+   scripts/release/verify-kms-release-assets.sh mero-kms-v<version>
    ```
 
    This checks the checksums and the cosign Sigstore bundles for the KMS release
-   assets (attestation policies, SBOMs, manifest).
+   assets, including every `kms-attestation-policy[.<profile>].json`.
 
-2. **Deploy the container.** The compose template (`scripts/kms/phala/kms-compose-template.yaml`)
-   sets the production environment. Pin the image by digest, not tag:
-
-   ```yaml
-   services:
-     mero-kms:
-       image: ghcr.io/calimero-network/mero-kms-phala@sha256:<DIGEST>
-       restart: unless-stopped
-       ports:
-         - "8080:8080"
-       environment:
-         LISTEN_ADDR: "0.0.0.0:8080"
-         DSTACK_SOCKET_PATH: "/var/run/dstack.sock"
-         CHALLENGE_TTL_SECS: "60"
-         ACCEPT_MOCK_ATTESTATION: "false"
-         ENFORCE_MEASUREMENT_POLICY: "true"
-         MERO_KMS_VERSION: "<version>"
-         MERO_KMS_PROFILE: "locked-read-only"
-       volumes:
-         - /var/run/dstack.sock:/var/run/dstack.sock
-   ```
-
-   `MERO_KMS_VERSION` drives the release-policy fetch; `MERO_KMS_PROFILE`
-   selects the profile cohort. The dstack socket **must** be mounted or key
-   derivation and quote generation fail. See the
-   [configuration reference](/operate/config-reference/) for every knob.
-
-3. **One dstack app per profile.** Deploy each profile's KMS
-   (`locked-read-only`, `debug-read-only`, `debug`) under its **own** dstack app
-   ID, and never run two profiles under one app. Node keys are derived from the
-   app key ([the derivation root](/understand/trust-model/#the-derivation-root-the-dstack-app)),
-   so a `debug` KMS — which has a shell — running under the locked app's ID can
-   derive every locked node's keys. Record each profile's app ID next to its
-   deployment; merod logs the `app_id` it sees in the KMS's event log on every
-   verified fetch (`KMS runs a released compose file`), so a mismatch shows up
-   in node logs.
-
-4. **Allowlist only the released compose hash for the locked app.** Register the
-   `locked-read-only` app with dstack's on-chain KMS and have its app contract
-   allow exactly the compose hash the release published for that profile —
-   `policy.kms_allowed_event_payload` in
-   `kms-phala-attestation-policy.locked-read-only.json`, also
-   `compatibility.profiles["locked-read-only"].event_payload` in
-   `kms-phala-compatibility-map.json`:
+2. **Start the bootstrap replica.** Create one TDX VM (`c3-standard-4`,
+   `--confidential-compute-type=TDX`, `--maintenance-policy=TERMINATE`) from the
+   release's image `merotee-kms-<profile>-<version>`, on the VPC only (no
+   external address), with instance metadata `kms-bootstrap=true`. It generates
+   a random 32-byte root inside the TD. Wait until its `/health` reports
+   `clusterRootReady: true`:
 
    ```sh
-   jq -r '.policy.kms_allowed_event_payload[]' kms-phala-attestation-policy.locked-read-only.json
+   curl -s http://<replica-ip>:8080/health
+   # {"status":"alive","service":"mero-kms","clusterRootReady":true}
    ```
 
-   The compose file you deploy must hash to that value byte for byte, so render
-   it from `scripts/kms/phala/kms-compose-template.yaml` exactly as the release
-   probe did. With the allowlist on-chain, an upgrade of the locked app to any
-   other compose file must first add its hash publicly, where it can be seen and
-   refused. Hold the app contract's owner key in a multisig, never a deployer's
-   hot wallet, and never add a `debug` or `debug-read-only` compose hash to the
-   locked app. Nodes enforce the same list independently: merod refuses a KMS
-   whose RTMR3 compose hash is not in the signed policy, whatever the contract
-   allows.
+3. **Start the other four replicas** in the remaining zones and regions (five in
+   total, three zones, at least two regions), each with `kms-peers` set to the
+   base URLs of the replicas already ready, e.g.
+   `kms-peers=http://10.0.0.5:8080`. Each one asks a peer for a nonce, sends its
+   own quote, and receives the root sealed to a one-time key once the peer has
+   checked that the quote carries **exactly its own** MRTD and RTMR0–3 and is not
+   a debug TD. The joiner checks the giver the same way. Wait for
+   `clusterRootReady: true` on every replica.
 
-   Do not provision the production locked KMS with
-   `scripts/kms/phala/provision_prod.py`: it uses `"kms": "PHALA"` (Phala's
-   centralized KMS) and a fresh app per run. That suits the release probe's
-   throwaway CVMs, but the centralized KMS puts no allowlist between the app
-   owner and a new compose file.
+4. **Clear `kms-bootstrap` on the first replica** (set it to `false`). It already
+   holds the root and reads the key only at boot, but no VM that could ever boot
+   again should carry `kms-bootstrap=true`: a second bootstrap is a second root.
 
-5. **Confirm health.** The health endpoint always returns `200` once the process
-   is up:
-
-   ```sh
-   curl -s https://<kms-host>:8080/health
-   # {"status":"alive","service":"mero-kms-phala"}
-   ```
+5. **Put one VPC-internal URL in front of all five** (an internal load balancer on
+   port 8080). No session affinity is needed: challenges are stateless, so any
+   replica can serve the `/get-key` that follows another replica's
+   `/challenge`. This URL is the cluster's KMS URL.
 
 </Steps>
 
 <Aside type="note">
-`/health` is a liveness check only — it returns `200 {"status":"alive"}`
-regardless of policy readiness. To confirm the KMS can actually issue keys, run a
-staging probe or a real `challenge → get-key` cycle. `ACCEPT_MOCK_ATTESTATION`
-is inert in the production build; it is only read when compiled with the
-`mock-attestation` feature.
+`/health` is a liveness check with one extra field: `clusterRootReady`. A replica
+without the root answers `/get-key` with `503 policy_not_ready`. To confirm a
+cluster actually issues keys, boot a node against it (below) or run the KMS TDX
+image probe. `ACCEPT_MOCK_ATTESTATION` is inert in the production build.
+</Aside>
+
+<Aside type="caution">
+Metadata is untrusted and only two keys are read, both validated by
+`kms-init`: `kms-bootstrap` and `kms-peers`. A wrong peer address only fails a
+join. Anything that decides what the KMS releases keys to — the node allowlist,
+the profile, the listen port — is baked into the image and measured, so it cannot
+be changed without producing a different KMS, which the running cluster refuses
+to join.
 </Aside>
 
 ## Configure a merod node to use the KMS
 
-**Node images do this at first boot.** `calimero-init` reads `kms-phala-url` and
-`tee-release-version` from instance metadata. It creates the node with `merod init
+**Node images do this at first boot.** `calimero-init` reads `kms-url` and
+`tee-release-version` from instance metadata. MDMA sets `kms-url` to the
+cluster's VPC-internal URL. `calimero-init` creates the node with `merod init
 --kms-url`, which fetches the storage key before writing anything, so the node's
 signing identity and account root never reach the data disk in plaintext. TDX
 protects the VM's memory, not its disks: a plaintext store is readable by anyone
 who can snapshot the data disk.
 
-- **`locked-read-only`**: refuses to create a node without `kms-phala-url`, or
-  when the baked merod lacks `init --kms-url`. A KMS URL without
-  `tee-release-version` is always refused, because the KMS could not be verified.
+merod verifies the KMS before it asks for anything: the KMS's quote must carry a
+TCB status and MRTD/RTMR0–3 in the `kms_allowed_*` lists of the signed
+`kms-attestation-policy[.<profile>].json` in release `mero-kms-v<version>`, where
+`<version>` is `tee-release-version`. So a node only ever trusts the KMS image of
+the release it was told to use.
+
+- **`locked-read-only`**: refuses to create a node without `kms-url`, or when the
+  baked merod lacks `init --kms-url`. A KMS URL without `tee-release-version` is
+  always refused, because the KMS could not be verified.
 - **Debug profiles**: still create an unencrypted node when no KMS is given, and
   log that they did.
 - **`ephemeral-store=true`** (any profile): the node lives on a tmpfs mounted over
@@ -135,7 +119,8 @@ who can snapshot the data disk.
   is on tmpfs and no swap is active. The flag alone relaxes nothing, so setting
   it on a normal node yields a node that forgets itself on reboot, never a
   plaintext disk. The release pipeline's measurement VM uses this: it cannot
-  have a KMS, because a release's KMS is published after its image is measured.
+  have a KMS, because a release's KMS image bakes in the node image's
+  measurements and is built after them.
 - **Nodes created before this**: they keep running and log that their store is
   unencrypted. Encrypting afterwards cannot work (every read is decrypted) and
   would not un-expose keys that have already sat on the disk. Recreate them.
@@ -157,64 +142,81 @@ bakes its own version as the floor, and both `calimero-init` and merod
 (`MERO_TEE_MIN_VERSION`) refuse anything lower.
 
 For a node you set up by hand, do the same: `MERO_TEE_VERSION=<release> merod init
---kms-url https://<kms-host>:8080/ ...`. The helper scripts below write attestation
-allowlists into an **existing** config, so they cannot encrypt a store that `init`
-already wrote in plaintext. Use them to pin allowlists on a node created with
-`--kms-url`, not to turn encryption on.
+--kms-url http://<kms-address>:8080/ ...`. merod writes the URL to `[tee.kms]` and
+fetches and verifies the release's signed KMS policy itself, so there is no
+allowlist to copy into `config.toml` by hand. `--kms-url` must be given at `init`:
+a store already written in plaintext cannot be encrypted afterwards.
+
+<Aside type="caution">
+Profile must match end to end. A `locked-read-only` KMS image bakes in only the
+`locked-read-only` node measurements, so a `debug` node is rejected on
+measurement policy, and a node pinned to the `locked-read-only` KMS policy refuses
+a `debug` KMS.
+</Aside>
+
+## Replace a dead replica
+
+Replicas never restart in place: the service is `Restart=no`, and a replica that
+stops, crashes or loses its host is gone along with the root in its memory.
 
 <Steps>
 
-1. **Generate the client attestation config** from a release tag and KMS URL:
-
-   ```sh
-   scripts/policy/generate-merod-kms-phala-attestation-config.sh \
-     --profile locked-read-only \
-     <release-tag> https://<kms-host>:8080/ ./tee-kms.toml
-   ```
-
-   The script downloads the release's policy and produces a `[tee]` config
-   fragment (the profile defaults to `locked-read-only`).
-
-2. **Apply it to a node home** (use `--dry-run` first to preview):
-
-   ```sh
-   scripts/policy/apply-merod-kms-phala-attestation-config.sh --dry-run \
-     --profile locked-read-only \
-     <release-tag> https://<kms-host>:8080/ /data default
-   ```
-
-   Re-run without `--dry-run` to write the config into the merod home.
+1. **Delete the dead VM** and its disk.
+2. **Start a new VM** from the same release's image, in the same zone or another
+   one that keeps the spread (three zones, at least two regions), with
+   `kms-peers` naming live replicas and `kms-bootstrap` unset or `false`.
+3. **Wait for `clusterRootReady: true`**, then add it behind the internal URL.
 
 </Steps>
 
-<Aside type="caution">
-Profile must match end to end. A KMS running `MERO_KMS_PROFILE=locked-read-only`
-only releases keys to nodes whose RTMR3 profile measurement is
-`locked-read-only`; a `debug` node will be rejected on measurement policy.
-</Aside>
+For GCP host maintenance (`--maintenance-policy TERMINATE`; TDX has no live
+migration), MDMA reads the `maintenance-event` notice and starts the replacement
+first, so it joins before the old VM goes. Maintenance windows differ by zone,
+which is one reason for the spread.
 
-## Probe staging (KMS or node image)
+## Recover a lost cluster
+
+If every replica of a release's cluster is gone, its root is gone, and **there is
+no backup to restore**: by design, nobody holds a copy. Running nodes keep their
+keys in memory and keep serving, but a node of that release that restarts cannot
+reopen its data disk.
+
+Recovery needs no build, because the image holds no secret. It is the upgrade
+rollover, triggered early:
+
+<Steps>
+
+1. **Start a new cluster from the same release's image** ([deploy a release's KMS
+   cluster](#deploy-a-releases-kms-cluster)). It generates a fresh root, so it
+   has a new URL and derives keys no old disk opens with.
+2. **Start new nodes against it** (`kms-url` set to the new URL). They join their
+   groups and sync from peers: TEE nodes are `ReadOnlyTee` replicas, and even
+   TEE-authored writes replicate to every peer.
+3. **Delete the old nodes and destroy their data disks** once the new ones have
+   synced. Their disks are sealed to a root that no longer exists.
+
+</Steps>
+
+Drill this in staging, including killing every KMS VM at once.
+
+## Probe images before release (KMS or node)
 
 Both probes are manual (`workflow_dispatch`) GitHub Actions workflows. They boot
-a real confidential VM, exercise the full flow, and emit measurement candidates —
-the same probes the release pipeline runs.
+real TDX VMs, exercise the flow end to end, verify quotes with Intel Trust
+Authority, and publish nothing.
 
 <Tabs>
-<TabItem label="KMS (Phala)">
+<TabItem label="KMS image (GCP TDX)">
 
-`kms-phala-staging-probe.yaml`. Key inputs: `kms_tag`, `kms_profile`,
-`instance_type` (default `tdx.small`), `service_port` (default `8080`),
-`phala_public_domain_suffix`, and `ita_appraisal_url` (Intel Trust Authority).
-It deploys to Phala, verifies `/attest`, runs a `challenge → get-key` cycle, and
-returns `kms-policy-candidates.json` + `kms-app-identity.json`.
-
-`kms_tag` takes a `mero-kms-v<version>` tag, or `latest` for the newest
-published one. An umbrella `<version>` tag or a `mero-tee-v<version>` node tag
-is rejected up front — each version publishes all three, and this probe needs
-the KMS one. Note that `latest` here means the newest `mero-kms-v*` release,
-*not* whatever GitHub's "latest release" flag points at: that flag is set by
-hand and often sits on the umbrella tag. To probe a pinned image instead, set
-`kms_image` and pass its version in `kms_version`.
+`kms-tdx-image-probe.yaml`. Inputs: `profile`, `node_release_tag` (the node
+release whose allowlist the KMS image bakes in), and `wait_timeout_minutes`. It
+builds the KMS image from the dispatched commit (`playbook-kms.yml`,
+`image_role = "kms"`), starts a two-replica cluster (one with
+`kms-bootstrap=true`, the other with `kms-peers` naming the first), and checks
+that both hold the root and report the same transport key — derived from the
+root, so equal keys mean one root. Intel Trust Authority verifies both quotes,
+and their measurements must be identical. It deletes its image, VMs and firewall
+rule at the end.
 
 </TabItem>
 <TabItem label="Node image (GCP)">
@@ -279,7 +281,7 @@ Before trusting any release, run the matching verifier (all under
 `scripts/release/`):
 
 ```sh
-scripts/release/verify-kms-phala-release-assets.sh   mero-kms-v<version>
+scripts/release/verify-kms-release-assets.sh           mero-kms-v<version>
 scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v<version>
 # or the combined entrypoint:
 scripts/release/verify-release-assets.sh <tag>
@@ -290,70 +292,53 @@ cosign signatures. A non-zero exit means the release is incomplete or tampered �
 do not deploy it. On a schedule, `release-auditor.yaml` runs the same class of
 checks across recent releases automatically.
 
-## Roll a new KMS version
+## Upgrade to a new release
 
-Because the KMS fetches its policy by version and nodes re-attest on their own
-schedule, a version roll is a controlled restart.
+Nothing is upgraded in place. Release N+1 brings a new node image, a new KMS
+image and so a new cluster with a new root; old nodes are replaced, not re-keyed.
 
 <Steps>
 
-1. **Verify** the new KMS release assets (above) and confirm the new version
-   appears in `compatibility-catalog.json` paired with the node-image version
-   your fleet runs.
-
-2. **Stage and probe.** Deploy the new digest to a staging CVM and run
-   `kms-phala-staging-probe.yaml` against it. Confirm the probe's measurement
-   candidates match the published policy and a staging node completes
-   `challenge → get-key`.
-
-3. **Promote policy** if measurements changed: the release pipeline builds the
-   policy from probe candidates. Any change to `kms-phala-attestation-policy.<profile>.json`
-   is reviewed and merged before production.
-
-4. **Allow the new compose hash, then deploy.** A new digest or
-   `MERO_KMS_VERSION` changes the compose file, and so its hash. Add the new
-   release's `kms_allowed_event_payload` to the locked app's on-chain allowlist,
-   deploy with the new digest and `MERO_KMS_VERSION`, and restart the container.
-   The KMS refetches its policy on startup; existing node sessions are
-   unaffected until they re-attest. Nodes verify the KMS against the policy of
-   the release their `tee-release-version` names, so a node on the old release
-   refuses the new compose hash until it is moved to the new release.
-
-5. **Confirm, then retire the old hash.** Health-check the new instance and run
-   a canary `challenge → get-key` from a production node before removing the old
-   instance. Once no node's `tee-release-version` names the old release, remove
-   its compose hash from the app's on-chain allowlist.
+1. **Verify** both releases' assets (above) and confirm the version appears in
+   `compatibility-catalog.json`.
+2. **Deploy the new release's KMS cluster** ([above](#deploy-a-releases-kms-cluster)).
+   It runs beside the old one; the two share nothing.
+3. **Start new nodes** from the new node image with `kms-url` set to the new
+   cluster and `tee-release-version` set to the new release. They join their
+   groups and sync from peers.
+4. **Delete the old nodes and destroy their data disks** once the new ones have
+   synced.
+5. **Retire the old release** (below).
 
 </Steps>
 
-<Aside type="caution">
-Keep the previous KMS instance (and its policy) in place until the new one is
-proven with a real key release. A KMS that starts without a usable policy is
-fail-closed: `/get-key` returns `503 policy_not_ready` even though `/health` and
-`/attest` still answer.
-</Aside>
+## Retire a release
+
+Once no node of release N is left, delete its cluster: all five replica VMs and
+their disks, and the internal load balancer. The root is then gone for good, so
+no copy of an old node disk can ever be opened again. The KMS image itself stays
+published with the release (its measurements are what anyone auditing the
+release checks against); retiring a cluster deletes only the running VMs.
 
 ## Post-release e2e
 
-After a **Release mero-tee** run completes, two `workflow_run`-triggered
-workflows validate the published artifacts end to end:
-
-- `post-release-mero-tee-node-e2e.yaml` — boots fresh TDX VMs per profile and
-  checks their measurement candidates are covered by the release's
-  `published-mrtds.json`, independent of the KMS.
-- `post-release-kms-node-e2e.yaml` — validates KMS↔node compatibility for the
-  released version pair (`scripts/release/e2e-verify-kms-node-compatibility.sh`).
+After a **Release mero-tee** run completes, `post-release-mero-tee-node-e2e.yaml`
+(`workflow_run`-triggered) boots fresh TDX VMs per profile and checks their
+measurement candidates are covered by the release's `published-mrtds.json`,
+independent of the KMS. The KMS side is proven inside Release mero-kms itself:
+each image is booted as a two-replica cluster, with the node allowlist of that
+very node release baked in, before anything is published.
 
 ## Incident response
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| `/get-key` → `503 policy_not_ready` | `MERO_KMS_VERSION` unset or release-policy fetch failed | Set `MERO_KMS_VERSION`, confirm the release policy asset exists and is reachable, restart. |
-| Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node profile ≠ KMS profile, stale policy, or outdated TCB | Align profiles; re-probe and promote a policy covering the node's measurements. |
-| merod: `KMS compose hash … is not a released one` | The KMS runs a compose file that is not the one the node's release published (a hand-edited compose, the wrong profile, or a different release) | Redeploy from the template for the release the node's `tee-release-version` names, or move the node to the KMS's release. Never widen the policy to fit. |
-| merod: `KMS event log does not replay to the quote's RTMR3` / `carries no eventLog` | A proxy altered the `/attest` response, or the KMS predates event logs | Check nothing between the node and the KMS rewrites responses; upgrade mero-kms. |
-| Key release → `500 key_derivation_failed` | dstack socket not mounted / unreachable | Verify `/var/run/dstack.sock` is mounted into the container. |
-| `cargo audit` advisory flagged | Vulnerable dependency | Bump the dependency (see `security-audit.yaml` / `CHANGELOG.md` for the pattern). |
+| `/get-key` → `503 policy_not_ready` | The replica has not joined its cluster yet (no root) | Check `/health` `clusterRootReady`; check `kms-peers` names live replicas of the **same** release. A replica that cannot join is replaced, not restarted. |
+| A replica never reaches `clusterRootReady` | `kms-peers` names no live replica, names a different release's cluster (different measurements, so the join is refused), or the joiner is a debug TD | Point `kms-peers` at live replicas of the same release image; start a new VM. |
+| Every replica is gone | Cluster lost | [Recover a lost cluster](#recover-a-lost-cluster). |
+| Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node image or profile is not the one this release's KMS image bakes in, or the node's TCB status is outside the baked list | Run the node image of the same release and profile as the KMS; never widen anything to fit. |
+| merod refuses the KMS (measurements not in `kms_allowed_*`) | `kms-url` points at a different release's cluster than `tee-release-version` names, or a non-release image | Point the node at its own release's cluster. |
+| `cargo audit` advisory flagged | Vulnerable dependency | Bump the dependency (see `security-audit.yaml` / `CHANGELOG.md` for the pattern); it ships in the next release. |
 
 See [Error handling](/operate/error-handling/) for the full error catalog.
 

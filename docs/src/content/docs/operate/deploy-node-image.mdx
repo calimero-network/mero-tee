@@ -192,7 +192,7 @@ scripts. All are optional except where noted:
 | `server-port` | merod admin/server port | `2428` |
 | `swarm-port` | merod libp2p swarm port | `2528` |
 | `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and, on `locked-read-only`, `MERO_TEE_PROFILE=locked-read-only`. **Refused if older than the image** (downgrade protection) | unset → env file removed |
-| `kms-phala-url` | the KMS the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
+| `kms-url` | the VPC-internal URL of the release's KMS cluster, which the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
 | `metrics-secret-name` | GCP Secret Manager name for authenticated metrics push — see the warning below | none |
 | `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
@@ -286,7 +286,7 @@ the boot disk. The script
      opened volume without ext4: the boot stops. Nothing is ever formatted.
 
    The key is shredded as soon as the disk is open. `locked-read-only` refuses a
-   blank disk without `kms-phala-url` + `tee-release-version`, or on a merod
+   blank disk without `kms-url` + `tee-release-version`, or on a merod
    without `kms disk-key`. With `ephemeral-store=true`, a tmpfs is mounted over
    `/mnt/data` instead and the disk is untouched.
 

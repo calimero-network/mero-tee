@@ -9,13 +9,12 @@ Verifying a release happens at two layers, and you should do both before you
 trust a deployment:
 
 1. **The release artifacts** — the checksums, manifests, attestation policies,
-   and container metadata published with a GitHub release. Verify them with the
+   and measurements published with a GitHub release. Verify them with the
    repo's scripts: SHA-256 checksums plus **cosign** (Sigstore) signatures that
    pin who built them.
 2. **A running instance** — a live KMS or merod node. Verify its attestation
-   with the public web verifier: it pulls a fresh quote, appraises it through
-   Intel Trust Authority, and compares its measurements against the release
-   policy.
+   with the public web verifier: it appraises a quote through Intel Trust
+   Authority and compares its measurements against the release policy.
 
 The artifact scripts prove *the release you downloaded is authentic and
 untampered*; the web verifier proves *a specific live instance is running that
@@ -44,7 +43,7 @@ Internally it calls the two per-artifact verifiers, which you can also run
 directly against a single asset set:
 
 ```bash
-scripts/release/verify-kms-phala-release-assets.sh    mero-kms-v<version>
+scripts/release/verify-kms-release-assets.sh           mero-kms-v<version>
 scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v<version>
 ```
 
@@ -52,16 +51,18 @@ scripts/release/verify-node-image-gcp-release-assets.sh mero-tee-v<version>
 
 - **Downloads the signed assets** for the tag — checksums file, release
   manifest, attestation policies (including the per-profile
-  `kms-phala-attestation-policy.<profile>.json` files), container metadata,
-  SBOMs, and the release archives.
-- **Verifies SHA-256 checksums** — normalizes `kms-phala-checksums.txt` and runs
-  `sha256sum -c`, then cross-checks each archive hash against the release
-  manifest so the checksums file and manifest must agree.
+  `kms-attestation-policy.<profile>.json` files), and SBOMs.
+- **Verifies SHA-256 checksums** — runs `sha256sum -c` over the release's
+  checksums file, and cross-checks it against the release manifest so the two
+  must agree.
+- **Checks the KMS policy** — every `kms-attestation-policy[.<profile>].json`
+  must carry well-formed, non-empty `kms_allowed_mrtd` / `kms_allowed_rtmr0..3`
+  lists, the measurements merod pins the KMS image by.
 - **Verifies cosign signatures** — for every signed asset it runs
-  `cosign verify-blob` against the asset's `.sig` and `.pem`, pinning the
+  `cosign verify-blob` against the asset's signature, pinning the
   **signer identity** and **OIDC issuer**:
   - identity (default): the release workflow, e.g.
-    `^https://github.com/calimero-network/mero-tee/.github/workflows/release-kms-phala.yaml@refs/heads/master$`
+    `^https://github.com/calimero-network/mero-tee/.github/workflows/release-kms.yaml@refs/heads/master$`
     (the node-image script pins `release-node-image-gcp.yaml`).
   - OIDC issuer (default): `https://token.actions.githubusercontent.com`.
 
@@ -95,14 +96,17 @@ The public **attestation verifier** is a small web app backed by a stateless
 
 | Route | Verifies | Reachability |
 | --- | --- | --- |
-| `/kms` | a Phala KMS instance, by URL | KMS must serve `POST /attest` over HTTPS |
-| `/mero-tee` | a merod node **or** a KMS | node must serve `POST /admin-api/tee/attest` |
+| `/kms` | a mero-kms replica, from a pasted `/attest` response | none: KMS replicas listen only inside their VPC, so you call `/attest` from there and paste the result |
+| `/mero-tee` | a merod node, by URL | node must serve `POST /admin-api/tee/attest` |
 
-On each route you enter the instance URL and, optionally, a release tag and (for
-KMS) a profile to compare measurements against. The backend generates a fresh
-32-byte nonce, fetches the attestation, appraises the quote through Intel Trust
-Authority, verifies the returned JWT against Intel's JWKS, and compares the
-measurements and compose-hash against the published release policy. The
+On `/mero-tee` you enter the node URL and, optionally, a release tag; the backend
+generates a fresh 32-byte nonce and fetches the attestation itself. On `/kms` you
+paste the KMS's `/attest` response and, optionally, the nonce you sent, a release
+tag and a profile. Either way the backend appraises the quote through Intel Trust
+Authority, verifies the returned JWT against Intel's JWKS, and the page compares
+MRTD and RTMR0–3 against the published release policy (`kms_allowed_*` of
+`kms-attestation-policy.<profile>.json` for a KMS, `published-mrtds.json` for a
+node). The
 mechanics of each check are covered in [Verification](/flows/verification/).
 
 :::note
@@ -114,14 +118,14 @@ routes and parameters below are relative to whichever base URL hosts it.
 ### Deep-link parameters
 
 Both routes read their inputs from query parameters, so you can share a
-pre-filled verification link. A KMS deep link:
+pre-filled verification link. On `/kms` the release and profile are pre-filled
+(the attestation itself is always pasted):
 
 ```text
-/kms?kms_url=https://your-kms.phala.network&release_tag=mero-kms-v2.3.51&profile=locked-read-only
+/kms?release_tag=mero-kms-v2.3.75&profile=locked-read-only
 ```
 
-- `kms_url` — the KMS base URL (required to auto-run).
-- `release_tag` — release to compare against, e.g. `mero-kms-v2.3.51` (optional).
+- `release_tag` — release to compare against, e.g. `mero-kms-v2.3.75` (optional).
 - `profile` — `debug`, `debug-read-only`, or `locked-read-only` (optional).
 
 A node deep link on `/mero-tee`:
@@ -135,38 +139,45 @@ accepted. When a URL parameter is present the page verifies automatically on
 load; otherwise fill the form and submit.
 
 :::caution
-The backend enforces an **SSRF allowlist** on the target host. By default KMS
-URLs must match `phala.network` or localhost, and node URLs must be a bare IPv4
-address or localhost. A self-hosted verifier verifying a KMS on another domain
-must set `KMS_ALLOWED_HOSTS` (or `NODE_ALLOWED_HOSTS`) accordingly, and
-`ITA_API_KEY` must be configured or `/api/verify` returns `503`.
+The backend enforces an **SSRF allowlist** on node URLs: they must match
+`NODE_ALLOWED_HOSTS` (by default a bare IPv4 address or localhost). It never
+fetches from a KMS. `ITA_API_KEY` must be configured or `/api/verify` returns
+`503`.
 :::
 
 ### Paste-attestation mode
 
-When you already have an attestation JSON (for example the response body of a
-KMS `/attest` call, captured out of band), you can verify it directly without
-the verifier reaching the instance. `POST /api/verify` accepts an `attestation`
-object instead of a URL:
+This is how a KMS is verified. From a machine inside the KMS's VPC, call
+`/attest` with a nonce you chose:
+
+```bash
+NONCE=$(openssl rand -base64 32)
+curl -s -X POST http://<kms-address>:8080/attest \
+  -H 'content-type: application/json' \
+  -d "{\"nonceB64\":\"$NONCE\"}"
+```
+
+Then paste the response into `/kms`, or send it to `POST /api/verify` as an
+`attestation` object, with `nonce_b64` so the freshness check runs:
 
 ```bash
 curl -s -X POST https://<verifier-host>/api/verify \
   -H 'content-type: application/json' \
   -d '{
     "attestation": {
-      "quote_b64":       "<base64 raw TDX quote>",
-      "reportDataHex":   "<hex of the 64-byte report_data>",
-      "eventLog":        [ /* dstack event-log entries */ ]
-    }
+      "quoteB64":      "<base64 raw TDX quote>",
+      "reportDataHex": "<hex of the 64-byte report_data>"
+    },
+    "nonce_b64": "<the nonce you sent to /attest>"
   }'
 ```
 
-The function extracts the quote (top-level `quote_b64` for a KMS attestation, or
-`data.quoteB64` for a merod node response), sends it to Intel Trust Authority,
-and returns the appraisal — `ita_token`, `ita_token_verified`, and `ita_claims`.
-Because you supplied the attestation rather than a live nonce challenge, the
-freshness check only applies if `reportDataHex` is present; the authenticity and
-measurement checks run either way.
+The function extracts the quote (top-level `quoteB64` / `quote_b64` for a KMS
+attestation, or `data.quoteB64` for a merod node response), sends it to Intel
+Trust Authority, and returns the appraisal — `ita_token`, `ita_token_verified`,
+and `ita_claims`. With `nonce_b64` the quote's `report_data` must start with that
+nonce; without it the verifier cannot vouch that the quote is fresh. The
+authenticity and measurement checks run either way.
 
 ## Next steps
 
