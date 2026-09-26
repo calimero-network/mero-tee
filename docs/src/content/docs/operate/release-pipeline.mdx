@@ -142,6 +142,20 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 </Steps>
 
+## KMS TDX image probe — `kms-tdx-image-probe.yaml`
+
+Manual only (`workflow_dispatch`), and it publishes nothing. It builds the
+mero-kms TDX cluster image ([design](https://github.com/calimero-network/mero-tee/blob/claude/dstack-node-key-derivation-w37pkm/docs/design/gcp-tdx-kms.md))
+from the dispatched ref, with the node allowlist of a published node release
+(`node_release_tag`) baked in, and runs a two-replica cluster on TDX VMs: one
+bootstraps the root, the other joins it. It passes when both hold the root,
+report the same transport key, and Intel Trust Authority verifies both quotes
+with identical measurements. It deletes its image, VMs and firewall rule.
+
+The image definition it builds (`image_role = "kms"`) is not on `master` yet:
+dispatch it on the branch that carries it. It lands here first only because
+GitHub dispatches a workflow only once its file is on the default branch.
+
 ### Node-image release assets
 
 Uploaded to `mero-tee-v<version>` (each with `.sig`, `.pem` and `.bundle.json`
