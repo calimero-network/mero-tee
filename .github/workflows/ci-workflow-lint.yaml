@@ -340,6 +340,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fetch-secret-rest-test.sh
 
+      # The staging probe's Secret Manager check only runs on real GCP; this
+      # pins the two parts that could make it lie without any cloud: the
+      # receiver's token classification and the verdict read from it.
+      - name: Check the secret-fetch probe tells a fetched token from a failed fetch
+        id: secret_fetch_probe_test
+        shell: bash
+        run: scripts/ci/tests/node-secret-fetch-probe-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -372,6 +380,7 @@ jobs:
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
             --checks-line "- gcp secret fetched without a cloud CLI: ${{ steps.fetch_secret_rest_test.outcome }}" \
+            --checks-line "- secret-fetch probe verdicts: ${{ steps.secret_fetch_probe_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
