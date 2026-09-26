@@ -1,20 +1,19 @@
 import { QuoteAttestationCard } from './QuoteAttestationCard.jsx';
 import { RtmrCard } from './RtmrCard.jsx';
-import { ComposeHashCard } from './ComposeHashCard.jsx';
-import { EventLogCard } from './EventLogCard.jsx';
 import { QuoteJsonCard } from './QuoteJsonCard.jsx';
 
 /**
  * Shared verification results display.
  * Single responsibility: render result cards from verification data.
- * Node (merod) verification omits compose hash and event log (KMS-only).
+ * KMS results carry `matches` (release profiles whose KMS allowlists hold the quote)
+ * and `nonce_verified`; node results compare against published-mrtds.json.
  */
 export function VerificationResults({ result }) {
   if (!result) return null;
 
   const hasQuoteData = result.ita_token_verified != null;
-  const hasRtmrData = result.quoteRtmrs != null || result.replayedRtmrs != null;
-  const hasComposeOrEventLog = (result.eventCount ?? 0) > 0 || result.composeHash != null;
+  const hasRtmrData = result.quoteRtmrs != null;
+  const isKms = Array.isArray(result.matches);
 
   let cardIndex = 0;
   const delay = (n) => ({ style: { animationDelay: `${n * 0.07}s` } });
@@ -29,50 +28,29 @@ export function VerificationResults({ result }) {
             quoteRtmrs={result.quoteRtmrs}
             itaRtmrs={result.itaRtmrs}
             measurementSources={result.measurementSources}
-            replayedRtmrs={result.replayedRtmrs}
             policiesByProfile={result.policiesByProfile}
             tagToUse={result.tagToUse}
-            profileFromComposeHash={result.matches?.[0]}
-            isKms={hasComposeOrEventLog}
+            matchedProfile={result.selectedProfile || result.matches?.[0]}
             {...delay(cardIndex++)}
           />
-        )}
-        {hasComposeOrEventLog && (
-          <>
-            <ComposeHashCard
-              composeHash={result.composeHash}
-              appId={result.appId}
-              matches={result.matches}
-              policyMatches={result.policyMatches}
-              profiles={result.profiles}
-              policyComposeHashesByProfile={result.policyComposeHashesByProfile}
-              releaseComposePublishing={result.releaseComposePublishing}
-              tagToUse={result.tagToUse}
-              selectedProfile={result.selectedProfile}
-              {...delay(cardIndex++)}
-            />
-            <EventLogCard
-              eventCount={result.eventCount}
-              eventLog={result.eventLog}
-              composeHash={result.composeHash}
-              appId={result.appId}
-              expectedComposeHashes={result.profiles}
-              expectedPolicyComposeHashes={result.policyComposeHashesByProfile}
-              rtmr3ReplaySteps={result.rtmr3ReplaySteps}
-              quoteRtmr3={result.quoteRtmrs?.rtmr3}
-              selectedProfile={result.selectedProfile}
-              {...delay(cardIndex++)}
-            />
-          </>
         )}
         {hasQuoteData && (
           <QuoteJsonCard itaClaims={result.ita_claims} attestation={result.attestation} {...delay(cardIndex++)} />
         )}
       </div>
+      {isKms && (
+        <p className="results-footer">
+          {result.nonce_verified
+            ? 'Quote is bound to the nonce you sent to /attest.'
+            : 'No nonce given: freshness of the pasted quote was not checked.'}
+        </p>
+      )}
       {result.tagToUse && (
         <p className="results-footer">
           Checked against release: {result.tagToUse}
-          {result.matches?.length > 0 ? ' (matched)' : ''}
+          {isKms && (result.matches.length > 0
+            ? ` (matched ${result.matches.join(', ')}${result.matchedImage ? `, image ${result.matchedImage}` : ''})`
+            : ' (no profile matches all of MRTD and RTMR0–3)')}
         </p>
       )}
     </div>

@@ -7,16 +7,14 @@ set -euo pipefail
 
 assets_for_rekor=(
   artifacts/*.tar.gz
-  release-assets/kms-phala-checksums.txt
-  release-assets/kms-phala-attestation-policy.json
-  release-assets/kms-phala-attestation-policy.debug.json
-  release-assets/kms-phala-attestation-policy.debug-read-only.json
-  release-assets/kms-phala-attestation-policy.locked-read-only.json
-  release-assets/kms-phala-container-metadata.json
-  release-assets/kms-phala-container-sbom.spdx.json
-  release-assets/kms-phala-binaries-sbom.spdx.json
-  release-assets/kms-phala-trust-bundle.tar.gz
-  release-assets/kms-phala-compatibility-map.json
+  release-assets/kms-checksums.txt
+  release-assets/kms-attestation-policy.json
+  release-assets/kms-attestation-policy.debug.json
+  release-assets/kms-attestation-policy.debug-read-only.json
+  release-assets/kms-attestation-policy.locked-read-only.json
+  release-assets/kms-binaries-sbom.spdx.json
+  release-assets/kms-trust-bundle.tar.gz
+  release-assets/kms-compatibility-map.json
 )
 
 for asset in "${assets_for_rekor[@]}"; do
@@ -70,11 +68,11 @@ jq -n \
     workflow_run_attempt: $run_attempt,
     generated_at: (now | todate),
     entries: $entries
-  }' > release-assets/kms-phala-rekor-index.json
+  }' > release-assets/kms-rekor-index.json
 
 post_assets=(
-  release-assets/kms-phala-rekor-index.json
-  release-assets/kms-phala-release-manifest.json
+  release-assets/kms-rekor-index.json
+  release-assets/kms-release-manifest.json
 )
 for asset in "${post_assets[@]}"; do
   base_name="$(basename "${asset}")"

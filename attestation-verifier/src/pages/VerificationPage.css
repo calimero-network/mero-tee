@@ -305,8 +305,7 @@ form button:disabled {
   margin-right: 0.35rem;
 }
 
-.rtmr-expected,
-.rtmr-replay {
+.rtmr-expected {
   margin-top: 0.35rem;
   font-size: 0.9em;
 }
@@ -361,122 +360,6 @@ form button:disabled {
   word-break: break-all;
 }
 
-.expected-section {
-  margin-top: 0.5rem;
-}
-
-.event-count {
-  color: var(--text-muted);
-  margin-bottom: 0.75rem;
-}
-
-.event-log-section {
-  margin-top: 1rem;
-}
-
-.event-log-heading {
-  font-size: 0.9rem;
-  font-weight: 500;
-  margin: 0 0 0.35rem;
-}
-
-.event-log-desc {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  margin: 0 0 0.75rem;
-  line-height: 1.4;
-}
-
-.event-highlight {
-  margin-bottom: 0.5rem;
-}
-
-.event-highlight .label {
-  color: var(--text-muted);
-  margin-right: 0.5rem;
-}
-
-.event-log-toggle {
-  padding: 0.35rem 0.6rem;
-  font-size: 0.85rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.event-log-toggle:hover {
-  background: var(--bg);
-  border-color: rgba(165, 255, 17, 0.25);
-}
-
-.toggle-icon {
-  display: inline-block;
-  transition: transform 0.2s ease;
-  font-size: 0.7rem;
-  color: var(--accent);
-}
-
-.toggle-icon.open {
-  transform: rotate(90deg);
-}
-
-.event-list {
-  margin-top: 0.5rem;
-  padding: 0.75rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0.8rem;
-}
-
-.event-summary-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto auto;
-  gap: 0.5rem 1rem;
-  align-items: center;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.event-summary-row:last-child {
-  border-bottom: none;
-}
-
-.event-imr {
-  color: var(--text-muted);
-  font-size: 0.85em;
-}
-
-.event-name {
-  font-weight: 500;
-}
-
-.event-payload,
-.event-digest {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.8em;
-  word-break: break-all;
-}
-
-.event-badge {
-  font-size: 0.7rem;
-  padding: 0.15rem 0.4rem;
-  background: var(--accent);
-  color: #0a0a0a;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.expected-compose-section {
-  margin-top: 0.75rem;
-}
-
 .results-footer {
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -522,10 +405,5 @@ form button:disabled {
 
   .json-viewer-tabs {
     flex-wrap: wrap;
-  }
-
-  .event-summary-row {
-    grid-template-columns: 1fr;
-    gap: 0.3rem;
   }
 }

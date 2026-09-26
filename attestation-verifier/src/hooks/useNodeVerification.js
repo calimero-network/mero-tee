@@ -1,6 +1,6 @@
 /**
  * Hook for node (merod) attestation verification.
- * Nodes return TDX quotes only (no event_log/compose_hash).
+ * Nodes return TDX quotes only.
  * Policy comparison uses MRTD/RTMR0–3 parsed from the quote (same as published-mrtds.json);
  * Intel Trust Authority JWT is verified separately (QuoteAttestationCard).
  */
@@ -53,10 +53,6 @@ export function useNodeVerification() {
           quoteRtmrs,
           itaRtmrs,
           measurementSources,
-          replayedRtmrs: {},
-          composeHash: null,
-          eventLog: [],
-          eventCount: 0,
           tagToUse,
           policiesByProfile,
         },

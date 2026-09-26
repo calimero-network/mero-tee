@@ -68,8 +68,6 @@ jobs:
           bash -n mero-tee/init.sh
           bash -n mero-tee/build-and-release.sh
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
-          bash -n scripts/release/verify-kms-phala-release-assets.sh
-          bash -n scripts/release/e2e-verify-kms-node-compatibility.sh
           bash -n scripts/release/node-image-gcp/resolve-release-gate.sh
           bash -n scripts/release/node-image-gcp/resolve-image-vm-parameters.sh
           bash -n scripts/release/node-image-gcp/sweep-attestation-resources.sh
@@ -77,8 +75,6 @@ jobs:
           bash -n scripts/release/node-image-gcp/sign-release-assets.sh
           bash -n scripts/release/node-image-gcp/verify-generated-signatures.sh
           bash -n scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
-          bash -n scripts/policy/generate-merod-kms-phala-attestation-config.sh
-          bash -n scripts/policy/apply-merod-kms-phala-attestation-config.sh
           python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py
           python3 -m py_compile scripts/attestation/shared/extract_tdx_policy_candidates.py
 

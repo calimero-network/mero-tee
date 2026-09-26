@@ -1,6 +1,6 @@
 /**
  * GET /api/compat-map?tag=mero-kms-v2.1.73
- * Proxies kms-phala-compatibility-map.json from GitHub releases (avoids CORS).
+ * Proxies kms-compatibility-map.json from GitHub releases (avoids CORS).
  */
 const REPO = 'calimero-network/mero-tee';
 const TAG_RE = /^mero-kms-v[\d.]+$/;
@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Valid tag required (e.g. mero-kms-v2.1.73)' });
   }
 
-  const url = `https://github.com/${REPO}/releases/download/${tag}/kms-phala-compatibility-map.json`;
+  const url = `https://github.com/${REPO}/releases/download/${tag}/kms-compatibility-map.json`;
   try {
     const resp = await fetch(url, { headers: { 'User-Agent': 'calimero-attestation-verifier/1.0' } });
     if (!resp.ok) {

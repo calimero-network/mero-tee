@@ -13,8 +13,8 @@ body:
     id: component
     attributes:
       label: Component
-      description: Which area is affected? (for example `mero-kms-phala`, `release-node-image-gcp`, `scripts/policy`)
-      placeholder: mero-kms-phala
+      description: Which area is affected? (for example `mero-kms`, `release-node-image-gcp`, `scripts/policy`)
+      placeholder: mero-kms
     validations:
       required: true
   - type: textarea

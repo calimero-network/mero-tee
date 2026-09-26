@@ -160,7 +160,7 @@
       - "'systemctl disable vmagent vector' in (baked_init.content | b64decode)"
       # New nodes get a KMS-encrypted store, and locked-read-only refuses
       # to create a plaintext one.
-      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_PHALA_URL\")' in (baked_init.content | b64decode)"
+      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_URL\")' in (baked_init.content | b64decode)"
       - "'The locked-read-only profile does not' in (baked_init.content | b64decode)"
       # The data disk is LUKS2 with integrity, keyed from the KMS; a blank disk
       # is the only thing ever formatted; the release cannot go below the image;

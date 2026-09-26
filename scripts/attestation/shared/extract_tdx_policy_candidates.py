@@ -269,8 +269,8 @@ def extract_tcb_status_candidates(payload: Any) -> List[Tuple[str, str, str]]:
 # invariant -- which is exactly the bug this file's docstring describes.
 #
 # `outofdate` is here as a DELIBERATE, REVIEWABLE decision, not an observation.
-# The node images run on GCP Confidential VMs and the KMS on Phala CVMs; a TCB
-# status reflects those vendors' host firmware, which Calimero cannot patch. As of
+# The node and KMS images run on GCP Confidential VMs (Intel TDX); a TCB
+# status reflects the cloud host's firmware, which Calimero cannot patch. As of
 # 2026-09-11 both fleets report OutOfDate, so a floor of `uptodate` alone would be
 # satisfiable by no host we run on. Accepting both keeps the fleet working AND
 # accepts a patched host the moment a vendor catches up -- unlike the old

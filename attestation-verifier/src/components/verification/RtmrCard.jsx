@@ -53,8 +53,8 @@ function hasAnyPolicy(policiesByProfile) {
   return policiesByProfile && Object.values(policiesByProfile).some(Boolean);
 }
 
-function inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash) {
-  if (!policiesByProfile) return profileFromComposeHash || null;
+function inferProfile(quoteRtmrs, policiesByProfile, matchedProfile) {
+  if (matchedProfile || !policiesByProfile) return matchedProfile || null;
   if (quoteRtmrs?.mrtd) {
     const mrtdProfiles = getProfilesWithValue(quoteRtmrs.mrtd, policiesByProfile, 'mrtd');
     if (mrtdProfiles.length > 0) return mrtdProfiles[0];
@@ -64,7 +64,7 @@ function inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash) {
     const profiles = getProfilesWithValue(val, policiesByProfile, `rtmr${i}`);
     if (profiles.length > 0) return profiles[0];
   }
-  return profileFromComposeHash || null;
+  return null;
 }
 
 /** When no profile inferred, use debug for expected display (common case). */
@@ -85,24 +85,20 @@ export function RtmrCard({
   quoteRtmrs,
   itaRtmrs,
   measurementSources,
-  replayedRtmrs,
   policiesByProfile,
   tagToUse,
-  profileFromComposeHash,
-  isKms = false,
+  matchedProfile,
   style,
 }) {
   const showExpected = hasAnyPolicy(policiesByProfile);
   const inferredProfile = showExpected
-    ? inferProfile(quoteRtmrs, policiesByProfile, profileFromComposeHash)
+    ? inferProfile(quoteRtmrs, policiesByProfile, matchedProfile)
     : null;
   const rows = [];
   for (let i = 0; i <= 3; i++) {
     const val = quoteRtmrs?.[`rtmr${i}`] || null;
     const src = measurementSources?.[`rtmr${i}`];
     const sourceLabel = src === 'ita' ? 'ITA' : src === 'quote' ? 'quote' : null;
-    const replayed = replayedRtmrs?.[i] ?? null;
-    const replayMatch = val && replayed && val === replayed;
     const rtmrKey = `rtmr${i}`;
     const inReleaseProfiles = policiesByProfile
       ? getProfilesWithValue(val, policiesByProfile, rtmrKey)
@@ -112,8 +108,6 @@ export function RtmrCard({
     const allowlist = getAllowlist(policiesByProfile?.[profileForExpected], rtmrKey);
     const policyMatch = val && allowlist && isInAllowlist(val, allowlist);
 
-    const skipPolicyForThisRtmr = isKms && i === 3;
-
     rows.push(
       <div key={i} className="rtmr-row">
         <span className="rtmr-label">RTMR{i}</span>
@@ -122,7 +116,7 @@ export function RtmrCard({
             <span className="label">Observed ({sourceLabel || '—'}):</span>{' '}
             <code>{truncateHex(val, 12)}</code>
           </div>
-          {showExpected && !skipPolicyForThisRtmr && (
+          {showExpected && (
             <div>
               <span className="label">Expected ({tagToUse} · {profileForExpected}):</span>{' '}
               <code>{truncateHex(expectedVal, 12)}</code>
@@ -139,17 +133,7 @@ export function RtmrCard({
               )}
             </div>
           )}
-          {i === 3 && val && replayed && (
-            <div className="rtmr-replay">
-              <span className="label">Event log replay:</span>{' '}
-              <code>{truncateHex(replayed, 12)}</code>
-              <span className={replayMatch ? 'result-ok' : 'result-err'}>
-                {' '}
-                {replayMatch ? '✓ Matches quote' : '✗ Mismatch'}
-              </span>
-            </div>
-          )}
-          {showExpected && !skipPolicyForThisRtmr && val && !policyMatch && (
+          {showExpected && val && !policyMatch && (
             <div className="rtmr-expected">
               <span className="label">In release allowlist:</span>{' '}
               {inReleaseProfiles.length > 0 ? (
@@ -230,9 +214,6 @@ export function RtmrCard({
         MRTD and RTMR0–3 shown for policy comparison are parsed from the TDX quote (same as published
         releases). All registers are compared against the release allowlist. Intel Trust Authority (ITA)
         JWT signature is verified separately. TCB status comes from ITA claims (when present).
-        {isKms
-          ? ' For KMS, RTMR3 changes per deployment (includes compose_hash); only event log replay integrity is checked.'
-          : ''}
       </p>
       {itaMismatchWarning && (
         <p className="rtmr-hint">

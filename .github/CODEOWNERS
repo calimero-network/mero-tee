@@ -2,9 +2,9 @@
 * @chefsale
 
 # Security-sensitive workflows
-/.github/workflows/release-kms-phala.yaml @chefsale
+/.github/workflows/release-kms.yaml @chefsale
 /.github/workflows/release-node-image-gcp.yaml @chefsale
-/.github/workflows/kms-phala-staging-probe.yaml @chefsale
+/.github/workflows/kms-tdx-image-probe.yaml @chefsale
 
 # KMS package
 /mero-kms/ @chefsale
@@ -19,4 +19,3 @@
 /scripts/release/ @chefsale
 /scripts/policy/ @chefsale
 /scripts/attestation/ @chefsale
-/scripts/kms/ @chefsale

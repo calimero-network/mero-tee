@@ -1,38 +1,20 @@
 /**
  * Hook for KMS attestation verification.
  * Encapsulates verification flow, state, and side effects.
+ *
+ * The input is a mero-kms `/attest` response pasted by the operator (the KMS listens
+ * only inside its VPC). Intel Trust Authority verifies the quote; MRTD/RTMR0-3 parsed
+ * from it are then matched against the KMS allowlists of the release policies.
  */
 
 import { useState, useCallback } from 'react';
-import { verifyKmsAttestation, fetchKmsReleases, fetchAttestationPolicy, fetchCompatibilityMap } from '../services/api.js';
+import { verifyKmsAttestation } from '../services/api.js';
 import { findMatchingRelease } from '../services/compat.js';
 import {
-  extractComposeHashAndAppId,
   extractRTMRsFromClaims,
   extractMeasurementsFromQuoteB64,
   mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
-import { replayRTMR, replayRTMRWithSteps } from '../utils/crypto.js';
-import {
-  buildPolicyComposeHashesByProfile,
-  findPolicyComposeMatches,
-  analyzeReleaseComposePublishing,
-} from '../utils/composeHashPolicy.js';
-
-const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
-
-async function fetchPoliciesForTag(tag) {
-  const results = {};
-  for (const profile of PROFILES) {
-    try {
-      const policy = await fetchAttestationPolicy(tag, profile);
-      results[profile] = policy;
-    } catch {
-      results[profile] = null;
-    }
-  }
-  return results;
-}
 
 export function useVerification() {
   const [state, setState] = useState({
@@ -41,48 +23,18 @@ export function useVerification() {
     result: null,
   });
 
-  const verify = useCallback(async (kmsUrl, releaseTag = null, selectedProfile = null) => {
+  const verify = useCallback(async (attestJson, nonceB64 = null, releaseTag = null, selectedProfile = null) => {
     setState({ status: 'loading', error: null, result: null });
     try {
-      const data = await verifyKmsAttestation(kmsUrl);
-      const { attestation, ita_claims, ita_token_verified } = data;
+      let pasted;
+      try {
+        pasted = JSON.parse(attestJson);
+      } catch {
+        throw new Error('The /attest response is not valid JSON');
+      }
+      const data = await verifyKmsAttestation(pasted, nonceB64);
+      const { attestation, ita_claims, ita_token_verified, nonce_verified } = data;
       if (!attestation) throw new Error('No attestation in response');
-
-      const eventLog = attestation.event_log ?? attestation.eventLog;
-      const events = Array.isArray(eventLog)
-        ? eventLog
-        : eventLog
-          ? JSON.parse(eventLog)
-          : [];
-
-      const { composeHash, appId } = extractComposeHashAndAppId(events);
-      let tagToUse, compatMap, matches;
-      if (releaseTag) {
-        tagToUse = releaseTag;
-        try {
-          compatMap = await fetchCompatibilityMap(releaseTag);
-        } catch { compatMap = null; }
-        matches = [];
-        if (composeHash && compatMap?.compatibility?.profiles) {
-          for (const [profile, p] of Object.entries(compatMap.compatibility.profiles)) {
-            const expected = (p.event_payload || '').toLowerCase();
-            if (expected && expected === composeHash) matches.push(profile);
-          }
-        }
-      } else if (composeHash) {
-        ({ tag: tagToUse, compatMap, matches } = await findMatchingRelease(composeHash));
-      } else {
-        const latestTag = (await fetchKmsReleases(1))[0];
-        tagToUse = latestTag;
-        compatMap = null;
-        matches = [];
-      }
-      // When selectedProfile is set, only consider it a match if composeHash matches that profile
-      if (selectedProfile && compatMap?.compatibility?.profiles?.[selectedProfile]) {
-        const expected = (compatMap.compatibility.profiles[selectedProfile].event_payload ?? '').toLowerCase();
-        const matchForSelected = expected && composeHash === expected;
-        matches = matchForSelected ? [selectedProfile] : [];
-      }
 
       // Policy comparison: MRTD/RTMR0–3 from parsed quote first (matches release policy); ITA JWT verified separately.
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
@@ -92,31 +44,14 @@ export function useVerification() {
         fromQuote,
         fromITA
       );
-      const replayedRtmrs = {};
-      let rtmr3ReplaySteps = null;
-      for (let i = 0; i <= 3; i++) {
-        try {
-          if (i === 3) {
-            const { finalRtmr, steps } = await replayRTMRWithSteps(events, 3);
-            replayedRtmrs[3] = finalRtmr;
-            rtmr3ReplaySteps = steps;
-          } else {
-            replayedRtmrs[i] = await replayRTMR(events, i);
-          }
-        } catch {
-          replayedRtmrs[i] = null;
-        }
-      }
 
-      const policiesByProfile = await fetchPoliciesForTag(tagToUse);
-      const policyComposeHashesByProfile = buildPolicyComposeHashesByProfile(policiesByProfile);
-      const policyMatches = composeHash
-        ? findPolicyComposeMatches(composeHash, policyComposeHashesByProfile)
-        : [];
-      const releaseComposePublishing = analyzeReleaseComposePublishing(
-        compatMap?.compatibility?.profiles || {},
-        policyComposeHashesByProfile
+      const { tag, policiesByProfile, compatMap, matches: allMatches } = await findMatchingRelease(
+        quoteRtmrs,
+        releaseTag
       );
+      const matches = selectedProfile
+        ? allMatches.filter((p) => p === selectedProfile)
+        : allMatches;
 
       setState({
         status: 'success',
@@ -125,24 +60,17 @@ export function useVerification() {
           attestation,
           ita_claims: ita_claims || null,
           ita_token_verified,
+          nonce_verified,
           itaRtmrs,
-          composeHash,
-          appId,
-          tagToUse,
-          compatMap,
-          matches,
           selectedProfile: selectedProfile || null,
-          profiles: compatMap?.compatibility?.profiles || {},
-          policyMatches,
-          policyComposeHashesByProfile,
-          releaseComposePublishing,
+          tagToUse: tag,
+          matches,
+          matchedImage: matches.length > 0
+            ? compatMap?.compatibility?.profiles?.[matches[0]]?.kms_image ?? null
+            : null,
           quoteRtmrs,
           measurementSources,
-          replayedRtmrs,
           policiesByProfile,
-          eventCount: events.length,
-          eventLog: events,
-          rtmr3ReplaySteps,
         },
       });
     } catch (e) {

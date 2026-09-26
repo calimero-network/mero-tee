@@ -1,6 +1,6 @@
 ---
-# mero-kms as a TDX cluster replica (MERO_KMS_BACKEND=tdx): no dstack, keys
-# derive from a root held only in the replicas' memory. See
+# mero-kms as a TDX cluster replica: keys derive from a root held only in the
+# replicas' memory, and the node allowlist is baked into the image's env. See
 # docs/design/gcp-tdx-kms.md.
 - name: Require the mero-kms binary and the node allowlist
   assert:

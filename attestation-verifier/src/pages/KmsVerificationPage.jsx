@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useVerification } from '../hooks/useVerification.js';
 import { VerificationResults } from '../components/verification/VerificationResults.jsx';
@@ -8,26 +7,20 @@ import './VerificationPage.css';
 
 export function KmsVerificationPage() {
   const [searchParams] = useSearchParams();
-  const kmsUrlParam = searchParams.get('kms_url');
   const releaseTagParam = searchParams.get('release_tag');
   const profileParam = searchParams.get('profile');
   const { status, error, result, verify } = useVerification();
 
-  useEffect(() => {
-    if (kmsUrlParam) {
-      verify(kmsUrlParam, releaseTagParam || undefined, profileParam || undefined);
-    }
-  }, [kmsUrlParam, releaseTagParam, profileParam, verify]);
-
   return (
     <section className="verification-page">
-      <h2>KMS Instance (Phala)</h2>
+      <h2>KMS cluster (GCP TDX)</h2>
       <p className="hint">
-        Verify a Phala KMS instance by URL. The backend fetches attestation and verifies via Intel
-        Trust Authority.
+        mero-kms replicas listen only inside their VPC, so this service cannot reach them. Call a
+        replica&apos;s <code>/attest</code> from inside that network and paste the response: its quote
+        is verified by Intel Trust Authority and its MRTD/RTMR0–3 are matched against the KMS
+        allowlists of the signed <code>kms-attestation-policy</code> of each mero-kms release.
       </p>
       <KmsVerifierForm
-        initialUrl={kmsUrlParam}
         initialReleaseTag={releaseTagParam}
         initialProfile={profileParam}
         status={status}
@@ -35,7 +28,7 @@ export function KmsVerificationPage() {
       />
       {status === 'loading' && (
         <p className="status-loading">
-          Fetching attestation and verifying with Intel Trust Authority…
+          Verifying with Intel Trust Authority and matching release policies…
         </p>
       )}
       {status === 'error' && <div className="error-banner">{error}</div>}

@@ -1,9 +1,9 @@
 /**
  * Attestation parsing and extraction utilities.
- * Single responsibility: parse attestation payloads, extract compose_hash, RTMRs, MRTD from quote.
+ * Single responsibility: parse attestation payloads, extract RTMRs and MRTD from the quote.
  */
 
-import { RTMR_HEX_RE, COMPOSE_HASH_RE } from './hex.js';
+import { RTMR_HEX_RE } from './hex.js';
 
 // TDX quote binary layout (Intel TDX DCAP)
 const QUOTE_HEADER_LEN = 48;
@@ -71,34 +71,6 @@ export function extractMeasurementsFromQuoteB64(quoteB64) {
       .join('');
   }
   return out;
-}
-
-export function extractComposeHashAndAppId(eventLog) {
-  let composeHash = null;
-  let appId = null;
-  const events = Array.isArray(eventLog) ? eventLog : [];
-  for (const event of events) {
-    if (event.imr !== 3) continue;
-    const name = event.event || '';
-    // Match crypto.js buildEventDigestInput: use same payload source for consistency
-    const hasEventPayload = 'event_payload' in event;
-    const hasEventPayloadCamel = 'eventPayload' in event;
-    let payload = event.event_payload ?? event.eventPayload ?? '';
-    if (typeof payload === 'string') payload = payload.trim();
-
-    if (name === 'compose-hash' || name === 'app-id') {
-      const source = hasEventPayload ? 'event_payload' : hasEventPayloadCamel ? 'eventPayload' : 'none';
-      const payloadPreview = typeof payload === 'string' ? payload.slice(0, 24) + (payload.length > 24 ? '...' : '') : payload;
-      console.log(`[attestation] ${name}: source=${source} event_payload=${JSON.stringify(event.event_payload)} eventPayload=${JSON.stringify(event.eventPayload)} -> payload=${JSON.stringify(payloadPreview)}`);
-    }
-
-    if (name === 'compose-hash' && payload && COMPOSE_HASH_RE.test(payload)) {
-      composeHash = payload.toLowerCase();
-    } else if (name === 'app-id' && payload) {
-      appId = typeof payload === 'string' ? payload : String(payload);
-    }
-  }
-  return { composeHash, appId };
 }
 
 /** Extract RTMR0-3 and MRTD from ITA claims (nested JSON). */

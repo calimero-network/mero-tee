@@ -54,7 +54,7 @@ jobs:
             echo "Auditing release ${tag}..."
             assets_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name]')"
 
-            has_kms_assets="$(jq -r 'any(.[]; . == "kms-phala-checksums.txt")' <<< "${assets_json}")"
+            has_kms_assets="$(jq -r 'any(.[]; . == "kms-checksums.txt")' <<< "${assets_json}")"
             has_node_image_assets="$(jq -r 'any(.[]; . == "node-image-gcp-checksums.txt")' <<< "${assets_json}")"
 
             if [[ "${has_kms_assets}" != "true" && "${has_node_image_assets}" != "true" ]]; then
@@ -63,7 +63,7 @@ jobs:
             fi
 
             if [[ "${has_kms_assets}" == "true" ]]; then
-              if ! scripts/release/verify-kms-phala-release-assets.sh "${tag}"; then
+              if ! scripts/release/verify-kms-release-assets.sh "${tag}"; then
                 failures+=("${tag}:kms")
               fi
             fi
