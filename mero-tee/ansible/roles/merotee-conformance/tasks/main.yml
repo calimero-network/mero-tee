@@ -288,12 +288,17 @@
       - "'PathPrefix(`/admin-api/tee`)' not in (service_files.results[4].content | b64decode)"
       - "'Path(`/admin-api/tee/info`)' in (service_files.results[4].content | b64decode)"
       - "'Path(`/admin-api/tee/attest`)' in (service_files.results[4].content | b64decode)"
+      # mero-auth checks a scoped token against X-Forwarded-Uri/-Method; a
+      # trusted client-supplied value lets it pick the route (mero-tee#339).
+      - "'trustForwardHeader: true' not in (service_files.results[4].content | b64decode)"
+      - "'trustForwardHeader: false' in (service_files.results[4].content | b64decode)"
     fail_msg: >-
       merod/mero-auth must Require calimero-init (so they never write to
       /mnt/data before the encrypted disk is open) with core dumps off;
       mero-auth must bind loopback without --verbose; traefik must not log at
-      DEBUG, keep an access log, or expose its API; and only /admin-api/tee/info
-      and /attest may bypass auth.
+      DEBUG, keep an access log, or expose its API; only /admin-api/tee/info
+      and /attest may bypass auth; and forwardAuth must not trust the client's
+      X-Forwarded-* headers.
 
 - name: Check that observability services are not enabled by default (R7)
   command: systemctl is-enabled {{ item }}
@@ -317,3 +322,55 @@
         or ((item.stdout | trim) == '' and 'No such file' in (item.stderr | default('')))
     fail_msg: "Service {{ item.item }} should not start by default (is-enabled: '{{ item.stdout }}' {{ item.stderr | default('') }})"
   loop: "{{ observability_enabled.results }}"
+
+# fetch_secret.sh's `gcp` provider must work with snapd masked. It used to call
+# `gcloud`, which GCP Ubuntu images ship as a snap: fine on a debug image, dead
+# on this one (mero-tee#339). It now needs only curl and python3, so check that
+# each resolves to a real binary outside /snap and runs -- and that no copy of
+# the script has gone back to a cloud CLI.
+#
+# This is the part of "can the locked profile fetch a secret" a build can prove.
+# The fetch itself needs a service account and a secret, which a build VM is
+# not given; scripts/ci/tests/fetch-secret-rest-test.sh drives the request and
+# the decode against a stub metadata server and Secret Manager instead.
+- name: Resolve the tools fetch_secret.sh needs
+  shell: |
+    set -euo pipefail
+    for tool in curl python3; do
+      path="$(command -v "$tool")"
+      real="$(readlink -f "$path")"
+      echo "$tool $real"
+      case "$real" in /snap/*) echo "SNAP $tool" ;; esac
+    done
+    curl --version >/dev/null
+    python3 -c 'import base64, json'
+  args:
+    executable: /bin/bash
+  register: fetch_secret_tools
+  changed_when: false
+
+- name: Assert fetch_secret.sh's tools are not snaps
+  assert:
+    that:
+      - "'SNAP ' not in fetch_secret_tools.stdout"
+    fail_msg: >-
+      fetch_secret.sh depends on a snap-installed tool, which cannot run with
+      snapd masked: {{ fetch_secret_tools.stdout_lines | join(', ') }}
+
+- name: Read the installed fetch_secret.sh copies
+  slurp:
+    path: "{{ item }}"
+  register: fetch_secret_scripts
+  loop:
+    - /etc/vector/fetch_secret.sh
+    - /etc/vmagent/fetch_secret.sh
+
+- name: Assert fetch_secret.sh calls no cloud CLI
+  assert:
+    that:
+      - "(item.content | b64decode) is not search('(?m)^[^#]*(gcloud|aws) ')"
+    fail_msg: >-
+      {{ item.item }} invokes gcloud or aws. Those are snaps on this base image
+      and cannot run with snapd masked; use the REST API as the gcp provider
+      does.
+  loop: "{{ fetch_secret_scripts.results }}"
