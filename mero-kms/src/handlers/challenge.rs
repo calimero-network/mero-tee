@@ -1,5 +1,5 @@
 //! `/challenge` endpoint: issues short-lived, stateless challenge tokens (see
-//! `challenge_token`).
+//! `stateless_challenge`).
 
 use axum::extract::State;
 use axum::Json;
@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::challenge_token;
+use crate::stateless_challenge;
 use crate::util::{unix_now_secs, MAX_PEER_ID_LENGTH};
 
 use super::errors::ServiceError;
@@ -43,11 +43,13 @@ pub(crate) async fn challenge_handler(
     let key = state.backend.challenge_key()?;
     let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
-    let challenge = challenge_token::issue(&key, &request.peer_id, expires_at);
+    // Any replica of the cluster can check this challenge; see
+    // `stateless_challenge`. Nothing is stored.
+    let (challenge_id, nonce) = stateless_challenge::issue(&key, &request.peer_id, expires_at);
 
     Ok(Json(ChallengeResponse {
-        challenge_id: challenge.token,
-        nonce_b64: BASE64.encode(challenge.nonce),
+        challenge_id,
+        nonce_b64: BASE64.encode(nonce),
         expires_at,
     }))
 }

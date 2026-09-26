@@ -13,8 +13,8 @@ use axum::{Json, Router};
 use std::sync::Arc;
 
 use crate::backend::TdxBackend;
-use crate::challenge_token::ReplayGuard;
 use crate::cluster::{self, JoinNonces};
+use crate::stateless_challenge::SpentChallenges;
 use crate::Config;
 
 pub(crate) use attest::decode_fixed_b64_32;
@@ -26,21 +26,21 @@ const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 pub struct AppState {
     /// Service configuration and attestation policy.
     pub config: Config,
-    /// Challenges this replica already consumed.
-    pub(crate) consumed_challenges: Arc<ReplayGuard>,
     /// Where keys and quotes come from.
     pub(crate) backend: Arc<TdxBackend>,
     /// Nonces this replica issued to replicas joining its cluster.
     pub(crate) join_nonces: Arc<JoinNonces>,
+    /// The stateless challenges this replica has already accepted.
+    pub(crate) spent_challenges: Arc<SpentChallenges>,
 }
 
 /// Create the router with all endpoints.
 pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router {
     let state = AppState {
-        consumed_challenges: Arc::new(ReplayGuard::new(config.max_consumed_challenges)),
         config,
         backend,
         join_nonces: Arc::new(JoinNonces::default()),
+        spent_challenges: Arc::new(SpentChallenges::default()),
     };
 
     Router::new()

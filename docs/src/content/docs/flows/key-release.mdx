@@ -38,25 +38,24 @@ reaches the replica that served its `/challenge`, and it does not need to.
    { "peerId": "12D3KooW..." }
    ```
 
-2. **KMS mints a stateless challenge.** It generates a cryptographically random 32-byte
-   nonce and returns it inside a token that is the challenge ID: `nonce ‖ expiresAt ‖
-   tag`, hex-encoded (144 characters), where `tag` is an HMAC-SHA256 over the nonce, the
-   expiry and the peer ID under a challenge key HKDF'd from the cluster root. Nothing is
-   stored.
+2. **KMS mints a stateless challenge.** The challenge ID is 16 random bytes and the
+   expiry, hex-encoded (48 characters). The nonce is an HMAC-SHA256 over the ID and the
+   peer ID under a challenge key HKDF'd from the cluster root. Nothing is stored.
 
 3. **KMS responds:**
 
    ```json
    {
-     "challengeId": "<144 hex chars>",
-     "nonceB64": "<base64 of 32 random bytes>",
+     "challengeId": "<48 hex chars>",
+     "nonceB64": "<base64 of the 32-byte nonce>",
      "expiresAt": 1700000000
    }
    ```
 
-Because the challenge carries everything needed to check it, authenticated with a key
-only the cluster holds, any replica can verify it, and it verifies only for the peer
-that asked for it (`mero-kms/src/challenge_token.rs`). Challenges expire after
+Because the nonce is recomputed from the challenge ID with a key only the cluster
+holds, any replica can recompute it, and only for the peer that asked for it
+(`mero-kms/src/stateless_challenge.rs`). A forged ID yields a nonce its forger cannot
+compute, so the node's signature and quote refuse it. Challenges expire after
 `CHALLENGE_TTL_SECS` (default **60 seconds**). A replica without its root cannot issue
 one and answers `503 policy_not_ready`.
 
@@ -67,7 +66,7 @@ signs a payload binding the challenge to its key, and calls `/get-key`:
 
 ```json
 {
-  "challengeId": "<144 hex chars>",
+  "challengeId": "<48 hex chars>",
   "quoteB64": "<base64 raw TDX quote>",
   "peerId": "12D3KooW...",
   "peerPublicKeyB64": "<base64 protobuf libp2p public key>",
@@ -81,7 +80,7 @@ check, so a request replayed to the same replica always fails on its second atte
 regardless of where the first attempt errored:
 
 1. **Validate inputs.** Peer-ID shape (base58btc, ≤128 chars) and challenge-ID shape
-   (144 hex chars) are checked; the quote is base64-decoded. Without `sealToB64` the
+   (48 hex chars) are checked; the quote is base64-decoded. Without `sealToB64` the
    request is refused (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, on in every image).
 
 2. **Root gate.** If the replica does not hold its cluster's root yet, key release is

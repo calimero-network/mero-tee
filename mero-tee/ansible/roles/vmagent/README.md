@@ -6,7 +6,7 @@ This Ansible role installs vmagent (VictoriaMetrics Agent) binary and setup scri
 
 - Ansible 2.9+
 - Ubuntu/Debian-based system
-- curl and python3 (for the `gcp` secret provider, which calls the metadata server and Secret Manager's REST API directly). No cloud CLI: `gcloud` is a snap on GCP Ubuntu images and cannot run on `locked-read-only`, where snapd is masked.
+- No cloud CLI. The bearer token is a file already on the node (`provided` provider): mdma delivers it as `observability-token` metadata, and calimero-init writes it to `/etc/vector/provided_token`.
 
 ## Role Variables
 
@@ -54,7 +54,7 @@ After the image is built and the instance is deployed, configure vmagent in two 
 1. **Create scrape configuration** - Define what metrics to collect
 2. **Run configure script** - Set up vmagent with bearer token and systemd service
 
-### With Authentication (GCP example)
+### With Authentication
 
 ```bash
 #!/bin/bash
@@ -90,8 +90,8 @@ EOF
   "/etc/vmagent/scrape_config.yml" \
   "https://victoria-lb.apps.dev.p2p.aws.calimero.network/api/v1/write" \
   "true" \
-  "gcp" \
-  "victoria-lb-metrics-bearer-token"
+  "provided" \
+  "/etc/vector/provided_token"
 ```
 
 ### Without Authentication (for internal VPC endpoints)
@@ -130,34 +130,14 @@ The `configure_vmagent.sh` script takes 5 parameters:
 1. **config_file_path** - Path to the scrape configuration YAML file
 2. **remote_write_url** - VictoriaMetrics remote write endpoint
 3. **auth_enabled** - "true" or "false" for bearer token authentication
-4. **secret_provider** - "gcp" (Secret Manager) or "provided" (a token file already on the node; `secret_name` is its path). Only used if auth_enabled=true
-5. **secret_name** - Secret name or path (only used if auth_enabled=true)
+4. **secret_provider** - "provided": a token file already on the node (only used if auth_enabled=true)
+5. **secret_name** - Path of that token file (only used if auth_enabled=true)
 
 The configure script will:
 1. Validate scrape configuration file exists
-2. Fetch bearer token from secrets manager (if auth enabled)
+2. Read the bearer token file (if auth enabled)
 3. Create systemd service file with proper flags
 4. Enable and start vmagent service
-
-## IAM/Permissions Requirements
-
-### GCP
-
-When using authentication with GCP, the compute instance's service account must have the Secret Manager role:
-
-```terraform
-service_account_roles = [
-  "roles/secretmanager.secretAccessor"
-]
-```
-
-Or grant the permission manually:
-
-```bash
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:SERVICE_ACCOUNT_EMAIL" \
-  --role="roles/secretmanager.secretAccessor"
-```
 
 ## Verification
 

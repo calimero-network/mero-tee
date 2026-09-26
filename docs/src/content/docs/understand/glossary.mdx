@@ -44,9 +44,9 @@ and peer ID, so any replica can redeem it; each replica keeps a replay set until
 expiry.
 
 **ChallengeId** — the stateless challenge token returned by `/challenge` and echoed
-back to `/get-key`: `nonce ‖ expiresAt ‖ tag`, hex-encoded to 144 characters, where
-the tag is an HMAC-SHA256 over the nonce, expiry and peer ID under a key derived from
-the cluster root (`mero-kms/src/challenge_token.rs`). (It is not a UUID.)
+back to `/get-key`: 16 random bytes and the expiry, hex-encoded to 48 characters. Its
+nonce is an HMAC-SHA256 over the ID and the peer ID under a key derived from the
+cluster root (`mero-kms/src/stateless_challenge.rs`). (It is not a UUID.)
 
 **Cluster** — the five KMS replicas (three zones, at least two regions) that
 serve one release, behind one VPC-internal URL. One cluster per release; an

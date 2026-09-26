@@ -194,9 +194,7 @@ scripts. All are optional except where noted:
 | `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and, on `locked-read-only`, `MERO_TEE_PROFILE=locked-read-only`. **Refused if older than the image** (downgrade protection) | unset → env file removed |
 | `kms-url` | the VPC-internal URL of the release's KMS cluster, which the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
-| `metrics-secret-name` | GCP Secret Manager name for authenticated metrics push — see the warning below | none |
 | `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
-| `logs-secret-name` | GCP Secret Manager name for authenticated log push — see the warning below | none |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the node falls back to the credential MDMA delivers on a `should-join` poll |
 | `merod-version` | **only** used to download binaries at boot if they were not baked into the image — debug profiles only; `locked-read-only` refuses to boot rather than run an unmeasured binary | required only when unbaked |
 
@@ -206,22 +204,13 @@ present. `node_exporter` is started alongside `vmagent`, because it is the only
 thing the default scrape config targets — its unit file is installed by the
 image but is not enabled, so without that it would be a dead scrape target.
 
-:::caution[`*-secret-name` does not work on MDMA-created nodes]
-Those two keys make `fetch_secret.sh` read **GCP Secret Manager**, which needs a
-cloud identity. MDMA creates node instances with **no `serviceAccounts` field at
-all**, so such a node has none, and the metadata server's token endpoint has
-nothing to give it.
-
-On a node that does have a service account holding
-`roles/secretmanager.secretAccessor`, the `gcp` provider works on every profile,
-`locked-read-only` included. It calls the metadata server and Secret Manager's
-REST API with `curl` and uses no `gcloud`. That CLI is a snap on the GCP Ubuntu
-base image, and snapd is masked on `locked-read-only`.
-
-Use `observability-token` instead. It carries the credential itself, and the
-`provided` provider simply reads it from disk. The `*-secret-name` keys remain
-for nodes provisioned some other way, and `observability-token` wins when both
-are set.
+:::note[The observability credential comes only from MDMA]
+`observability-token` is the only way a node gets the token its shippers
+present, and the `provided` provider simply reads it from disk. There is no
+Secret Manager path: MDMA creates node instances with **no `serviceAccounts`
+field at all**, so a node has no cloud identity to read a secret with. The
+`logs-secret-name` and `metrics-secret-name` keys that used to select that path
+are no longer read.
 :::
 
 :::note[Instance metadata is set at creation only]

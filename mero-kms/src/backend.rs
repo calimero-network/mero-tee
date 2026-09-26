@@ -7,8 +7,8 @@
 //! replica can hold it. Quotes come from the kernel's configfs-tsm interface.
 //!
 //! A node's key derives on the path `{namespace}/{profile}/{peerId}`, the
-//! transport key on [`sealed::TRANSPORT_KEY_PATH`], and the key that MACs
-//! `/challenge` tokens on [`CHALLENGE_KEY_PATH`].
+//! transport key on [`sealed::TRANSPORT_KEY_PATH`], and the key `/challenge`
+//! nonces are MACed with under a salt of its own ([`CHALLENGE_KEY_SALT`]).
 
 use std::sync::RwLock;
 
@@ -17,7 +17,6 @@ use calimero_tee_attestation::generate_mock_attestation;
 use calimero_tee_attestation::{generate_attestation, AttestationResult};
 use eyre::{bail, Result as EyreResult};
 use ring::hkdf::{KeyType, Salt, HKDF_SHA256};
-use ring::hmac;
 use sha2::{Digest, Sha256};
 use tracing::info;
 use zeroize::Zeroizing;
@@ -29,10 +28,11 @@ use crate::sealed::{self, TransportKey};
 /// Salt for every key derived from a TDX root.
 const ROOT_DERIVE_SALT: &[u8] = b"mero-kms/tdx-root/derive/v1";
 
-/// The derivation path of the key that MACs challenge tokens (see
-/// `challenge_token`). Never a peer key's path: those are
-/// `{namespace}/{profile}/{peerId}` under a configured namespace.
-pub(crate) const CHALLENGE_KEY_PATH: &str = "mero-kms/challenge/v1";
+/// Salt for the key `/challenge` nonces are MACed with. A salt of its own, not a
+/// path under [`ROOT_DERIVE_SALT`]: node keys are HKDF over
+/// `{prefix}/{profile}/{peerId}`, with the prefix taken from config, so no path
+/// string is guaranteed never to name a node's key.
+const CHALLENGE_KEY_SALT: &[u8] = b"mero-kms/tdx-root/challenge-mac/v1";
 
 /// Report data for the quote a TDX replica takes of itself at startup, to learn
 /// its own measurements.
@@ -84,6 +84,10 @@ impl Root {
 
     /// HKDF-SHA256 of the root, with `path` as the info.
     fn derive(&self, path: &str) -> Zeroizing<[u8; KEY_LEN]> {
+        self.derive_salted(ROOT_DERIVE_SALT, path)
+    }
+
+    fn derive_salted(&self, salt: &[u8], path: &str) -> Zeroizing<[u8; KEY_LEN]> {
         struct Len;
         impl KeyType for Len {
             fn len(&self) -> usize {
@@ -91,7 +95,7 @@ impl Root {
             }
         }
         let mut out = Zeroizing::new([0u8; KEY_LEN]);
-        Salt::new(HKDF_SHA256, ROOT_DERIVE_SALT)
+        Salt::new(HKDF_SHA256, salt)
             .extract(self.0.as_ref())
             .expand(&[path.as_bytes()], Len)
             // SAFETY: 32 bytes is far below HKDF-SHA256's 255 * 32 limit.
@@ -223,13 +227,11 @@ impl TdxBackend {
         ))
     }
 
-    /// The HMAC key for challenge tokens. Every replica of the cluster derives
-    /// the same one, so a token one replica issued verifies on any other.
-    pub(crate) fn challenge_key(&self) -> Result<hmac::Key, ServiceError> {
-        Ok(hmac::Key::new(
-            hmac::HMAC_SHA256,
-            &*self.derive(CHALLENGE_KEY_PATH)?,
-        ))
+    /// The key every replica of this cluster MACs `/challenge` nonces with. It
+    /// comes from the root, so a challenge one replica issued checks out on any
+    /// other, and no replica has to share state with another to serve it.
+    pub(crate) fn challenge_key(&self) -> Result<Zeroizing<[u8; KEY_LEN]>, ServiceError> {
+        self.with_root(|root| Ok(root.derive_salted(CHALLENGE_KEY_SALT, "challenge")))
     }
 
     pub(crate) async fn quote(
@@ -297,11 +299,17 @@ mod tests {
         assert_ne!(*root.derive(path), *root.derive("merod/storage/debug/a"));
         assert_ne!(*root.derive(path), *other.derive(path));
         assert_ne!(*root.derive(path), *root.derive(sealed::TRANSPORT_KEY_PATH));
-        assert_ne!(*root.derive(path), *root.derive(CHALLENGE_KEY_PATH));
-        assert_ne!(
-            *root.derive(CHALLENGE_KEY_PATH),
-            *root.derive(sealed::TRANSPORT_KEY_PATH)
-        );
+    }
+
+    /// The challenge MAC key has a salt of its own, so no node key path, from
+    /// any configured prefix, can name it.
+    #[test]
+    fn the_challenge_key_is_no_path_key() {
+        let root = Root::from_bytes(&[7; KEY_LEN]).unwrap();
+        let challenge = root.derive_salted(CHALLENGE_KEY_SALT, "challenge");
+        assert_ne!(*challenge, *root.derive("challenge"));
+        assert_ne!(*challenge, *root.derive("merod/storage/locked-read-only/a"));
+        assert_ne!(*challenge, *root.derive(sealed::TRANSPORT_KEY_PATH));
     }
 
     /// Pinned so a change to the derivation, which would strand every disk of

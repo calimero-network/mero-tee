@@ -525,8 +525,9 @@ async fn get_key_error(app: &Router, challenge_id: &str, peer_id: &str) -> Strin
 }
 
 /// Replicas share no storage: a challenge one replica issued must pass on any
-/// other replica of the same cluster, once per replica, and on no replica of
-/// another cluster.
+/// other replica of the same cluster, once per replica. (Another cluster opens
+/// it to a different nonce, which the node's signature and quote then fail;
+/// `stateless_challenge`'s tests cover that binding.)
 #[tokio::test]
 async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster() {
     let peer_id = Keypair::generate_ed25519()
@@ -535,13 +536,9 @@ async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster
         .to_base58();
     let replica_a = create_router(Config::default(), replica(7));
     let replica_b = create_router(Config::default(), replica(7));
-    let other_cluster = create_router(Config::default(), replica(8));
 
     let challenge_id = issue_challenge(&replica_a, &peer_id).await;
-    assert_eq!(
-        get_key_error(&other_cluster, &challenge_id, &peer_id).await,
-        "invalid_challenge"
-    );
+    assert_eq!(challenge_id.len(), crate::stateless_challenge::ID_HEX_LEN);
     assert_eq!(
         get_key_error(&replica_b, &challenge_id, &peer_id).await,
         "invalid_peer_public_key"
@@ -558,14 +555,10 @@ async fn an_expired_challenge_is_refused() {
         .public()
         .to_peer_id()
         .to_base58();
-    let app = create_router(
-        Config {
-            challenge_ttl_secs: 0,
-            ..Config::default()
-        },
-        replica(7),
-    );
-    let challenge_id = issue_challenge(&app, &peer_id).await;
+    let app = create_router(Config::default(), replica(7));
+    let mut challenge_id = issue_challenge(&app, &peer_id).await;
+    // Set the expiry (bytes 16..24) to the epoch.
+    challenge_id.replace_range(32..48, &"0".repeat(16));
     assert_eq!(
         get_key_error(&app, &challenge_id, &peer_id).await,
         "invalid_challenge"
@@ -580,15 +573,28 @@ async fn a_tampered_challenge_is_refused() {
         .to_base58();
     let app = create_router(Config::default(), replica(7));
     let mut challenge_id = issue_challenge(&app, &peer_id).await;
-    // Push the expiry (bytes 32..40) far into the future.
-    challenge_id.replace_range(64..66, "ff");
+    // Push the expiry (bytes 16..24) far past anything this KMS issues.
+    challenge_id.replace_range(32..34, "ff");
     assert_eq!(
         get_key_error(&app, &challenge_id, &peer_id).await,
         "invalid_challenge"
     );
 }
 
-/// The token is keyed by the root, so a replica that has not joined its
+#[tokio::test]
+async fn a_malformed_challenge_id_is_refused() {
+    let peer_id = Keypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_base58();
+    let app = create_router(Config::default(), replica(7));
+    assert_eq!(
+        get_key_error(&app, &"a".repeat(32), &peer_id).await,
+        "invalid_challenge"
+    );
+}
+
+/// The challenge key comes from the root, so a replica that has not joined its
 /// cluster yet can neither issue nor check one.
 #[tokio::test]
 async fn a_replica_without_a_root_issues_no_challenge() {

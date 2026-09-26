@@ -61,12 +61,15 @@ disabled (`build_cors_layer`, `mero-kms/src/main.rs`).
 | `CHALLENGE_TTL_SECS` | `u64` — `60` | Lifetime of a challenge in seconds. After expiry it can no longer be redeemed. |
 | `MAX_CONSUMED_CHALLENGES` | `usize` — `10000` | How many used, unexpired challenges one replica remembers in order to refuse their replay. When full, `/get-key` answers `429 rate_limited`. Must be greater than `0` or startup fails. |
 
-Challenges are **stateless across replicas** (`mero-kms/src/challenge_token.rs`).
-The `challengeId` is the token itself: the 32-byte nonce, the expiry, and an
-HMAC-SHA256 tag (domain `mero-kms/challenge-token/v1`) over both and the peer ID,
-keyed with a challenge key HKDF'd from the cluster root (path `mero-kms/challenge/v1`). Any replica behind the cluster's URL can check a challenge
-another replica issued, and a challenge verifies only for the peer that asked for
-it. Each replica remembers the challenges it has redeemed until they expire.
+Challenges are **stateless across replicas** (`mero-kms/src/stateless_challenge.rs`).
+The `challengeId` is 16 random bytes and the expiry (48 hex characters), and the
+nonce is an HMAC-SHA256 over the ID and the peer ID, keyed with a challenge key
+HKDF'd from the cluster root under a salt of its own
+(`mero-kms/tdx-root/challenge-mac/v1`), so no node key path can name it. Any
+replica behind the cluster's URL recomputes the nonce of a challenge another
+replica issued, and a challenge yields the right nonce only for the peer that
+asked for it. An expiry later than `now + CHALLENGE_TTL_SECS` plus 30 seconds of
+clock skew is refused. Each replica remembers the challenges it has redeemed until they expire.
 There is no shared store and no Redis.
 
 ### Profile & key derivation

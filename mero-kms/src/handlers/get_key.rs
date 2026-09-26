@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
-use crate::challenge_token::{self, ChallengeError};
 use crate::policy::AttestationPolicy;
 use crate::sealed;
+use crate::stateless_challenge;
 use crate::util::unix_now_secs;
 use crate::Config;
 
@@ -64,7 +64,7 @@ pub struct GetKeyResponse {
 ///
 /// The challenge is consumed *before* signature/attestation checks so that a
 /// request replayed to the same replica always fails on the second attempt
-/// regardless of where the first attempt errored (see `challenge_token` for
+/// regardless of where the first attempt errored (see `stateless_challenge` for
 /// why single use is per replica).
 pub(crate) async fn get_key_handler(
     State(state): State<AppState>,
@@ -90,7 +90,7 @@ pub(crate) async fn get_key_handler(
         ));
     }
 
-    let challenge_nonce = consume_challenge(&state, &request.challenge_id, &request.peer_id)?;
+    let challenge_nonce = consume_challenge(&state, &request)?;
 
     verify_peer_signature(
         &request.peer_id,
@@ -242,24 +242,27 @@ pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Check `token` against this cluster's challenge key and mark it used on
-/// this replica. Returns the nonce the node's quote must carry.
-fn consume_challenge(
-    state: &AppState,
-    token: &str,
-    peer_id: &str,
-) -> Result<[u8; 32], ServiceError> {
-    let key = state.backend.challenge_key()?;
+/// The nonce `request`'s challenge was issued with, marking the challenge used
+/// on this replica. It is recomputed from the challenge itself
+/// (`stateless_challenge`), so a challenge any replica of the cluster issued is
+/// accepted.
+fn consume_challenge(state: &AppState, request: &GetKeyRequest) -> Result<[u8; 32], ServiceError> {
     let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
-    challenge_token::verify(&key, token, peer_id, now)
-        .and_then(|verified| {
-            state.consumed_challenges.consume(&verified, now)?;
-            Ok(verified.nonce)
-        })
-        .map_err(|err| match err {
-            ChallengeError::CapacityExceeded => ServiceError::RateLimited(err.to_string()),
-            _ => ServiceError::InvalidChallenge(format!("Challenge validation failed: {err}")),
-        })
+    let key = state.backend.challenge_key()?;
+    let (nonce, expires_at) = stateless_challenge::open(
+        &key,
+        &request.challenge_id,
+        &request.peer_id,
+        now,
+        state.config.challenge_ttl_secs,
+    )?;
+    state.spent_challenges.spend(
+        &request.challenge_id,
+        expires_at,
+        now,
+        state.config.max_consumed_challenges,
+    )?;
+    Ok(nonce)
 }
 
 /// Build the key derivation path: `{namespace}/{profile}/{peerId}`.

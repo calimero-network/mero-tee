@@ -4,16 +4,16 @@
 //! storage encryption keys based on peer ID. It runs as a cluster of plain TDX VMs; keys
 //! derive from a cluster root that exists only in the replicas' memory (see `backend` and
 //! `cluster`), and challenges are stateless so any replica can serve any request (see
-//! `challenge_token`).
+//! `stateless_challenge`).
 
 mod backend;
-mod challenge_token;
 mod cluster;
 mod config;
 mod handlers;
 mod measurement;
 mod policy;
 mod sealed;
+mod stateless_challenge;
 mod util;
 
 #[cfg(test)]

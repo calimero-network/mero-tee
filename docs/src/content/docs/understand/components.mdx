@@ -52,7 +52,7 @@ exchange step by step; [trust model](/understand/trust-model/) covers the checks
 | `src/cluster.rs` | Bootstrap and the attested join protocol ("same as me", debug TDs refused, the root sealed between one-time X25519 keys). |
 | `src/policy.rs` | `AttestationPolicy` model and fail-closed startup validation. |
 | `src/measurement.rs`, `src/util.rs` | The 48-byte SHA-384 `HexMeasurement` newtype, the debug-TD check, and hex helpers. |
-| `src/challenge_token.rs` | Stateless challenges: tokens HMAC'd with a root-derived key, plus a per-replica replay set until expiry. |
+| `src/stateless_challenge.rs` | Stateless challenges: nonces HMAC'd from the challenge ID and peer ID with a root-derived key, plus a per-replica set of spent challenges until expiry. |
 | `src/sealed.rs` | Sealing released keys to the node's one-time key. |
 | `src/handlers/` | `challenge.rs`, `get_key.rs`, `attest.rs`, and the `errors.rs` `ServiceError` enum. |
 

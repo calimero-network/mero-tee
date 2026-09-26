@@ -17,18 +17,18 @@ replaced by a new VM that joins its peers. See the [design](../docs/design/gcp-t
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | `{"status":"alive","service":"mero-kms","clusterRootReady":bool}` |
-| `POST` | `/challenge` | Issue a challenge token for a peer (503 until the replica holds the root) |
+| `POST` | `/challenge` | Issue a challenge for a peer (503 until the replica holds the root) |
 | `POST` | `/get-key` | Verify the challenge, signature and attestation, and release the node's key |
 | `POST` | `/attest` | KMS self-attestation: a quote over the caller's nonce, optionally reporting the transport key |
 | `POST` | `/cluster/nonce` | Single-use nonce for a replica joining the cluster |
 | `POST` | `/cluster/join` | Give the root to a replica with exactly this replica's measurements |
 
 Every replica sits behind one load-balanced URL, with no stickiness and no shared
-storage. The `challengeId` `/challenge` returns is therefore self-contained: the
-nonce, its expiry and an HMAC-SHA256 tag over them and the peer id, keyed by a key
-HKDF'd from the root (`mero-kms/challenge/v1`). Any replica of the cluster verifies
-it; each replica refuses a challenge it already consumed until it expires. See
-`src/challenge_token.rs`.
+storage. The `challengeId` `/challenge` returns is therefore self-contained: 16
+random bytes and its expiry, and its nonce is an HMAC-SHA256 over the ID and the
+peer id, keyed by a key HKDF'd from the root under a salt of its own. Any replica of
+the cluster recomputes the nonce; each replica refuses a challenge it already
+accepted until it expires. See `src/stateless_challenge.rs`.
 
 ## Quick Start
 
@@ -56,7 +56,7 @@ at least one allowed value. See `src/config/mod.rs` for the full table.
 | `MERO_KMS_BOOTSTRAP` | `false` | Generate the cluster root (exactly one replica, once) |
 | `MERO_KMS_PEERS` | — | Comma-separated base URLs of replicas to join from; required unless bootstrapping |
 | `MERO_KMS_JOIN_RETRY_SECS` | `10` | Pause between rounds of join attempts |
-| `CHALLENGE_TTL_SECS` | `60` | Lifetime of a challenge token |
+| `CHALLENGE_TTL_SECS` | `60` | Lifetime of a challenge |
 | `MAX_CONSUMED_CHALLENGES` | `10000` | Used, unexpired challenges one replica remembers; `/get-key` answers 429 when full |
 | `CORS_ALLOWED_ORIGINS` | — | Comma-separated CORS origins; CORS is off when unset |
 | `ACCEPT_MOCK_ATTESTATION` | `false` | Only with the `mock-attestation` feature: accept mock quotes. Never in production |

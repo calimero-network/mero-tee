@@ -8,8 +8,8 @@
 #   partial_config_path   - Path to partial vector config with sources/transforms (e.g., /etc/vector/vector_partial.yaml)
 #   victoria_logs_url     - Victoria Logs endpoint URL
 #   auth_enabled          - "true" or "false"
-#   secret_provider       - "gcp" or "provided" (only used if auth_enabled=true)
-#   secret_name           - Secret name/path (only used if auth_enabled=true)
+#   secret_provider       - "provided" (only used if auth_enabled=true)
+#   secret_name           - path of the token file (only used if auth_enabled=true)
 #
 # Example:
 # ./configure_vector.sh \
