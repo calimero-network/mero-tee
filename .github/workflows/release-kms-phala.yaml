@@ -624,19 +624,24 @@ jobs:
           compose_hash_debug="$(jq -r '.compose_hash // ""' "${app_identity_debug}")"
           compose_hash_debug_ro="$(jq -r '.compose_hash // ""' "${app_identity_debug_ro}")"
           compose_hash_locked="$(jq -r '.compose_hash // ""' "${app_identity_locked}")"
-          if [[ -n "${compose_hash_debug}" && -n "${compose_hash_debug_ro}" && -n "${compose_hash_locked}" ]]; then
-            for h in compose_hash_debug compose_hash_debug_ro compose_hash_locked; do
-              val="${!h}"
-              if [[ ! "${val}" =~ ^[a-f0-9]{64}$ ]]; then
-                echo "::error::Invalid compose_hash for ${h}: ${val}"
-                exit 1
-              fi
-            done
-          else
-            echo "::warning::compose_hash not available from probe (compose_hash_skipped); omitting from release assets"
-            compose_hash_debug=""
-            compose_hash_debug_ro=""
-            compose_hash_locked=""
+          # merod refuses a KMS whose RTMR3 compose-hash event is not in
+          # kms_allowed_event_payload (mero-tee#338), so a policy without one
+          # would verify no KMS at all. Fail the release rather than publish it.
+          for h in compose_hash_debug compose_hash_debug_ro compose_hash_locked; do
+            val="${!h}"
+            if [[ ! "${val}" =~ ^[a-f0-9]{64}$ ]]; then
+              echo "::error::Missing or invalid compose_hash for ${h}: '${val}'"
+              exit 1
+            fi
+          done
+          # The profile is part of the compose file, so each profile's KMS app
+          # has its own compose hash. A shared one would let a debug KMS stand
+          # in for a locked one.
+          if [[ "${compose_hash_debug}" == "${compose_hash_locked}" \
+             || "${compose_hash_debug_ro}" == "${compose_hash_locked}" \
+             || "${compose_hash_debug}" == "${compose_hash_debug_ro}" ]]; then
+            echo "::error::KMS profiles share a compose hash; each profile must run its own compose file"
+            exit 1
           fi
           if [[ ! -f "${node_policy_file}" ]]; then
             echo "::error::Node policy not found at ${node_policy_file}"

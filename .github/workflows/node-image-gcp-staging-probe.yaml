@@ -79,6 +79,11 @@ on:
         description: "Optional comma-separated acceptable probe result codes"
         required: false
         default: ""
+      log_auth_check:
+        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it"
+        required: false
+        type: boolean
+        default: false
       log_verbosity:
         description: "Logging verbosity: compact (default) or debug"
         required: false
@@ -287,9 +292,36 @@ jobs:
             --target-tags "${{ steps.params.outputs.firewall_tag }}" \
             --description "Temporary node e2e ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
 
+      # The chain mdma relies on to make a node's logs arrive at all: the token
+      # in `observability-token` metadata, written out by calimero-init, and
+      # presented by vector through the `provided` provider. A break anywhere
+      # makes the sink reject every write, silently from the node's side.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ inputs.log_auth_check }}
+        env:
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          VM_NETWORK: ${{ steps.params.outputs.vm_network }}
+          VM_SUBNETWORK: ${{ steps.params.outputs.vm_subnetwork }}
+          NODE_TAG: ${{ steps.params.outputs.firewall_tag }}
+          RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
       - name: Create ephemeral TDX VM
+        env:
+          LOG_AUTH_CHECK: ${{ inputs.log_auth_check }}
+          RECEIVER_IP: ${{ steps.log_auth.outputs.receiver_ip }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
         run: |
           set -euo pipefail
+          metadata="merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true"
+          if [[ "${LOG_AUTH_CHECK}" == "true" ]]; then
+            # The same two keys mdma sets; the receiver stands in for the sink.
+            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
+            rm -f "${TOKEN_FILE}"
+          fi
           gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --zone "${{ steps.params.outputs.vm_zone }}" \
@@ -302,7 +334,7 @@ jobs:
             --image "${{ steps.params.outputs.image_name }}" \
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
-            --metadata "merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true" \
+            --metadata "${metadata}" \
             --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
 
       - name: Wait for VM and admin API readiness
@@ -478,6 +510,16 @@ jobs:
         run: |
           bash scripts/ci/probes/node_runtime_kms_probe.sh
 
+      - name: Verify node pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ inputs.log_auth_check }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
+
       - name: Verify quote externally and derive policy candidates
         id: verify_external
         run: |
@@ -532,6 +574,8 @@ jobs:
             --entry "attestation-context.json|Probe context metadata" \
             --entry "node-client-verification.json|Anti-fake verification outcomes" \
             --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
+            --entry "node-log-auth-result.json|Log-auth check: pushes seen by the receiver" \
+            --entry "log-auth-receiver-serial.log|Log-auth receiver serial console" \
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
             --entry "ita-ci-verification-summary.json|ITA JWT tdx fields + node quote SHA-256 (CI summary)" \
             --entry "external-attestation-token-claims.json|ITA JWT claims (full)" \
@@ -566,6 +610,12 @@ jobs:
           gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --quiet || true
+          if [[ "${{ inputs.log_auth_check }}" == "true" ]]; then
+            VM_PROJECT="${{ steps.params.outputs.vm_project }}" \
+            VM_ZONE="${{ steps.params.outputs.vm_zone }}" \
+            RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              bash scripts/ci/probes/node_log_auth_probe.sh cleanup
+          fi
 
       - name: Summarize node probe run
         if: ${{ always() }}
@@ -580,6 +630,8 @@ jobs:
               result_reason="ANTI_FAKE_CHECK_FAILED"
             elif [[ "${{ steps.runtime_probe.outcome }}" == "failure" ]]; then
               result_reason="KMS_PROBE_EXPECTATION_MISMATCH"
+            elif [[ "${{ steps.log_auth.outcome }}" == "failure" || "${{ steps.verify_log_auth.outcome }}" == "failure" ]]; then
+              result_reason="LOG_AUTH_CHECK_FAILED"
             elif [[ "${{ steps.verify_external.outcome }}" == "failure" ]]; then
               result_reason="ITA_VERIFICATION_FAILURE"
             else
@@ -597,6 +649,7 @@ jobs:
             --arg endpoint_outcome "${{ steps.endpoint.outcome || 'skipped' }}" \
             --arg anti_fake_outcome "${{ steps.verify_anti_fake.outcome || 'skipped' }}" \
             --arg runtime_outcome "${{ steps.runtime_probe.outcome || 'skipped' }}" \
+            --arg log_auth_outcome "${{ steps.verify_log_auth.outcome || 'skipped' }}" \
             --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
             --arg job_status "${{ job.status }}" \
             --arg reason "${result_reason}" \
@@ -620,6 +673,7 @@ jobs:
                     ("- Endpoint readiness: " + $endpoint_outcome),
                     ("- Anti-fake checks: " + $anti_fake_outcome),
                     ("- Runtime node->KMS probe: " + $runtime_outcome),
+                    ("- Log push authenticated: " + $log_auth_outcome),
                     ("- External verification: " + $external_outcome)
                   ]
                 },

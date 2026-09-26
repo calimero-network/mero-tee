@@ -132,6 +132,7 @@ jq -e --arg tag "${logical_tag}" --arg profile "${profile}" '
   (((.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1) | type == "array" and length > 0)) and
   (((.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2) | type == "array" and length > 0)) and
   (((.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3) | type == "array" and length > 0)) and
+  ((.policy.kms_allowed_event_payload // []) | type == "array" and length > 0 and all(type == "string" and test("^[a-f0-9]{64}$"))) and
   (.kms.attest_endpoint == "/attest") and
   (.kms.default_binding_b64 | type == "string" and length > 0)
 ' "${policy_file}" >/dev/null
@@ -143,6 +144,9 @@ allowed_rtmr0="$(jq -c '.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0' "${p
 allowed_rtmr1="$(jq -c '.policy.kms_allowed_rtmr1 // .policy.allowed_rtmr1' "${policy_file}")"
 allowed_rtmr2="$(jq -c '.policy.kms_allowed_rtmr2 // .policy.allowed_rtmr2' "${policy_file}")"
 allowed_rtmr3="$(jq -c '.policy.kms_allowed_rtmr3 // .policy.allowed_rtmr3' "${policy_file}")"
+# The released KMS compose files. merod replays the KMS's RTMR3 event log and
+# refuses a KMS app running any other compose file (mero-tee#338).
+allowed_compose_hashes="$(jq -c '.policy.kms_allowed_event_payload' "${policy_file}")"
 binding_b64="$(jq -r '.kms.default_binding_b64' "${policy_file}")"
 commit_sha="$(jq -r '.commit_sha' "${policy_file}")"
 
@@ -164,6 +168,7 @@ allowed_rtmr0 = ${allowed_rtmr0}
 allowed_rtmr1 = ${allowed_rtmr1}
 allowed_rtmr2 = ${allowed_rtmr2}
 allowed_rtmr3 = ${allowed_rtmr3}
+allowed_compose_hashes = ${allowed_compose_hashes}
 binding_b64 = "${binding_b64}"
 EOF
 )"

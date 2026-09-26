@@ -902,15 +902,19 @@ jobs:
             artifacts/published-mrtds.json
             artifacts/published-mrtds.json.sig
             artifacts/published-mrtds.json.pem
+            artifacts/published-mrtds.json.bundle.json
             artifacts/release-provenance.json
             artifacts/release-provenance.json.sig
             artifacts/release-provenance.json.pem
+            artifacts/release-provenance.json.bundle.json
             artifacts/node-image-gcp-release-sbom.spdx.json
             artifacts/node-image-gcp-release-sbom.spdx.json.sig
             artifacts/node-image-gcp-release-sbom.spdx.json.pem
+            artifacts/node-image-gcp-release-sbom.spdx.json.bundle.json
             artifacts/node-image-gcp-checksums.txt
             artifacts/node-image-gcp-checksums.txt.sig
             artifacts/node-image-gcp-checksums.txt.pem
+            artifacts/node-image-gcp-checksums.txt.bundle.json
 
       - name: Smoke test published release assets
         env:
