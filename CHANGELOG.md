@@ -18,6 +18,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
   **Requires a core release with `merod init --kms-url`** ([calimero-network/core#4062](https://github.com/calimero-network/core/pull/4062)) and a `merodVersion` bump. Until then the new conformance assert fails `locked-read-only` image builds, deliberately. Covered by `scripts/ci/tests/calimero-init-store-encryption-test.sh`, which runs the decision against a stub merod in ten cases and is wired into `ci-workflow-lint`.
 
+### Fixed
+
+- **Releases build again: the measurement VM keeps its store in memory.** The KMS-store rule above made `locked-read-only` refuse to boot without `kms-phala-url`, and the release pipeline's measurement VM has none. It cannot, because a release's KMS is published only after its image has been measured, so `calimero-init` failed, merod never served `/admin-api/tee/attest`, and "Release mero-tee" failed at "Collect TEE info" for the rc.45 image. The release and staging-probe VMs now set `ephemeral-store=true`. `calimero-init` then mounts a tmpfs over `/mnt/data` and may create the store without a KMS, but only after checking from the mount table that the home really is on tmpfs and no swap is active. The metadata key alone relaxes nothing. Instance metadata is not measured, so the image's published MRTD/RTMRs are unchanged. Three new cases in `calimero-init-store-encryption-test.sh`.
+
 ### Changed
 
 - **`fleet_delegated_execution` is now `fleet_delegated_access`, matching core's rename of the flag it drives.** Core renamed `--public-intents` to `--delegated-access` when the flag grew to decide more than two intent routes — it now also decides whether merod's guard accepts a request-carried proof, which reaches reads, and `GET /admin-api/namespaces` executes no intent. This repo's variable name followed.

@@ -381,7 +381,7 @@ jobs:
             --image "${{ steps.params.outputs.image_name }}" \
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
-            --metadata "merod-version=${{ steps.params.outputs.merod_version }}" \
+            --metadata "merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true" \
             --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
 
       - name: Wait for VM to reach RUNNING

@@ -91,6 +91,13 @@ who can snapshot the data disk.
   `tee-release-version` is always refused, because the KMS could not be verified.
 - **Debug profiles**: still create an unencrypted node when no KMS is given, and
   log that they did.
+- **`ephemeral-store=true`** (any profile): the node lives on a tmpfs mounted over
+  `/mnt/data`, in memory TDX encrypts, and is gone at power-off. The store may
+  then be created without a KMS, but only if the mount table confirms the home
+  is on tmpfs and no swap is active. The flag alone relaxes nothing, so setting
+  it on a normal node yields a node that forgets itself on reboot, never a
+  plaintext disk. The release pipeline's measurement VM uses this: it cannot
+  have a KMS, because a release's KMS is published after its image is measured.
 - **Nodes created before this**: they keep running and log that their store is
   unencrypted. Encrypting afterwards cannot work (every read is decrypted) and
   would not un-expose keys that have already sat on the disk. Recreate them.
