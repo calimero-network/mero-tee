@@ -238,6 +238,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-data-disk-test.sh
 
+      # TDX protects memory, not disks, so merod's store -- the node's admitted
+      # signing identity and account root -- must be encrypted with a KMS key,
+      # and from `merod init` onwards. Runs the decision against a stub merod:
+      # locked-read-only never creates a plaintext store, and a KMS that cannot
+      # be verified (no tee-release-version) is never used.
+      - name: Check new nodes get a KMS-encrypted store
+        id: store_encryption_test
+        shell: bash
+        run: scripts/ci/tests/calimero-init-store-encryption-test.sh
+
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and
       # a fresh node 401s, `continue`s, and never reaches the code that would
@@ -302,6 +312,7 @@ jobs:
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
+            --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
