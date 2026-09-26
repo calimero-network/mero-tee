@@ -79,6 +79,8 @@ jobs:
           bash -n scripts/release/kms-phala/sign-release-assets.sh
           bash -n scripts/release/kms-phala/verify-generated-signatures.sh
           bash -n scripts/release/kms-phala/upsert-umbrella-release-links.sh
+          bash -n scripts/release/kms-tdx/measure-kms-image.sh
+          bash -n scripts/release/kms-tdx/write-tdx-policy.sh
           python3 -m py_compile scripts/attestation/kms/verify_dstack_compose_hash.py
 
       - name: Get version info
@@ -402,11 +404,149 @@ jobs:
           path: probe-artifacts/
           retention-days: 2
 
+  # The KMS as a frozen GCP TDX cluster (docs/design/gcp-tdx-kms.md), released
+  # beside the Phala one. Builds the KMS image with this release's own binary
+  # and the node allowlist of the matching node release baked in, boots it once
+  # to measure it, and hands the measurements to release-metadata, which
+  # publishes them as kms-tdx-attestation-policy.<profile>.json. The image is
+  # part of what merod pins, so a release whose TDX image cannot be measured
+  # is not published.
+  tdx-kms-image:
+    name: Build and measure TDX KMS image (${{ matrix.profile }})
+    if: needs.prepare.outputs.binary_release == 'true'
+    runs-on: ubuntu-latest
+    needs: [prepare, build-binaries]
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
+    permissions:
+      contents: read
+    env:
+      PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+      PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
+      PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
+      PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
+      PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
+      VM_PROJECT: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+      VM_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+      VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
+      ITA_APPRAISAL_URL: ${{ vars.ITA_APPRAISAL_URL }}
+      KMS_PORT: "8080"
+      PROFILE: ${{ matrix.profile }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # The image carries the binary this release publishes, not a rebuild.
+      - name: Download the released x86_64 binary
+        uses: actions/download-artifact@v8
+        with:
+          name: artifacts-x86_64-unknown-linux-gnu
+          path: artifacts/
+
+      - name: Extract the binary
+        run: |
+          set -euo pipefail
+          mkdir -p tdx
+          tar -xzf "artifacts/${BINARY}_x86_64-unknown-linux-gnu.tar.gz" -C tdx
+          mv "tdx/${BINARY}" tdx/mero-kms
+          sha256sum tdx/mero-kms | tee tdx/mero-kms.sha256
+
+      # The KMS serves exactly the node images of the node release with the
+      # same version, which runs from the same versions.json change and may
+      # still be building.
+      - name: Wait for the node release's allowlist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node_tag="mero-tee-v${VERSION}"
+          for attempt in $(seq 1 120); do
+            if gh release download "${node_tag}" --repo "${GITHUB_REPOSITORY}" \
+                --pattern "published-mrtds.json" --dir tdx --clobber 2>/dev/null; then
+              break
+            fi
+            [[ "${attempt}" -lt 120 ]] || { echo "::error::${node_tag}/published-mrtds.json never appeared"; exit 1; }
+            echo "Waiting for ${node_tag} (attempt ${attempt}/120)"
+            sleep 60
+          done
+          jq --arg p "${PROFILE}" '.profiles[$p] | {
+              allowed_tcb_statuses, allowed_mrtd,
+              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
+            }' tdx/published-mrtds.json > tdx/node-allowlist.json
+          jq -e 'all(.[]; type == "array" and length > 0)' tdx/node-allowlist.json >/dev/null \
+            || { echo "::error::${node_tag} has no complete ${PROFILE} node allowlist"; exit 1; }
+
+      - name: Authenticate to GCP via service account key
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup packer
+        uses: hashicorp/setup-packer@v3.4.0
+        with:
+          version: v1.11.2
+
+      - name: Build the KMS image
+        working-directory: mero-tee
+        env:
+          IMAGE_ROLE: kms
+          MERO_KMS_BINARY: ../tdx/mero-kms
+          KMS_NODE_POLICY_FILE: ../tdx/node-allowlist.json
+          # A release rebuilds its own image name on a re-run.
+          PACKER_FORCE_BUILD: "true"
+          PACKER_LOG: 1
+        run: |
+          set -euo pipefail
+          ./init.sh
+          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-build.log
+
+      - name: Show build log on failure
+        if: ${{ failure() }}
+        run: tail -200 /tmp/packer-build.log 2>/dev/null || true
+
+      - name: Measure the KMS image
+        env:
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+          RESOURCE_NAME: kms-measure-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          OUT_DIR: tdx/measure
+        run: |
+          set -euo pipefail
+          IMAGE="merotee-kms-${PROFILE}-${VERSION//./-}"
+          IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          export IMAGE IMAGE_PROJECT
+          bash scripts/release/kms-tdx/measure-kms-image.sh
+          jq -n --arg name "${IMAGE}" --arg project "${IMAGE_PROJECT}" \
+            --arg family "merotee-kms-${PROFILE}" \
+            '{name: $name, project: $project, family: $family}' > tdx/measure/image.json
+
+      - name: Upload the measurements
+        uses: actions/upload-artifact@v7
+        with:
+          name: kms-tdx-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
+          path: |
+            tdx/measure/measurements.json
+            tdx/measure/image.json
+            tdx/measure/attest.json
+            tdx/mero-kms.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   release-metadata:
     name: Release Metadata
     if: needs.prepare.outputs.binary_release == 'true'
     runs-on: ubuntu-latest
-    needs: [prepare, build-binaries, release-container, probe]
+    needs: [prepare, build-binaries, release-container, probe, tdx-kms-image]
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}-${{ needs.prepare.outputs.version }}
       cancel-in-progress: true
@@ -432,6 +572,12 @@ jobs:
         with:
           pattern: kms-probe-${{ needs.prepare.outputs.version }}-*
           path: probe-artifacts/
+
+      - name: Download TDX KMS measurements
+        uses: actions/download-artifact@v8
+        with:
+          pattern: kms-tdx-${{ needs.prepare.outputs.version }}-*
+          path: tdx-artifacts/
 
       - name: Wait for node release and fetch node policy
         id: node_policy
@@ -1477,6 +1623,43 @@ jobs:
             echo "| locked-read-only | ${locked_ro_mrtd_preview:0:24}... | ${locked_ro_rtmr0_preview:0:24}... | ${locked_ro_rtmr2_preview:0:24}... |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # Beside the Phala policies, not instead of them: nodes keep verifying a
+      # Phala KMS until mdma points them at a TDX cluster. merod reads the
+      # backend from the file (`kms.backend`), so the two cannot share a name.
+      - name: Generate TDX KMS attestation policies
+        env:
+          TAG: ${{ needs.prepare.outputs.version }}
+          COMMIT: ${{ needs.prepare.outputs.target_commit }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # The same default /attest binding as the Phala policy: mero-kms
+          # computes it the same way on both backends.
+          read -r DEFAULT_BINDING_HEX DEFAULT_BINDING_B64 < <(
+            python3 -c 'import base64, hashlib; d = hashlib.sha256(b"mero-kms-phala-attest-v1").digest(); print(d.hex(), base64.b64encode(d).decode())'
+          )
+          export DEFAULT_BINDING_HEX DEFAULT_BINDING_B64
+          for profile in debug debug-read-only locked-read-only; do
+            dir="tdx-artifacts/kms-tdx-${TAG}-${profile}"
+            bash scripts/release/kms-tdx/write-tdx-policy.sh "${profile}" \
+              "${dir}/measure/measurements.json" node-policy/published-mrtds.json \
+              "${dir}/measure/image.json" \
+              "release-assets/kms-tdx-attestation-policy.${profile}.json"
+          done
+          cp release-assets/kms-tdx-attestation-policy.locked-read-only.json \
+            release-assets/kms-tdx-attestation-policy.json
+          {
+            echo "## TDX KMS policies"
+            for profile in debug debug-read-only locked-read-only; do
+              f="release-assets/kms-tdx-attestation-policy.${profile}.json"
+              echo "- ${profile}: image \`$(jq -r .image.name "${f}")\`, MRTD \`$(jq -r '.policy.kms_allowed_mrtd[0][0:24]' "${f}")...\`"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Install cosign for keyless signing
         uses: sigstore/cosign-installer@v3
 
@@ -1548,6 +1731,22 @@ jobs:
             release-assets/kms-phala-attestation-policy.debug.json.bundle.json
             release-assets/kms-phala-attestation-policy.debug-read-only.json.bundle.json
             release-assets/kms-phala-attestation-policy.locked-read-only.json.bundle.json
+            release-assets/kms-tdx-attestation-policy.json
+            release-assets/kms-tdx-attestation-policy.json.sig
+            release-assets/kms-tdx-attestation-policy.json.pem
+            release-assets/kms-tdx-attestation-policy.json.bundle.json
+            release-assets/kms-tdx-attestation-policy.debug.json
+            release-assets/kms-tdx-attestation-policy.debug.json.sig
+            release-assets/kms-tdx-attestation-policy.debug.json.pem
+            release-assets/kms-tdx-attestation-policy.debug.json.bundle.json
+            release-assets/kms-tdx-attestation-policy.debug-read-only.json
+            release-assets/kms-tdx-attestation-policy.debug-read-only.json.sig
+            release-assets/kms-tdx-attestation-policy.debug-read-only.json.pem
+            release-assets/kms-tdx-attestation-policy.debug-read-only.json.bundle.json
+            release-assets/kms-tdx-attestation-policy.locked-read-only.json
+            release-assets/kms-tdx-attestation-policy.locked-read-only.json.sig
+            release-assets/kms-tdx-attestation-policy.locked-read-only.json.pem
+            release-assets/kms-tdx-attestation-policy.locked-read-only.json.bundle.json
             release-assets/kms-phala-rekor-index.json
             release-assets/kms-phala-rekor-index.json.sig
             release-assets/kms-phala-rekor-index.json.pem

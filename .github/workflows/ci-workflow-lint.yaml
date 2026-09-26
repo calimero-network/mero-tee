@@ -353,6 +353,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/node-log-auth-probe-test.sh
 
+      # A TDX KMS policy merod misreads fails every node, or passes the wrong
+      # KMS: it must say `kms.backend: tdx` and name no compose hash.
+      - name: Check the release writes a TDX KMS policy merod pins by its registers
+        id: kms_tdx_policy_test
+        shell: bash
+        run: scripts/ci/tests/kms-tdx-policy-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -385,6 +392,7 @@ jobs:
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
+            --checks-line "- TDX KMS policy layout: ${{ steps.kms_tdx_policy_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

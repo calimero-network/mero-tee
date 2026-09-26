@@ -13,6 +13,10 @@ signed_assets=(
   release-assets/kms-phala-attestation-policy.debug.json
   release-assets/kms-phala-attestation-policy.debug-read-only.json
   release-assets/kms-phala-attestation-policy.locked-read-only.json
+  release-assets/kms-tdx-attestation-policy.json
+  release-assets/kms-tdx-attestation-policy.debug.json
+  release-assets/kms-tdx-attestation-policy.debug-read-only.json
+  release-assets/kms-tdx-attestation-policy.locked-read-only.json
   release-assets/kms-phala-container-metadata.json
   release-assets/kms-phala-container-sbom.spdx.json
   release-assets/kms-phala-binaries-sbom.spdx.json

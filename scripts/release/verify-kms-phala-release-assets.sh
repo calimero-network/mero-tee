@@ -126,6 +126,14 @@ profile_policy_assets=(
   "kms-phala-attestation-policy.debug-read-only.json"
   "kms-phala-attestation-policy.locked-read-only.json"
 )
+# The TDX cluster KMS's policies (docs/design/gcp-tdx-kms.md), published beside
+# the Phala ones by releases that build a TDX KMS image. Older releases have none.
+tdx_policy_assets=(
+  "kms-tdx-attestation-policy.json"
+  "kms-tdx-attestation-policy.debug.json"
+  "kms-tdx-attestation-policy.debug-read-only.json"
+  "kms-tdx-attestation-policy.locked-read-only.json"
+)
 
 release_tag="${tag}"
 release_tag_candidates=("${tag}")
@@ -198,6 +206,30 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
         exit 1
       fi
     done
+  done
+fi
+
+has_tdx_policy_assets="false"
+if jq -e '.assets | any(.name == "kms-tdx-attestation-policy.json")' <<< "${release_json}" >/dev/null; then
+  has_tdx_policy_assets="true"
+  for asset in "${tdx_policy_assets[@]}"; do
+    for suffix in "" ".sig" ".pem"; do
+      if ! download_asset "${release_tag}" "${asset}${suffix}" "${tmp_dir}"; then
+        echo "Release is missing required TDX policy asset: ${asset}${suffix}"
+        exit 1
+      fi
+    done
+    # What merod keys on (core#4085): a tdx backend, the KMS role, all five
+    # registers, and no compose hash.
+    if ! jq -e '
+        .role == "kms" and .kms.backend == "tdx"
+        and (.policy | has("kms_allowed_event_payload") | not)
+        and all(["kms_allowed_mrtd","kms_allowed_rtmr0","kms_allowed_rtmr1","kms_allowed_rtmr2","kms_allowed_rtmr3"][];
+                . as $k | $root.policy[$k] | type == "array" and length > 0)
+      ' --argjson root "$(cat "${tmp_dir}/${asset}")" "${tmp_dir}/${asset}" >/dev/null; then
+      echo "${asset} is not a TDX KMS policy merod can pin"
+      exit 1
+    fi
   done
 fi
 
@@ -489,6 +521,11 @@ for archive in "${archives[@]}"; do
 done
 if [[ "${has_profile_policy_assets}" == "true" ]]; then
   for asset in "${profile_policy_assets[@]}"; do
+    signed_assets+=("${asset}")
+  done
+fi
+if [[ "${has_tdx_policy_assets}" == "true" ]]; then
+  for asset in "${tdx_policy_assets[@]}"; do
     signed_assets+=("${asset}")
   done
 fi

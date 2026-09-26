@@ -78,11 +78,39 @@ Workflow name **Release mero-kms**. Triggers: push to `master` touching
    observation as the spec, and it would have rejected any corrected policy.
    :::
 
-5. **`release-metadata`** — the assembly step:
+5. **`tdx-kms-image`** — for each profile, build the **TDX cluster KMS image**
+   ([design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md))
+   and measure it:
+   - Bake in this release's own `x86_64` binary (the `build-binaries` artifact,
+     not a rebuild) and the node allowlist of the matching `mero-tee-v<version>`
+     release, waiting up to two hours for that release to publish
+     `published-mrtds.json`.
+   - Build `merotee-kms-<profile>-<version>` with `IMAGE_ROLE=kms`.
+   - Boot it once as a bootstrap replica
+     (`scripts/release/kms-tdx/measure-kms-image.sh`), wait for it to hold a
+     root, and check it booted its dm-verity root (profiles with a serial
+     console).
+   - Take a quote over `/attest`, verify it with Intel Trust Authority, and
+     extract MRTD and RTMR0–3. The declared TCB set is `uptodate,outofdate`,
+     for the reason in the design: a strict rule would refuse replicas
+     restarted between an Intel TCB update and Google's host patch.
+   - Delete the VM, and hand the measurements to `release-metadata`.
+
+   One replica is enough to measure an image, because every replica of it
+   measures the same. The KMS TDX image probe checks the join between two.
+
+6. **`release-metadata`** — the assembly step:
    - Wait for and fetch the counterpart node release's `published-mrtds.json`.
    - Generate the SBOMs with Syft (`syft` over the container and the binaries).
    - Build the per-profile attestation policy JSON from the probe candidates and
      the node MRTDs, plus a compatibility map and container-metadata file.
+   - Write the TDX KMS policies, `kms-tdx-attestation-policy[.<profile>].json`
+     (`scripts/release/kms-tdx/write-tdx-policy.sh`), **beside** the Phala ones.
+     They use the same layout with `kms.backend: "tdx"`, the KMS's five
+     registers, no `kms_allowed_event_payload`, and an `image` block naming the
+     GCP image they pin. Nodes keep verifying a Phala KMS until they are pointed
+     at a TDX cluster; merod reads the backend from the file, so the two cannot
+     share a name.
    - Write `kms-phala-checksums.txt` (SHA-256 of all assets).
    - Sign every asset with **cosign keyless** (Sigstore / Fulcio / Rekor),
      producing `<asset>.bundle.json` sidecars, then verify the signatures.

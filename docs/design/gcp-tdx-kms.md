@@ -223,7 +223,7 @@ modified KMS that still attests as genuine would be handed the root:
 | 1 | mero-kms | Backend without dstack: configfs-tsm quotes, HKDF from an in-memory root, root-derived transport key, measurements baked in at build time. |
 | 2 | mero-kms | Join protocol (mutual attestation, HPKE), bootstrap mode, stateless or sticky challenges. |
 | 3 | mero-tee | KMS image: a `kms` role in the playbook, locked profile with the same lockdown as the node, a debug profile for staging. |
-| 4 | mero-tee | Release pipeline: build and measure the node image, bake its measurements into the KMS image, build and measure that, then publish the KMS measurements in the node release's signed policy. |
+| 4 | mero-tee | Release pipeline: build and measure the node image, bake its measurements into the KMS image, build and measure that, then publish the KMS measurements. The KMS release (`release-kms-phala.yaml`, job `tdx-kms-image`) publishes them as `kms-tdx-attestation-policy[.<profile>].json`, beside the Phala policies, signed by the same workflow identity merod already checks. |
 | 5 | core (merod) | Pin a GCP KMS by measurements; no dstack event-log requirement for this type. A generic `kms-url` metadata key alongside `kms-phala-url`. |
 | 6 | mdma | Deploy a cluster per release (bootstrap one VM, join the rest, one internal URL); keep the replica count, act on maintenance notices; roll nodes over; recreate a lost cluster; delete old clusters and destroy old disks. |
 | 7 | all | Remove the Phala path: `release-kms-phala.yaml`, dstack code in mero-kms, `kms-phala-*` assets, MDMA's Phala provider. |
@@ -240,6 +240,9 @@ Made:
 - Phala is removed entirely.
 - Challenges are stateless (above), not sticky.
 - The KMS is reachable only inside the VPC, behind an internal load balancer.
+- During the migration a KMS release publishes the TDX policies beside the
+  Phala ones, as `kms-tdx-attestation-policy[.<profile>].json`. A node verifies
+  whichever KMS it is pointed at, and mdma moves nodes release by release.
 
 Open:
 
