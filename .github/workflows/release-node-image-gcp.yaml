@@ -517,6 +517,27 @@ jobs:
             '{base_url: $base_url, nonce: $nonce, instance: $instance, image: $image, project: $project, zone: $zone}' \
             > "${artifacts_dir}/attestation-context.json"
 
+      # The node answering proves it booted, not WHICH root it booted: a boot
+      # that fell back to the base partition would answer too. The profiles
+      # that keep a serial console show the kernel cmdline and the initrd's
+      # verity setup, so require both (mero-tee#334). locked-read-only has no
+      # console; it runs the same seal and the same initrd.
+      - name: Check the node booted its dm-verity root
+        if: ${{ success() && matrix.profile != 'locked-read-only' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          set -euo pipefail
+          serial="$(gcloud compute instances get-serial-port-output "${{ steps.params.outputs.instance_name }}" \
+            --project "${{ steps.params.outputs.vm_project }}" --zone "${{ steps.params.outputs.vm_zone }}" 2>/dev/null || true)"
+          if ! grep -E 'Command line:.* roothash=[0-9a-f]{64} ' <<< "${serial}"; then
+            echo "::error::the booted kernel cmdline carries no dm-verity root hash"
+            exit 1
+          fi
+          if ! grep -E 'veritysetup@root' <<< "${serial}"; then
+            echo "::error::the initrd never set up the dm-verity root"
+            exit 1
+          fi
+          echo "Booted the dm-verity root."
+
       - name: Add profile-specific artifact names
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |

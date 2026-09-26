@@ -176,6 +176,21 @@ jobs:
           done
           echo "Bootstrap replica holds the root: $(cat /tmp/health.json)"
 
+      # A replica answering proves it booted, not WHICH root: require the
+      # verity root hash on the kernel cmdline and the initrd's verity setup in
+      # the boot log. Only the debug profile keeps a serial console.
+      - name: Check the bootstrap replica booted its dm-verity root
+        if: ${{ inputs.profile == 'debug' }}
+        run: |
+          set -euo pipefail
+          serial="$(gcloud compute instances get-serial-port-output "${{ steps.names.outputs.first }}" \
+            --project "${VM_PROJECT}" --zone "${VM_ZONE}" 2>/dev/null || true)"
+          grep -E 'Command line:.* roothash=[0-9a-f]{64} ' <<< "${serial}" \
+            || { echo "::error::the booted kernel cmdline carries no dm-verity root hash"; exit 1; }
+          grep -E 'veritysetup@root' <<< "${serial}" \
+            || { echo "::error::the initrd never set up the dm-verity root"; exit 1; }
+          grep -E 'mero-kms-init' <<< "${serial}" | tail -5 || true
+
       - name: Start the joining replica
         run: |
           gcloud compute instances create "${{ steps.names.outputs.second }}" \

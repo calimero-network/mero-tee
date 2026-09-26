@@ -137,3 +137,8 @@
         /usr/local/sbin/calimero-seal-root
         {{ '--remove-user ubuntu' if (lockdown_profile | default('locked-read-only')) == 'locked-read-only' else '' }}
       changed_when: true
+      register: seal_result
+
+    - name: Show what the seal wrote (partitions, root hash)
+      debug:
+        var: seal_result.stdout_lines
