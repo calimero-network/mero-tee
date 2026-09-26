@@ -29,7 +29,8 @@
 #   * the KMS unreachable   -> refuse, and the disk is not formatted
 #   * the key file never outlives the script, and is written only to the tmpfs
 #   * tee-release-version below the baked floor -> refuse; merod.env carries
-#     MERO_TEE_MIN_VERSION, and MERO_TEE_PROFILE on locked-read-only only
+#     MERO_TEE_MIN_VERSION, and MERO_TEE_PROFILE (the image's profile) on
+#     every profile
 #
 # Usage: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 # shellcheck disable=SC2016
@@ -487,9 +488,15 @@ run_pin prerelease locked-read-only 2.3.70-rc.1 2.3.70
 
 run_pin debug-profile debug-read-only 2.3.70 2.3.70
 [[ "$(prc debug-profile)" == 0 ]] || fail "a debug profile at the floor must be accepted"
-penv debug-profile | grep -q 'MERO_TEE_PROFILE' \
-  && fail "MERO_TEE_PROFILE must not be pinned on a debug profile: merod fetches the locked-read-only policy for every profile"
+penv debug-profile | grep -qx 'MERO_TEE_PROFILE="debug-read-only"' \
+  || fail "a debug-read-only node must pin its own policy profile, not the locked one: $(penv debug-profile)"
+grep -qx 'MERO_TEE_PROFILE=debug-read-only' "$WORK/pin-debug-profile/exported" \
+  || fail "MERO_TEE_PROFILE is not exported for disk-key / init on debug-read-only"
 penv debug-profile | grep -qx 'MERO_TEE_MIN_VERSION="2.3.70"' || fail "the floor applies on every profile"
+run_pin debug debug 2.3.70 2.3.70
+[[ "$(prc debug)" == 0 ]] || fail "the debug profile at the floor must be accepted"
+penv debug | grep -qx 'MERO_TEE_PROFILE="debug"' \
+  || fail "a debug node must pin its own policy profile: $(penv debug)"
 
 run_pin no-floor locked-read-only 2.3.1 ""
 [[ "$(prc no-floor)" == 0 ]] || fail "an image without a baked floor falls back to merod's own checks"
