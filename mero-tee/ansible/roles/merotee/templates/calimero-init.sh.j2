@@ -107,6 +107,17 @@ TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
 # before it accepts a key, so a wrong URL fails the boot rather than handing
 # the node a key someone else knows. See "Storage encryption" below.
 KMS_PHALA_URL=$(get_meta "kms-phala-url" | tr -d '\r\n')
+# Which kind of KMS that URL is: `dstack` (the Phala KMS, and the default) or
+# `tdx` (a frozen GCP TDX cluster, docs/design/gcp-tdx-kms.md). A KMS release
+# publishes a policy for each, side by side, and merod verifies the KMS against
+# the one this names (`MERO_TEE_KMS_BACKEND`). Untrusted like the URL, and for
+# the same reason that is fine: the wrong kind fails verification.
+KMS_BACKEND=$(get_meta "kms-backend" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+case "${KMS_BACKEND}" in
+  "" | dstack) KMS_BACKEND="" ;;
+  tdx) ;;
+  *) fatal "kms-backend must be dstack or tdx, got '${KMS_BACKEND}'" ;;
+esac
 # `true` keeps the whole node in RAM (a tmpfs over the data disk's mount point)
 # for a VM meant to live minutes: the release pipeline's measurement VM, which
 # cannot have a KMS because a release's KMS is published only after its image
@@ -245,6 +256,9 @@ Refusing to start; set tee-release-version to ${MIN_TEE_RELEASE_VERSION} or late
     if [[ -n "$EXPECTED_TEE_POLICY_PROFILE" ]]; then
       printf 'MERO_TEE_PROFILE="%s"\n' "$(env_file_value "$EXPECTED_TEE_POLICY_PROFILE")"
     fi
+    if [[ -n "$KMS_BACKEND" ]]; then
+      printf 'MERO_TEE_KMS_BACKEND="%s"\n' "$(env_file_value "$KMS_BACKEND")"
+    fi
   } > /etc/calimero/merod.env
   chmod 0644 /etc/calimero/merod.env
   log "Configured MERO_TEE_VERSION=${SANITIZED_TEE_RELEASE_VERSION} (floor=${MIN_TEE_RELEASE_VERSION:-none} policy-profile=${EXPECTED_TEE_POLICY_PROFILE:-any}) from tee-release-version metadata"
@@ -258,6 +272,9 @@ Refusing to start; set tee-release-version to ${MIN_TEE_RELEASE_VERSION} or late
   fi
   if [[ -n "$EXPECTED_TEE_POLICY_PROFILE" ]]; then
     export MERO_TEE_PROFILE="$EXPECTED_TEE_POLICY_PROFILE"
+  fi
+  if [[ -n "$KMS_BACKEND" ]]; then
+    export MERO_TEE_KMS_BACKEND="$KMS_BACKEND"
   fi
 else
   rm -f /etc/calimero/merod.env

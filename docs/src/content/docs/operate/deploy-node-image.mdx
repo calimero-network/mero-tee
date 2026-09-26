@@ -193,6 +193,7 @@ scripts. All are optional except where noted:
 | `swarm-port` | merod libp2p swarm port | `2528` |
 | `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and, on `locked-read-only`, `MERO_TEE_PROFILE=locked-read-only`. **Refused if older than the image** (downgrade protection) | unset → env file removed |
 | `kms-phala-url` | the KMS the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
+| `kms-backend` | which kind of KMS `kms-phala-url` is: `dstack` (the Phala KMS) or `tdx` (a GCP TDX cluster KMS). Written to `merod.env` as `MERO_TEE_KMS_BACKEND`, so merod verifies the KMS against the release's `kms-tdx-attestation-policy…` instead of its `kms-phala-attestation-policy…`; any other value stops the boot | unset → `dstack` |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |
 | `logs-endpoint` | if set, configures and starts `vector` | unset → vector stays off |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the node falls back to the credential MDMA delivers on a `should-join` poll |

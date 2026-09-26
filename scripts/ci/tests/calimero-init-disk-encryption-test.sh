@@ -435,9 +435,9 @@ set +e; bash "$L/run.sh" >/dev/null 2>&1; echo $? >"$L/rc"; set -e
 never_formatted luks-kms-down
 
 # --- 7. release pinning -----------------------------------------------------
-#   run_pin NAME PROFILE RELEASE FLOOR
+#   run_pin NAME PROFILE RELEASE FLOOR [KMS_BACKEND]
 run_pin() {
-  local name="$1" profile="$2" release="$3" floor="$4"
+  local name="$1" profile="$2" release="$3" floor="$4" kms_backend="${5:-}"
   local P="$WORK/pin-$name"
   mkdir -p "$P"
   [[ -n "$floor" ]] && printf '%s\n' "$floor" >"$P/min-tee-release-version"
@@ -451,6 +451,7 @@ log() { echo "\$*" >>"$P/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
 IMAGE_PROFILE="$profile"
 TEE_RELEASE_VERSION="$release"
+KMS_BACKEND="$kms_backend"
 $block
 { env | grep '^MERO_TEE_' || true; } | sort >"$P/exported"
 RUN
@@ -498,5 +499,35 @@ penv no-floor | grep -q 'MERO_TEE_MIN_VERSION' && fail "no floor file, yet MERO_
 run_pin no-release locked-read-only "" 2.3.70
 [[ "$(prc no-release)" == 0 ]] || fail "no tee-release-version is decided later, by the disk and store checks"
 [[ ! -e "$WORK/pin-no-release/merod.env" ]] || fail "merod.env must be absent without a release"
+
+# The KMS kind rides with the release: merod verifies a TDX cluster KMS against
+# the release's TDX policy only when told it is one.
+run_pin tdx-kms locked-read-only 2.3.70 2.3.70 tdx
+[[ "$(prc tdx-kms)" == 0 ]] || fail "a node pointed at a TDX KMS must be accepted"
+penv tdx-kms | grep -qx 'MERO_TEE_KMS_BACKEND="tdx"' || fail "merod.env lacks MERO_TEE_KMS_BACKEND for a TDX KMS: $(penv tdx-kms)"
+grep -qx 'MERO_TEE_KMS_BACKEND=tdx' "$WORK/pin-tdx-kms/exported" || fail "MERO_TEE_KMS_BACKEND is not exported for disk-key / init"
+penv equal | grep -q 'MERO_TEE_KMS_BACKEND' && fail "a node with no kms-backend must keep today's (dstack) policy: $(penv equal)"
+grep -q 'MERO_TEE_KMS_BACKEND' "$WORK/pin-equal/exported" && fail "MERO_TEE_KMS_BACKEND exported for a dstack node"
+
+# The metadata is validated where it is read: only dstack or tdx, case-folded.
+backend_block="$(awk '/^KMS_BACKEND=\$\(get_meta "kms-backend"/{on=1} on{print} on && /^esac$/{exit}' "$TEMPLATE")"
+grep -qF 'kms-backend must be dstack or tdx' <<<"$backend_block" || fail "could not find the kms-backend validation block"
+check_backend() {  # <metadata value> <expected KMS_BACKEND, or FATAL>
+  local out rc=0
+  out="$(bash -c 'set -euo pipefail
+fatal() { echo FATAL; exit 1; }
+get_meta() { printf "%s" "$VALUE"; }
+'"$backend_block"'
+printf "%s" "$KMS_BACKEND"' 2>/dev/null)" || rc=$?
+  if [[ "$2" == FATAL ]]; then
+    [[ "$rc" != 0 ]] || fail "kms-backend '$1' must stop the boot"
+  else
+    [[ "$rc" == 0 && "$out" == "$2" ]] || fail "kms-backend '$1' gave '$out' (rc $rc), want '$2'"
+  fi
+}
+VALUE="" check_backend "" ""
+VALUE="dstack" check_backend "dstack" ""
+VALUE=" TDX" check_backend " TDX" "tdx"
+VALUE="sgx" check_backend "sgx" FATAL
 
 echo "PASS: the data disk is LUKS2-encrypted from the KMS, never reformatted once it holds anything, and the release cannot be downgraded below the image"
