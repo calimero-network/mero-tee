@@ -69,10 +69,13 @@ has the rationale.
    holds the root and reads the key only at boot, but no VM that could ever boot
    again should carry `kms-bootstrap=true`: a second bootstrap is a second root.
 
-5. **Put one VPC-internal URL in front of all five** (an internal load balancer on
-   port 8080). No session affinity is needed: challenges are stateless, so any
-   replica can serve the `/get-key` that follows another replica's
-   `/challenge`. This URL is the cluster's KMS URL.
+5. **Put one VPC-internal URL in front of all five**: a name in a Cloud DNS
+   private zone whose A record lists every ready replica's internal IP (TTL 30s),
+   on port 8080. The replicas span regions, so no regional internal load balancer
+   can front them. No session affinity is needed: challenges are stateless, so
+   any replica can serve the `/get-key` that follows another replica's
+   `/challenge`. Keep the record in step with the live replicas; merod tries the
+   next address when one does not answer. This URL is the cluster's KMS URL.
 
 </Steps>
 
@@ -315,7 +318,7 @@ image and so a new cluster with a new root; old nodes are replaced, not re-keyed
 ## Retire a release
 
 Once no node of release N is left, delete its cluster: all five replica VMs and
-their disks, and the internal load balancer. The root is then gone for good, so
+their disks, and its DNS record. The root is then gone for good, so
 no copy of an old node disk can ever be opened again. The KMS image itself stays
 published with the release (its measurements are what anyone auditing the
 release checks against); retiring a cluster deletes only the running VMs.

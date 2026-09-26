@@ -245,7 +245,13 @@ Made:
 - Challenges are stateless (above), not sticky.
 - The KMS is reachable only inside the VPC: one VPC-internal URL in front of
   a release's replicas, plain HTTP on port 8080. Nodes reach it from the same
-  network; nothing outside the VPC needs it.
+  network; nothing outside the VPC needs it. The URL is a name in a Cloud DNS
+  private zone listing every ready replica (TTL 30s), not an internal load
+  balancer: the replicas span regions, which a regional internal LB cannot
+  front, and a cross-region internal Application LB needs a proxy-only subnet
+  per region for a service a node calls once per boot. A dead replica stays in
+  the record until MDMA's next sweep (about a minute); merod's connect timeout
+  is split across the addresses, so it moves on to the next one.
 - The Phala path is removed now, in the same change that ships the GCP
   cluster, not after a first release served by both. Every upgrade is new
   nodes plus a new KMS anyway, so there is nothing to stay compatible with.
