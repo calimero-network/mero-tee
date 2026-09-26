@@ -1,4 +1,4 @@
-name: CI mero-kms-phala
+name: CI mero-kms
 
 on:
   push:
@@ -9,20 +9,20 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
-      - ".github/workflows/ci-kms-phala.yaml"
+      - ".github/workflows/ci-kms.yaml"
   pull_request:
     paths:
       - Cargo.toml
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
-      - ".github/workflows/ci-kms-phala.yaml"
+      - ".github/workflows/ci-kms.yaml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-kms-phala-${{ github.workflow }}-${{ github.ref }}
+  group: ci-kms-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -42,7 +42,7 @@ jobs:
       - name: Setup rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: ci-mero-kms-phala
+          key: ci-mero-kms
 
       - name: Format check
         id: fmt
@@ -50,24 +50,33 @@ jobs:
 
       - name: Clippy
         id: clippy
-        run: cargo clippy -p mero-kms-phala --all-targets -- -D warnings
+        run: cargo clippy -p mero-kms --all-targets -- -D warnings
 
       - name: Tests
         id: tests
-        run: cargo test -p mero-kms-phala
+        run: cargo test -p mero-kms
+
+      # The two-replica join tests over real HTTP need mock quotes.
+      - name: Tests (mock attestation)
+        id: tests_mock
+        run: cargo test -p mero-kms --features mock-attestation
+
+      - name: Clippy (mock attestation)
+        id: clippy_mock
+        run: cargo clippy -p mero-kms --all-targets --features mock-attestation -- -D warnings
 
       - name: Doc warnings
         id: docs
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p mero-kms-phala --no-deps
+        run: cargo doc -p mero-kms --no-deps
 
       - name: Summarize CI outcomes
         if: ${{ always() }}
         run: |
           set -euo pipefail
           source scripts/ci/logging.sh
-          result_line="$(ci_result "ci-kms-phala" "${{ job.status }}" "FMT_CLIPPY_TEST" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
+          result_line="$(ci_result "ci-kms" "${{ job.status }}" "FMT_CLIPPY_TEST" "ref=${GITHUB_REF_NAME}" "run_id=${GITHUB_RUN_ID}")"
           ci_info "${result_line}"
           python3 scripts/ci/summary/write_workflow_summary.py \
             --output "${GITHUB_STEP_SUMMARY}" \
@@ -75,6 +84,8 @@ jobs:
             --checks-line "- fmt: ${{ steps.fmt.outcome }}" \
             --checks-line "- clippy: ${{ steps.clippy.outcome }}" \
             --checks-line "- tests: ${{ steps.tests.outcome }}" \
+            --checks-line "- tests (mock attestation): ${{ steps.tests_mock.outcome }}" \
+            --checks-line "- clippy (mock attestation): ${{ steps.clippy_mock.outcome }}" \
             --checks-line "- docs: ${{ steps.docs.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \

@@ -1,7 +1,7 @@
 //! Sealed key release: the key `/get-key` releases is encrypted to the node.
 //!
 //! Without this the key crossed the wire as plain hex inside TLS, and TLS ended
-//! wherever the node's `kms-phala-url` pointed. That URL comes from instance
+//! wherever the node's `kms-url` pointed. That URL comes from instance
 //! metadata, which the node's operator writes, so an HTTPS proxy with any
 //! public-CA certificate could sit in front of this service, forward every
 //! request unchanged, and read every storage key it released. Every quote on
@@ -10,8 +10,8 @@
 //! So the key is sealed end to end, TD to TD:
 //!
 //! * This service holds a long-lived X25519 **transport key**, derived from
-//!   dstack ([`TRANSPORT_KEY_PATH`]) so every replica of one KMS app holds the
-//!   same key. `/attest` returns its public half and commits to it in the quote
+//!   the cluster root ([`TRANSPORT_KEY_PATH`]) so every replica of one KMS
+//!   cluster holds the same key. `/attest` returns its public half and commits to it in the quote
 //!   ([`attest_binding`]), so a node knows the key belongs to a genuine KMS.
 //! * A node names a one-time X25519 key in `sealToB64` and commits to it in ITS
 //!   quote ([`request_binding`]), so nobody in the middle can swap it.
@@ -30,7 +30,7 @@ use zeroize::Zeroizing;
 
 use crate::handlers::errors::ServiceError;
 
-/// The dstack derivation path of the transport key. Never a peer key's path:
+/// The root derivation path of the transport key. Never a peer key's path:
 /// those are `{namespace}/{profile}/{peerId}` under a configured namespace.
 pub(crate) const TRANSPORT_KEY_PATH: &str = "mero-kms/transport/x25519/v1";
 
@@ -38,7 +38,7 @@ const ATTEST_DOMAIN: &[u8] = b"mero-kms/attest-transport-key/v1";
 const REQUEST_DOMAIN: &[u8] = b"mero-kms/sealed-get-key/v1";
 const SEAL_DOMAIN: &[u8] = b"mero-kms/sealed-key/v1";
 
-/// The transport keypair, from the 32+ bytes dstack derives at
+/// The transport keypair, from the 32 bytes the root derives at
 /// [`TRANSPORT_KEY_PATH`].
 pub(crate) struct TransportKey {
     secret: Zeroizing<[u8; 32]>,
@@ -46,16 +46,10 @@ pub(crate) struct TransportKey {
 }
 
 impl TransportKey {
-    pub(crate) fn from_derived_bytes(derived: &[u8]) -> Result<Self, ServiceError> {
-        let Some(bytes) = derived.get(..32) else {
-            return Err(ServiceError::KeyDerivationFailed(
-                "dstack returned fewer than 32 bytes for the transport key".to_owned(),
-            ));
-        };
-        let mut secret = Zeroizing::new([0u8; 32]);
-        secret.copy_from_slice(bytes);
+    pub(crate) fn from_secret(secret: &[u8; 32]) -> Self {
+        let secret = Zeroizing::new(*secret);
         let public = MontgomeryPoint::mul_base_clamped(*secret).0;
-        Ok(Self { secret, public })
+        Self { secret, public }
     }
 
     pub(crate) fn public(&self) -> &[u8; 32] {
@@ -141,7 +135,7 @@ mod tests {
     /// what keep them the same format.
     #[test]
     fn the_wire_format_matches_the_published_vectors() {
-        let transport = TransportKey::from_derived_bytes(&KMS_SECRET).unwrap();
+        let transport = TransportKey::from_secret(&KMS_SECRET);
         let node_public = MontgomeryPoint::mul_base_clamped(NODE_SECRET).0;
         assert_eq!(
             hex::encode(attest_binding(&[0x77; 32], transport.public())),
@@ -158,13 +152,8 @@ mod tests {
 
     #[test]
     fn a_low_order_seal_key_is_refused() {
-        let transport = TransportKey::from_derived_bytes(&KMS_SECRET).unwrap();
+        let transport = TransportKey::from_secret(&KMS_SECRET);
         assert!(seal(&transport, &[0; 32], &NONCE, PEER, KEY_HEX).is_err());
-    }
-
-    #[test]
-    fn a_short_derivation_is_refused() {
-        assert!(TransportKey::from_derived_bytes(&[0; 31]).is_err());
     }
 
     // Also reproduced independently with Python's `cryptography` (X25519, HKDF,

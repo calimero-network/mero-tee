@@ -6,11 +6,20 @@ use base64::Engine;
 use libp2p_identity::Keypair;
 use tower::util::ServiceExt;
 
+use crate::backend::{test_tdx_backend, Root, TdxBackend, KEY_LEN};
 use crate::test_util::read_json_body;
 use crate::AttestationPolicy;
 
 use super::errors::ServiceError;
 use super::*;
+
+/// A replica holding the root `[seed; 32]`; two replicas with the same seed
+/// are one cluster.
+fn replica(seed: u8) -> Arc<TdxBackend> {
+    Arc::new(test_tdx_backend(Some(
+        Root::from_bytes(&[seed; KEY_LEN]).expect("32-byte root"),
+    )))
+}
 
 fn post_json_request(uri: &str, body: &serde_json::Value) -> Request<Body> {
     Request::builder()
@@ -90,18 +99,6 @@ fn test_error_response_display_without_details() {
         details: None,
     };
     assert_eq!(error.to_string(), "not_found");
-}
-
-#[test]
-fn test_policy_not_ready_blocks_key_release() {
-    let config = Config {
-        policy_ready: false,
-        policy_unavailable_reason: Some("policy is still syncing".to_string()),
-        ..Config::default()
-    };
-    let err = get_key::ensure_policy_ready_for_key_release(&config)
-        .expect_err("unready policy should block key release");
-    assert!(matches!(err, ServiceError::PolicyNotReady(_)));
 }
 
 #[test]
@@ -269,12 +266,6 @@ fn test_validate_peer_id_shape_rejects_empty() {
 }
 
 #[test]
-fn test_validate_challenge_id_rejects_invalid_shape() {
-    let err = get_key::validate_challenge_id("abc").unwrap_err();
-    assert!(matches!(err, ServiceError::InvalidChallenge(_)));
-}
-
-#[test]
 fn test_resolve_attestation_binding_defaults_to_domain_separator() {
     let binding = attest::resolve_attestation_binding(None).unwrap();
     assert_eq!(binding.len(), 32);
@@ -361,11 +352,7 @@ fn test_verify_peer_signature_rejects_spoofed_peer_id() {
 
 #[tokio::test]
 async fn test_health_endpoint_response() {
-    let app = create_router(
-        Config::default(),
-        crate::backend::Backend::dstack("/var/run/dstack.sock"),
-    )
-    .expect("router should build");
+    let app = create_router(Config::default(), replica(7));
     let response = app
         .oneshot(
             Request::builder()
@@ -380,16 +367,13 @@ async fn test_health_endpoint_response() {
     assert_eq!(response.status(), StatusCode::OK);
     let payload = read_json_body(response).await;
     assert_eq!(payload["status"], "alive");
-    assert_eq!(payload["service"], "mero-kms-phala");
+    assert_eq!(payload["service"], "mero-kms");
+    assert_eq!(payload["clusterRootReady"], true);
 }
 
 #[tokio::test]
 async fn test_attest_endpoint_rejects_invalid_nonce_length() {
-    let app = create_router(
-        Config::default(),
-        crate::backend::Backend::dstack("/var/run/dstack.sock"),
-    )
-    .expect("router should build");
+    let app = create_router(Config::default(), replica(7));
     let bad_nonce_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 31]);
     let body = serde_json::json!({
         "nonceB64": bad_nonce_b64
@@ -407,7 +391,8 @@ async fn test_attest_endpoint_rejects_invalid_nonce_length() {
 
 #[tokio::test]
 async fn test_policy_not_ready_error_maps_to_service_unavailable() {
-    let response = ServiceError::PolicyNotReady("policy fetch pending".to_string()).into_response();
+    let response =
+        ServiceError::PolicyNotReady("replica has not joined".to_string()).into_response();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let payload = read_json_body(response).await;
     assert_eq!(payload["error"], "policy_not_ready");
@@ -415,11 +400,7 @@ async fn test_policy_not_ready_error_maps_to_service_unavailable() {
 
 #[tokio::test]
 async fn test_challenge_is_single_use_even_when_signature_fails() {
-    let app = create_router(
-        Config::default(),
-        crate::backend::Backend::dstack("/var/run/dstack.sock"),
-    )
-    .expect("router should build");
+    let app = create_router(Config::default(), replica(7));
     let keypair = Keypair::generate_ed25519();
     let peer_id = keypair.public().to_peer_id().to_base58();
     let challenge_body = serde_json::json!({
@@ -477,11 +458,7 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
 async fn an_unsealed_key_request_is_refused_by_default() {
     let config = Config::default();
     assert!(config.require_sealed_key_release);
-    let app = create_router(
-        config,
-        crate::backend::Backend::dstack("/var/run/dstack.sock"),
-    )
-    .expect("router should build");
+    let app = create_router(config, replica(7));
     let request_body = serde_json::json!({
         "challengeId": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d7",
         "quoteB64": base64::engine::general_purpose::STANDARD.encode(b"quote"),
@@ -505,4 +482,126 @@ async fn an_unsealed_key_request_is_refused_by_default() {
             .contains("sealed only"),
         "{payload}"
     );
+}
+
+/// Ask `app` for a challenge for `peer_id` and return its token.
+async fn issue_challenge(app: &Router, peer_id: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(post_json_request(
+            "/challenge",
+            &serde_json::json!({ "peerId": peer_id }),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    read_json_body(response).await["challengeId"]
+        .as_str()
+        .expect("challengeId should be a string")
+        .to_owned()
+}
+
+/// A `/get-key` request that passes every check before the challenge and fails
+/// the first one after it (the peer public key), so its error tells whether
+/// the challenge was accepted.
+async fn get_key_error(app: &Router, challenge_id: &str, peer_id: &str) -> String {
+    let body = serde_json::json!({
+        "challengeId": challenge_id,
+        "quoteB64": base64::engine::general_purpose::STANDARD.encode(b"dummy-quote"),
+        "peerId": peer_id,
+        "peerPublicKeyB64": base64::engine::general_purpose::STANDARD.encode(b"not-protobuf"),
+        "signatureB64": base64::engine::general_purpose::STANDARD.encode(b"bad-signature"),
+        "sealToB64": base64::engine::general_purpose::STANDARD.encode([0x42u8; 32])
+    });
+    let response = app
+        .clone()
+        .oneshot(post_json_request("/get-key", &body))
+        .await
+        .expect("request should succeed");
+    read_json_body(response).await["error"]
+        .as_str()
+        .expect("error should be a string")
+        .to_owned()
+}
+
+/// Replicas share no storage: a challenge one replica issued must pass on any
+/// other replica of the same cluster, once per replica, and on no replica of
+/// another cluster.
+#[tokio::test]
+async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster() {
+    let peer_id = Keypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_base58();
+    let replica_a = create_router(Config::default(), replica(7));
+    let replica_b = create_router(Config::default(), replica(7));
+    let other_cluster = create_router(Config::default(), replica(8));
+
+    let challenge_id = issue_challenge(&replica_a, &peer_id).await;
+    assert_eq!(
+        get_key_error(&other_cluster, &challenge_id, &peer_id).await,
+        "invalid_challenge"
+    );
+    assert_eq!(
+        get_key_error(&replica_b, &challenge_id, &peer_id).await,
+        "invalid_peer_public_key"
+    );
+    assert_eq!(
+        get_key_error(&replica_b, &challenge_id, &peer_id).await,
+        "invalid_challenge"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_challenge_is_refused() {
+    let peer_id = Keypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_base58();
+    let app = create_router(
+        Config {
+            challenge_ttl_secs: 0,
+            ..Config::default()
+        },
+        replica(7),
+    );
+    let challenge_id = issue_challenge(&app, &peer_id).await;
+    assert_eq!(
+        get_key_error(&app, &challenge_id, &peer_id).await,
+        "invalid_challenge"
+    );
+}
+
+#[tokio::test]
+async fn a_tampered_challenge_is_refused() {
+    let peer_id = Keypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_base58();
+    let app = create_router(Config::default(), replica(7));
+    let mut challenge_id = issue_challenge(&app, &peer_id).await;
+    // Push the expiry (bytes 32..40) far into the future.
+    challenge_id.replace_range(64..66, "ff");
+    assert_eq!(
+        get_key_error(&app, &challenge_id, &peer_id).await,
+        "invalid_challenge"
+    );
+}
+
+/// The token is keyed by the root, so a replica that has not joined its
+/// cluster yet can neither issue nor check one.
+#[tokio::test]
+async fn a_replica_without_a_root_issues_no_challenge() {
+    let app = create_router(Config::default(), Arc::new(test_tdx_backend(None)));
+    let response = app
+        .oneshot(post_json_request(
+            "/challenge",
+            &serde_json::json!({
+                "peerId": Keypair::generate_ed25519().public().to_peer_id().to_base58()
+            }),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(read_json_body(response).await["error"], "policy_not_ready");
 }

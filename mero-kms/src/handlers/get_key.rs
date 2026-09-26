@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
+use crate::challenge_token::{self, ChallengeError};
 use crate::policy::AttestationPolicy;
 use crate::sealed;
-use crate::util::CHALLENGE_ID_HEX_LEN;
+use crate::util::unix_now_secs;
 use crate::Config;
 
 use super::challenge::validate_peer_id_shape;
@@ -25,7 +26,7 @@ use super::AppState;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyRequest {
-    /// Hex-encoded challenge ID previously obtained from `/challenge`.
+    /// The challenge token previously obtained from `/challenge`.
     pub challenge_id: String,
     /// Base64-encoded raw TDX quote bytes with the challenge nonce in report_data.
     pub quote_b64: String,
@@ -57,19 +58,19 @@ pub struct GetKeyResponse {
     pub seal_nonce_b64: Option<String>,
 }
 
-/// Key release flow: validate inputs → consume single-use challenge → verify
-/// peer signature → verify TDX attestation → enforce measurement policy → derive key from the backend.
+/// Key release flow: validate inputs → verify and consume the challenge →
+/// verify peer signature → verify TDX attestation → enforce measurement policy
+/// → derive key from the cluster root.
 ///
 /// The challenge is consumed *before* signature/attestation checks so that a
-/// replayed request always fails on the second attempt regardless of where
-/// the first attempt errored.
+/// request replayed to the same replica always fails on the second attempt
+/// regardless of where the first attempt errored (see `challenge_token` for
+/// why single use is per replica).
 pub(crate) async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
     validate_peer_id_shape(&request.peer_id)?;
-    validate_challenge_id(&request.challenge_id)?;
-    ensure_policy_ready_for_key_release(&state.config)?;
     info!(peer_id = %request.peer_id, "Received key release request");
 
     let quote_bytes = BASE64
@@ -89,13 +90,7 @@ pub(crate) async fn get_key_handler(
         ));
     }
 
-    let challenge_nonce = state
-        .challenge_store
-        .consume(&request.challenge_id, &request.peer_id)
-        .await
-        .map_err(|msg| {
-            ServiceError::InvalidChallenge(format!("Challenge validation failed: {}", msg))
-        })?;
+    let challenge_nonce = consume_challenge(&state, &request.challenge_id, &request.peer_id)?;
 
     verify_peer_signature(
         &request.peer_id,
@@ -123,7 +118,7 @@ pub(crate) async fn get_key_handler(
     .await?;
 
     let key_path = key_path_for_peer(&state.config, &request.peer_id);
-    let key_hex = state.backend.derive_key_hex(&key_path).await?;
+    let key_hex = state.backend.derive_key_hex(&key_path)?;
 
     info!(peer_id = %request.peer_id, "Key derived successfully");
     let Some(seal_to) = seal_to else {
@@ -137,7 +132,7 @@ pub(crate) async fn get_key_handler(
             seal_nonce_b64: None,
         }));
     };
-    let transport = state.backend.transport_key().await?;
+    let transport = state.backend.transport_key()?;
     let (seal_nonce, sealed_key) = sealed::seal(
         &transport,
         &seal_to,
@@ -247,16 +242,24 @@ pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceError> {
-    if challenge_id.len() != CHALLENGE_ID_HEX_LEN
-        || !challenge_id.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        return Err(ServiceError::InvalidChallenge(format!(
-            "challenge ID must be {} hex characters",
-            CHALLENGE_ID_HEX_LEN
-        )));
-    }
-    Ok(())
+/// Check `token` against this cluster's challenge key and mark it used on
+/// this replica. Returns the nonce the node's quote must carry.
+fn consume_challenge(
+    state: &AppState,
+    token: &str,
+    peer_id: &str,
+) -> Result<[u8; 32], ServiceError> {
+    let key = state.backend.challenge_key()?;
+    let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
+    challenge_token::verify(&key, token, peer_id, now)
+        .and_then(|verified| {
+            state.consumed_challenges.consume(&verified, now)?;
+            Ok(verified.nonce)
+        })
+        .map_err(|err| match err {
+            ChallengeError::CapacityExceeded => ServiceError::RateLimited(err.to_string()),
+            _ => ServiceError::InvalidChallenge(format!("Challenge validation failed: {err}")),
+        })
 }
 
 /// Build the key derivation path: `{namespace}/{profile}/{peerId}`.
@@ -386,19 +389,4 @@ fn enforce_tcb_status(
         )));
     }
     Ok(())
-}
-
-const DEFAULT_POLICY_NOT_READY_MSG: &str =
-    "Attestation policy is not ready yet. Set MERO_KMS_VERSION and MERO_KMS_PROFILE, \
-     or use explicit USE_ENV_POLICY mode.";
-
-pub(crate) fn ensure_policy_ready_for_key_release(config: &Config) -> Result<(), ServiceError> {
-    if config.policy_ready {
-        return Ok(());
-    }
-    let details = config
-        .policy_unavailable_reason
-        .clone()
-        .unwrap_or_else(|| DEFAULT_POLICY_NOT_READY_MSG.to_string());
-    Err(ServiceError::PolicyNotReady(details))
 }

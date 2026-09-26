@@ -1,4 +1,4 @@
-//! `/attest` endpoint: returns KMS quote + event log for client verification.
+//! `/attest` endpoint: returns a KMS quote for client verification.
 
 use axum::extract::State;
 use axum::Json;
@@ -34,10 +34,6 @@ pub struct KmsAttestResponse {
     pub quote_b64: String,
     /// Hex-encoded 64-byte report_data used for quote generation.
     pub report_data_hex: String,
-    /// Parsed dstack event log entries; empty on a TDX replica.
-    pub event_log: serde_json::Value,
-    /// VM config string returned by dstack quote API; empty on a TDX replica.
-    pub vm_config: String,
     /// Base64 X25519 transport key, present when the request asked for it. The
     /// quote's report data then commits to it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,20 +51,18 @@ pub(crate) async fn attest_kms_handler(
     let nonce = decode_fixed_b64_32("nonceB64", &request.nonce_b64)?;
     let binding = resolve_attestation_binding(request.binding_b64.as_deref())?;
     let (binding, transport_public) = if request.transport_key {
-        let transport = state.backend.transport_key().await?;
+        let transport = state.backend.transport_key()?;
         let public = *transport.public();
         (sealed::attest_binding(&binding, &public), Some(public))
     } else {
         (binding, None)
     };
     let report_data = build_attestation_report_data(&nonce, &binding);
-    let quote = state.backend.quote(report_data).await?;
+    let quote = state.backend.quote(report_data).await?.quote_bytes;
 
     Ok(Json(KmsAttestResponse {
-        quote_b64: BASE64.encode(quote.quote),
+        quote_b64: BASE64.encode(quote),
         report_data_hex: hex::encode(report_data),
-        event_log: quote.event_log,
-        vm_config: quote.vm_config,
         transport_public_key_b64: transport_public.map(|public| BASE64.encode(public)),
     }))
 }
@@ -83,7 +77,7 @@ pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 
 }
 
 /// Domain separation label used to derive the default attestation binding.
-const ATTEST_DOMAIN_SEPARATOR: &[u8] = b"mero-kms-phala-attest-v1";
+const ATTEST_DOMAIN_SEPARATOR: &[u8] = b"mero-kms-attest-v1";
 
 /// Domain-separated default binding when the caller doesn't supply one.
 /// Ensures the second half of report_data is never all-zeros.

@@ -12,8 +12,8 @@ use axum::{Json, Router};
 
 use std::sync::Arc;
 
-use crate::backend::Backend;
-use crate::challenge_store::ChallengeStore;
+use crate::backend::TdxBackend;
+use crate::challenge_token::ReplayGuard;
 use crate::cluster::{self, JoinNonces};
 use crate::Config;
 
@@ -26,26 +26,24 @@ const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 pub struct AppState {
     /// Service configuration and attestation policy.
     pub config: Config,
-    /// Backend for storing and consuming single-use challenges.
-    pub challenge_store: ChallengeStore,
+    /// Challenges this replica already consumed.
+    pub(crate) consumed_challenges: Arc<ReplayGuard>,
     /// Where keys and quotes come from.
-    pub(crate) backend: Backend,
+    pub(crate) backend: Arc<TdxBackend>,
     /// Nonces this replica issued to replicas joining its cluster.
     pub(crate) join_nonces: Arc<JoinNonces>,
 }
 
 /// Create the router with all endpoints.
-pub(crate) fn create_router(config: Config, backend: Backend) -> eyre::Result<Router> {
-    let challenge_store = ChallengeStore::from_redis_url(config.redis_url.as_deref())
-        .map_err(|e| eyre::eyre!("failed to initialize challenge store: {}", e))?;
+pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router {
     let state = AppState {
+        consumed_challenges: Arc::new(ReplayGuard::new(config.max_consumed_challenges)),
         config,
-        challenge_store,
         backend,
         join_nonces: Arc::new(JoinNonces::default()),
     };
 
-    Ok(Router::new()
+    Router::new()
         .route("/health", get(health_handler))
         .route("/challenge", post(challenge::challenge_handler))
         .route("/get-key", post(get_key::get_key_handler))
@@ -53,20 +51,17 @@ pub(crate) fn create_router(config: Config, backend: Backend) -> eyre::Result<Ro
         .route("/cluster/nonce", post(cluster::join_nonce_handler))
         .route("/cluster/join", post(cluster::join_handler))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
-        .with_state(state))
+        .with_state(state)
 }
 
-/// Health check endpoint. A TDX replica also reports whether it holds its
+/// Health check endpoint. Also reports whether this replica holds its
 /// cluster's root yet, so a deployer can tell when a new replica has joined.
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let mut body = serde_json::json!({
+    Json(serde_json::json!({
         "status": "alive",
-        "service": "mero-kms-phala"
-    });
-    if let Backend::Tdx(tdx) = &state.backend {
-        body["clusterRootReady"] = serde_json::Value::Bool(tdx.has_root());
-    }
-    Json(body)
+        "service": "mero-kms",
+        "clusterRootReady": state.backend.has_root(),
+    }))
 }
 
 #[cfg(test)]

@@ -56,15 +56,15 @@ except Exception as exc:
 lock_versions = [
     pkg.get("version")
     for pkg in cargo_lock.get("package", [])
-    if pkg.get("name") == "mero-kms-phala"
+    if pkg.get("name") == "mero-kms"
 ]
 if not lock_versions:
-    fail("Cargo.lock has no package entry for mero-kms-phala")
+    fail("Cargo.lock has no package entry for mero-kms")
 if len(lock_versions) != 1:
-    fail(f"Expected exactly one mero-kms-phala entry in Cargo.lock, found {len(lock_versions)}")
+    fail(f"Expected exactly one mero-kms entry in Cargo.lock, found {len(lock_versions)}")
 if lock_versions[0] != kms_version:
     fail(
-        "Cargo.lock mero-kms-phala version mismatch: "
+        "Cargo.lock mero-kms version mismatch: "
         f"{lock_versions[0]} != {kms_version}"
     )
 

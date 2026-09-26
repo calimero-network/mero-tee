@@ -7,15 +7,6 @@ use thiserror::Error;
 /// Size of a TDX measurement register in bytes (48 bytes = 384 bits for SHA-384).
 pub const MEASUREMENT_BYTES: usize = 48;
 
-/// Expected length of a SHA-256 hex string (64 hex characters = 32 bytes).
-pub const SHA256_HEX_LEN: usize = 64;
-
-/// Size of a challenge identifier in bytes before hex encoding.
-pub const CHALLENGE_ID_BYTES: usize = 16;
-
-/// Length of a hex-encoded challenge identifier string.
-pub const CHALLENGE_ID_HEX_LEN: usize = CHALLENGE_ID_BYTES * 2;
-
 /// Maximum accepted length for a libp2p peer ID string (base58-encoded).
 pub const MAX_PEER_ID_LENGTH: usize = 128;
 

@@ -41,7 +41,7 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use crate::backend::{Backend, Measurements, Root, TdxBackend};
+use crate::backend::{Measurements, Root, TdxBackend};
 use crate::handlers::errors::ServiceError;
 use crate::handlers::AppState;
 use crate::measurement::is_debug_td;
@@ -293,21 +293,11 @@ async fn verify_peer(
     check_peer(&verification, tdx.own(), policy)
 }
 
-fn tdx_of(state: &AppState) -> Result<&Arc<TdxBackend>, ServiceError> {
-    match &state.backend {
-        Backend::Tdx(tdx) => Ok(tdx),
-        Backend::Dstack { .. } => Err(ServiceError::InvalidAttestationRequest(
-            "this KMS is not a TDX cluster replica".to_owned(),
-        )),
-    }
-}
-
 /// `POST /cluster/nonce`
 pub(crate) async fn join_nonce_handler(
     State(state): State<AppState>,
 ) -> Result<Json<JoinNonceResponse>, ServiceError> {
-    let tdx = tdx_of(&state)?;
-    tdx.with_root(|_| Ok(()))?;
+    state.backend.with_root(|_| Ok(()))?;
     let nonce = state.join_nonces.issue()?;
     Ok(Json(JoinNonceResponse {
         nonce_b64: BASE64.encode(nonce),
@@ -319,7 +309,7 @@ pub(crate) async fn join_handler(
     State(state): State<AppState>,
     Json(request): Json<JoinRequest>,
 ) -> Result<Json<JoinResponse>, ServiceError> {
-    let tdx = tdx_of(&state)?;
+    let tdx = &state.backend;
     let nonce = decode_32("nonceB64", &request.nonce_b64)?;
     state.join_nonces.consume(&nonce)?;
     let joiner_public = decode_32("joinerPublicB64", &request.joiner_public_b64)?;
@@ -679,7 +669,7 @@ mod tests {
         }
 
         async fn serve(tdx: Arc<TdxBackend>) -> SocketAddr {
-            let app = create_router(config(), Backend::Tdx(tdx)).unwrap();
+            let app = create_router(config(), tdx);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             drop(tokio::spawn(
@@ -707,8 +697,8 @@ mod tests {
             .expect("the joiner got the root");
 
             let path = "merod/storage/locked-read-only/12D3KooWPeer";
-            let giver_key = Backend::Tdx(giver).derive_key_hex(path).await.unwrap();
-            let joiner_key = Backend::Tdx(joiner).derive_key_hex(path).await.unwrap();
+            let giver_key = giver.derive_key_hex(path).unwrap();
+            let joiner_key = joiner.derive_key_hex(path).unwrap();
             assert_eq!(*giver_key, *joiner_key);
         }
 

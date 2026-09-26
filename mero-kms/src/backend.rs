@@ -1,27 +1,23 @@
-//! Where key material and quotes come from.
+//! Where key material and quotes come from: a plain TDX VM.
 //!
-//! * [`Backend::Dstack`]: Phala's dstack guest agent derives keys from the
-//!   dstack **app** key and produces quotes. Whoever controls the app's code can
-//!   derive the same keys (mero-tee#338), which is why this backend is being
-//!   retired.
-//! * [`Backend::Tdx`]: a plain TDX VM with no dstack. Keys derive from a random
-//!   **root** that exists only in this process's memory. The first replica of a
-//!   cluster generates it; every other replica gets it from a peer whose quote
-//!   carries exactly its own measurements (see `cluster`). Nothing ever writes it
-//!   to disk, so nobody outside a genuine replica can hold it. Quotes come from
-//!   the kernel's configfs-tsm interface.
+//! Keys derive from a random **root** that exists only in this process's
+//! memory. The first replica of a cluster generates it; every other replica gets
+//! it from a peer whose quote carries exactly its own measurements (see
+//! `cluster`). Nothing ever writes it to disk, so nobody outside a genuine
+//! replica can hold it. Quotes come from the kernel's configfs-tsm interface.
 //!
-//! Both derive a node's key on the same path, `{namespace}/{profile}/{peerId}`,
-//! and the transport key on [`sealed::TRANSPORT_KEY_PATH`].
+//! A node's key derives on the path `{namespace}/{profile}/{peerId}`, the
+//! transport key on [`sealed::TRANSPORT_KEY_PATH`], and the key that MACs
+//! `/challenge` tokens on [`CHALLENGE_KEY_PATH`].
 
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 #[cfg(feature = "mock-attestation")]
 use calimero_tee_attestation::generate_mock_attestation;
 use calimero_tee_attestation::{generate_attestation, AttestationResult};
-use dstack_sdk::dstack_client::DstackClient;
 use eyre::{bail, Result as EyreResult};
 use ring::hkdf::{KeyType, Salt, HKDF_SHA256};
+use ring::hmac;
 use sha2::{Digest, Sha256};
 use tracing::info;
 use zeroize::Zeroizing;
@@ -30,9 +26,13 @@ use crate::handlers::errors::ServiceError;
 use crate::measurement::is_debug_td;
 use crate::sealed::{self, TransportKey};
 
-/// Salt for every key derived from a TDX root. Distinct from anything dstack
-/// uses, so a key never collides across backends.
+/// Salt for every key derived from a TDX root.
 const ROOT_DERIVE_SALT: &[u8] = b"mero-kms/tdx-root/derive/v1";
+
+/// The derivation path of the key that MACs challenge tokens (see
+/// `challenge_token`). Never a peer key's path: those are
+/// `{namespace}/{profile}/{peerId}` under a configured namespace.
+pub(crate) const CHALLENGE_KEY_PATH: &str = "mero-kms/challenge/v1";
 
 /// Report data for the quote a TDX replica takes of itself at startup, to learn
 /// its own measurements.
@@ -40,100 +40,6 @@ const SELF_MEASUREMENT_DOMAIN: &[u8] = b"mero-kms/self-measurement/v1";
 
 /// Length of the root and of every key derived from it.
 pub(crate) const KEY_LEN: usize = 32;
-
-/// Where key material and quotes come from; see the module docs.
-#[derive(Clone)]
-pub(crate) enum Backend {
-    Dstack { socket_path: String },
-    Tdx(Arc<TdxBackend>),
-}
-
-/// A quote this service produced about itself.
-pub(crate) struct KmsQuote {
-    pub quote: Vec<u8>,
-    /// dstack's event log. Empty for a TDX replica: its RTMR3 carries the image's
-    /// own boot measurement, not dstack events.
-    pub event_log: serde_json::Value,
-    pub vm_config: String,
-}
-
-impl Backend {
-    pub(crate) fn dstack(socket_path: &str) -> Self {
-        Self::Dstack {
-            socket_path: socket_path.to_owned(),
-        }
-    }
-
-    /// The hex key at `path`, the form merod expects.
-    pub(crate) async fn derive_key_hex(
-        &self,
-        path: &str,
-    ) -> Result<Zeroizing<String>, ServiceError> {
-        match self {
-            Self::Dstack { socket_path } => {
-                let response = DstackClient::new(Some(socket_path))
-                    .get_key(Some(path.to_owned()), None)
-                    .await
-                    .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
-                Ok(Zeroizing::new(response.key))
-            }
-            Self::Tdx(tdx) => {
-                let key = tdx.derive(path)?;
-                Ok(Zeroizing::new(hex::encode(*key)))
-            }
-        }
-    }
-
-    /// This service's transport key. Every replica derives the same one, so for a
-    /// TDX cluster its public half also names the cluster: two clusters with
-    /// different roots never share it.
-    pub(crate) async fn transport_key(&self) -> Result<TransportKey, ServiceError> {
-        match self {
-            Self::Dstack { .. } => {
-                let key_hex = self.derive_key_hex(sealed::TRANSPORT_KEY_PATH).await?;
-                let derived = Zeroizing::new(hex::decode(key_hex.as_str()).map_err(|e| {
-                    ServiceError::KeyDerivationFailed(format!("dstack key hex: {e}"))
-                })?);
-                TransportKey::from_derived_bytes(&derived)
-            }
-            Self::Tdx(tdx) => {
-                TransportKey::from_derived_bytes(&*tdx.derive(sealed::TRANSPORT_KEY_PATH)?)
-            }
-        }
-    }
-
-    /// A quote over `report_data`.
-    pub(crate) async fn quote(&self, report_data: [u8; 64]) -> Result<KmsQuote, ServiceError> {
-        match self {
-            Self::Dstack { socket_path } => {
-                let response = DstackClient::new(Some(socket_path))
-                    .get_quote(report_data.to_vec())
-                    .await
-                    .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?;
-                let quote = hex::decode(&response.quote).map_err(|e| {
-                    ServiceError::AttestationVerificationFailed(format!(
-                        "dstack returned invalid quote hex: {e}"
-                    ))
-                })?;
-                let event_log = serde_json::from_str(&response.event_log).map_err(|e| {
-                    ServiceError::AttestationVerificationFailed(format!(
-                        "dstack returned invalid event log json: {e}"
-                    ))
-                })?;
-                Ok(KmsQuote {
-                    quote,
-                    event_log,
-                    vm_config: response.vm_config,
-                })
-            }
-            Self::Tdx(tdx) => Ok(KmsQuote {
-                quote: tdx.quote(report_data).await?.quote_bytes,
-                event_log: serde_json::Value::Array(Vec::new()),
-                vm_config: String::new(),
-            }),
-        }
-    }
-}
 
 /// The five registers that identify a TDX image, as lowercase hex.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,7 +82,7 @@ impl Root {
         &self.0
     }
 
-    /// HKDF-SHA256 of the root, salted per backend, with `path` as the info.
+    /// HKDF-SHA256 of the root, with `path` as the info.
     fn derive(&self, path: &str) -> Zeroizing<[u8; KEY_LEN]> {
         struct Len;
         impl KeyType for Len {
@@ -303,6 +209,29 @@ impl TdxBackend {
         self.with_root(|root| Ok(root.derive(path)))
     }
 
+    /// The hex key at `path`, the form merod expects.
+    pub(crate) fn derive_key_hex(&self, path: &str) -> Result<Zeroizing<String>, ServiceError> {
+        Ok(Zeroizing::new(hex::encode(*self.derive(path)?)))
+    }
+
+    /// This cluster's transport key. Every replica derives the same one, so its
+    /// public half also names the cluster: two clusters with different roots
+    /// never share it.
+    pub(crate) fn transport_key(&self) -> Result<TransportKey, ServiceError> {
+        Ok(TransportKey::from_secret(
+            &*self.derive(sealed::TRANSPORT_KEY_PATH)?,
+        ))
+    }
+
+    /// The HMAC key for challenge tokens. Every replica of the cluster derives
+    /// the same one, so a token one replica issued verifies on any other.
+    pub(crate) fn challenge_key(&self) -> Result<hmac::Key, ServiceError> {
+        Ok(hmac::Key::new(
+            hmac::HMAC_SHA256,
+            &*self.derive(CHALLENGE_KEY_PATH)?,
+        ))
+    }
+
     pub(crate) async fn quote(
         &self,
         report_data: [u8; 64],
@@ -368,6 +297,11 @@ mod tests {
         assert_ne!(*root.derive(path), *root.derive("merod/storage/debug/a"));
         assert_ne!(*root.derive(path), *other.derive(path));
         assert_ne!(*root.derive(path), *root.derive(sealed::TRANSPORT_KEY_PATH));
+        assert_ne!(*root.derive(path), *root.derive(CHALLENGE_KEY_PATH));
+        assert_ne!(
+            *root.derive(CHALLENGE_KEY_PATH),
+            *root.derive(sealed::TRANSPORT_KEY_PATH)
+        );
     }
 
     /// Pinned so a change to the derivation, which would strand every disk of

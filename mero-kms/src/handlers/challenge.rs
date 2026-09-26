@@ -1,19 +1,17 @@
-//! `/challenge` endpoint: issues short-lived nonce challenges.
+//! `/challenge` endpoint: issues short-lived, stateless challenge tokens (see
+//! `challenge_token`).
 
 use axum::extract::State;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use rand::random;
 use serde::{Deserialize, Serialize};
 
-use crate::challenge_store::{ChallengeStoreError, PendingChallenge};
-use crate::util::{unix_now_secs, CHALLENGE_ID_BYTES, MAX_PEER_ID_LENGTH};
+use crate::challenge_token;
+use crate::util::{unix_now_secs, MAX_PEER_ID_LENGTH};
 
 use super::errors::ServiceError;
 use super::AppState;
-
-const RATE_LIMIT_MESSAGE: &str = "Too many pending challenges. Retry shortly.";
 
 /// Request body for the challenge endpoint.
 #[derive(Debug, Deserialize)]
@@ -27,7 +25,7 @@ pub struct ChallengeRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChallengeResponse {
-    /// Unique challenge ID.
+    /// The challenge token, echoed back to `/get-key`.
     pub challenge_id: String,
     /// Base64-encoded 32-byte nonce.
     pub nonce_b64: String,
@@ -35,47 +33,23 @@ pub struct ChallengeResponse {
     pub expires_at: u64,
 }
 
-/// Handler for challenge issuance.
+/// Handler for challenge issuance. 503 until this replica holds its cluster's
+/// root, which keys the token.
 pub(crate) async fn challenge_handler(
     State(state): State<AppState>,
     Json(request): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, ServiceError> {
     validate_peer_id_shape(&request.peer_id)?;
-    let nonce: [u8; 32] = random();
-
-    let challenge_id = create_challenge_id();
+    let key = state.backend.challenge_key()?;
     let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let expires_at = now.saturating_add(state.config.challenge_ttl_secs);
-    state
-        .challenge_store
-        .insert(
-            challenge_id.clone(),
-            PendingChallenge {
-                nonce,
-                peer_id: request.peer_id,
-                expires_at,
-            },
-            state.config.challenge_ttl_secs,
-            state.config.max_pending_challenges,
-        )
-        .await
-        .map_err(|err| match err {
-            ChallengeStoreError::CapacityExceeded => {
-                ServiceError::RateLimited(RATE_LIMIT_MESSAGE.to_string())
-            }
-            _ => ServiceError::InvalidChallenge(format!("Challenge storage failed: {}", err)),
-        })?;
+    let challenge = challenge_token::issue(&key, &request.peer_id, expires_at);
 
     Ok(Json(ChallengeResponse {
-        challenge_id,
-        nonce_b64: BASE64.encode(nonce),
+        challenge_id: challenge.token,
+        nonce_b64: BASE64.encode(challenge.nonce),
         expires_at,
     }))
-}
-
-fn create_challenge_id() -> String {
-    let raw: [u8; CHALLENGE_ID_BYTES] = random();
-    hex::encode(raw)
 }
 
 pub(crate) fn validate_peer_id_shape(peer_id: &str) -> Result<(), ServiceError> {

@@ -1,18 +1,18 @@
-//! mero-kms-phala: Key management service for merod nodes running in a TEE.
+//! mero-kms: Key management service for merod nodes running in a TEE.
 //!
 //! This service validates TDX attestations from merod nodes and releases deterministic
-//! storage encryption keys based on peer ID. Keys derive either from Phala's dstack
-//! (`MERO_KMS_BACKEND=dstack`) or from a cluster root that exists only in the memory
-//! of TDX replicas (`MERO_KMS_BACKEND=tdx`); see `backend` and `cluster`.
+//! storage encryption keys based on peer ID. It runs as a cluster of plain TDX VMs; keys
+//! derive from a cluster root that exists only in the replicas' memory (see `backend` and
+//! `cluster`), and challenges are stateless so any replica can serve any request (see
+//! `challenge_token`).
 
 mod backend;
-mod challenge_store;
+mod challenge_token;
 mod cluster;
 mod config;
 mod handlers;
 mod measurement;
 mod policy;
-mod runtime_event;
 mod sealed;
 mod util;
 
@@ -29,10 +29,9 @@ use tower_http::trace::TraceLayer;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
-use crate::backend::{Backend, Root, TdxBackend};
-use crate::config::{log_startup_config, BackendKind};
+use crate::backend::{Root, TdxBackend};
+use crate::config::log_startup_config;
 use crate::handlers::create_router;
-use crate::runtime_event::ensure_kms_profile_runtime_event;
 
 pub use crate::config::Config;
 pub use crate::measurement::HexMeasurement;
@@ -51,7 +50,7 @@ async fn main() -> eyre::Result<()> {
         .with_level(true)
         .init();
 
-    let config = Config::from_env().await?;
+    let config = Config::from_env()?;
 
     log_startup_config(&config);
 
@@ -65,47 +64,28 @@ async fn main() -> eyre::Result<()> {
         );
     }
 
-    let backend = match config.backend {
-        BackendKind::Dstack => {
-            // Without the `mock-attestation` feature the RTMR3 runtime marker can
-            // never be skipped: there is no mock mode to skip it for.
-            if mock {
-                warn!("Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled");
-            } else if let Err(err) = ensure_kms_profile_runtime_event(&config.kms_profile) {
-                warn!(
-                    "Failed to emit KMS profile RTMR3 runtime marker; continuing startup: {err:#}"
-                );
-                warn!(
-                    "Profile pinning is still enforced, but runtime profile-measurement separation may be reduced"
-                );
-            }
-            Backend::dstack(&config.dstack_socket_path)
-        }
-        BackendKind::Tdx => {
-            let tdx = Arc::new(
-                TdxBackend::new(
-                    #[cfg(feature = "mock-attestation")]
-                    mock,
-                )
-                .await?,
-            );
-            if config.kms_bootstrap {
-                tdx.set_root(Root::generate())
-                    .map_err(|e| eyre::eyre!("{e}"))?;
-                tracing::info!("Generated a new cluster root; this replica bootstraps the cluster");
-            } else {
-                drop(tokio::spawn(cluster::join_until_ready(
-                    Arc::clone(&tdx),
-                    config.attestation_policy.clone(),
-                    config.cluster_peers.clone(),
-                    Duration::from_secs(config.join_retry_secs),
-                )));
-            }
-            Backend::Tdx(tdx)
-        }
-    };
+    let backend = Arc::new(
+        TdxBackend::new(
+            #[cfg(feature = "mock-attestation")]
+            mock,
+        )
+        .await?,
+    );
+    if config.kms_bootstrap {
+        backend
+            .set_root(Root::generate())
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        tracing::info!("Generated a new cluster root; this replica bootstraps the cluster");
+    } else {
+        drop(tokio::spawn(cluster::join_until_ready(
+            Arc::clone(&backend),
+            config.attestation_policy.clone(),
+            config.cluster_peers.clone(),
+            Duration::from_secs(config.join_retry_secs),
+        )));
+    }
 
-    let base_app = create_router(config.clone(), backend)?.layer(TraceLayer::new_for_http());
+    let base_app = create_router(config.clone(), backend).layer(TraceLayer::new_for_http());
     let app = build_cors_layer(&config.cors_allowed_origins, base_app)?;
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
