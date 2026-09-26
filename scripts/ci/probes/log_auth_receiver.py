@@ -2,10 +2,11 @@
 """Stand-in log sink that reports whether each push carried the expected token.
 
 Runs on a throwaway VM next to a staging-probe node (see
-node_secret_fetch_probe.sh). The node's vector is pointed here as its
-`logs-endpoint`, with `logs-secret-name` naming a Secret Manager secret, so the
-bearer token on each push is whatever `fetch_secret.sh gcp` fetched on the node.
-A locked-read-only node has no shell and no serial console to ask, so this is
+node_log_auth_probe.sh). The node's vector is pointed here as its
+`logs-endpoint`, and the node was given a token as `observability-token`
+metadata, the way mdma gives it one. So the bearer token on each push is
+whatever reached vector through calimero-init and the `provided` provider. A
+locked-read-only node has no shell and no serial console to ask, so this is
 where the result becomes visible.
 
 Only the SHA-256 of the expected token is given to this process, so the token
@@ -13,8 +14,8 @@ itself is never on this VM. Each request is classified and written as one line:
 
     PROBE_AUTH_OK        Authorization: Bearer <token whose sha256 matches>
     PROBE_AUTH_MISMATCH  a bearer token, but not the expected one
-    PROBE_AUTH_NONE      no Authorization header: the node's fetch failed and
-                         vector pushed unauthenticated
+    PROBE_AUTH_NONE      no Authorization header: the token never reached
+                         vector, so it pushed unauthenticated
 
 The probe reads these lines from the VM's serial console. Every request gets a
 200 with an empty Elasticsearch bulk response, so vector keeps pushing instead
