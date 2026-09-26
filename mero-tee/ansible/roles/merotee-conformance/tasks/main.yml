@@ -102,6 +102,10 @@
       - "'if [[ -n \"${METRICS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'if [[ -n \"${LOGS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'systemctl disable vmagent vector' in (baked_init.content | b64decode)"
+      # New nodes get a KMS-encrypted store, and locked-read-only refuses
+      # to create a plaintext one.
+      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_PHALA_URL\")' in (baked_init.content | b64decode)"
+      - "'The locked-read-only profile does not' in (baked_init.content | b64decode)"
     fail_msg: "Baked init script does not satisfy expected R6/R7 invariants"
 
 - name: Check that observability services are not enabled by default (R7)

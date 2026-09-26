@@ -70,6 +70,12 @@ SERVER_PORT=${SERVER_PORT:-2428}
 SWARM_PORT=$(get_meta "swarm-port")
 SWARM_PORT=${SWARM_PORT:-2528}
 TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
+# The mero-kms-phala endpoint this node's storage key comes from. Stamped by
+# mdma's dispatcher at creation. Untrusted like all metadata, and that is fine:
+# merod verifies the KMS's own attestation against the signed release policy
+# before it accepts a key, so a wrong URL fails the boot rather than handing
+# the node a key someone else knows. See "Storage encryption" below.
+KMS_PHALA_URL=$(get_meta "kms-phala-url" | tr -d '\r\n')
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
 METRICS_SECRET=$(get_meta "metrics-secret-name")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
@@ -122,18 +128,24 @@ else
   rm -f /etc/calimero/merod.env
 fi
 
+# Extra `merod init` arguments; set by the storage-encryption decision below.
+INIT_EXTRA_ARGS=()
+INIT_ENCRYPTED=false
+
 init_node() {
   if [[ "$MEROD_MODE" == "read-only" ]]; then
     "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
       --mode read-only \
       --advertise-address \
       --server-port "$SERVER_PORT" \
-      --swarm-port "$SWARM_PORT"
+      --swarm-port "$SWARM_PORT" \
+      ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
   else
     "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
       --advertise-address \
       --server-port "$SERVER_PORT" \
-      --swarm-port "$SWARM_PORT"
+      --swarm-port "$SWARM_PORT" \
+      ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
   fi
 }
 
@@ -225,12 +237,107 @@ Refusing to initialise onto the root filesystem -- see $LOG."
   fi
 fi
 
+# --- Storage encryption (KMS) ------------------------------------------------
+#
+# TDX protects this VM's MEMORY. It does not protect its disks: the data disk
+# above is ordinary ext4 on a device the host reads and writes, so whatever
+# merod stores in plaintext is readable by anyone who can snapshot or attach
+# that disk -- the cloud project, or whoever compromises it. merod's store holds
+# the node's signing identity (the key it was ADMITTED under as a ReadOnlyTee),
+# its account root, and every context's replicated state. A copied disk is
+# therefore a copy of an admitted fleet member: it can pull every group key the
+# node was given, and, since admitted TEEs may vouch for new ones, admit more.
+#
+# So the store is encrypted with a key released by mero-kms-phala, which only
+# hands it to a TD whose quote matches the release policy and is bound to this
+# node's peer id. The key is derived from `{namespace}/{profile}/{peerId}`, so
+# it survives image upgrades within a profile.
+#
+# It has to happen at `merod init`, not later. `init` is what writes the signing
+# identity and account root, so a store encrypted only from the first `run`
+# would already hold both in plaintext -- and could not be opened encrypted at
+# all, because every read decrypts. `merod init --kms-url` fetches the key
+# before writing anything and saves `[tee.kms.phala]` so `run` fetches the same
+# key on every boot.
+#
+# `tee-release-version` names the signed mero-tee release whose policy the KMS
+# is verified against; `merod init --kms-url` refuses without it, because a key
+# from an unverified KMS may be known to whoever runs the endpoint.
+#
+# Keyed on config.toml, not the node directory: config.toml is what marks a
+# node initialised, and `merod init --kms-url` fetches the key before writing
+# it, so an init that failed on an unreachable or unverifiable KMS is retried on
+# the next boot instead of being mistaken for a finished node.
+NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"
+
+fatal() {
+  log "ERROR: $*"
+  exit 1
+}
+
+merod_can_encrypt_at_init() {
+  "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- '--kms-url'
+}
+
+if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
+  # For `merod init`. `merod run` reads the same value from merod.env above.
+  export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"
+fi
+
 mkdir -p "$CALIMERO_HOME"
-if [[ ! -d "$CALIMERO_HOME/$CALIMERO_NODE" ]]; then
-  log "Initializing Calimero node..."
+if [[ ! -f "$NODE_CONFIG" ]]; then
+  if [[ -n "$KMS_PHALA_URL" ]]; then
+    [[ -n "${TEE_RELEASE_VERSION:-}" ]] || fatal "kms-phala-url is set but \
+tee-release-version is not. The KMS is verified against that release's signed \
+policy, and without it merod cannot tell a real KMS from an impostor. Refusing \
+to initialise."
+    if merod_can_encrypt_at_init; then
+      INIT_EXTRA_ARGS=(--kms-url "$KMS_PHALA_URL")
+      INIT_ENCRYPTED=true
+      log "Initializing Calimero node with a KMS-encrypted store (kms=$KMS_PHALA_URL release=$TEE_RELEASE_VERSION)..."
+    elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+      fatal "the baked merod does not support 'init --kms-url', so it cannot \
+create an encrypted store. Refusing to create an unencrypted node on the \
+locked-read-only profile. Bump merodVersion in versions.json."
+    else
+      log "WARN: the baked merod does not support 'init --kms-url'; creating an \
+UNENCRYPTED store (allowed on profile=$IMAGE_PROFILE only)."
+    fi
+  elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "no kms-phala-url metadata. The locked-read-only profile does not \
+create a node with an unencrypted store: its signing identity would sit in \
+plaintext on a disk the host can read. Set kms-phala-url (and \
+tee-release-version) on the instance."
+  else
+    log "WARN: no kms-phala-url metadata; creating an UNENCRYPTED store (allowed \
+on profile=$IMAGE_PROFILE only)."
+  fi
+  # A flag rather than bash's array-length form: this file is a Jinja
+  # template, and that form opens with Jinja's comment delimiter, which fails
+  # the render mid-image-build.
+  if [[ "$INIT_ENCRYPTED" != true ]]; then
+    log "Initializing Calimero node..."
+  fi
+  # Under `set -e` a failed init stops here, before any service starts: no
+  # plaintext fallback, and config.toml is absent so the next boot retries.
   init_node
+elif grep -q '^\[tee' "$NODE_CONFIG"; then
+  log "Calimero node already initialized at $CALIMERO_HOME/$CALIMERO_NODE with a KMS-encrypted store; skipping init"
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" && -z "${TEE_RELEASE_VERSION:-}" ]]; then
+    fatal "this node's store is KMS-encrypted but tee-release-version is \
+missing, so merod would accept its key from an unverified KMS. Refusing to \
+start."
+  fi
 else
-  log "Calimero node already initialized at $CALIMERO_HOME/$CALIMERO_NODE; skipping init"
+  # A node initialised before this change. Its store is plaintext and cannot be
+  # encrypted in place (every read would fail to decrypt), and its keys have
+  # been on a host-readable disk for as long as it has run -- encrypting now
+  # would not un-expose them. It keeps running so the fleet does not lose
+  # capacity on an image upgrade; the remedy is to recreate it.
+  log "WARN: Calimero node at $CALIMERO_HOME/$CALIMERO_NODE has an UNENCRYPTED \
+store (initialised before KMS storage encryption). Its signing identity and \
+account root are readable from the data disk and must be treated as exposed. \
+Recreate this node to move it onto an encrypted store."
 fi
 
 if [[ "$MEROD_MODE" == "read-only" ]]; then

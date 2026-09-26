@@ -199,6 +199,32 @@
     daemon_reload: true
   when: merod_mode == "read-only"
 
+# --- Storage-encryption conformance ------------------------------------------
+#
+# calimero-init refuses to create a locked-read-only node without a
+# KMS-encrypted store, and it creates one with `merod init --kms-url`. A merod
+# that predates that flag cannot encrypt from the first write, so every new node
+# on such an image would stop at boot. Catch it here, at build time, instead:
+# the flag is a capability probe that needs no node, network or config.
+- name: Probe whether the baked merod can encrypt its store at init
+  command: /usr/local/bin/merod --node conformance init --help
+  register: merod_kms_init_help
+  changed_when: false
+  failed_when: false
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
+- name: Assert the baked merod can create a KMS-encrypted store
+  assert:
+    that:
+      - merod_kms_init_help.rc == 0
+      - "'--kms-url' in merod_kms_init_help.stdout"
+    fail_msg: >-
+      The locked-read-only profile only creates nodes with a KMS-encrypted
+      store, but the baked merod ({{ merod_version | default('unknown') }}) has
+      no `init --kms-url`, so it can only create a plaintext one. Bump
+      merodVersion in mero-tee/versions.json to a core release carrying it.
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
 # --- Delegated-execution conformance -----------------------------------------
 #
 # A relay image has one cross-repo dependency the build cannot infer: the baked
