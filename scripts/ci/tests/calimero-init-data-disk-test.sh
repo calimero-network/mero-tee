@@ -80,7 +80,11 @@ grep -qF 'if [[ "$DATA_SIG_RC" == 2 ]]; then' <<<"$body" \
        probe that failed is not a blank disk"
 
 # --- a present-but-unmountable disk is fatal, not ignored -------------------
-awk '/could not be mounted at/,/^fi$/' <<<"$body" | grep -qF 'exit 1' \
+# The block is sliced into a variable rather than piped into `grep -q`: grep
+# exits at its first match, awk then writes the rest into a closed pipe and
+# dies of SIGPIPE, and under `pipefail` that fails the assertion at random.
+unmountable_block=$(awk '/could not be mounted at/,/^fi$/' <<<"$body")
+grep -qF 'exit 1' <<<"$unmountable_block" \
   || fail "a data disk that exists and will not mount must stop the boot.
        Continuing writes the node's state to root and nobody learns until root
        is full -- which is the bug this fixes. calimero-init's journal ships, so

@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# The staging probe's Secret Manager fetch check must tell a fetched credential
-# apart from a failed fetch.
+# The staging probe's log-auth check must tell a node that pushed with its
+# credential apart from one that pushed without it.
 #
 # The check itself runs only on real GCP (node-image-gcp-staging-probe.yaml,
-# `secret_fetch_check`). Two pieces of it can be wrong without any cloud, and a
+# `log_auth_check`). Two pieces of it can be wrong without any cloud, and a
 # wrong one would make that run lie:
 #
 #   * log_auth_receiver.py must classify each push as OK only when the bearer
 #     token hashes to the expected SHA-256. A receiver that passed any token,
-#     or no token at all, would turn a failed fetch into a green check.
-#   * `node_secret_fetch_probe.sh verify` must pass on an authenticated push,
+#     or no token at all, would turn an unauthenticated node into a green check.
+#   * `node_log_auth_probe.sh verify` must pass on an authenticated push,
 #     and on anything else fail with the code that names what went wrong.
 #
 # Here the receiver runs on localhost and gets real HTTP requests, and verify
 # reads its output through a stub `gcloud` that plays the serial console.
 #
-# Usage: scripts/ci/tests/node-secret-fetch-probe-test.sh
+# Usage: scripts/ci/tests/node-log-auth-probe-test.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 RECEIVER="${REPO_ROOT}/scripts/ci/probes/log_auth_receiver.py"
-PROBE="${REPO_ROOT}/scripts/ci/probes/node_secret_fetch_probe.sh"
+PROBE="${REPO_ROOT}/scripts/ci/probes/node_log_auth_probe.sh"
 
 SB="$(mktemp -d)"
 RECEIVER_PID=""
@@ -92,7 +92,7 @@ expect_verify() {
   local name="$1" serial="$2" want="$3"
   if run_verify "${serial}"; then
     [[ "${want}" == "pass" ]] || fail "verify passed on ${name}: $(cat "${SB}/verify.out")"
-    jq -e '.passed == true' "${SB}/art/node-secret-fetch-result.json" >/dev/null \
+    jq -e '.passed == true' "${SB}/art/node-log-auth-result.json" >/dev/null \
       || fail "verify passed on ${name} but the result file says otherwise"
   else
     [[ "${want}" != "pass" ]] || fail "verify failed on ${name}: $(cat "${SB}/verify.out")"
@@ -104,12 +104,12 @@ expect_verify() {
 expect_verify "an authenticated push" \
   'boot\nPROBE_RECEIVER_READY port=9200\nPROBE_AUTH_NONE POST /_bulk\nPROBE_AUTH_OK POST /_bulk\n' pass
 expect_verify "unauthenticated pushes only" \
-  'PROBE_RECEIVER_READY port=9200\nPROBE_AUTH_NONE POST /_bulk\n' SECRET_FETCH_FAILED
+  'PROBE_RECEIVER_READY port=9200\nPROBE_AUTH_NONE POST /_bulk\n' LOG_PUSH_UNAUTHENTICATED
 expect_verify "a wrong token" \
-  'PROBE_RECEIVER_READY port=9200\nPROBE_AUTH_MISMATCH POST /_bulk\n' SECRET_FETCH_WRONG_TOKEN
+  'PROBE_RECEIVER_READY port=9200\nPROBE_AUTH_MISMATCH POST /_bulk\n' LOG_PUSH_WRONG_TOKEN
 expect_verify "a receiver that never started" \
   'boot\n' RECEIVER_NOT_READY
 expect_verify "no pushes at all" \
   'PROBE_RECEIVER_READY port=9200\n' NO_LOG_PUSHES
 
-echo "== secret-fetch probe classifies pushes and verdicts correctly =="
+echo "== log-auth probe classifies pushes and verdicts correctly =="
