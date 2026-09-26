@@ -6,6 +6,18 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Security
+
+- **New nodes get a KMS-encrypted store, and `locked-read-only` never creates a plaintext one.** TDX protects the VM's memory, not its disks. Until now `calimero-init` ran a plain `merod init` onto a plain ext4 data disk and never configured the KMS: mdma stamped `kms-phala-url` into instance metadata and nothing read it. So merod's store sat in plaintext on a device the host reads. That store holds the node's signing identity (the key it was admitted under as a `ReadOnlyTee`), its account root, and every context's replicated state. A snapshot of the data disk was therefore a copy of an admitted fleet member, able to pull every group key the node held.
+
+  `calimero-init` now reads `kms-phala-url` and creates new nodes with `merod init --kms-url`. The storage key is fetched from mero-kms-phala **before** anything is written, so the identity and account root are never on disk in plaintext. It has to happen at `init`: a store written in plaintext cannot later be opened encrypted, because every read is decrypted. The KMS derives the key from `{namespace}/{profile}/{peerId}`, so it survives image upgrades within a profile. The KMS URL comes from untrusted metadata, and that is fine: merod verifies the KMS's own attestation against the signed release policy named by `tee-release-version`. That makes `tee-release-version` mandatory whenever a KMS is used, and an unverifiable KMS is refused.
+
+  - **`locked-read-only` fails the boot rather than create a plaintext node** when `kms-phala-url` is missing or the baked merod has no `init --kms-url`. A build-time conformance assert catches the second case before release. A KMS-encrypted node with no `tee-release-version` also refuses to start.
+  - **Debug profiles** still create a plaintext node without a KMS, and log it.
+  - **Nodes created before this keep running and log that their keys must be treated as exposed.** Encrypting them in place cannot work, and would not un-expose keys that have already sat on the disk. Recreate them.
+
+  **Requires a core release with `merod init --kms-url`** ([calimero-network/core#4062](https://github.com/calimero-network/core/pull/4062)) and a `merodVersion` bump. Until then the new conformance assert fails `locked-read-only` image builds, deliberately. Covered by `scripts/ci/tests/calimero-init-store-encryption-test.sh`, which runs the decision against a stub merod in ten cases and is wired into `ci-workflow-lint`.
+
 ### Changed
 
 - **`fleet_delegated_execution` is now `fleet_delegated_access`, matching core's rename of the flag it drives.** Core renamed `--public-intents` to `--delegated-access` when the flag grew to decide more than two intent routes — it now also decides whether merod's guard accepts a request-carried proof, which reaches reads, and `GET /admin-api/namespaces` executes no intent. This repo's variable name followed.
