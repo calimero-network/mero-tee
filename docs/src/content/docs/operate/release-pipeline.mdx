@@ -137,16 +137,20 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 4. **`publish_mrtds`** — assemble `published-mrtds.json` (per-profile
    measurements) with `assemble-published-mrtd-payload.sh`, generate the SBOM,
-   cosign-sign the assets (`.sig` + `.pem`), and publish the GitHub release
+   cosign-sign the assets (`.sig` + `.pem` + `.bundle.json`), and publish the GitHub release
    `mero-tee-v<version>`.
 
 </Steps>
 
 ### Node-image release assets
 
-Uploaded to `mero-tee-v<version>` (each with `.sig` and `.pem` sidecars):
+Uploaded to `mero-tee-v<version>` (each with `.sig`, `.pem` and `.bundle.json`
+sidecars; releases before the bundles were added carry only `.sig` and `.pem`):
 
-- `published-mrtds.json` — expected MRTD/RTMR0–3 for each profile
+- `published-mrtds.json` — expected MRTD/RTMR0–3 for each profile. A namespace
+  whose TEE policy trusts signed releases has its admitters download this file
+  and its `.bundle.json` and verify the signature against the `Release mero-tee`
+  workflow identity before comparing a joining TEE's quote with it.
 - `release-provenance.json`
 - `node-image-gcp-release-sbom.spdx.json`
 - `node-image-gcp-checksums.txt`
