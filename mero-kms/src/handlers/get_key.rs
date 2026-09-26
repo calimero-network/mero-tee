@@ -11,12 +11,10 @@ use dstack_sdk::dstack_client::DstackClient;
 use libp2p_identity::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, info};
-// `warn!` is only reachable from the mock-attestation paths below.
-#[cfg(feature = "mock-attestation")]
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
 use crate::policy::AttestationPolicy;
+use crate::sealed;
 use crate::util::CHALLENGE_ID_HEX_LEN;
 use crate::Config;
 
@@ -38,14 +36,26 @@ pub struct GetKeyRequest {
     pub peer_public_key_b64: String,
     /// Base64-encoded signature over the canonical challenge+quote+peer payload.
     pub signature_b64: String,
+    /// Base64 one-time X25519 key to seal the released key to. The quote's
+    /// report data commits to it, and so does the signature.
+    #[serde(default)]
+    pub seal_to_b64: Option<String>,
 }
 
 /// Response body for the get-key endpoint.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
-    /// Derived storage encryption key for the requesting peer.
-    pub key: String,
+    /// Derived storage encryption key, in the clear. Only for a request that did
+    /// not ask for sealing, from a merod that predates it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The key sealed to the request's `sealToB64` (see `sealed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sealed_key_b64: Option<String>,
+    /// The 12-byte AES-GCM nonce of `sealedKeyB64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seal_nonce_b64: Option<String>,
 }
 
 /// Key release flow: validate inputs → consume single-use challenge → verify
@@ -67,6 +77,18 @@ pub(crate) async fn get_key_handler(
         .decode(&request.quote_b64)
         .map_err(|e| ServiceError::InvalidBase64(e.to_string()))?;
     debug!(quote_len = quote_bytes.len(), "Decoded quote");
+    let seal_to = request
+        .seal_to_b64
+        .as_deref()
+        .map(|value| super::attest::decode_fixed_b64_32("sealToB64", value))
+        .transpose()?;
+    if seal_to.is_none() && state.config.require_sealed_key_release {
+        return Err(ServiceError::InvalidAttestationRequest(
+            "this KMS releases keys sealed only; the request carries no sealToB64. \
+             Upgrade merod."
+                .to_owned(),
+        ));
+    }
 
     let challenge_nonce = state
         .challenge_store
@@ -83,12 +105,20 @@ pub(crate) async fn get_key_handler(
         &request.challenge_id,
         &challenge_nonce,
         &quote_bytes,
+        seal_to.as_ref(),
     )?;
 
+    // What the quote's report data must carry after the nonce: the peer id
+    // alone for a legacy request, the peer id and the seal key for a sealed one.
+    let binding = match &seal_to {
+        Some(seal_to) => sealed::request_binding(seal_to, &request.peer_id),
+        None => hash_peer_id(&request.peer_id),
+    };
     verify_and_enforce_attestation(
         &state.config,
         &quote_bytes,
         &challenge_nonce,
+        &binding,
         &request.peer_id,
     )
     .await?;
@@ -101,8 +131,29 @@ pub(crate) async fn get_key_handler(
         .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
 
     info!(peer_id = %request.peer_id, "Key derived successfully");
+    let Some(seal_to) = seal_to else {
+        warn!(
+            peer_id = %request.peer_id,
+            "Releasing a key UNSEALED to a merod that predates sealed release"
+        );
+        return Ok(Json(GetKeyResponse {
+            key: Some(key_response.key),
+            sealed_key_b64: None,
+            seal_nonce_b64: None,
+        }));
+    };
+    let transport = super::attest::transport_key(&client).await?;
+    let (seal_nonce, sealed_key) = sealed::seal(
+        &transport,
+        &seal_to,
+        &challenge_nonce,
+        &request.peer_id,
+        &key_response.key,
+    )?;
     Ok(Json(GetKeyResponse {
-        key: key_response.key,
+        key: None,
+        sealed_key_b64: Some(BASE64.encode(sealed_key)),
+        seal_nonce_b64: Some(BASE64.encode(seal_nonce)),
     }))
 }
 
@@ -119,6 +170,7 @@ async fn verify_and_enforce_attestation(
     config: &Config,
     quote_bytes: &[u8],
     challenge_nonce: &[u8; 32],
+    binding: &[u8; 32],
     peer_id: &str,
 ) -> Result<(), ServiceError> {
     #[cfg(feature = "mock-attestation")]
@@ -133,11 +185,11 @@ async fn verify_and_enforce_attestation(
         }
     }
 
-    let peer_id_hash = hash_peer_id(peer_id);
+    let peer_id_hash = *binding;
     debug!(
         peer_id = %peer_id,
-        peer_id_hash = %hex::encode(peer_id_hash),
-        "Created peer ID hash for verification"
+        binding = %hex::encode(peer_id_hash),
+        "Expected report-data binding for verification"
     );
 
     #[cfg(feature = "mock-attestation")]
@@ -233,6 +285,7 @@ pub(crate) fn verify_peer_signature(
     challenge_id: &str,
     challenge_nonce: &[u8; 32],
     quote_bytes: &[u8],
+    seal_to: Option<&[u8; 32]>,
 ) -> Result<(), ServiceError> {
     let public_key_bytes = BASE64
         .decode(peer_public_key_b64)
@@ -248,7 +301,8 @@ pub(crate) fn verify_peer_signature(
         return Err(ServiceError::PeerIdentityMismatch);
     }
 
-    let payload = build_signature_payload(challenge_id, challenge_nonce, quote_bytes, peer_id)?;
+    let payload =
+        build_signature_payload(challenge_id, challenge_nonce, quote_bytes, peer_id, seal_to)?;
     if !public_key.verify(&payload, &signature_bytes) {
         return Err(ServiceError::InvalidSignature(
             "signature verification failed".to_owned(),
@@ -260,20 +314,28 @@ pub(crate) fn verify_peer_signature(
 /// Canonical JSON payload that the node must sign. Includes the challenge ID,
 /// nonce, SHA-256 of the quote (not the quote itself, to keep the payload small),
 /// and the peer ID. Deterministic serialization via `serde_json::to_vec`.
+///
+/// A sealed request also signs `sealToHex`, so the seal key cannot be changed
+/// without the node's identity key, on top of its quote committing to it.
 pub(crate) fn build_signature_payload(
     challenge_id: &str,
     challenge_nonce: &[u8; 32],
     quote_bytes: &[u8],
     peer_id: &str,
+    seal_to: Option<&[u8; 32]>,
 ) -> Result<Vec<u8>, ServiceError> {
     let quote_hash = Sha256::digest(quote_bytes);
-    serde_json::to_vec(&serde_json::json!({
+    let mut payload = serde_json::json!({
         "challengeId": challenge_id,
         "challengeNonceHex": hex::encode(challenge_nonce),
         "quoteHashHex": hex::encode(quote_hash),
         "peerId": peer_id,
-    }))
-    .map_err(|e| ServiceError::InvalidSignature(format!("failed to serialize payload: {}", e)))
+    });
+    if let Some(seal_to) = seal_to {
+        payload["sealToHex"] = serde_json::Value::String(hex::encode(seal_to));
+    }
+    serde_json::to_vec(&payload)
+        .map_err(|e| ServiceError::InvalidSignature(format!("failed to serialize payload: {}", e)))
 }
 
 /// Verify that the quote's TCB status and all five TDX measurement registers

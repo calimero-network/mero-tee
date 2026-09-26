@@ -237,9 +237,57 @@ fn test_signature_payload_is_deterministic() {
     let quote = b"quote-bytes";
     let peer_id = "12D3KooWAbcdefghijklmnopqrstuvwxyz";
 
-    let payload1 = get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
-    let payload2 = get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id).unwrap();
+    let payload1 =
+        get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id, None).unwrap();
+    let payload2 =
+        get_key::build_signature_payload(challenge_id, &nonce, quote, peer_id, None).unwrap();
     assert_eq!(payload1, payload2);
+}
+
+/// A merod that predates sealing signs the legacy payload. A proxy that adds a
+/// `sealToB64` of its own to such a request, hoping to have the key sealed to
+/// itself, changes the payload the signature must cover and is refused.
+#[test]
+fn a_seal_key_added_to_a_request_the_node_did_not_sign_is_refused() {
+    let keypair = Keypair::generate_ed25519();
+    let peer_id = keypair.public().to_peer_id().to_base58();
+    let peer_public_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(keypair.public().encode_protobuf());
+    let challenge_id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d6";
+    let challenge_nonce = [0x7c; 32];
+    let quote_bytes = b"quote-bytes-for-seal";
+    let signed_seal = [0x10; 32];
+    let payload = get_key::build_signature_payload(
+        challenge_id,
+        &challenge_nonce,
+        quote_bytes,
+        &peer_id,
+        Some(&signed_seal),
+    )
+    .unwrap();
+    let signature_b64 =
+        base64::engine::general_purpose::STANDARD.encode(keypair.sign(&payload).unwrap());
+
+    let verify = |seal_to: Option<&[u8; 32]>| {
+        get_key::verify_peer_signature(
+            &peer_id,
+            &peer_public_key_b64,
+            &signature_b64,
+            challenge_id,
+            &challenge_nonce,
+            quote_bytes,
+            seal_to,
+        )
+    };
+    assert!(verify(Some(&signed_seal)).is_ok());
+    assert!(matches!(
+        verify(Some(&[0x20; 32])),
+        Err(ServiceError::InvalidSignature(_))
+    ));
+    assert!(matches!(
+        verify(None),
+        Err(ServiceError::InvalidSignature(_))
+    ));
 }
 
 #[test]
@@ -302,9 +350,14 @@ fn test_verify_peer_signature_accepts_matching_peer_identity() {
     let challenge_id = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
     let challenge_nonce = [0x7b; 32];
     let quote_bytes = b"quote-bytes-for-signature";
-    let payload =
-        get_key::build_signature_payload(challenge_id, &challenge_nonce, quote_bytes, &peer_id)
-            .unwrap();
+    let payload = get_key::build_signature_payload(
+        challenge_id,
+        &challenge_nonce,
+        quote_bytes,
+        &peer_id,
+        None,
+    )
+    .unwrap();
     let signature = keypair.sign(&payload).unwrap();
     let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature);
 
@@ -315,6 +368,7 @@ fn test_verify_peer_signature_accepts_matching_peer_identity() {
         challenge_id,
         &challenge_nonce,
         quote_bytes,
+        None,
     );
     assert!(result.is_ok());
 }
@@ -335,6 +389,7 @@ fn test_verify_peer_signature_rejects_spoofed_peer_id() {
         &challenge_nonce,
         quote_bytes,
         &claimed_peer_id,
+        None,
     )
     .unwrap();
     let attacker_signature_b64 =
@@ -347,6 +402,7 @@ fn test_verify_peer_signature_rejects_spoofed_peer_id() {
         challenge_id,
         &challenge_nonce,
         quote_bytes,
+        None,
     );
     assert!(matches!(result, Err(ServiceError::PeerIdentityMismatch)));
 }

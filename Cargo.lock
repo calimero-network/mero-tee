@@ -3996,6 +3996,7 @@ dependencies = [
  "base64 0.23.1",
  "calimero-server-primitives",
  "calimero-tee-attestation",
+ "curve25519-dalek 5.0.0",
  "dstack-attest",
  "dstack-sdk",
  "eyre",
@@ -4004,6 +4005,7 @@ dependencies = [
  "rand 0.10.2",
  "redis",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -4013,6 +4015,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
