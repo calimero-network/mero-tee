@@ -63,6 +63,20 @@ variable "lockdown_profile" {
   }
 }
 
+# Empty for a release. A build from any other ref sets a suffix such as
+# "-dev-<run id>": the image then gets its own name and a separate "-dev"
+# family, so it can never replace a released image or be picked up by mdma's
+# dispatcher, which resolves images by exact name and exact family.
+variable "image_suffix" {
+  type    = string
+  default = ""
+
+  validation {
+    condition     = var.image_suffix == "" || can(regex("^-[a-z0-9-]{1,40}$", var.image_suffix))
+    error_message = "image_suffix must be empty or a hyphen followed by lowercase letters, digits and hyphens."
+  }
+}
+
 variable "project_id" {
   type    = string
   default = "calimero-p2p-development"
@@ -114,8 +128,8 @@ source "googlecompute" "this" {
   # them here alone would leave the dispatcher unable to find any image. They
   # still read "questing-25-10" after the base moved to 26.04 LTS; renaming needs
   # a paired mdma change and a deploy ordering, so it is not done here.
-  image_name           = "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
-  image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}"
+  image_name           = "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}"
+  image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}"
   image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
   machine_type         = var.instance_type
   disk_size            = 20

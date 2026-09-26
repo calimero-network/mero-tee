@@ -48,12 +48,21 @@ fi
 if [[ -n "${PACKER_GCP_SUBNETWORK:-}" ]]; then
   packer_args+=(-var "subnetwork=${PACKER_GCP_SUBNETWORK}")
 fi
+# A non-release build (CI on a branch) names its images apart; see
+# `image_suffix` in ubuntu.pkr.hcl.
+if [[ -n "${IMAGE_SUFFIX:-}" ]]; then
+  packer_args+=(-var "image_suffix=${IMAGE_SUFFIX}")
+fi
 # The base image is pinned in ubuntu.pkr.hcl (`source_image_family`), which is the
 # single source of truth -- the value is deliberately not repeated here or in CI,
 # since a second copy can disagree with the one Packer actually builds from. No
 # override is allowed, for release reproducibility.
 
 packer_cmd=(packer build)
+if [[ "${PACKER_FORCE_BUILD:-false}" == "true" && -n "${IMAGE_SUFFIX:-}" ]]; then
+  echo "::error::PACKER_FORCE_BUILD applies to release builds only, never with IMAGE_SUFFIX"
+  exit 1
+fi
 if [[ "${PACKER_FORCE_BUILD:-false}" == "true" ]]; then
   echo "PACKER_FORCE_BUILD=true; enabling packer -force to replace pre-existing image artifacts"
   packer_cmd+=(-force)

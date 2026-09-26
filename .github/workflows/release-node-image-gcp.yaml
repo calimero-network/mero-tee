@@ -41,6 +41,10 @@ env:
   ITA_POLICY_IDS: ${{ vars.ITA_POLICY_IDS }}
   ITA_POLICY_MUST_MATCH: ${{ vars.ITA_POLICY_MUST_MATCH }}
   CI_LOG_VERBOSITY: ${{ github.event_name == 'workflow_dispatch' && inputs.log_verbosity || 'compact' }}
+  # Off master, images are named apart and put in a "-dev" family, so a branch
+  # build can neither replace a released image nor be booted by mdma. See
+  # `image_suffix` in mero-tee/ubuntu.pkr.hcl.
+  IMAGE_SUFFIX: ${{ github.ref != 'refs/heads/master' && format('-dev-{0}', github.run_id) || '' }}
 
 jobs:
   preflight:
@@ -285,7 +289,10 @@ jobs:
           PACKER_LOG: 1
         run: |
           set -euo pipefail
-          export PACKER_FORCE_BUILD=true
+          # Only a release may replace an existing image of the same name.
+          if [[ -z "${IMAGE_SUFFIX}" ]]; then
+            export PACKER_FORCE_BUILD=true
+          fi
           echo "Running init.sh..."
           ./init.sh
           echo "Running build-and-release.sh for profile=${{ matrix.profile }}..."
@@ -777,6 +784,19 @@ jobs:
               --quiet || true
           else
             echo "Direct firewall cleanup skipped (firewall parameters unavailable)."
+          fi
+
+      # A branch build's image exists only to be measured here; it is never
+      # published, so it goes once this run is done with it.
+      - name: Delete branch build image
+        if: ${{ always() && env.IMAGE_SUFFIX != '' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          image_name="${{ steps.params.outputs.image_name }}"
+          image_project="${{ steps.params.outputs.image_project }}"
+          if [[ -n "${image_name}" && -n "${image_project}" && "${image_name}" == *"${IMAGE_SUFFIX}" ]]; then
+            gcloud compute images delete "${image_name}" --project "${image_project}" --quiet || true
+          else
+            echo "Branch image cleanup skipped (no suffixed image resolved)."
           fi
 
   cleanup_attestation_resources:
