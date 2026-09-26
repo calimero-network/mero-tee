@@ -144,7 +144,7 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 **Dispatching from a branch builds and measures, and publishes nothing.**
 Publishing runs only on `master`. Off `master`, images are named
-`…-<version>-dev-<run id>` in a separate `merotee-ubuntu-questing-<profile>-dev`
+`…-<version>-d<run number>-<attempt>` in a separate `merotee-ubuntu-questing-<profile>-dev`
 family (`image_suffix` in `mero-tee/ubuntu.pkr.hcl`). Packer never replaces an
 existing image for such a build, and the image is deleted at the end of the run.
 mdma's dispatcher resolves images by exact name and exact family, so it never

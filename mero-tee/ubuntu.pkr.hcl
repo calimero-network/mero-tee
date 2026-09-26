@@ -64,7 +64,7 @@ variable "lockdown_profile" {
 }
 
 # Empty for a release. A build from any other ref sets a suffix such as
-# "-dev-<run id>": the image then gets its own name and a separate "-dev"
+# "-d<run number>-<attempt>": the image then gets its own name and a separate "-dev"
 # family, so it can never replace a released image or be picked up by mdma's
 # dispatcher, which resolves images by exact name and exact family.
 variable "image_suffix" {
@@ -72,8 +72,8 @@ variable "image_suffix" {
   default = ""
 
   validation {
-    condition     = var.image_suffix == "" || can(regex("^-[a-z0-9-]{1,40}$", var.image_suffix))
-    error_message = "The image_suffix must be empty or a hyphen followed by lowercase letters, digits and hyphens."
+    condition     = var.image_suffix == "" || can(regex("^-[a-z0-9-]{1,9}$", var.image_suffix))
+    error_message = "The image_suffix must be empty or a hyphen followed by at most 9 lowercase letters, digits and hyphens, so the image name stays within 63 characters."
   }
 }
 

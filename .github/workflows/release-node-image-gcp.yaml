@@ -44,7 +44,9 @@ env:
   # Off master, images are named apart and put in a "-dev" family, so a branch
   # build can neither replace a released image nor be booted by mdma. See
   # `image_suffix` in mero-tee/ubuntu.pkr.hcl.
-  IMAGE_SUFFIX: ${{ github.ref != 'refs/heads/master' && format('-dev-{0}', github.run_id) || '' }}
+  # Short on purpose: GCP image names stop at 63 characters, and the longest
+  # released name is 53.
+  IMAGE_SUFFIX: ${{ github.ref != 'refs/heads/master' && format('-d{0}-{1}', github.run_number, github.run_attempt) || '' }}
 
 jobs:
   preflight:
