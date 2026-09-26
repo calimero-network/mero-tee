@@ -79,8 +79,8 @@ on:
         description: "Optional comma-separated acceptable probe result codes"
         required: false
         default: ""
-      secret_fetch_check:
-        description: "Boot the node with a service account and check it fetches its log token from Secret Manager (needs vars.GCP_PROBE_SECRET_SA)"
+      log_auth_check:
+        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it"
         required: false
         type: boolean
         default: false
@@ -110,10 +110,6 @@ jobs:
       GCP_ATTESTATION_ALLOWED_CIDRS: ${{ vars.GCP_ATTESTATION_ALLOWED_CIDRS }}
       GCP_ATTESTATION_MEROD_VERSION: ${{ vars.GCP_ATTESTATION_MEROD_VERSION }}
       ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
-      # Only used when `secret_fetch_check` is set: an existing service account
-      # with no project roles. The check grants it access to one throwaway
-      # secret for the length of the run.
-      GCP_PROBE_SECRET_SA: ${{ vars.GCP_PROBE_SECRET_SA }}
       CI_LOG_VERBOSITY: ${{ inputs.log_verbosity }}
     steps:
       - name: Checkout code
@@ -296,44 +292,35 @@ jobs:
             --target-tags "${{ steps.params.outputs.firewall_tag }}" \
             --description "Temporary node e2e ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
 
-      # The one probe path that boots a node WITH a cloud identity. Every other
-      # run uses `--no-service-account`, as mdma does, so fetch_secret.sh's
-      # `gcp` provider never ran against a real image. The mero-tee#339 fix
-      # rewrote it to work with snapd masked, and this is where that is proven.
-      - name: Set up Secret Manager fetch check
-        id: secret_fetch
-        if: ${{ inputs.secret_fetch_check }}
+      # The chain mdma relies on to make a node's logs arrive at all: the token
+      # in `observability-token` metadata, written out by calimero-init, and
+      # presented by vector through the `provided` provider. A break anywhere
+      # makes the sink reject every write, silently from the node's side.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ inputs.log_auth_check }}
         env:
-          PROBE_SERVICE_ACCOUNT: ${{ env.GCP_PROBE_SECRET_SA }}
           VM_PROJECT: ${{ steps.params.outputs.vm_project }}
           VM_ZONE: ${{ steps.params.outputs.vm_zone }}
           VM_NETWORK: ${{ steps.params.outputs.vm_network }}
           VM_SUBNETWORK: ${{ steps.params.outputs.vm_subnetwork }}
           NODE_TAG: ${{ steps.params.outputs.firewall_tag }}
           RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PROBE_SERVICE_ACCOUNT}" ]]; then
-            echo "::error::secret_fetch_check needs repo variable GCP_PROBE_SECRET_SA (a service account with no project roles)."
-            exit 1
-          fi
-          bash scripts/ci/probes/node_secret_fetch_probe.sh setup
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
 
       - name: Create ephemeral TDX VM
         env:
-          SECRET_FETCH_CHECK: ${{ inputs.secret_fetch_check }}
-          PROBE_SERVICE_ACCOUNT: ${{ env.GCP_PROBE_SECRET_SA }}
-          SECRET_NAME: ${{ steps.secret_fetch.outputs.secret_name }}
-          RECEIVER_IP: ${{ steps.secret_fetch.outputs.receiver_ip }}
+          LOG_AUTH_CHECK: ${{ inputs.log_auth_check }}
+          RECEIVER_IP: ${{ steps.log_auth.outputs.receiver_ip }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
         run: |
           set -euo pipefail
-          identity=(--no-service-account --no-scopes)
           metadata="merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true"
-          if [[ "${SECRET_FETCH_CHECK}" == "true" ]]; then
-            # `logs-secret-name` and no `observability-token`, so calimero-init
-            # picks the `gcp` provider; the receiver stands in for the log sink.
-            identity=(--service-account "${PROBE_SERVICE_ACCOUNT}" --scopes cloud-platform)
-            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,logs-secret-name=${SECRET_NAME}"
+          if [[ "${LOG_AUTH_CHECK}" == "true" ]]; then
+            # The same two keys mdma sets; the receiver stands in for the sink.
+            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
+            rm -f "${TOKEN_FILE}"
           fi
           gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
@@ -342,7 +329,8 @@ jobs:
             --confidential-compute-type "TDX" \
             --maintenance-policy "TERMINATE" \
             --min-cpu-platform "Intel Sapphire Rapids" \
-            "${identity[@]}" \
+            --no-service-account \
+            --no-scopes \
             --image "${{ steps.params.outputs.image_name }}" \
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
@@ -522,15 +510,15 @@ jobs:
         run: |
           bash scripts/ci/probes/node_runtime_kms_probe.sh
 
-      - name: Verify node fetched its log token from Secret Manager
-        id: verify_secret_fetch
-        if: ${{ inputs.secret_fetch_check }}
+      - name: Verify node pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ inputs.log_auth_check }}
         env:
           ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
           VM_PROJECT: ${{ steps.params.outputs.vm_project }}
           VM_ZONE: ${{ steps.params.outputs.vm_zone }}
           RUN_SUFFIX: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: bash scripts/ci/probes/node_secret_fetch_probe.sh verify
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
 
       - name: Verify quote externally and derive policy candidates
         id: verify_external
@@ -586,7 +574,7 @@ jobs:
             --entry "attestation-context.json|Probe context metadata" \
             --entry "node-client-verification.json|Anti-fake verification outcomes" \
             --entry "node-kms-probe-result.json|Runtime node->KMS probe outcome" \
-            --entry "node-secret-fetch-result.json|Secret Manager fetch check: pushes seen by the receiver" \
+            --entry "node-log-auth-result.json|Log-auth check: pushes seen by the receiver" \
             --entry "log-auth-receiver-serial.log|Log-auth receiver serial console" \
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
             --entry "ita-ci-verification-summary.json|ITA JWT tdx fields + node quote SHA-256 (CI summary)" \
@@ -622,11 +610,11 @@ jobs:
           gcloud compute firewall-rules delete "${{ steps.params.outputs.firewall_rule }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --quiet || true
-          if [[ "${{ inputs.secret_fetch_check }}" == "true" ]]; then
+          if [[ "${{ inputs.log_auth_check }}" == "true" ]]; then
             VM_PROJECT="${{ steps.params.outputs.vm_project }}" \
             VM_ZONE="${{ steps.params.outputs.vm_zone }}" \
             RUN_SUFFIX="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-              bash scripts/ci/probes/node_secret_fetch_probe.sh cleanup
+              bash scripts/ci/probes/node_log_auth_probe.sh cleanup
           fi
 
       - name: Summarize node probe run
@@ -642,8 +630,8 @@ jobs:
               result_reason="ANTI_FAKE_CHECK_FAILED"
             elif [[ "${{ steps.runtime_probe.outcome }}" == "failure" ]]; then
               result_reason="KMS_PROBE_EXPECTATION_MISMATCH"
-            elif [[ "${{ steps.secret_fetch.outcome }}" == "failure" || "${{ steps.verify_secret_fetch.outcome }}" == "failure" ]]; then
-              result_reason="SECRET_FETCH_CHECK_FAILED"
+            elif [[ "${{ steps.log_auth.outcome }}" == "failure" || "${{ steps.verify_log_auth.outcome }}" == "failure" ]]; then
+              result_reason="LOG_AUTH_CHECK_FAILED"
             elif [[ "${{ steps.verify_external.outcome }}" == "failure" ]]; then
               result_reason="ITA_VERIFICATION_FAILURE"
             else
@@ -661,7 +649,7 @@ jobs:
             --arg endpoint_outcome "${{ steps.endpoint.outcome || 'skipped' }}" \
             --arg anti_fake_outcome "${{ steps.verify_anti_fake.outcome || 'skipped' }}" \
             --arg runtime_outcome "${{ steps.runtime_probe.outcome || 'skipped' }}" \
-            --arg secret_fetch_outcome "${{ steps.verify_secret_fetch.outcome || 'skipped' }}" \
+            --arg log_auth_outcome "${{ steps.verify_log_auth.outcome || 'skipped' }}" \
             --arg external_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
             --arg job_status "${{ job.status }}" \
             --arg reason "${result_reason}" \
@@ -685,7 +673,7 @@ jobs:
                     ("- Endpoint readiness: " + $endpoint_outcome),
                     ("- Anti-fake checks: " + $anti_fake_outcome),
                     ("- Runtime node->KMS probe: " + $runtime_outcome),
-                    ("- Secret Manager fetch: " + $secret_fetch_outcome),
+                    ("- Log push authenticated: " + $log_auth_outcome),
                     ("- External verification: " + $external_outcome)
                   ]
                 },
