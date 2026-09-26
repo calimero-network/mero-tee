@@ -43,6 +43,82 @@ Plane 1 before requesting a key is a client-side decision; the KMS's role is to
 make an honest quote available.
 :::
 
+`merod` enforces it whenever a node is pointed at a release (`tee-release-version`
+on the node images): the KMS's TCB status and MRTD/RTMR0–3 must be in the signed
+release policy's `kms_allowed_*` allowlists, **and** the `compose-hash` its RTMR3
+event log measures must be in `kms_allowed_event_payload`. merod replays the
+`eventLog` `/attest` returns, recomputing every RTMR3 event digest from its
+contents, and trusts the compose hash only when the replay reproduces the quote's
+RTMR3. A policy with no compose hash is refused. See
+[the derivation root](#the-derivation-root-the-dstack-app) for why registers
+alone are not enough.
+
+## The derivation root: the dstack app
+
+A node's storage and data-disk keys are a pure function of the KMS's dstack
+**app** key and the path `{namespace}/{profile}/{peerId}`
+(`mero-kms/src/handlers/get_key.rs`). mero-kms only decides *when* to ask dstack
+for one. So anything that runs under the same app ID can derive every node's
+keys without going through mero-kms at all:
+
+- **The app owner.** They can upgrade the app to another compose file — a debug
+  image with a shell, or a one-line `get_key` endpoint — and call
+  `get_key("merod/storage/locked-read-only/<peerId>")` from inside it.
+- **A sibling deployment.** A `debug` KMS running under the `locked-read-only`
+  app's ID has a shell and the locked app key.
+- **dstack's KMS itself**, which holds the app key's root.
+
+Sealed key release protects a key in transit; it cannot protect a key against
+its own derivation root. Three controls narrow who holds that root
+([#338](https://github.com/calimero-network/mero-tee/issues/338)):
+
+| Control | What it stops | Where |
+| --- | --- | --- |
+| **merod pins the KMS compose hash** | A node trusting a KMS app upgraded to an unreleased compose file, even one whose registers are allowlisted | `merod` (core), `kms_allowed_event_payload` in the signed policy |
+| **One dstack app ID per profile** | A debug KMS, with a shell, sharing the locked KMS's app key | [Deploy the Phala KMS](/operate/runbooks/#deploy-the-phala-kms) |
+| **On-chain compose-hash allowlist on the locked app** | The owner silently upgrading the locked app: an upgrade has to add a compose hash in public, on the app's contract, first | [Deploy the Phala KMS](/operate/runbooks/#deploy-the-phala-kms) |
+
+The node-side pin runs in code on every key fetch. The other two are
+deployment controls, and the pin only fully works with them: a compose hash
+names a compose file, not an app, so the pin says *what* the KMS runs, and the
+app-ID split plus the on-chain allowlist say *who else* can run code with its
+key. What remains is dstack's KMS and, for the on-chain allowlist, whoever
+controls the app contract's owner key — which is why that should be a multisig,
+not a deployer's hot wallet.
+
+### Considered: a node-contributed secret
+
+Mixing a secret only the node holds into the key would take the dstack root out
+of the trust base for confidentiality: `key = HKDF(kms_key, node_secret)`, with
+the KMS half released as today. It is **not adopted yet**, because the only
+place a TD can keep a secret across reboots is the disk the key protects, and
+every choice of where to keep it gives something up:
+
+- **Sealed to the TD's measurements** (a key derived from MRTD/RTMRs): survives
+  reboots, but an image upgrade changes the measurements, and the node can no
+  longer open its own data. Upgrades would need an in-TD re-key before reboot.
+- **Kept by a second, independent KMS** (for example a different dstack app, or
+  a different provider): two roots must collude instead of one. This is the
+  most practical option, at the cost of a second service on the key path.
+- **Generated at first boot and held only in memory**: no root can derive it,
+  but a reboot loses the data, which rules it out for a replica with state.
+
+If a second KMS is adopted, the migration is additive and keyed off the
+existing store:
+
+1. Ship merod that can fetch both halves and derive `HKDF(k1, k2)`, still
+   opening stores created under `k1` alone. A store records which scheme it
+   uses (a version in its KMS key metadata), never inferred.
+2. New nodes create stores under the combined key.
+3. Existing nodes re-encrypt in place — open with `k1`, write under
+   `HKDF(k1, k2)`, swap atomically — and only then record the new scheme. A node
+   that crashes midway reopens with whichever key its recorded scheme names.
+4. Once the fleet has migrated, a later merod refuses the `k1`-only scheme on
+   `locked-read-only`. A node still on it has to be recreated.
+
+The data disk (LUKS2) follows the same steps with a second keyslot: add the
+combined key's slot, then remove the old one.
+
 ## Plane 2 — the KMS verifies the node
 
 Key release (`POST /get-key`, `mero-kms/src/handlers/get_key.rs`) never trusts a
@@ -131,6 +207,8 @@ being baked into the key-derivation path.
 | Threat | Mitigation |
 | --- | --- |
 | **Rogue KMS** | A fake KMS cannot produce a valid quote with the expected KMS measurements; Plane 1 verification via `/attest` rejects it. |
+| **KMS app upgraded to another compose file** | merod replays the KMS's RTMR3 event log and refuses any compose hash not in the signed policy's `kms_allowed_event_payload`; the locked app's on-chain allowlist makes an upgrade public before it can run. |
+| **Debug KMS sharing the locked app key** | Each profile's KMS runs under its own dstack app ID, and each profile's compose file (and so its compose hash) differs. |
 | **Rogue / tampered node** | A node outside TDX cannot produce a valid quote; a tampered image has different MRTD/RTMR values that the policy rejects. |
 | **Replay** | The challenge nonce is single-use and TTL-bound and is consumed before verification; the `/attest` nonce prevents quote reuse. |
 | **Peer-ID spoofing** | `get-key` requires a signature by the key that derives to the claimed `peerId`, and binds `SHA-256(peerId)` into the quote's `report_data`. |

@@ -286,6 +286,14 @@ certificate issued to the `Release mero-kms` workflow on `refs/heads/master` of
 signature is missing or does not verify is refused, and the KMS stays in the
 fail-closed `policy_not_ready` state.
 
+The same document pins the KMS for merod: `kms_allowed_tcb_statuses`,
+`kms_allowed_mrtd`, `kms_allowed_rtmr0..3`, and `kms_allowed_event_payload`, the
+released KMS compose hashes. merod refuses a policy without a compose hash, and a
+KMS whose replayed RTMR3 `compose-hash` event is not in the list.
+`scripts/policy/generate-merod-kms-phala-attestation-config.sh` and
+`apply-merod-kms-phala-attestation-config.sh` carry the list into `config.toml`
+as `tee.kms.phala.attestation.allowed_compose_hashes`.
+
 ## Next steps
 
 - [Release pipeline](/operate/release-pipeline/) — how these versions and policies are produced and published.

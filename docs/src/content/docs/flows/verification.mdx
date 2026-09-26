@@ -113,8 +113,10 @@ The public verifier is the operator-facing tool. Inside the system, two automate
 verification relationships run continuously (see the [trust model](/understand/trust-model/)):
 
 - **A node verifies the KMS** before requesting a key: it pulls a quote via `/attest`
-  with a fresh nonce and compares the KMS measurement against values it was configured
-  with.
+  with a fresh nonce, compares the KMS measurements against the signed release policy,
+  and replays the RTMR3 event log to check the KMS's compose hash against the policy's
+  `kms_allowed_event_payload` — the same compose-hash check as step 4 above, enforced
+  on every key fetch.
 - **The KMS verifies a node** on every key request: the quote signature, the nonce
   binding, and the full measurement policy are checked in [Key Release](/flows/key-release/).
 

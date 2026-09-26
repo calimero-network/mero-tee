@@ -386,7 +386,7 @@ if [[ "${has_profile_policy_assets}" == "true" ]]; then
       (.kms.attest_endpoint == "/attest") and
       (.kms.default_binding_hex | type == "string" and test("^[A-Fa-f0-9]{64}$")) and
       (.kms.default_binding_b64 | type == "string" and length > 0) and
-      (((.policy.kms_allowed_event_payload // []) | length == 0) or (((.policy.kms_allowed_event_payload)[0] // "") | type == "string" and (length == 64) and test("^[a-f0-9]+$"))) and
+      ((.policy.kms_allowed_event_payload // []) | type == "array" and length > 0 and all(type == "string" and test("^[a-f0-9]{64}$"))) and
       ((.policy.kms_allowed_tcb_statuses // .policy.allowed_tcb_statuses) | type == "array" and length > 0 and (index("uptodate") != null)) and
       (((.policy.kms_allowed_mrtd // .policy.allowed_mrtd) | type == "array" and length > 0)) and
       (((.policy.kms_allowed_rtmr0 // .policy.allowed_rtmr0) | type == "array" and length > 0)) and
