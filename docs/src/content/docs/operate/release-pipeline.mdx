@@ -151,6 +151,20 @@ mdma's dispatcher resolves images by exact name and exact family, so it never
 boots a branch image. Before this, a branch dispatch at the current
 `imageVersion` replaced the released image of the same name.
 
+## KMS TDX image probe — `kms-tdx-image-probe.yaml`
+
+Manual only (`workflow_dispatch`), and it publishes nothing. It builds the
+mero-kms TDX cluster image ([design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md);
+`image_role = "kms"`, `playbook-kms.yml`) from the dispatched commit, with the
+node allowlist of a published node release (`node_release_tag`) baked in. It
+then runs a two-replica cluster on TDX VMs: one started with
+`kms-bootstrap=true`, the other with `kms-peers` naming the first. It checks
+that both come to hold the root and report the same transport key (derived
+from the root, so equal keys mean one root), and that Intel Trust Authority
+verifies both quotes with identical measurements. It deletes its image, VMs and
+firewall rule when done. This is how the image is proven before the Release
+mero-kms workflow builds and publishes it.
+
 ### Node-image release assets
 
 Uploaded to `mero-tee-v<version>` (each with `.sig` and `.pem` sidecars):
