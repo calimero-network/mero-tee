@@ -24,6 +24,10 @@
 //! | `ALLOWED_RTMR1` | `CSV` | *(empty)* | Allowed RTMR1 hex values (when `USE_ENV_POLICY=true`) |
 //! | `ALLOWED_RTMR2` | `CSV` | *(empty)* | Allowed RTMR2 hex values (when `USE_ENV_POLICY=true`) |
 //! | `ALLOWED_RTMR3` | `CSV` | *(empty)* | Allowed RTMR3 hex values (when `USE_ENV_POLICY=true`) |
+//! | `MERO_KMS_BACKEND` | `dstack` \| `tdx` | `dstack` | Where keys and quotes come from (see `backend`). `tdx` requires `USE_ENV_POLICY=true`: the node allowlist comes from the image, never from a fetched release |
+//! | `MERO_KMS_BOOTSTRAP` | `bool` | `false` | `tdx` only: generate the cluster's root instead of joining. Set on exactly one replica, once |
+//! | `MERO_KMS_PEERS` | `CSV` | *(empty)* | `tdx` only: base URLs of replicas to join from. Untrusted: a wrong one only fails a join |
+//! | `MERO_KMS_JOIN_RETRY_SECS` | `u64` | `10` | `tdx` only: pause between rounds of join attempts |
 
 pub mod env;
 pub mod policy_loader;
@@ -42,6 +46,13 @@ use self::policy_loader::fetch_policy_from_release;
 
 const KNOWN_PROFILES: [&str; 3] = ["debug", "debug-read-only", "locked-read-only"];
 const IMAGE_PROFILE_PATH: &str = "/etc/mero-kms/image-profile";
+
+/// Where keys and quotes come from; see `backend`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    Dstack,
+    Tdx,
+}
 
 /// Configuration for the key releaser service.
 #[derive(Debug, Clone)]
@@ -84,6 +95,14 @@ pub struct Config {
     /// it `false` serves merods older than 0.11.0-rc.47, which cannot unseal,
     /// and reopens that hole for them.
     pub require_sealed_key_release: bool,
+    /// Where keys and quotes come from (`MERO_KMS_BACKEND`).
+    pub backend: BackendKind,
+    /// `tdx`: generate the cluster's root instead of joining.
+    pub kms_bootstrap: bool,
+    /// `tdx`: base URLs of replicas to join from.
+    pub cluster_peers: Vec<String>,
+    /// `tdx`: pause between rounds of join attempts, in seconds.
+    pub join_retry_secs: u64,
 }
 
 impl Default for Config {
@@ -105,6 +124,10 @@ impl Default for Config {
             policy_unavailable_reason: None,
             kms_version: None,
             require_sealed_key_release: true,
+            backend: BackendKind::Dstack,
+            kms_bootstrap: false,
+            cluster_peers: Vec::new(),
+            join_retry_secs: 10,
         }
     }
 }
@@ -169,6 +192,8 @@ impl Config {
         let require_sealed_key_release =
             parse_bool_env("MERO_KMS_REQUIRE_SEALED_KEY_RELEASE", true)?;
         let use_env_policy = parse_bool_env("USE_ENV_POLICY", false)?;
+        let (backend, kms_bootstrap, cluster_peers, join_retry_secs) =
+            backend_from_env(use_env_policy)?;
 
         let release_version = if use_env_policy {
             None
@@ -210,6 +235,10 @@ impl Config {
             policy_unavailable_reason,
             kms_version: release_version,
             require_sealed_key_release,
+            backend,
+            kms_bootstrap,
+            cluster_peers,
+            join_retry_secs,
         })
     }
 
@@ -231,6 +260,51 @@ impl Config {
             Err(std::env::VarError::NotUnicode(_)) => bail!("MERO_KMS_VERSION must be valid UTF-8"),
         }
     }
+}
+
+/// Read the backend settings and refuse combinations that would weaken a TDX
+/// replica: a node allowlist fetched from a release sits outside the image's
+/// measurements, and a replica with neither bootstrap nor peers can never serve.
+fn backend_from_env(use_env_policy: bool) -> EyreResult<(BackendKind, bool, Vec<String>, u64)> {
+    let backend = match read_env_utf8("MERO_KMS_BACKEND")?
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("") | Some("dstack") => BackendKind::Dstack,
+        Some("tdx") => BackendKind::Tdx,
+        Some(other) => bail!("MERO_KMS_BACKEND must be 'dstack' or 'tdx', got '{other}'"),
+    };
+    let kms_bootstrap = parse_bool_env("MERO_KMS_BOOTSTRAP", false)?;
+    let cluster_peers = parse_csv_env("MERO_KMS_PEERS", false).unwrap_or_default();
+    let join_retry_secs = std::env::var("MERO_KMS_JOIN_RETRY_SECS")
+        .ok()
+        .map(|v| v.trim().parse::<u64>())
+        .transpose()
+        .map_err(|e| eyre::eyre!("MERO_KMS_JOIN_RETRY_SECS: {e}"))?
+        .unwrap_or(10)
+        .max(1);
+
+    match backend {
+        BackendKind::Tdx => {
+            if !use_env_policy {
+                bail!(
+                    "MERO_KMS_BACKEND=tdx requires USE_ENV_POLICY=true: a TDX replica takes its \
+                     node allowlist from its image, never from a fetched release"
+                );
+            }
+            if !kms_bootstrap && cluster_peers.is_empty() {
+                bail!("MERO_KMS_BACKEND=tdx needs MERO_KMS_BOOTSTRAP=true or MERO_KMS_PEERS");
+            }
+        }
+        BackendKind::Dstack => {
+            if kms_bootstrap || !cluster_peers.is_empty() {
+                bail!("MERO_KMS_BOOTSTRAP and MERO_KMS_PEERS only apply to MERO_KMS_BACKEND=tdx");
+            }
+        }
+    }
+    Ok((backend, kms_bootstrap, cluster_peers, join_retry_secs))
 }
 
 /// Determine the attestation policy source (env vars vs. GitHub release) and load it.
@@ -389,7 +463,14 @@ pub fn log_startup_config(config: &Config) {
 
     info!("Starting mero-kms-phala");
     info!("Listen address: {}", config.listen_addr);
-    info!("Dstack socket: {}", config.dstack_socket_path);
+    info!("Backend: {:?}", config.backend);
+    match config.backend {
+        BackendKind::Dstack => info!("Dstack socket: {}", config.dstack_socket_path),
+        BackendKind::Tdx => info!(
+            "Cluster: bootstrap={} peers={:?}",
+            config.kms_bootstrap, config.cluster_peers
+        ),
+    }
     info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
     info!("Max pending challenges: {}", config.max_pending_challenges);
     #[cfg(feature = "mock-attestation")]

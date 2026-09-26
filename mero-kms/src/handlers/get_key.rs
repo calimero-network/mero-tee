@@ -7,7 +7,6 @@ use base64::Engine;
 #[cfg(feature = "mock-attestation")]
 use calimero_tee_attestation::{is_mock_quote, verify_mock_attestation};
 use calimero_tee_attestation::{verify_attestation, VerificationResult};
-use dstack_sdk::dstack_client::DstackClient;
 use libp2p_identity::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,7 +58,7 @@ pub struct GetKeyResponse {
 }
 
 /// Key release flow: validate inputs → consume single-use challenge → verify
-/// peer signature → verify TDX attestation → enforce measurement policy → derive key via dstack.
+/// peer signature → verify TDX attestation → enforce measurement policy → derive key from the backend.
 ///
 /// The challenge is consumed *before* signature/attestation checks so that a
 /// replayed request always fails on the second attempt regardless of where
@@ -124,11 +123,7 @@ pub(crate) async fn get_key_handler(
     .await?;
 
     let key_path = key_path_for_peer(&state.config, &request.peer_id);
-    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
-    let key_response = client
-        .get_key(Some(key_path), None)
-        .await
-        .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
+    let key_hex = state.backend.derive_key_hex(&key_path).await?;
 
     info!(peer_id = %request.peer_id, "Key derived successfully");
     let Some(seal_to) = seal_to else {
@@ -137,18 +132,18 @@ pub(crate) async fn get_key_handler(
             "Releasing a key UNSEALED to a merod that predates sealed release"
         );
         return Ok(Json(GetKeyResponse {
-            key: Some(key_response.key),
+            key: Some(key_hex.to_string()),
             sealed_key_b64: None,
             seal_nonce_b64: None,
         }));
     };
-    let transport = super::attest::transport_key(&client).await?;
+    let transport = state.backend.transport_key().await?;
     let (seal_nonce, sealed_key) = sealed::seal(
         &transport,
         &seal_to,
         &challenge_nonce,
         &request.peer_id,
-        &key_response.key,
+        &key_hex,
     )?;
     Ok(Json(GetKeyResponse {
         key: None,
@@ -264,7 +259,7 @@ pub(crate) fn validate_challenge_id(challenge_id: &str) -> Result<(), ServiceErr
     Ok(())
 }
 
-/// Build the dstack key derivation path: `{namespace}/{profile}/{peerId}`.
+/// Build the key derivation path: `{namespace}/{profile}/{peerId}`.
 /// This ensures each profile+peer combination gets a unique deterministic key.
 pub(crate) fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
     format!(

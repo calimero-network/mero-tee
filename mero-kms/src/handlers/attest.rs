@@ -4,13 +4,12 @@ use axum::extract::State;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use dstack_sdk::dstack_client::DstackClient;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::errors::ServiceError;
 use super::AppState;
-use crate::sealed::{self, TransportKey};
+use crate::sealed;
 
 /// Request body for the KMS attestation endpoint.
 #[derive(Debug, Deserialize)]
@@ -35,9 +34,9 @@ pub struct KmsAttestResponse {
     pub quote_b64: String,
     /// Hex-encoded 64-byte report_data used for quote generation.
     pub report_data_hex: String,
-    /// Parsed event log entries associated with the quote.
+    /// Parsed dstack event log entries; empty on a TDX replica.
     pub event_log: serde_json::Value,
-    /// VM config string returned by dstack quote API.
+    /// VM config string returned by dstack quote API; empty on a TDX replica.
     pub vm_config: String,
     /// Base64 X25519 transport key, present when the request asked for it. The
     /// quote's report data then commits to it.
@@ -55,56 +54,23 @@ pub(crate) async fn attest_kms_handler(
 ) -> Result<Json<KmsAttestResponse>, ServiceError> {
     let nonce = decode_fixed_b64_32("nonceB64", &request.nonce_b64)?;
     let binding = resolve_attestation_binding(request.binding_b64.as_deref())?;
-    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
     let (binding, transport_public) = if request.transport_key {
-        let transport = transport_key(&client).await?;
+        let transport = state.backend.transport_key().await?;
         let public = *transport.public();
         (sealed::attest_binding(&binding, &public), Some(public))
     } else {
         (binding, None)
     };
     let report_data = build_attestation_report_data(&nonce, &binding);
-
-    let quote_response = client
-        .get_quote(report_data.to_vec())
-        .await
-        .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?;
-
-    let quote_bytes = hex::decode(&quote_response.quote).map_err(|e| {
-        ServiceError::AttestationVerificationFailed(format!(
-            "dstack returned invalid quote hex: {}",
-            e
-        ))
-    })?;
-
-    let parsed_event_log = serde_json::from_str::<serde_json::Value>(&quote_response.event_log)
-        .map_err(|e| {
-            ServiceError::AttestationVerificationFailed(format!(
-                "dstack returned invalid event log json: {}",
-                e
-            ))
-        })?;
+    let quote = state.backend.quote(report_data).await?;
 
     Ok(Json(KmsAttestResponse {
-        quote_b64: BASE64.encode(quote_bytes),
+        quote_b64: BASE64.encode(quote.quote),
         report_data_hex: hex::encode(report_data),
-        event_log: parsed_event_log,
-        vm_config: quote_response.vm_config,
+        event_log: quote.event_log,
+        vm_config: quote.vm_config,
         transport_public_key_b64: transport_public.map(|public| BASE64.encode(public)),
     }))
-}
-
-/// This service's transport key, derived by dstack so every replica agrees.
-pub(crate) async fn transport_key(client: &DstackClient) -> Result<TransportKey, ServiceError> {
-    let response = client
-        .get_key(Some(sealed::TRANSPORT_KEY_PATH.to_owned()), None)
-        .await
-        .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
-    let derived = zeroize::Zeroizing::new(
-        hex::decode(&response.key)
-            .map_err(|e| ServiceError::KeyDerivationFailed(format!("dstack key hex: {e}")))?,
-    );
-    TransportKey::from_derived_bytes(&derived)
 }
 
 pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], ServiceError> {

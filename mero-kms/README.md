@@ -1,6 +1,6 @@
 # mero-kms-phala
 
-KMS service that validates TDX attestations from merod nodes and releases storage encryption keys via Phala dstack.
+KMS service that validates TDX attestations from merod nodes and releases storage encryption keys. Keys derive from Phala dstack (`MERO_KMS_BACKEND=dstack`, the default) or from a root held only in the memory of a TDX cluster (`MERO_KMS_BACKEND=tdx`; see the [design](../docs/design/gcp-tdx-kms.md)).
 
 > **Full documentation**: [Components — mero-kms-phala](https://calimero-network.github.io/mero-tee/components.html)
 
@@ -12,6 +12,8 @@ KMS service that validates TDX attestations from merod nodes and releases storag
 | `POST` | `/challenge` | Issue nonce challenge for a peer |
 | `POST` | `/get-key` | Verify attestation and release encryption key |
 | `POST` | `/attest` | KMS self-attestation (quote generation) |
+| `POST` | `/cluster/nonce` | `tdx` only: single-use nonce for a replica joining the cluster |
+| `POST` | `/cluster/join` | `tdx` only: give the root to a replica with exactly this replica's measurements (both sides attest) |
 
 ## Quick Start
 
@@ -23,13 +25,13 @@ cargo build --release
 
 See [Config Reference](https://calimero-network.github.io/mero-tee/config-reference.html) for all environment variables.
 
-Key variables: `LISTEN_ADDR`, `DSTACK_SOCKET_PATH`, `MERO_KMS_VERSION`, `MERO_KMS_PROFILE`, `ENFORCE_MEASUREMENT_POLICY`, `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`.
+Key variables: `LISTEN_ADDR`, `DSTACK_SOCKET_PATH`, `MERO_KMS_VERSION`, `MERO_KMS_PROFILE`, `ENFORCE_MEASUREMENT_POLICY`, `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, and for a TDX cluster `MERO_KMS_BACKEND`, `MERO_KMS_BOOTSTRAP`, `MERO_KMS_PEERS`.
 
 **Sealed key release.** A key is never meant to cross the wire in the clear: TLS
 ends wherever the node's `kms-phala-url` points, which is operator-written metadata,
 so a proxy in front of this service could otherwise read every key it releases.
 `/attest` with `transportKey: true` returns this service's X25519 transport key
-(derived by dstack at `mero-kms/transport/x25519/v1`, so every replica agrees) and
+(derived at `mero-kms/transport/x25519/v1` by dstack or from the cluster root, so every replica agrees) and
 commits to it in the quote. A `/get-key` request carrying `sealToB64` — a one-time
 X25519 key its quote and signature commit to — gets the key back as
 `sealedKeyB64`/`sealNonceB64` (X25519 → HKDF-SHA256 → AES-256-GCM) instead of `key`.

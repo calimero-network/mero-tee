@@ -88,6 +88,26 @@ When enforcement is on, every register allowlist (and the TCB status list) must
 be non-empty or the service refuses to start (`validate_policy_requirements`,
 `mero-kms/src/policy.rs`).
 
+### Backend: dstack or a TDX cluster
+
+The GCP TDX KMS ([design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md))
+runs mero-kms with no dstack. Keys derive from a root that exists only in the
+memory of the cluster's replicas.
+
+| Variable | Type / Default | Meaning |
+| --- | --- | --- |
+| `MERO_KMS_BACKEND` | `dstack` \| `tdx` — `dstack` | Where keys and quotes come from. `tdx` derives keys by HKDF from the in-memory root on the same `{prefix}/{profile}/{peerId}` paths, and takes quotes from configfs-tsm. It requires `USE_ENV_POLICY=true`: the node allowlist comes from the image, never from a fetched release. |
+| `MERO_KMS_BOOTSTRAP` | bool — `false` | `tdx` only. Generate the cluster's root instead of joining. Set on exactly one replica, once, when the cluster is created. |
+| `MERO_KMS_PEERS` | CSV — *(empty)* | `tdx` only. Base URLs of replicas to join from (`http://10.0.0.5:8080`). Untrusted: a wrong address only fails a join. A replica without `MERO_KMS_BOOTSTRAP` needs at least one. |
+| `MERO_KMS_JOIN_RETRY_SECS` | u64 — `10` | `tdx` only. Pause between rounds of join attempts. |
+
+A `tdx` replica refuses to start in a debug TD, or when RTMR3 was never
+extended. It answers `/get-key` with `503 policy_not_ready` until it holds the
+root, and `/health` reports `clusterRootReady`. It gives the root only to a
+replica whose quote carries exactly its own MRTD and RTMR0–3, is not a debug TD,
+and has a TCB status in `ALLOWED_TCB_STATUSES` (`POST /cluster/nonce`, then
+`POST /cluster/join`; both sides attest).
+
 ### Development-only knob
 
 | Variable | Type / Default | Meaning |
