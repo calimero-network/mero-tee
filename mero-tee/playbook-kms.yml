@@ -1,0 +1,53 @@
+---
+# mero-kms TDX cluster image (docs/design/gcp-tdx-kms.md). Same base, lockdown
+# and dm-verity seal as the node image (playbook.yml); none of the node's
+# services. Built with `image_role = "kms"` in ubuntu.pkr.hcl.
+- hosts: all
+  become: true
+  pre_tasks:
+    - name: Refresh apt metadata cache only (avoid non-deterministic full upgrades)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    - role: ansible/roles/mero-kms
+
+    - role: ansible/roles/cleanup
+
+    - role: ansible/roles/merod-lockdown
+      when: lockdown_profile == 'locked-read-only'
+
+    - role: ansible/roles/verity-root
+
+  post_tasks:
+    # Names the build in RTMR3 (kms-init extends it with role, profile and this
+    # hash). The dm-verity root hash is what the disk is checked against.
+    - name: Compute the KMS content hash
+      shell: |
+        { find /etc/mero-kms /usr/local/lib/mero-kms -type f 2>/dev/null
+          echo /usr/local/bin/mero-kms
+          [ -f /etc/default/grub ] && echo /etc/default/grub
+        } | sort -u | xargs -r sha256sum | sha256sum | awk '{print $1}'
+      register: root_hash_result
+      changed_when: false
+
+    - name: Add calimero.root_hash to the kernel cmdline (RTMR2)
+      copy:
+        content: |
+          # KMS content hash (RTMR[2]); names the build. The dm-verity root hash is what the disk is checked against.
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
+        dest: /etc/default/grub.d/60-calimero-root-hash.cfg
+        mode: "0644"
+
+    - name: Update GRUB
+      command: update-grub
+      changed_when: true
+
+    # LAST task: seal the root; on locked-read-only remove the Packer user first
+    # (see the same task in playbook.yml for why both run in one process).
+    - name: Seal the root filesystem behind dm-verity
+      command: >-
+        /usr/local/sbin/calimero-seal-root
+        {{ '--remove-user ubuntu' if lockdown_profile == 'locked-read-only' else '' }}
+      changed_when: true

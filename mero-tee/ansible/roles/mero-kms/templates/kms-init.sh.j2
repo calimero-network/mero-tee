@@ -1,0 +1,93 @@
+#!/bin/bash
+# mero-kms boot. Extends RTMR3 so a quote names this image, then reads the two
+# instance-metadata keys a KMS replica takes and hands them to mero-kms.
+#
+# Metadata is written by whoever runs the VM, so it is untrusted, and only two
+# keys are read, both validated:
+#   kms-bootstrap  "true" on the one replica that generates a new cluster root.
+#   kms-peers      Comma-separated base URLs of replicas to join from.
+# A wrong value can only fail a join or start a cluster nobody points nodes at;
+# it cannot change what this image releases keys to, which is baked in
+# (/etc/mero-kms/kms.env) and measured.
+set -euo pipefail
+
+IMAGE_PROFILE="{{ lockdown_profile }}"
+IMAGE_ROLE="kms"
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+RUN_DIR="/run/mero-kms"
+
+log() { echo "[mero-kms-init] $*"; }
+fatal() {
+  log "ERROR: $*"
+  exit 1
+}
+
+get_meta() {
+  curl -sf -H "Metadata-Flavor: Google" "${METADATA_URL}/$1" 2>/dev/null || true
+}
+
+# --- RTMR3 --------------------------------------------------------------------
+# Fatal on locked-read-only: a quote from an unextended RTMR3 does not name the
+# image, and mero-kms refuses to hold a root in that state anyway.
+rtmr3_problem() {
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "RTMR3 not extended: $*"
+  fi
+  log "WARN: RTMR3 not extended: $*"
+}
+
+ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
+modprobe tdx_guest 2>/dev/null || true
+rtmr3_sysfs=""
+for candidate in \
+  "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
+  "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
+  if [[ -w "$candidate" ]]; then
+    rtmr3_sysfs="$candidate"
+    break
+  fi
+done
+if [[ -z "$rtmr3_sysfs" ]]; then
+  rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/"
+else
+  extend="$(mktemp)"
+  printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
+    | openssl dgst -sha384 -binary > "$extend"
+  if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
+    rtmr3_problem "extend input is not 48 bytes"
+  elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
+    rtmr3_problem "write failed ($rtmr3_sysfs)"
+  else
+    log "Extended RTMR3 (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+  fi
+  rm -f "$extend"
+fi
+
+# --- Cluster metadata ------------------------------------------------------
+bootstrap="$(get_meta kms-bootstrap | tr -d '\r\n' | tr '[:upper:]' '[:lower:]')"
+case "$bootstrap" in
+  true) ;;
+  false | "") bootstrap="false" ;;
+  *) fatal "kms-bootstrap must be true or false, got '$bootstrap'" ;;
+esac
+
+peers="$(get_meta kms-peers | tr -d '\r\n[:space:]')"
+if [[ -n "$peers" ]]; then
+  IFS=',' read -r -a peer_list <<< "$peers"
+  for peer in "${peer_list[@]}"; do
+    [[ "$peer" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] \
+      || fatal "kms-peers entry '$peer' is not a base URL (http[s]://host[:port])"
+  done
+fi
+
+if [[ "$bootstrap" != "true" && -z "$peers" ]]; then
+  fatal "set kms-bootstrap=true on the first replica, or kms-peers on the others"
+fi
+
+mkdir -p "$RUN_DIR"
+chmod 0755 "$RUN_DIR"
+{
+  echo "MERO_KMS_BOOTSTRAP=${bootstrap}"
+  echo "MERO_KMS_PEERS=${peers}"
+} > "${RUN_DIR}/cluster.env"
+log "Cluster: bootstrap=${bootstrap} peers=${peers:-none}"
