@@ -527,7 +527,7 @@ TLS_CERT_NOT_AFTER=""
 # parent's variables, so an in-memory cache would re-run meroctl every second.
 # Any failure reports an empty list, which mdma treats as "not reported" and
 # does not erase what it already holds.
-SWARM_ADDRS_FILE="/var/lib/calimero/fleet-swarm-addrs.json"
+SWARM_ADDRS_FILE="/mnt/data/fleet/fleet-swarm-addrs.json"
 SWARM_ADDRS_TTL=60
 cached_swarm_addrs() {
   local mtime now
