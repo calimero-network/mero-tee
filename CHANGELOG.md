@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Removed
+
+- **The `gcp` secret provider and the `logs-secret-name` / `metrics-secret-name` metadata keys.** Every node gets its observability credential from mdma as `observability-token` metadata, read through the `provided` provider, and mdma creates nodes with no service account, so nothing could use Secret Manager. `fetch_secret.sh` now supports only `provided`; calimero-init no longer reads the two keys; `scripts/ci/tests/fetch-secret-rest-test.sh` and the conformance check that `curl`/`python3` are not snaps (both existed for the `gcp` provider) are removed. The conformance assert that no `fetch_secret.sh` calls `gcloud`/`aws` stays. A node given `*-secret-name` and no `observability-token` now starts its shippers unauthenticated, with the existing loud WARN, instead of failing a fetch.
+
 ### Security
 
 - **Node releases publish a Sigstore bundle for every signed asset.** `published-mrtds.json`, `release-provenance.json`, the SBOM and the checksums now ship a `.bundle.json` beside their `.sig`/`.pem`, as the KMS release already did. The bundle carries the Rekor inclusion proof that lets a verifier check the short-lived signing certificate offline, which is what core needs to verify `published-mrtds.json` when a namespace's TEE admission policy trusts signed releases instead of pasted measurement lists. `verify-generated-signatures.sh` checks the bundles in the release job. Releases published before this carry only `.sig`/`.pem`, so signed-release admission works for nodes on releases from this one on.

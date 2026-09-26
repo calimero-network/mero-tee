@@ -106,9 +106,7 @@ KMS_PHALA_URL=$(get_meta "kms-phala-url" | tr -d '\r\n')
 # allows a node without a KMS. See "The data disk" and "Storage encryption".
 EPHEMERAL_STORE=$(get_meta "ephemeral-store" | tr -d '\r\n')
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
-METRICS_SECRET=$(get_meta "metrics-secret-name")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
-LOGS_SECRET=$(get_meta "logs-secret-name")
 # The bearer token vector and vmagent present to the observability front end.
 # Stamped per-instance at creation by mdma's dispatcher, the same way
 # `enrolment-token` and `relay-url` are. `tr -d` because a metadata value
@@ -1065,12 +1063,11 @@ fi
 # telemetry. Against that: a node with no logs is a node that cannot be
 # debugged at all, on a profile with no shell to debug it from.
 #
-# NOT `logs-secret-name` / `metrics-secret-name`, which make fetch_secret.sh
-# read GCP Secret Manager. That path cannot work on these instances: mdma
-# creates them with no `serviceAccounts` field at all, so there is no cloud
-# identity, and both `gcloud` and the metadata server's token endpoint are dead
-# ends. They are still honoured below, after this, for a node provisioned some
-# other way -- but they are not how an mdma node gets a credential.
+# Not GCP Secret Manager. mdma creates these instances with no
+# `serviceAccounts` field at all, so there is no cloud identity to read a
+# secret with. The `logs-secret-name` / `metrics-secret-name` keys that used to
+# select that path are no longer read, since every node gets its credential
+# from mdma.
 #
 # The same file the fleet sidecar writes on rotation, and written the same way:
 # `printf '%s'`, no trailing newline, because mdma compares SHA-256 of the token
@@ -1107,32 +1104,25 @@ fi
 # triple both configure_vector.sh and configure_vmagent.sh take. Sets globals
 # rather than printing, so a caller cannot lose the distinction between the
 # three fields in a word split.
-#
-# The metadata token wins over `*-secret-name` when both are set: one is a
-# credential that is already here, the other is an instruction to fetch one with
-# an identity this instance does not have.
 OBS_AUTH="false"
-OBS_PROVIDER="gcp"
+OBS_PROVIDER="provided"
 OBS_SECRET=""
 resolve_obs_auth() {
-  local legacy_secret="${1:-}"
   if [[ -s "$OBS_TOKEN_FILE" ]]; then
     OBS_AUTH="true"; OBS_PROVIDER="provided"; OBS_SECRET="$OBS_TOKEN_FILE"
-  elif [[ -n "$legacy_secret" ]]; then
-    OBS_AUTH="true"; OBS_PROVIDER="gcp"; OBS_SECRET="$legacy_secret"
   else
     # Still started, not refused. An endpoint with no auth in front of it is a
     # legitimate deployment (an internal ALB, a local collector), and refusing
     # would break it. Unauthenticated against a BEARER-GATED endpoint is the
     # common case and is silent from the node's side -- every write is rejected
     # at the sink and nothing here ever hears about it -- so say so loudly.
-    OBS_AUTH="false"; OBS_PROVIDER="gcp"; OBS_SECRET=""
+    OBS_AUTH="false"; OBS_PROVIDER="provided"; OBS_SECRET=""
   fi
 }
 
 # R7: start vmagent only if metrics-endpoint set
 if [[ -n "${METRICS_ENDPOINT:-}" ]]; then
-  resolve_obs_auth "${METRICS_SECRET:-}"
+  resolve_obs_auth
   [[ "$OBS_AUTH" == "true" ]] || log "WARN: metrics-endpoint is set but this node has no observability credential; vmagent will push unauthenticated and a bearer-gated endpoint will reject every write"
   if [[ -f /etc/vmagent/configure_vmagent.sh ]] && [[ -f /etc/vmagent/scrape_config.yml ]]; then
     # What vmagent is pointed at. The default scrape config targets
@@ -1157,7 +1147,7 @@ fi
 
 # R7: start vector only if logs-endpoint set
 if [[ -n "${LOGS_ENDPOINT:-}" ]]; then
-  resolve_obs_auth "${LOGS_SECRET:-}"
+  resolve_obs_auth
   [[ "$OBS_AUTH" == "true" ]] || log "WARN: logs-endpoint is set but this node has no observability credential; vector will push unauthenticated and a bearer-gated endpoint will reject every write"
   if [[ -f /etc/vector/configure_vector.sh ]] && [[ -f /etc/vector/vector_partial.yaml ]]; then
     /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$LOGS_ENDPOINT" "$OBS_AUTH" "$OBS_PROVIDER" "$OBS_SECRET" >>"$LOG" 2>&1 \
