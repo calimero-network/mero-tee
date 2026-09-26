@@ -2,7 +2,9 @@
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
 # Attestation: calimero.role + calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
 # calimero-init extends RTMR[3] with role+profile+root_hash at boot (kernel 6.16+).
-# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod binaries — cannot be forged.
+# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod binaries at BUILD time.
+# It is measured as a cmdline string only; nothing re-hashes the files at boot, so it does not stop an
+# offline edit of the boot disk (see mero-tee#334: dm-verity for the root filesystem).
 - hosts: all
   become: true
   vars:
@@ -106,10 +108,10 @@
       register: root_hash_result
       changed_when: false
 
-    - name: Add calimero.root_hash to kernel cmdline (measured, unfakeable)
+    - name: Add calimero.root_hash to kernel cmdline (measured as a string; see mero-tee#334)
       copy:
         content: |
-          # Root content hash for attestation (RTMR[2]); cannot be forged without identical image
+          # Root content hash for attestation (RTMR[2]); identifies the build, not checked against the disk at boot
           GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
         dest: /etc/default/grub.d/60-calimero-root-hash.cfg
         mode: "0644"

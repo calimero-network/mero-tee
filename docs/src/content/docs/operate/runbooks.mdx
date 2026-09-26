@@ -102,6 +102,22 @@ who can snapshot the data disk.
   unencrypted. Encrypting afterwards cannot work (every read is decrypted) and
   would not un-expose keys that have already sat on the disk. Recreate them.
 
+**The data disk is encrypted as a whole, too.** The store is not everything on
+it: `config.toml`, the TLS key, mero-auth's database and the fleet token sit
+beside it. So a new node's data disk is LUKS2 with dm-integrity, keyed by
+`merod kms disk-key` from the same KMS (a dedicated disk-unlock identity, kept in
+the LUKS2 header). `locked-read-only` refuses to create a plaintext data disk
+under the same conditions it refuses a plaintext store. Existing plain-ext4 disks
+keep working, with a warning; recreate those nodes to encrypt them. See
+[the boot sequence](/operate/deploy-node-image/#the-calimero-init-boot-sequence).
+**Requires a core release with `merod kms disk-key`**; until `merodVersion`
+carries it, the build-time conformance assert fails `locked-read-only` image
+builds.
+
+`tee-release-version` cannot name a release older than the image: the image
+bakes its own version as the floor, and both `calimero-init` and merod
+(`MERO_TEE_MIN_VERSION`) refuse anything lower.
+
 For a node you set up by hand, do the same: `MERO_TEE_VERSION=<release> merod init
 --kms-url https://<kms-host>:8080/ ...`. The helper scripts below write attestation
 allowlists into an **existing** config, so they cannot encrypt a store that `init`
@@ -189,6 +205,42 @@ has removed openssh. An ITA call that fails for a transport or authorization
 reason is reported as `inconclusive` and fails the run; only an explicit
 rejection from ITA counts as a verdict about the quote.
 </Aside>
+
+#### Secret Manager fetch check (`secret_fetch_check`)
+
+Off by default. Every other probe run boots the node with
+`--no-service-account`, the way MDMA does, so the `gcp` provider in
+`fetch_secret.sh` never runs against a real image. With `secret_fetch_check`
+set, the probe (`scripts/ci/probes/node_secret_fetch_probe.sh`):
+
+1. creates a one-off secret holding a random token and grants the probe service
+   account read access to that secret only;
+2. starts a receiver VM (`log_auth_receiver.py`, plain Debian, no external
+   address) that accepts vector's pushes and records only whether each one
+   carried that token;
+3. boots the node with that service account and sets `logs-endpoint` to the
+   receiver and `logs-secret-name` to the secret, with no `observability-token`;
+4. passes once the receiver's serial console shows an authenticated push, and
+   deletes the receiver, its firewall rule and the secret either way.
+
+The node has no shell, so the result is observed from outside, as with the
+attestation checks. On failure the reason code names what the receiver saw:
+`SECRET_FETCH_FAILED` (pushes with no credential, so the fetch failed),
+`SECRET_FETCH_WRONG_TOKEN`, `NO_LOG_PUSHES`, or `RECEIVER_NOT_READY`. The
+artifact is `node-secret-fetch-result.json`.
+
+Before the first run, this needs setting up once:
+
+- **Repo variable `GCP_PROBE_SECRET_SA`:** an existing service account with no
+  project roles. The check grants it access to one secret per run.
+- **The workflow's own GCP identity** needs to create and delete secrets and
+  set their IAM policy (for example `roles/secretmanager.admin` on the VM
+  project), and `roles/iam.serviceAccountUser` on that service account so it
+  can attach it to the VM.
+- **The Secret Manager API** must be enabled in the VM project.
+
+Run it against a `locked-read-only` image: that is the profile with snapd
+masked, where the provider used to fail (mero-tee#339).
 
 </TabItem>
 </Tabs>

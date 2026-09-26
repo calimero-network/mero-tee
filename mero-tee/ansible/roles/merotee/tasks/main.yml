@@ -1,4 +1,12 @@
 ---
+# Full data-disk encryption (see "The data disk" in calimero-init.sh.j2): the
+# boot script formats a blank data disk as LUKS2 with dm-integrity and opens it
+# on every boot. The kernel side (dm-crypt, dm-integrity) is asserted below.
+- name: Install cryptsetup for the encrypted data disk
+  apt:
+    name: cryptsetup
+    state: present
+
 # Ensure tdx_guest module for RTMR3 extend (TDX Confidential VMs)
 - name: Install linux-modules-extra for tdx_guest (RTMR3 extend)
   apt:
@@ -45,6 +53,33 @@
     group: root
     mode: "0755"
 
+# The oldest `tee-release-version` this image accepts: its own version. The
+# KMS release that admits an image is always cut after the image is measured,
+# so nothing older can be a legitimate choice, only a downgrade to an older
+# (validly signed) policy. Under /etc/calimero, so the root hash measures it.
+# calimero-init refuses a lower release and passes it to merod as
+# MERO_TEE_MIN_VERSION. `image_version` is packer's `version` (versions.json
+# `imageVersion`), passed by ubuntu.pkr.hcl.
+- name: Bake the minimum tee-release-version (this image's version)
+  copy:
+    content: "{{ image_version }}\n"
+    dest: /etc/calimero/min-tee-release-version
+    owner: root
+    group: root
+    mode: "0644"
+  when: image_version | default('') | length > 0
+
+- name: Assert locked-read-only images carry a release floor
+  assert:
+    that:
+      - image_version | default('') | length > 0
+    fail_msg: >-
+      image_version is not set, so this image would bake no minimum
+      tee-release-version and any older signed release could be named in
+      instance metadata. Build through build-and-release.sh / ubuntu.pkr.hcl,
+      which pass versions.json imageVersion.
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
 - name: Render baked-in init script (R6)
   template:
     src: calimero-init.sh.j2
@@ -64,6 +99,11 @@
       [Service]
       Type=oneshot
       RemainAfterExit=yes
+      # The first boot formats the data disk with dm-integrity, which wipes the
+      # whole device and runs at the disk's write throughput. A start timeout
+      # would kill it halfway and leave a LUKS header with no identity token,
+      # which the next boot (correctly) refuses to touch.
+      TimeoutStartSec=infinity
       ExecStart=/usr/local/lib/calimero/init.sh
 
       [Install]
@@ -130,11 +170,23 @@
     content: |
         [Unit]
         Description=mero-auth
+        # Requires, not just After: mero-auth's database lives on /mnt/data. If
+        # calimero-init failed (the data disk could not be unlocked), starting
+        # anyway would create that database on the ROOT filesystem under
+        # /mnt/data -- in plaintext, and making the next boot mistake the
+        # directory for a pre-disk node's state.
+        Requires=calimero-init.service
         After=calimero-init.service
 
         [Service]
-        ExecStart=/usr/local/bin/mero-auth --config /etc/calimero/auth.toml --verbose
+        # Default log level, not the verbose flag it used to run with: this
+        # unit's output is shipped to an endpoint set in instance metadata, and
+        # verbose auth logging is request-level detail about who authenticates
+        # to this node.
+        ExecStart=/usr/local/bin/mero-auth --config /etc/calimero/auth.toml
         Restart=always
+        # A core dump of this process is its keys, written to disk.
+        LimitCORE=0
 
         [Install]
         WantedBy=multi-user.target
@@ -145,12 +197,17 @@
     content: |
         [Unit]
         Description=merod
+        # Requires: never run against /mnt/data unless calimero-init unlocked
+        # and mounted it (see mero-auth above).
+        Requires=calimero-init.service
         After=calimero-init.service
 
         [Service]
         EnvironmentFile=-/etc/calimero/merod.env
         ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
         Restart=always
+        # A core dump of merod is its signing identity and every group key.
+        LimitCORE=0
 
         [Install]
         WantedBy=multi-user.target
@@ -179,6 +236,10 @@
     content: |
         [Unit]
         Description=Fleet HA sidecar (polls MDMA for group assignments)
+        # Requires calimero-init: the sidecar's state, fleet token included,
+        # lives on the encrypted data disk (/mnt/data/fleet), and must never be
+        # written to the root filesystem because the disk failed to unlock.
+        Requires=calimero-init.service
         After=calimero-init.service merod.service
         Wants=merod.service
 
@@ -198,6 +259,118 @@
     enabled: true
     daemon_reload: true
   when: merod_mode == "read-only"
+
+# --- Nothing secret persists on the boot disk -------------------------------
+#
+# TDX encrypts this VM's memory; the boot disk is as readable to the cloud
+# project as the data disk, and unlike the data disk it is not encrypted. So
+# every path by which memory reaches it is closed here: the journal, core
+# dumps and swap. Applied on every profile -- none of them needs these, and a
+# debug-read-only node still holds real fleet keys.
+
+# Journald keeps logs in /run (RAM) only. Units still log to it, and vector
+# still ships it; nothing is written to /var/log/journal. ForwardToSyslog=no so
+# rsyslog (present on the Ubuntu base) cannot write the same lines to
+# /var/log/syslog instead; merod-lockdown also masks rsyslog on locked-read-only.
+- name: Ensure journald drop-in directory exists
+  file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Keep the journal in memory only
+  copy:
+    content: |
+      # calimero: logs never persist to the (unencrypted) boot disk.
+      [Journal]
+      Storage=volatile
+      ForwardToSyslog=no
+      ForwardToWall=no
+    dest: /etc/systemd/journald.conf.d/60-calimero-volatile.conf
+    mode: "0644"
+
+- name: Remove any persistent journal left by the base image
+  file:
+    path: /var/log/journal
+    state: absent
+
+# Core dumps are process memory written to disk: for merod that is its signing
+# identity and every group key. Off at every layer, so no single one being
+# re-enabled by a package brings them back: the kernel pattern pipes to
+# /bin/false (sysctl.d/60 sorts after systemd-coredump's 50-coredump.conf),
+# setuid dumps are off, systemd gives every unit a zero core limit, and
+# systemd-coredump (if installed) stores nothing.
+- name: Disable kernel core dumps
+  copy:
+    content: |
+      # calimero: no process memory is ever written to disk.
+      kernel.core_pattern=|/bin/false
+      fs.suid_dumpable=0
+    dest: /etc/sysctl.d/60-calimero-no-coredump.conf
+    mode: "0644"
+
+- name: Ensure systemd manager drop-in directory exists
+  file:
+    path: /etc/systemd/system.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Give every unit a zero core-dump limit
+  copy:
+    content: |
+      [Manager]
+      DefaultLimitCORE=0
+    dest: /etc/systemd/system.conf.d/60-calimero-no-coredump.conf
+    mode: "0644"
+
+- name: Ensure systemd-coredump drop-in directory exists
+  file:
+    path: /etc/systemd/coredump.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Store nothing if systemd-coredump is ever present
+  copy:
+    content: |
+      [Coredump]
+      Storage=none
+      ProcessSizeMax=0
+    dest: /etc/systemd/coredump.conf.d/60-calimero-no-coredump.conf
+    mode: "0644"
+
+# apport and whoopsie collect crash dumps (and apport rewrites core_pattern
+# when it starts). Leaf packages: nothing on this image depends on them.
+- name: Purge crash reporters
+  apt:
+    name:
+      - apport
+      - whoopsie
+    state: absent
+    purge: true
+
+- name: Mask the systemd-coredump socket
+  systemd:
+    name: systemd-coredump.socket
+    masked: true
+    daemon_reload: true
+
+# No swap: a page swapped out is guest memory in plaintext on a host disk. The
+# GCP Ubuntu base ships none; this makes sure nothing in the build added one,
+# and calimero-init asserts `swapon` is empty at every boot before it fetches a
+# key. (swap.target itself is masked on locked-read-only by merod-lockdown.)
+- name: Remove swap entries from /etc/fstab
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^[^#].*\sswap\s'
+    state: absent
+
+- name: Remove swap files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /swap.img
+    - /swapfile
 
 # --- Storage-encryption conformance ------------------------------------------
 #
@@ -223,6 +396,63 @@
       store, but the baked merod ({{ merod_version | default('unknown') }}) has
       no `init --kms-url`, so it can only create a plaintext one. Bump
       merodVersion in mero-tee/versions.json to a core release carrying it.
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
+# --- Data-disk-encryption conformance ----------------------------------------
+#
+# The same shape as the store assert above. calimero-init refuses to create a
+# locked-read-only node's data disk without encryption, and it encrypts with
+# `merod kms disk-key` + cryptsetup LUKS2/dm-integrity. A merod without the
+# subcommand, a missing cryptsetup, or a kernel without dm-integrity would each
+# make every NEW locked-read-only node stop at boot. Catch them here.
+- name: Probe whether the baked merod can fetch a data-disk key
+  command: /usr/local/bin/merod kms disk-key --help
+  register: merod_disk_key_help
+  changed_when: false
+  failed_when: false
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
+- name: Assert the baked merod can unlock an encrypted data disk
+  assert:
+    that:
+      - merod_disk_key_help.rc == 0
+      - "'--key-out' in merod_disk_key_help.stdout"
+      - "'--create-identity' in merod_disk_key_help.stdout"
+    fail_msg: >-
+      The locked-read-only profile only creates nodes with an encrypted data
+      disk, keyed by `merod kms disk-key`, but the baked merod
+      ({{ merod_version | default('unknown') }}) has no such subcommand. Every
+      new node would refuse to boot. Bump merodVersion in
+      mero-tee/versions.json to a core release carrying it.
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
+- name: Probe cryptsetup and the kernel's dm-crypt / dm-integrity support
+  shell: |
+    set -euo pipefail
+    cryptsetup --version
+    # The kernel the image will boot, which need not be the kernel the build
+    # host is running: the newest one installed under /lib/modules.
+    kver="$(ls -1 /lib/modules | sort -V | tail -n1)"
+    echo "kernel=${kver}"
+    modinfo -k "${kver}" dm_crypt >/dev/null
+    modinfo -k "${kver}" dm_integrity >/dev/null
+  args:
+    executable: /bin/bash
+  register: disk_crypto_probe
+  changed_when: false
+  failed_when: false
+  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+
+- name: Assert the image can create LUKS2 volumes with integrity
+  assert:
+    that:
+      - disk_crypto_probe.rc == 0
+    fail_msg: >-
+      cryptsetup is missing or the image's kernel has no dm_crypt/dm_integrity
+      module ({{ disk_crypto_probe.stdout | default('') }}
+      {{ disk_crypto_probe.stderr | default('') }}). calimero-init could not
+      encrypt or open the data disk. On Ubuntu, dm_integrity can live in
+      linux-modules-extra for the kernel flavour.
   when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
 
 # --- Delegated-execution conformance -----------------------------------------

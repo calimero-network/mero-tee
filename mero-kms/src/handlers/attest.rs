@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::errors::ServiceError;
 use super::AppState;
+use crate::sealed::{self, TransportKey};
 
 /// Request body for the KMS attestation endpoint.
 #[derive(Debug, Deserialize)]
@@ -20,6 +21,10 @@ pub struct KmsAttestRequest {
     /// Optional base64-encoded 32-byte binding value for channel/session binding.
     #[serde(default)]
     pub binding_b64: Option<String>,
+    /// Report this service's transport key and commit to it in the quote, so
+    /// the caller can have `/get-key` seal the key it releases (see `sealed`).
+    #[serde(default)]
+    pub transport_key: bool,
 }
 
 /// Response body for the KMS attestation endpoint.
@@ -34,6 +39,10 @@ pub struct KmsAttestResponse {
     pub event_log: serde_json::Value,
     /// VM config string returned by dstack quote API.
     pub vm_config: String,
+    /// Base64 X25519 transport key, present when the request asked for it. The
+    /// quote's report data then commits to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_public_key_b64: Option<String>,
 }
 
 /// Handler for KMS self-attestation.
@@ -46,9 +55,16 @@ pub(crate) async fn attest_kms_handler(
 ) -> Result<Json<KmsAttestResponse>, ServiceError> {
     let nonce = decode_fixed_b64_32("nonceB64", &request.nonce_b64)?;
     let binding = resolve_attestation_binding(request.binding_b64.as_deref())?;
+    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
+    let (binding, transport_public) = if request.transport_key {
+        let transport = transport_key(&client).await?;
+        let public = *transport.public();
+        (sealed::attest_binding(&binding, &public), Some(public))
+    } else {
+        (binding, None)
+    };
     let report_data = build_attestation_report_data(&nonce, &binding);
 
-    let client = DstackClient::new(Some(&state.config.dstack_socket_path));
     let quote_response = client
         .get_quote(report_data.to_vec())
         .await
@@ -74,7 +90,21 @@ pub(crate) async fn attest_kms_handler(
         report_data_hex: hex::encode(report_data),
         event_log: parsed_event_log,
         vm_config: quote_response.vm_config,
+        transport_public_key_b64: transport_public.map(|public| BASE64.encode(public)),
     }))
+}
+
+/// This service's transport key, derived by dstack so every replica agrees.
+pub(crate) async fn transport_key(client: &DstackClient) -> Result<TransportKey, ServiceError> {
+    let response = client
+        .get_key(Some(sealed::TRANSPORT_KEY_PATH.to_owned()), None)
+        .await
+        .map_err(|e| ServiceError::KeyDerivationFailed(e.to_string()))?;
+    let derived = zeroize::Zeroizing::new(
+        hex::decode(&response.key)
+            .map_err(|e| ServiceError::KeyDerivationFailed(format!("dstack key hex: {e}")))?,
+    );
+    TransportKey::from_derived_bytes(&derived)
 }
 
 pub(crate) fn decode_fixed_b64_32(field_name: &str, value: &str) -> Result<[u8; 32], ServiceError> {

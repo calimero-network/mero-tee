@@ -4,7 +4,7 @@ sources:
     type: journald
     # `fleet-sidecar.service` is here because on a locked image this is the ONLY
     # way its output ever leaves the node. There is no shell on a confidential
-    # VM -- that is the point of one -- so `/var/log/fleet-sidecar.log` is
+    # VM -- that is the point of one -- so `/run/calimero/fleet-sidecar.log` is
     # unreadable by anyone, forever, and a unit missing from this list is a
     # subsystem that cannot be debugged at all.
     #

@@ -8,7 +8,7 @@
 #   config_file_path   - Path to scrape config YAML file (e.g., /etc/vmagent/scrape_config.yml)
 #   remote_write_url   - VictoriaMetrics remote write endpoint
 #   auth_enabled       - "true" or "false"
-#   secret_provider    - "aws" or "gcp" (only used if auth_enabled=true)
+#   secret_provider    - "gcp" or "provided" (only used if auth_enabled=true)
 #   secret_name        - Secret name/path (only used if auth_enabled=true)
 #
 # Example:

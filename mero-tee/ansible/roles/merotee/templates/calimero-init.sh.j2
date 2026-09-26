@@ -1,9 +1,24 @@
 #!/bin/bash
 # Calimero locked-down image init (R6). Uses baked merod/meroctl/mero-auth if present;
-# otherwise downloads from GitHub (legacy, requires merod-version metadata).
+# otherwise, on the debug profiles ONLY, downloads them from GitHub (legacy, requires
+# merod-version metadata). locked-read-only refuses: see "Binaries" below.
 set -euo pipefail
 
-LOG="/var/log/calimero-init.log"
+# The log lives in RAM (/run is a tmpfs), not on the boot disk.
+#
+# TDX protects this VM's memory, not its disks, and the boot disk is as readable
+# to the cloud project as the data disk is. Everything this script logs is also
+# on stdout, which journald captures -- and journald is volatile on this image
+# (see the merotee role), so a file copy under /var/log was the one place this
+# log outlived the boot, in plaintext, on a device the host can snapshot. It
+# holds no secret today; keeping it off the disk means a future log line cannot
+# quietly change that.
+LOG_DIR="/run/calimero"
+LOG="${LOG_DIR}/calimero-init.log"
+mkdir -p "$LOG_DIR"
+chmod 0700 "$LOG_DIR"
+# Where this log used to be. Removed so an upgraded node stops carrying it.
+rm -f /var/log/calimero-init.log /var/log/fleet-sidecar.log
 BIN_DIR="/usr/local/bin"
 CALIMERO_HOME="/mnt/data/calimero"
 CALIMERO_NODE="default"
@@ -20,6 +35,13 @@ get_meta() {
 }
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
+
+# Defined up front because the data-disk and release-floor checks below refuse
+# the boot as well as the storage-encryption decision does.
+fatal() {
+  log "ERROR: $*"
+  exit 1
+}
 
 log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
@@ -94,9 +116,23 @@ LOGS_SECRET=$(get_meta "logs-secret-name")
 # holds, and the mismatch would show up only as 401s at the sink.
 OBSERVABILITY_TOKEN=$(get_meta "observability-token" | tr -d '\r\n')
 
-# Use baked binaries if present (image built with calimero-core); else download at runtime
+# --- Binaries ---------------------------------------------------------------
+#
+# Use baked binaries if present (image built with calimero-core); else download
+# at runtime -- but never on locked-read-only.
+#
+# The baked binaries are hashed into `calimero.root_hash` on the kernel command
+# line, which is measured into RTMR[2]; that is what makes the node's quote say
+# WHICH merod it runs. A merod fetched here at boot is in no measurement at all:
+# the quote would be identical whatever was downloaded, and `merod-version` is
+# instance metadata the cloud project writes. So on the production profile a
+# missing binary is a broken image, and the only safe answer is to stop.
 if [[ -x "${BIN_DIR}/merod" ]] && [[ -x "${BIN_DIR}/meroctl" ]] && [[ -x "${BIN_DIR}/mero-auth" ]]; then
   log "Using baked merod/meroctl/mero-auth from image"
+elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+  fatal "merod/meroctl/mero-auth are not baked into this image. locked-read-only \
+never downloads them at boot: a downloaded binary is covered by no measurement, \
+so the node's attestation would vouch for code it never measured. Rebuild the image."
 else
   MEROD_VERSION=$(get_meta "merod-version")
   if [[ -z "${MEROD_VERSION:-}" ]]; then
@@ -122,15 +158,100 @@ fi
 
 log "server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
 
+# --- Release pinning (downgrade protection) ---------------------------------
+#
+# `tee-release-version` names the signed release whose policy merod verifies
+# the KMS against. It is instance metadata, so the cloud project chooses it --
+# and EVERY release's policy is validly signed. Without a floor, naming an old
+# release whose allowlists accept a KMS build since found wanting is a downgrade
+# anyone who can set metadata performs, and a valid signature would bless it.
+#
+# The floor is this image's own version, baked at build time into a file the
+# root hash measures. That is always safe: the KMS release that admits an image
+# is cut AFTER that image has been measured (its policy lists the image's
+# measurements), so no release older than the image can admit it anyway. merod
+# enforces it (`MERO_TEE_MIN_VERSION`, semver); the comparison here is defence
+# in depth that fails the boot with a clear line before anything is fetched.
+#
+# `MERO_TEE_PROFILE` makes merod refuse a policy whose `profile` differs, so a
+# production node cannot be pointed at a debug release's policy. Set on
+# locked-read-only ONLY, and to that value, on purpose: merod fetches the
+# release's default policy asset, which is the locked-read-only KMS policy for
+# every node profile (`kms-phala-attestation-policy.json` is an alias of
+# `.locked-read-only.json`, see release-kms-phala.yaml). Pinning a debug node
+# to its own profile name would make every debug node with a KMS refuse the
+# only policy merod ever fetches.
+MIN_TEE_RELEASE_FILE="/etc/calimero/min-tee-release-version"
+MIN_TEE_RELEASE_VERSION="$(tr -d '[:space:]' < "$MIN_TEE_RELEASE_FILE" 2>/dev/null || true)"
+EXPECTED_TEE_POLICY_PROFILE=""
+if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+  EXPECTED_TEE_POLICY_PROFILE="locked-read-only"
+fi
+
+# True when release $1 is OLDER than release $2. Semver-ish, like merod: the
+# `mero-kms-v` prefix is dropped, the numeric cores compare with `sort -V`, and
+# on equal cores a pre-release (`-rc.1`) is older than the release itself,
+# which `sort -V` alone gets backwards.
+release_older_than() {
+  local a="${1#mero-kms-v}" b="${2#mero-kms-v}"
+  a="${a%%+*}"; b="${b%%+*}"
+  local a_core="${a%%-*}" b_core="${b%%-*}"
+  if [[ "$a_core" != "$b_core" ]]; then
+    [[ "$(printf '%s\n%s\n' "$a_core" "$b_core" | sort -V | head -n1)" == "$a_core" ]]
+    return
+  fi
+  local a_pre="" b_pre=""
+  [[ "$a" == *-* ]] && a_pre="${a#*-}"
+  [[ "$b" == *-* ]] && b_pre="${b#*-}"
+  if [[ -z "$a_pre" ]]; then return 1; fi
+  if [[ -z "$b_pre" ]]; then return 0; fi
+  [[ "$a_pre" != "$b_pre" ]] \
+    && [[ "$(printf '%s\n%s\n' "$a_pre" "$b_pre" | sort -V | head -n1)" == "$a_pre" ]]
+}
+
+# EnvironmentFile value: strip line breaks, then quote/escape. Same escaping as
+# MERO_TEE_VERSION always had, now shared by the three values written.
+env_file_value() {
+  local v="${1//$'\n'/}"
+  v="${v//$'\r'/}"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  printf '%s' "$v"
+}
+
 if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
   # Prevent EnvironmentFile injection: strip line breaks and quote/escape value.
   SANITIZED_TEE_RELEASE_VERSION=${TEE_RELEASE_VERSION//$'\n'/}
   SANITIZED_TEE_RELEASE_VERSION=${SANITIZED_TEE_RELEASE_VERSION//$'\r'/}
-  ESCAPED_TEE_RELEASE_VERSION=${SANITIZED_TEE_RELEASE_VERSION//\\/\\\\}
-  ESCAPED_TEE_RELEASE_VERSION=${ESCAPED_TEE_RELEASE_VERSION//\"/\\\"}
-  printf 'MERO_TEE_VERSION="%s"\n' "$ESCAPED_TEE_RELEASE_VERSION" > /etc/calimero/merod.env
+  if [[ -n "$MIN_TEE_RELEASE_VERSION" ]] \
+      && release_older_than "$SANITIZED_TEE_RELEASE_VERSION" "$MIN_TEE_RELEASE_VERSION"; then
+    fatal "tee-release-version ${SANITIZED_TEE_RELEASE_VERSION} is older than this \
+image (${MIN_TEE_RELEASE_VERSION}). No release older than the image can have \
+measured it, so this can only be a downgrade to an older, validly signed policy. \
+Refusing to start; set tee-release-version to ${MIN_TEE_RELEASE_VERSION} or later."
+  fi
+  {
+    printf 'MERO_TEE_VERSION="%s"\n' "$(env_file_value "$SANITIZED_TEE_RELEASE_VERSION")"
+    if [[ -n "$MIN_TEE_RELEASE_VERSION" ]]; then
+      printf 'MERO_TEE_MIN_VERSION="%s"\n' "$(env_file_value "$MIN_TEE_RELEASE_VERSION")"
+    fi
+    if [[ -n "$EXPECTED_TEE_POLICY_PROFILE" ]]; then
+      printf 'MERO_TEE_PROFILE="%s"\n' "$(env_file_value "$EXPECTED_TEE_POLICY_PROFILE")"
+    fi
+  } > /etc/calimero/merod.env
   chmod 0644 /etc/calimero/merod.env
-  log "Configured MERO_TEE_VERSION from tee-release-version metadata"
+  log "Configured MERO_TEE_VERSION=${SANITIZED_TEE_RELEASE_VERSION} (floor=${MIN_TEE_RELEASE_VERSION:-none} policy-profile=${EXPECTED_TEE_POLICY_PROFILE:-any}) from tee-release-version metadata"
+
+  # For everything this script runs itself -- `merod kms disk-key` below and
+  # `merod init`. `merod run` reads the same three values from merod.env, so
+  # the disk, the store and the running node are verified against one policy.
+  export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"
+  if [[ -n "$MIN_TEE_RELEASE_VERSION" ]]; then
+    export MERO_TEE_MIN_VERSION="$MIN_TEE_RELEASE_VERSION"
+  fi
+  if [[ -n "$EXPECTED_TEE_POLICY_PROFILE" ]]; then
+    export MERO_TEE_PROFILE="$EXPECTED_TEE_POLICY_PROFILE"
+  fi
 else
   rm -f /etc/calimero/merod.env
 fi
@@ -156,6 +277,26 @@ init_node() {
   fi
 }
 
+# --- Swap -------------------------------------------------------------------
+#
+# Swap pages guest memory out to a DISK, and a disk is exactly what TDX does not
+# protect: whatever is paged out -- the data-disk key while it sits in its tmpfs
+# below, merod's keys, group keys -- lands in plaintext where the host can read
+# it. The image ships no swap (the merotee role removes every swap entry and
+# masks swap.target on locked-read-only), so this is a boot-time assertion that
+# it stayed that way, and it runs BEFORE any key is fetched.
+if [[ -n "$(swapon --noheadings 2>/dev/null)" ]]; then
+  log "WARN: swap is active on a confidential VM; disabling it before any key is fetched"
+  swapoff -a >>"$LOG" 2>&1 || true
+  if [[ -n "$(swapon --noheadings 2>/dev/null)" ]]; then
+    if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+      fatal "swap is still active after swapoff -a. Memory paged out to it would \
+reach a host-readable disk in plaintext. Refusing to continue."
+    fi
+    log "WARN: swap could not be disabled; keys may be paged to disk (allowed on profile=$IMAGE_PROFILE only)"
+  fi
+fi
+
 # --- The data disk ----------------------------------------------------------
 #
 # Every node is created with a separate data disk (200 GB on the current plans)
@@ -175,8 +316,344 @@ init_node() {
 # `data` (`dispatcher/app/gcp/instances.py`). The by-id path is stable
 # regardless of NVMe enumeration or attach order; the device-name guessing in
 # the old script was not.
+#
+# THE DISK IS ENCRYPTED (LUKS2, with integrity), keyed from the KMS.
+#
+# TDX protects memory, not disks, and the cloud project can snapshot, read and
+# rewrite this device at will. merod's own store is encrypted from `init
+# --kms-url` (below), but the disk holds more than the store: `config.toml`,
+# blobs, the node's TLS private key, mero-auth's database, the fleet sidecar's
+# token and state. So the whole block device is a dm-crypt mapping:
+#
+#   * aes-xts-plain64 for confidentiality, and `--integrity hmac-sha256` so an
+#     offline edit is DETECTED (the read fails) rather than silently decrypted
+#     into garbage merod might act on. XTS alone is malleable; the HMAC is keyed
+#     by the volume key, so the host cannot forge a valid sector.
+#   * The key is released by mero-kms-phala only to a TD whose quote matches
+#     the signed release policy (`merod kms disk-key`), exactly like the store
+#     key. It exists only in a RAM-backed directory, for as long as it takes to
+#     format or open the disk, and is shredded right after.
+#   * The KMS derives the key per IDENTITY: a dedicated libp2p keypair made on
+#     the first boot. It is stored in the LUKS2 header as a token, in the clear,
+#     by design -- it obtains nothing without a genuine TD to answer the KMS's
+#     attestation challenge, and the node needs it BEFORE the disk is open.
+#   * pbkdf2 at the minimum 1000 iterations: the passphrase is a full-entropy
+#     KMS key, not something a person chose, so a slow KDF would buy no
+#     resistance and only cost boot time.
+#   * No /etc/fstab entry and no crypttab: neither can unlock it. This script
+#     opens it on every boot, before anything writes to /mnt/data.
+#
+# What this refuses to do, ever: format a device that has ANY signature on it.
+# A crypto_LUKS device is opened; a plain ext4 one is mounted as it always was
+# (a node that predates this); anything else stops the boot. Only a device
+# `blkid -p` positively reports as blank is formatted.
 DATA_DEVICE="/dev/disk/by-id/google-data"
 DATA_MOUNT="/mnt/data"
+DATA_MAPPER_NAME="calimero-data"
+DATA_MAPPER="/dev/mapper/${DATA_MAPPER_NAME}"
+# A dedicated tmpfs, not just a directory under /run: `merod kms disk-key`
+# refuses to write the key anywhere that is not tmpfs/ramfs, and a mount of our
+# own makes that true by construction, with nothing else in it and mode 0700.
+DISK_KEY_DIR="/run/calimero-disk"
+DISK_KEY_FILE="${DISK_KEY_DIR}/data-disk.key"
+DISK_IDENTITY_FILE="${DISK_KEY_DIR}/data-disk.identity"
+DISK_TOKEN_TYPE="calimero-kms-identity"
+# A KMS that is briefly unreachable at boot should not brick a node until
+# someone reboots it, so the fetch is retried. Overridable only so the test
+# does not sleep.
+DISK_KEY_ATTEMPTS="${DISK_KEY_ATTEMPTS:-10}"
+DISK_KEY_RETRY_DELAY="${DISK_KEY_RETRY_DELAY:-6}"
+# What the data disk turned out to be, for the checks after it is mounted:
+# ephemeral | encrypted | plaintext | root-legacy | none.
+DATA_DISK_STATE="none"
+
+merod_can_unlock_disk() {
+  "$BIN_DIR/merod" kms disk-key --help 2>/dev/null | grep -q -- '--key-out'
+}
+
+# Shred the key (and drop the identity copy) the moment it is no longer
+# needed, and on ANY exit: a `fatal` halfway through a format must not leave
+# the key sitting in /run for the life of the boot.
+disk_secrets_cleanup() {
+  if [[ -e "$DISK_KEY_FILE" ]]; then
+    shred -u "$DISK_KEY_FILE" 2>/dev/null || rm -f "$DISK_KEY_FILE"
+  fi
+  rm -f "$DISK_IDENTITY_FILE"
+  if mountpoint -q "$DISK_KEY_DIR" 2>/dev/null; then
+    umount "$DISK_KEY_DIR" 2>/dev/null || true
+  fi
+}
+trap disk_secrets_cleanup EXIT
+
+prepare_disk_key_dir() {
+  mkdir -p "$DISK_KEY_DIR"
+  chmod 0700 "$DISK_KEY_DIR"
+  if ! mountpoint -q "$DISK_KEY_DIR" 2>/dev/null; then
+    mount -t tmpfs -o mode=0700,size=1m,nosuid,nodev,noexec tmpfs "$DISK_KEY_DIR" >>"$LOG" 2>&1 \
+      || fatal "could not mount a tmpfs at $DISK_KEY_DIR for the data-disk key"
+  fi
+  local fstype
+  fstype="$(findmnt -n -o FSTYPE --target "$DISK_KEY_DIR" 2>/dev/null || true)"
+  [[ "$fstype" == tmpfs || "$fstype" == ramfs ]] \
+    || fatal "$DISK_KEY_DIR is on '$fstype', not tmpfs; the data-disk key must never reach a disk"
+  # `--key-out` must not exist yet; a leftover could only be from this boot.
+  rm -f "$DISK_KEY_FILE"
+}
+
+# Ask the KMS for the data-disk key. `create` also mints the identity (first
+# boot only: an existing disk must present the identity it was made with).
+# Nothing secret is on merod's stdout, but it goes to the log only anyway.
+fetch_disk_key() {
+  local args=(kms disk-key --kms-url "$KMS_PHALA_URL" --identity "$DISK_IDENTITY_FILE" --key-out "$DISK_KEY_FILE")
+  if [[ "${1:-}" == create ]]; then
+    args+=(--create-identity)
+  fi
+  local attempt
+  for attempt in $(seq 1 "$DISK_KEY_ATTEMPTS"); do
+    rm -f "$DISK_KEY_FILE"
+    if "$BIN_DIR/merod" "${args[@]}" >>"$LOG" 2>&1 && [[ -s "$DISK_KEY_FILE" ]]; then
+      return 0
+    fi
+    log "WARN: data-disk key fetch attempt ${attempt}/${DISK_KEY_ATTEMPTS} failed (kms=$KMS_PHALA_URL release=${TEE_RELEASE_VERSION:-})"
+    if (( attempt < DISK_KEY_ATTEMPTS )); then
+      sleep "$DISK_KEY_RETRY_DELAY"
+    fi
+  done
+  fatal "could not obtain the data-disk key from the KMS after ${DISK_KEY_ATTEMPTS} attempts \
+(kms=$KMS_PHALA_URL release=${TEE_RELEASE_VERSION:-}). The disk stays locked; see $LOG."
+}
+
+# What is on a block device, WITHOUT trusting a cache: `blkid -p` probes the
+# device itself. Prints TYPE (or `partition-table:<type>`) and returns 0 when
+# something was found; returns 2 ONLY when blkid positively reports nothing
+# (its documented "no signature" code); any other status means the probe
+# itself failed, and a caller must treat that as "unknown", never as "blank".
+probe_signature() {
+  local out rc=0
+  out="$(blkid -p -o export "$1" 2>>"$LOG")" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    return "$rc"
+  fi
+  local sig_type sig_pttype
+  sig_type="$(sed -n 's/^TYPE=//p' <<<"$out" | head -n1)"
+  sig_pttype="$(sed -n 's/^PTTYPE=//p' <<<"$out" | head -n1)"
+  if [[ -n "$sig_type" ]]; then
+    printf '%s' "$sig_type"
+  elif [[ -n "$sig_pttype" ]]; then
+    printf 'partition-table:%s' "$sig_pttype"
+  else
+    printf 'unrecognised'
+  fi
+}
+
+# The identity stored in this disk's LUKS2 header. Exactly one token of our
+# type, or nothing: two would make "which identity unlocks this disk" a guess.
+read_disk_token_identity() {
+  cryptsetup luksDump --dump-json-metadata "$DATA_DEVICE" 2>>"$LOG" | python3 -c '
+import json, sys
+meta = json.load(sys.stdin)
+tokens = meta.get("tokens") or {}
+ours = [t for t in tokens.values() if isinstance(t, dict) and t.get("type") == sys.argv[1]]
+if len(ours) != 1:
+    sys.exit(1)
+identity = ours[0].get("identity_b64")
+if not isinstance(identity, str) or not identity:
+    sys.exit(1)
+print(identity)
+' "$DISK_TOKEN_TYPE"
+}
+
+open_data_mapper() {
+  if [[ -b "$DATA_MAPPER" ]]; then
+    log "Encrypted data disk is already open at $DATA_MAPPER"
+  else
+    cryptsetup open --type luks2 --key-file "$DISK_KEY_FILE" "$DATA_DEVICE" "$DATA_MAPPER_NAME" >>"$LOG" 2>&1 \
+      || fatal "could not open the encrypted data disk $DATA_DEVICE with the KMS key. \
+Either the KMS released a different key (a different identity or release \
+profile) or the header was tampered with. Not formatting it -- see $LOG."
+  fi
+  # The key has done its job. Shred it now rather than at exit.
+  disk_secrets_cleanup
+}
+
+# FIRST BOOT: the device is blank. Mint an identity, get its key, and build the
+# encrypted volume. The token is written and read back BEFORE any data goes on
+# the volume, so a disk holding anything is always one this node can reopen.
+#
+# `luksFormat --integrity` WIPES THE WHOLE DEVICE to initialise the integrity
+# tags, and that is deliberate even though it makes the first boot slow (the
+# wipe runs at the disk's write throughput: minutes to tens of minutes for
+# 200 GB depending on the disk type). `--integrity-no-wipe` would skip it, but
+# then every never-written sector fails its integrity check when read, and
+# "never written" includes whatever the page cache or ext4 decides to read
+# around a partial write -- the cryptsetup man page warns that even writes can
+# then fail. An I/O error surfacing weeks later under merod is a far worse
+# failure than a slow first boot, and the release pipeline's measurement VM
+# never gets here (it uses the ephemeral tmpfs), so the cost lands only on real
+# nodes, once.
+#
+# If the boot is interrupted during the wipe, the device is left with a LUKS2
+# header and no token. The next boot refuses it (below) instead of reformatting:
+# on the first boot there is nothing to lose, but code that reformats "a LUKS
+# device without our token" is code that can wipe a real disk. Recreate the node.
+format_encrypted_data_disk() {
+  log "Data disk is blank; creating an encrypted LUKS2 volume (aes-xts-plain64, \
+hmac-sha256 integrity) keyed from the KMS. The integrity wipe covers the whole \
+device and can take a long time on the first boot."
+  prepare_disk_key_dir
+  rm -f "$DISK_IDENTITY_FILE"
+  fetch_disk_key create
+  [[ -s "$DISK_IDENTITY_FILE" ]] || fatal "merod kms disk-key did not create the disk identity"
+
+  # Re-probe immediately before formatting. Nothing else should have touched
+  # the device in between, and if something did, it is no longer blank.
+  local rc=0
+  probe_signature "$DATA_DEVICE" >/dev/null || rc=$?
+  [[ "$rc" == 2 ]] || fatal "$DATA_DEVICE is no longer blank (blkid rc=$rc); not formatting it"
+
+  modprobe dm_crypt 2>/dev/null || true
+  modprobe dm_integrity 2>/dev/null || true
+  cryptsetup luksFormat --type luks2 \
+      --cipher aes-xts-plain64 --key-size 512 \
+      --integrity hmac-sha256 \
+      --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+      --batch-mode --key-file "$DISK_KEY_FILE" \
+      "$DATA_DEVICE" >>"$LOG" 2>&1 \
+    || fatal "cryptsetup luksFormat failed on $DATA_DEVICE; see $LOG"
+
+  local identity_b64 token_json
+  identity_b64="$(base64 -w0 < "$DISK_IDENTITY_FILE")"
+  token_json="$(python3 -c '
+import json, sys
+print(json.dumps({
+    "type": sys.argv[1],
+    "keyslots": [],
+    "identity_b64": sys.argv[2],
+    "kms_release": sys.argv[3],
+}))
+' "$DISK_TOKEN_TYPE" "$identity_b64" "${SANITIZED_TEE_RELEASE_VERSION:-}")"
+  printf '%s' "$token_json" | cryptsetup token import "$DATA_DEVICE" >>"$LOG" 2>&1 \
+    || fatal "could not store the disk identity in the LUKS2 header of $DATA_DEVICE"
+  # Read it back: a volume that cannot be reopened must never receive data.
+  [[ "$(read_disk_token_identity || true)" == "$identity_b64" ]] \
+    || fatal "the disk identity read back from $DATA_DEVICE does not match what was written"
+  log "Stored the data-disk identity in the LUKS2 header (token type $DISK_TOKEN_TYPE)"
+
+  open_data_mapper
+  mkfs.ext4 -q "$DATA_MAPPER" >>"$LOG" 2>&1 || fatal "mkfs.ext4 failed on $DATA_MAPPER"
+  log "Created ext4 on the encrypted data disk"
+}
+
+# EVERY LATER BOOT: open the volume with the key for the identity in its header.
+unlock_encrypted_data_disk() {
+  log "Data disk is LUKS-encrypted; fetching its key from the KMS"
+  prepare_disk_key_dir
+  local identity_b64
+  identity_b64="$(read_disk_token_identity)" || fatal "$DATA_DEVICE is a LUKS \
+device without exactly one $DISK_TOKEN_TYPE token, so this node cannot know which \
+identity unlocks it. That is what a first boot interrupted during the format \
+leaves behind. Refusing to touch it -- recreate the node."
+  ( umask 077; printf '%s' "$identity_b64" | base64 -d > "$DISK_IDENTITY_FILE" ) \
+    || fatal "the disk identity token on $DATA_DEVICE is not valid base64"
+  fetch_disk_key
+  open_data_mapper
+}
+
+# Mount the opened volume, refusing anything but the filesystem this script
+# created. A blank or foreign mapping is NOT formatted: the only way to get
+# one is an interrupted first boot or tampering, and a read error must never
+# be mistaken for "empty".
+mount_encrypted_data_disk() {
+  local rc=0 sig
+  sig="$(probe_signature "$DATA_MAPPER")" || rc=$?
+  if [[ "$rc" != 0 || "$sig" != ext4 ]]; then
+    fatal "the encrypted data disk opened but holds '${sig:-nothing}' (blkid rc=$rc), \
+not the ext4 this node creates. Not formatting it: that is an interrupted first \
+boot or tampering. Recreate the node."
+  fi
+  mount -t ext4 -o nosuid,nodev "$DATA_MAPPER" "$DATA_MOUNT" >>"$LOG" 2>&1 \
+    || fatal "$DATA_MAPPER could not be mounted at $DATA_MOUNT; see $LOG"
+  DATA_DISK_STATE="encrypted"
+  log "Mounted the encrypted data disk at $DATA_MOUNT ($(df -h --output=size "$DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' '))"
+}
+
+# The encryption decision for a BLANK disk, mirroring the store's below: a KMS
+# with no release to verify it against is refused on every profile;
+# locked-read-only never creates a plaintext disk; the debug profiles do, and
+# say so. Sets BLANK_DISK_PLAN to `encrypt` or `plain`.
+#
+# A global rather than printed, and called directly rather than in `$(...)`:
+# in a command substitution `fatal` would exit only the subshell, the caller
+# would compare an empty string, and the boot would fall through to the
+# PLAINTEXT branch -- the exact failure this decision exists to prevent. (`log`
+# also writes to stdout, which a substitution would capture as the answer.)
+BLANK_DISK_PLAN=""
+blank_disk_plan() {
+  BLANK_DISK_PLAN=
+  if [[ -n "$KMS_PHALA_URL" ]]; then
+    [[ -n "${TEE_RELEASE_VERSION:-}" ]] || fatal "kms-phala-url is set but \
+tee-release-version is not. The KMS is verified against that release's signed \
+policy, and without it merod cannot tell a real KMS from an impostor. Refusing \
+to create the data disk."
+    if merod_can_unlock_disk && command -v cryptsetup >/dev/null 2>&1; then
+      BLANK_DISK_PLAN=encrypt
+      return 0
+    fi
+    if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+      fatal "this image cannot encrypt the data disk (the baked merod has no \
+'kms disk-key', or cryptsetup is missing). Refusing to create an unencrypted data \
+disk on the locked-read-only profile. Bump merodVersion in versions.json."
+    fi
+    log "WARN: this image cannot encrypt the data disk (no 'merod kms disk-key' or \
+no cryptsetup); creating an UNENCRYPTED one (allowed on profile=$IMAGE_PROFILE only)."
+    BLANK_DISK_PLAN=plain
+    return 0
+  fi
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "no kms-phala-url metadata. The locked-read-only profile does not create \
+an unencrypted data disk: the node's TLS key, config and fleet credentials would \
+sit in plaintext on a disk the host can read. Set kms-phala-url (and \
+tee-release-version) on the instance."
+  fi
+  log "WARN: no kms-phala-url metadata; creating an UNENCRYPTED data disk (allowed \
+on profile=$IMAGE_PROFILE only)."
+  BLANK_DISK_PLAN=plain
+}
+
+# The old behaviour, for a plain ext4 disk: mount it, and record it in fstab so
+# a reboot does not depend on this script. Used for a node created before disk
+# encryption, and for a debug node created without a KMS.
+mount_plain_data_disk() {
+  if mount "$DATA_DEVICE" "$DATA_MOUNT" >>"$LOG" 2>&1; then
+    DATA_DISK_STATE="plaintext"
+    log "Mounted $DATA_DEVICE at $DATA_MOUNT ($(df -h --output=size "$DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' '))"
+    # Survive a reboot without depending on this script running first.
+    # `nofail` so a missing disk degrades to the warning above rather than
+    # dropping the boot into emergency mode, which on a shell-less machine is
+    # indistinguishable from a brick.
+    DATA_UUID="$(blkid -o value -s UUID "$DATA_DEVICE" 2>/dev/null || true)"
+    if [[ -n "$DATA_UUID" ]] && ! grep -q "$DATA_UUID" /etc/fstab 2>/dev/null; then
+      printf 'UUID=%s %s ext4 defaults,nofail 0 2\n' "$DATA_UUID" "$DATA_MOUNT" >> /etc/fstab
+      log "Recorded the data disk in /etc/fstab"
+    fi
+  else
+    # The disk is THERE and will not mount. Refusing to continue is the whole
+    # point: the alternative is writing the node's state to root and finding
+    # out when root fills. calimero-init's journal ships now, so a node that
+    # stops here says why.
+    log "ERROR: $DATA_DEVICE exists but could not be mounted at $DATA_MOUNT. \
+Refusing to initialise onto the root filesystem -- see $LOG."
+    exit 1
+  fi
+}
+
+warn_plaintext_data_disk() {
+  log "WARN: the data disk is UNENCRYPTED ext4 (created before full-disk \
+encryption, or on a debug profile without a KMS). Its TLS key, merod config, \
+mero-auth database and fleet credentials are readable by anyone who can \
+snapshot it. It is mounted as before and NOT reformatted. Recreate this node to \
+get an encrypted data disk."
+}
 
 mkdir -p "$DATA_MOUNT"
 
@@ -185,6 +662,7 @@ if [[ "$EPHEMERAL_STORE" == true ]]; then
   # reaches a disk the host can read. Everything is gone at power-off: the node
   # comes back as a fresh identity, which is what a VM meant to live minutes
   # wants. The data disk (if any) is left untouched.
+  DATA_DISK_STATE="ephemeral"
   if [[ "$(findmnt -n -o FSTYPE "$DATA_MOUNT" 2>/dev/null)" == tmpfs ]]; then
     log "Ephemeral store: tmpfs already mounted at $DATA_MOUNT"
   elif mount -t tmpfs -o mode=0755,size=50% tmpfs "$DATA_MOUNT" >>"$LOG" 2>&1; then
@@ -194,7 +672,16 @@ if [[ "$EPHEMERAL_STORE" == true ]]; then
     exit 1
   fi
 elif mountpoint -q "$DATA_MOUNT"; then
-  log "Data disk already mounted at $DATA_MOUNT"
+  # Mounted before this script ran: a plain disk from its fstab entry, or this
+  # script running a second time in one boot.
+  if [[ "$(findmnt -n -o SOURCE "$DATA_MOUNT" 2>/dev/null)" == "$DATA_MAPPER" ]]; then
+    DATA_DISK_STATE="encrypted"
+    log "Encrypted data disk already mounted at $DATA_MOUNT"
+  else
+    DATA_DISK_STATE="plaintext"
+    log "Data disk already mounted at $DATA_MOUNT"
+    warn_plaintext_data_disk
+  fi
 elif [[ -n "$(ls -A "$DATA_MOUNT" 2>/dev/null)" ]]; then
   # A NODE THAT PREDATES THIS CHANGE. Its state is already sitting on the root
   # filesystem under this path. Mounting the (empty) disk over it would hide
@@ -204,12 +691,13 @@ elif [[ -n "$(ls -A "$DATA_MOUNT" 2>/dev/null)" ]]; then
   # So: refuse, and say so. The node keeps working exactly as it did. Instance
   # metadata is written at creation and never backfilled, so such a node has to
   # be recreated for other reasons anyway; this is one more.
+  DATA_DISK_STATE="root-legacy"
   log "WARN: $DATA_MOUNT holds data but is NOT a mount point, so this node's \
 state is on the root filesystem. Not mounting the data disk over it -- that \
 would hide the existing state and merod would initialise a fresh identity. \
 This node has ~$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -d ' G')G \
-of usable space, not the provisioned disk size. Recreate the node to move onto \
-the data disk."
+of usable space, not the provisioned disk size, and its state is UNENCRYPTED on \
+the boot disk. Recreate the node to move onto an encrypted data disk."
 else
   # Wait for the device: the disk is attached at instance creation but udev may
   # not have made the by-id symlink by the time this unit runs.
@@ -225,44 +713,129 @@ else
     log "WARN: no data disk at $DATA_DEVICE after 30s; $CALIMERO_HOME will live \
 on the root filesystem. This is expected only where no data disk is provisioned."
   else
-    # Format ONLY when there is no filesystem. Never reformat: on any boot after
-    # the first, this device holds the node's entire state, and a reformat here
-    # would be indistinguishable from a wipe.
-    DATA_FSTYPE="$(blkid -o value -s TYPE "$DATA_DEVICE" 2>/dev/null || true)"
-    if [[ -z "$DATA_FSTYPE" ]]; then
-      log "Data disk is unformatted; creating ext4 on $DATA_DEVICE"
-      mkfs.ext4 -q -F "$DATA_DEVICE" >>"$LOG" 2>&1 || log "WARN: mkfs.ext4 failed on $DATA_DEVICE"
-    fi
-
-    if mount "$DATA_DEVICE" "$DATA_MOUNT" >>"$LOG" 2>&1; then
-      log "Mounted $DATA_DEVICE at $DATA_MOUNT ($(df -h --output=size "$DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' '))"
-      # Survive a reboot without depending on this script running first.
-      # `nofail` so a missing disk degrades to the warning above rather than
-      # dropping the boot into emergency mode, which on a shell-less machine is
-      # indistinguishable from a brick.
-      DATA_UUID="$(blkid -o value -s UUID "$DATA_DEVICE" 2>/dev/null || true)"
-      if [[ -n "$DATA_UUID" ]] && ! grep -q "$DATA_UUID" /etc/fstab 2>/dev/null; then
-        printf 'UUID=%s %s ext4 defaults,nofail 0 2\n' "$DATA_UUID" "$DATA_MOUNT" >> /etc/fstab
-        log "Recorded the data disk in /etc/fstab"
+    # Never reformat: on any boot after the first, this device holds the node's
+    # entire state, and a reformat here would be indistinguishable from a wipe.
+    # So the decision keys on what `blkid -p` finds, and only its explicit
+    # "nothing here" (rc 2) counts as blank. A probe that FAILED is not blank.
+    DATA_SIG_RC=0
+    DATA_SIG="$(probe_signature "$DATA_DEVICE")" || DATA_SIG_RC=$?
+    if [[ "$DATA_SIG_RC" == 2 ]]; then
+      blank_disk_plan
+      if [[ "$BLANK_DISK_PLAN" == encrypt ]]; then
+        format_encrypted_data_disk
+        mount_encrypted_data_disk
+      elif [[ "$BLANK_DISK_PLAN" == plain ]]; then
+        log "Data disk is unformatted; creating ext4 on $DATA_DEVICE"
+        mkfs.ext4 -q -F "$DATA_DEVICE" >>"$LOG" 2>&1 || log "WARN: mkfs.ext4 failed on $DATA_DEVICE"
+        mount_plain_data_disk
+        warn_plaintext_data_disk
+      else
+        fatal "no decision was reached for the blank data disk; refusing to format it"
       fi
+    elif [[ "$DATA_SIG_RC" != 0 ]]; then
+      fatal "could not probe $DATA_DEVICE (blkid rc=$DATA_SIG_RC). Not formatting \
+or mounting a device whose contents are unknown."
+    elif [[ "$DATA_SIG" == crypto_LUKS ]]; then
+      command -v cryptsetup >/dev/null 2>&1 \
+        || fatal "$DATA_DEVICE is LUKS-encrypted but cryptsetup is not installed"
+      merod_can_unlock_disk \
+        || fatal "$DATA_DEVICE is LUKS-encrypted but the baked merod has no 'kms disk-key' to unlock it"
+      [[ -n "$KMS_PHALA_URL" ]] \
+        || fatal "$DATA_DEVICE is LUKS-encrypted but kms-phala-url is not set, so its key cannot be fetched"
+      [[ -n "${TEE_RELEASE_VERSION:-}" ]] \
+        || fatal "$DATA_DEVICE is LUKS-encrypted but tee-release-version is not set, \
+so the KMS its key comes from could not be verified. Refusing to start."
+      unlock_encrypted_data_disk
+      mount_encrypted_data_disk
+    elif [[ "$DATA_SIG" == ext4 ]]; then
+      # A node from before disk encryption. Mounted exactly as before: this is
+      # its whole state, and "encrypting" it would mean formatting it.
+      mount_plain_data_disk
+      warn_plaintext_data_disk
     else
-      # The disk is THERE and will not mount. Refusing to continue is the whole
-      # point: the alternative is writing the node's state to root and finding
-      # out when root fills. calimero-init's journal ships now, so a node that
-      # stops here says why.
-      log "ERROR: $DATA_DEVICE exists but could not be mounted at $DATA_MOUNT. \
-Refusing to initialise onto the root filesystem -- see $LOG."
-      exit 1
+      fatal "$DATA_DEVICE holds '$DATA_SIG', which this image never creates. \
+Refusing to format or mount it -- it may be someone's data. Detach it or recreate \
+the node with a blank data disk."
     fi
   fi
+fi
+
+# Boot-time conformance for the disk: an "encrypted" disk must really be the
+# dm-crypt mapping, LUKS2, with integrity. Cheap, and it turns a regression in
+# the logic above into a refused boot instead of a plaintext node.
+if [[ "$DATA_DISK_STATE" == encrypted ]]; then
+  [[ "$(findmnt -n -o SOURCE "$DATA_MOUNT" 2>/dev/null)" == "$DATA_MAPPER" ]] \
+    || fatal "$DATA_MOUNT is not backed by $DATA_MAPPER"
+  DATA_CRYPT_STATUS="$(cryptsetup status "$DATA_MAPPER_NAME" 2>/dev/null || true)"
+  grep -qE '^[[:space:]]*type:[[:space:]]+LUKS2' <<<"$DATA_CRYPT_STATUS" \
+    || fatal "$DATA_MAPPER_NAME is not a LUKS2 mapping"
+  grep -qE '^[[:space:]]*integrity:[[:space:]]+[a-z]' <<<"$DATA_CRYPT_STATUS" \
+    || fatal "$DATA_MAPPER_NAME has no integrity protection"
+  log "Data disk check: $DATA_MOUNT is a LUKS2 dm-crypt mapping with integrity"
+fi
+
+# On locked-read-only, a node's state lives in TDX memory or on the encrypted
+# disk -- nowhere else. Anything else is state the HOST could have written, and
+# that is not just a confidentiality leak: a plain disk the operator prepared can
+# carry a node identity (config.toml's libp2p key) the operator also holds. A
+# genuine TD would attest under that key, be admitted as a ReadOnlyTee, and be
+# handed group keys wrapped to an identity the operator can unwrap. An encrypted
+# disk cannot be prepared that way: its contents are sealed under a key only a
+# genuine TD obtains, so nothing on it was written by anyone else.
+#
+# Existing nodes are not affected: the image is their boot disk, so a node on an
+# older image keeps it. Only a NEW VM boots this image, and mdma gives it a blank
+# data disk -- a plain one here is a disk someone attached.
+if [[ "$IMAGE_PROFILE" == locked-read-only ]] \
+  && [[ "$DATA_DISK_STATE" != encrypted ]] && [[ "$DATA_DISK_STATE" != ephemeral ]]; then
+  fatal "locked-read-only keeps node state only on an encrypted data disk or in \
+memory, and this node's would be '${DATA_DISK_STATE:-unset}' (host-writable). \
+Refusing to start: state the host can write can carry an identity the host holds. \
+Recreate the node with a blank data disk."
+fi
+
+# --- Fleet state off the boot disk -------------------------------------------
+#
+# The fleet sidecar used to keep its state -- including `fleet-token`, the
+# credential mdma issues on attested registration -- under /var/lib/calimero,
+# on the boot disk, which is as host-readable as any other. It now keeps it on
+# the data disk (/mnt/data/fleet), which is encrypted above and is mounted
+# before the sidecar can start (the unit Requires= this one). The token has to
+# survive reboots (re-registering costs a quote and a challenge), so /run would
+# not do; the data disk is the one persistent place the host cannot read.
+#
+# Moved once, here, because this runs after the mount and before the sidecar.
+# Copy-then-shred rather than `mv`: across filesystems `mv` is a copy and an
+# unlink, and an unlink leaves the blocks behind. shred is best effort on
+# SSD-backed ext4; a node that held a token on its boot disk should rotate it by
+# re-registering, which recreating the node does.
+FLEET_STATE_DIR="$DATA_MOUNT/fleet"
+LEGACY_FLEET_STATE_DIR="/var/lib/calimero"
+mkdir -p "$FLEET_STATE_DIR"
+chmod 0700 "$FLEET_STATE_DIR"
+if [[ -d "$LEGACY_FLEET_STATE_DIR" ]]; then
+  for legacy in "$LEGACY_FLEET_STATE_DIR"/fleet-*; do
+    [[ -f "$legacy" ]] || continue
+    dest="$FLEET_STATE_DIR/$(basename "$legacy")"
+    if [[ ! -e "$dest" ]]; then
+      cp -p "$legacy" "$dest" || { log "WARN: could not move $legacy to $FLEET_STATE_DIR"; continue; }
+    fi
+    shred -u "$legacy" 2>/dev/null || rm -f "$legacy"
+  done
+  rmdir "$LEGACY_FLEET_STATE_DIR" 2>/dev/null || true
+  log "Moved fleet sidecar state from $LEGACY_FLEET_STATE_DIR to $FLEET_STATE_DIR"
 fi
 
 # --- Storage encryption (KMS) ------------------------------------------------
 #
 # TDX protects this VM's MEMORY. It does not protect its disks: the data disk
-# above is ordinary ext4 on a device the host reads and writes, so whatever
-# merod stores in plaintext is readable by anyone who can snapshot or attach
-# that disk -- the cloud project, or whoever compromises it. merod's store holds
+# is a device the host reads and writes, so whatever merod stores in plaintext
+# is readable by anyone who can snapshot or attach that disk -- the cloud
+# project, or whoever compromises it. A new node's data disk is now encrypted
+# as a whole (above); the store keeps its own KMS key as well, because the two
+# fail differently: a node created before disk encryption, or a debug node with
+# a plain disk, still gets an encrypted store, and an encrypted store never
+# depends on the disk-unlock path being right. merod's store holds
 # the node's signing identity (the key it was ADMITTED under as a ReadOnlyTee),
 # its account root, and every context's replicated state. A copied disk is
 # therefore a copy of an admitted fleet member: it can pull every group key the
@@ -290,11 +863,6 @@ fi
 # the next boot instead of being mistaken for a finished node.
 NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"
 
-fatal() {
-  log "ERROR: $*"
-  exit 1
-}
-
 merod_can_encrypt_at_init() {
   "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- '--kms-url'
 }
@@ -309,10 +877,8 @@ store_is_memory_only() {
     && [[ -z "$(swapon --noheadings 2>/dev/null)" ]]
 }
 
-if [[ -n "${TEE_RELEASE_VERSION:-}" ]]; then
-  # For `merod init`. `merod run` reads the same value from merod.env above.
-  export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"
-fi
+# MERO_TEE_VERSION (and the floor and profile pin) were exported under
+# "Release pinning" above, for `merod init` as much as for the disk key.
 
 mkdir -p "$CALIMERO_HOME"
 if [[ ! -f "$NODE_CONFIG" ]]; then

@@ -130,8 +130,22 @@ http:
         - cors
       priority: 100
 
+    # The two TEE routes merod serves without authentication, and ONLY those
+    # two: `GET /admin-api/tee/info` and `POST /admin-api/tee/attest` (core's
+    # `tee::service()`, the public half of crates/server/src/admin/handlers/tee.rs).
+    #
+    # This used to be `PathPrefix(/admin-api/tee)`, which also exempted
+    # `POST /admin-api/tee/fleet-join` -- a STATE CHANGE (the node joins a
+    # group) that core mounts on `tee::protected_service()`. These nodes run
+    # merod in proxy auth mode, so traefik is the only guard that route has,
+    # and the prefix removed it. Anything not matched exactly here now falls to
+    # `node-api` and `auth-node`.
+    #
+    # The fleet sidecar is unaffected: it runs `meroctl tee fleet-join` with
+    # the local `--home`, which talks to merod on 127.0.0.1:2428 directly and
+    # never passes through this ingress; its `/attest` call is loopback too.
     node-api-tee:
-      rule: "PathPrefix(`/admin-api/tee`)"
+      rule: "(Path(`/admin-api/tee/info`) && (Method(`GET`) || Method(`HEAD`) || Method(`OPTIONS`))) || (Path(`/admin-api/tee/attest`) && (Method(`POST`) || Method(`OPTIONS`)))"
       entryPoints:
         - web
         - websecure
@@ -270,10 +284,21 @@ http:
         addVaryHeader: true
         accessControlExposeHeaders: X-Auth-Error
 
+    # `trustForwardHeader: false` is what makes the route mero-auth checks the
+    # route the caller actually asked for. mero-auth's `/auth/validate` decides
+    # a scoped token from `X-Forwarded-Uri` / `X-Forwarded-Method`, and with
+    # `true` Traefik passes on whatever the CLIENT put in those headers. A token
+    # scoped to route A could then reach route B by sending
+    # `X-Forwarded-Uri: A`. With `false`, Traefik discards the client's values
+    # and sets them from the request it is routing.
+    #
+    # Nothing sits in front of this Traefik to be trusted: it is the node's
+    # ingress, and the caller is whoever connected. Pinned by
+    # scripts/ci/tests/traefik-forward-auth-test.sh (mero-tee#339).
     auth-node:
       forwardAuth:
         address: "http://127.0.0.1:3001/auth/validate"
-        trustForwardHeader: true
+        trustForwardHeader: false
         authResponseHeaders:
           - X-Auth-User
           - X-Auth-Permissions
