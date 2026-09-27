@@ -74,6 +74,14 @@ release's jobs instead, which keeps the original push event.
    RTMR0–3 are the KMS measurements the release publishes. An image that is not
    proven this way is deleted.
 
+   The probe measures each joiner before waiting on its join. Now and then a TD
+   on GCE comes up with a different RTMR0 while MRTD and RTMR1–3 are equal, and
+   the bootstrap rightly refuses it the root. The probe then prints the event
+   log events that differ (`tdx_event_log.py diff`), deletes that VM and starts
+   another, as production replaces a replica that cannot join. It fails only if
+   no joiner in `MAX_JOINER_ATTEMPTS` (3) measures like the bootstrap. The
+   measurements themselves are never relaxed.
+
    :::caution[Measurements are observed; the TCB allowlist is declared]
    MRTD and RTMR0–3 are necessarily taken from the probe's own quote — they *are*
    the thing being published. The accepted TCB statuses are not: they come from
@@ -181,7 +189,8 @@ then runs a two-replica cluster on TDX VMs: one started with
 `kms-bootstrap=true`, the other with `kms-peers` naming the first. It checks
 that both come to hold the root and report the same transport key (derived
 from the root, so equal keys mean one root), and that Intel Trust Authority
-verifies both quotes with identical measurements. It deletes its image, VMs and
+verifies both quotes with identical measurements; a joiner that measures
+differently is replaced by a new VM, up to three times, as described above. It deletes its image, VMs and
 firewall rule when done. Run it to prove a change to the image before the
 Release mero-kms workflow builds and measures it for real. Like branch node
 builds, its image carries a suffix and its own family, so it can never be

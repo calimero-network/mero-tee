@@ -21,7 +21,14 @@ set -euo pipefail
 #   ITA_API_KEY
 #   OUT_DIR                where attest responses, ITA evidence and measurements go
 # Optional env:
-#   KMS_PORT (8080), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL
+#   KMS_PORT (8080), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL,
+#   MAX_JOINER_ATTEMPTS (3)
+#
+# A joiner whose quote measures differently from the bootstrap's is replaced by
+# a new VM, as a production replica that cannot join is: now and then a TD on
+# GCE comes up with another RTMR0 while MRTD and RTMR1-3 are equal. The probe
+# prints both replicas' event-log diff for it, and fails only when no joiner in
+# MAX_JOINER_ATTEMPTS measures like the bootstrap.
 #
 # Output: ${OUT_DIR}/kms-measurements.json, the ITA-verified policy candidates
 # (`.policy.allowed_mrtd`, `allowed_rtmr0..3`, `allowed_tcb_statuses`) both
@@ -34,6 +41,7 @@ for var in IMAGE IMAGE_PROJECT PROFILE PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_
   fi
 done
 KMS_PORT="${KMS_PORT:-8080}"
+MAX_JOINER_ATTEMPTS="${MAX_JOINER_ATTEMPTS:-3}"
 WAIT_TIMEOUT_MINUTES="${WAIT_TIMEOUT_MINUTES:-15}"
 ITA_APPRAISAL_URL="${ITA_APPRAISAL_URL:-https://api.trustauthority.intel.com/appraisal/v2/attest}"
 
@@ -44,7 +52,6 @@ mkdir -p "${OUT_DIR}"
 tag="${PROBE_NAME}"
 firewall="${PROBE_NAME}"
 first="${PROBE_NAME}-a"
-second="${PROBE_NAME}-b"
 created_vms=()
 firewall_created="false"
 
@@ -127,32 +134,50 @@ measure() {
     --allow-missing-tcb
 }
 
+same_measurements() {
+  diff <(jq -S '.policy' "${OUT_DIR}/$1-measurements.json") \
+    <(jq -S '.policy' "${OUT_DIR}/$2-measurements.json")
+}
+
+# Which events of the two replicas' CCEL event logs differ. Best effort: a TD
+# whose log cannot be read only loses this explanation.
+explain_mismatch() {
+  local joiner_ip="$1"
+  local event_log="${repo_root}/scripts/attestation/shared/tdx_event_log.py"
+  echo "::group::which measured events differ"
+  if measure bootstrap-log "${first_ip}" false true && measure joiner-log "${joiner_ip}" false true; then
+    for label in bootstrap-log joiner-log; do
+      echo "${label%-log} event log:"
+      python3 "${event_log}" show "${OUT_DIR}/${label}-attest.json" \
+        --attest-response "${OUT_DIR}/${label}-attest.json" || true
+    done
+    echo "events that differ (A = bootstrap, B = joiner):"
+    python3 "${event_log}" diff "${OUT_DIR}/bootstrap-log-attest.json" "${OUT_DIR}/joiner-log-attest.json" || true
+  fi
+  echo "::endgroup::"
+}
+
 # A joiner that never gets the root logs why only inside its VM, and a locked
 # replica has no console. Print what both replicas report on /health
-# (lastJoinError on the joiner, lastJoinRefusal on the bootstrap), whether they
-# measure the same, which the join requires, and if not, which events of their
-# CCEL event logs differ. Best effort: the probe has already failed.
+# (lastJoinError on the joiner, lastJoinRefusal on the bootstrap). Best effort:
+# the probe has already failed.
 explain_failed_join() {
   echo "::group::why the join failed"
   echo "bootstrap /health: $(curl -fsS --max-time 5 "http://${first_ip}:${KMS_PORT}/health" || echo unreachable)"
   echo "joiner /health:    $(curl -fsS --max-time 5 "http://${second_ip}:${KMS_PORT}/health" || echo unreachable)"
-  if measure bootstrap "${first_ip}" false true && measure joiner "${second_ip}" false true; then
-    if diff <(jq -S '.policy' "${OUT_DIR}/bootstrap-measurements.json") \
-      <(jq -S '.policy' "${OUT_DIR}/joiner-measurements.json"); then
-      echo "the two replicas measure the same"
-    else
-      echo "::error::the two replicas measure differently, so neither gives the other the root"
-      local event_log="${repo_root}/scripts/attestation/shared/tdx_event_log.py"
-      for label in bootstrap joiner; do
-        echo "${label} event log:"
-        python3 "${event_log}" show "${OUT_DIR}/${label}-attest.json" \
-          --attest-response "${OUT_DIR}/${label}-attest.json" || true
-      done
-      echo "events that differ (A = bootstrap, B = joiner):"
-      python3 "${event_log}" diff "${OUT_DIR}/bootstrap-attest.json" "${OUT_DIR}/joiner-attest.json" || true
-    fi
-  fi
   echo "::endgroup::"
+}
+
+wait_for_health() {
+  local ip="$1"
+  local deadline=$(( $(date +%s) + WAIT_TIMEOUT_MINUTES * 60 ))
+  until curl -fsS --max-time 5 "http://${ip}:${KMS_PORT}/health" >/dev/null; do
+    if (( $(date +%s) >= deadline )); then
+      echo "::error::replica at ${ip} never answered /health"
+      exit 1
+    fi
+    sleep 10
+  done
 }
 
 wait_for_root() {
@@ -174,10 +199,22 @@ wait_for_root() {
   echo "${label} replica holds the root: $(cat "${OUT_DIR}/${label}-health.json")"
 }
 
+delete_vm() {
+  local name="$1"
+  gcloud compute instances delete "${name}" \
+    --project "${VM_PROJECT}" --zone "${VM_ZONE}" --delete-disks=all --quiet || true
+  local kept=()
+  for vm in "${created_vms[@]}"; do
+    [[ "${vm}" == "${name}" ]] || kept+=("${vm}")
+  done
+  created_vms=("${kept[@]}")
+}
+
 start_replica "${first}" "kms-bootstrap=true"
 first_ip="$(vm_ip "${first}" 'accessConfigs[0].natIP')"
 first_internal="$(vm_ip "${first}" 'networkIP')"
 wait_for_root bootstrap "${first_ip}"
+measure bootstrap "${first_ip}" false
 
 # A replica answering proves it booted, not WHICH root: require the verity root
 # hash on the kernel cmdline and the initrd's verity setup in the boot log. Only
@@ -192,8 +229,29 @@ if [[ "${PROFILE}" == "debug" ]]; then
   grep -E 'mero-kms-init' <<< "${serial}" | tail -5 || true
 fi
 
-start_replica "${second}" "kms-peers=http://${first_internal}:${KMS_PORT}"
-second_ip="$(vm_ip "${second}" 'accessConfigs[0].natIP')"
+# The bootstrap gives the root only to a TD that measures exactly like itself,
+# so measure each joiner before waiting on the join.
+second=""
+second_ip=""
+for attempt in $(seq 1 "${MAX_JOINER_ATTEMPTS}"); do
+  candidate="${PROBE_NAME}-b${attempt}"
+  start_replica "${candidate}" "kms-peers=http://${first_internal}:${KMS_PORT}"
+  candidate_ip="$(vm_ip "${candidate}" 'accessConfigs[0].natIP')"
+  wait_for_health "${candidate_ip}"
+  measure joiner "${candidate_ip}" false
+  if same_measurements bootstrap joiner; then
+    second="${candidate}"
+    second_ip="${candidate_ip}"
+    break
+  fi
+  echo "::warning::joiner ${candidate} measures differently from the bootstrap (attempt ${attempt} of ${MAX_JOINER_ATTEMPTS}); replacing it with a new VM"
+  explain_mismatch "${candidate_ip}" || true
+  delete_vm "${candidate}"
+done
+if [[ -z "${second}" ]]; then
+  echo "::error::no joiner in ${MAX_JOINER_ATTEMPTS} VMs measured like the bootstrap"
+  exit 1
+fi
 wait_for_root joiner "${second_ip}"
 
 measure bootstrap "${first_ip}" true
