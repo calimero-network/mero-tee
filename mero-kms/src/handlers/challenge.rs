@@ -56,6 +56,13 @@ pub(crate) async fn challenge_handler(
 
 pub(crate) fn validate_peer_id_shape(peer_id: &str) -> Result<(), ServiceError> {
     let trimmed = peer_id.trim();
+    // Checked untrimmed too: the raw value is what gets logged, before any
+    // authentication, and a newline in it would let a caller forge log lines.
+    if trimmed.len() != peer_id.len() {
+        return Err(ServiceError::InvalidPeerId(
+            "peer ID must not have leading or trailing whitespace".to_string(),
+        ));
+    }
     if trimmed.is_empty() {
         return Err(ServiceError::InvalidPeerId(
             "peer ID must not be empty".to_string(),

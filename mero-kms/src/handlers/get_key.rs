@@ -43,7 +43,11 @@ pub struct GetKeyRequest {
 }
 
 /// Response body for the get-key endpoint.
-#[derive(Debug, Serialize)]
+///
+/// `Debug` is written by hand and redacts `key`: this is the one type here that
+/// holds a node's key in the clear, and a stray `{:?}` would otherwise put it in
+/// the journal, which ships off the replica.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
     /// Derived storage encryption key, in the clear. Only for a request that did
@@ -56,6 +60,16 @@ pub struct GetKeyResponse {
     /// The 12-byte AES-GCM nonce of `sealedKeyB64`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seal_nonce_b64: Option<String>,
+}
+
+impl std::fmt::Debug for GetKeyResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GetKeyResponse")
+            .field("key", &self.key.as_ref().map(|_| "<redacted>"))
+            .field("sealed_key_b64", &self.sealed_key_b64)
+            .field("seal_nonce_b64", &self.seal_nonce_b64)
+            .finish()
+    }
 }
 
 /// Key release flow: validate inputs → verify and consume the challenge →

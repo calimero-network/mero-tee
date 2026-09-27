@@ -32,6 +32,15 @@ AUTH_ENABLED="$3"
 SECRET_PROVIDER="$4"
 SECRET_NAME="$5"
 
+# The URL is pasted into vmagent's systemd unit, so a newline in it would inject
+# unit directives, up to an extra ExecStart running as root. It comes from
+# instance metadata, which is untrusted, so accept only a plain http(s) URL.
+URL_RE='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'
+if [[ ! "$REMOTE_WRITE_URL" =~ $URL_RE ]]; then
+    echo "Error: Remote write URL is not a plain http(s) URL; refusing to configure" >&2
+    exit 1
+fi
+
 echo "=== Configuring vmagent ==="
 echo "Config file: $CONFIG_FILE"
 echo "Remote write URL: $REMOTE_WRITE_URL"
@@ -88,12 +97,15 @@ NODE_FQDN="$(hostname 2>/dev/null || echo unknown)"
 #
 # Written by the playbook at build time (`/etc/calimero/image-profile`) and
 # measured, so a node cannot misreport it. The trailing newline is stripped.
-NODE_PROFILE="$(tr -d '\r\n' < /etc/calimero/image-profile 2>/dev/null || true)"
+NODE_PROFILE="$(tr -d '\r\n' < "${OBS_PROFILE_FILE:-/etc/calimero/image-profile}" 2>/dev/null || true)"
 NODE_PROFILE="${NODE_PROFILE:-unknown}"
 EXTRA_LABELS="-remoteWrite.label=instance_name=${NODE_FQDN}"
-EXTRA_LABELS="${EXTRA_LABELS} -remoteWrite.label=instance_type=merotee"
+# A KMS replica says `mero-kms` here (OBS_INSTANCE_TYPE, set by its boot
+# script), so its series never join a fleet node's in a dashboard.
+INSTANCE_TYPE="${OBS_INSTANCE_TYPE:-merotee}"
+EXTRA_LABELS="${EXTRA_LABELS} -remoteWrite.label=instance_type=${INSTANCE_TYPE}"
 EXTRA_LABELS="${EXTRA_LABELS} -remoteWrite.label=instance_profile=${NODE_PROFILE}"
-echo "Identifying labels: instance_name=${NODE_FQDN} instance_type=merotee instance_profile=${NODE_PROFILE}"
+echo "Identifying labels: instance_name=${NODE_FQDN} instance_type=${INSTANCE_TYPE} instance_profile=${NODE_PROFILE}"
 
 # 4. Create systemd service file
 echo ""
@@ -109,7 +121,7 @@ Type=simple
 ExecStart=/usr/local/bin/vmagent \\
   -promscrape.config=$CONFIG_FILE \\
   -remoteWrite.url=$REMOTE_WRITE_URL \\
-  -httpListenAddr=:8429 $BEARER_TOKEN_FLAG $EXTRA_LABELS
+  -httpListenAddr=${VMAGENT_HTTP_LISTEN:-:8429} $BEARER_TOKEN_FLAG $EXTRA_LABELS
 Restart=always
 RestartSec=10
 

@@ -266,6 +266,41 @@ fn test_validate_peer_id_shape_rejects_empty() {
 }
 
 #[test]
+fn test_validate_peer_id_shape_rejects_surrounding_whitespace() {
+    // The raw value is logged before any authentication; a newline in it would
+    // forge a log line.
+    let keypair = Keypair::generate_ed25519();
+    let peer_id = keypair.public().to_peer_id().to_base58();
+    for padded in [
+        format!("{peer_id}\n"),
+        format!(" {peer_id}"),
+        format!("{peer_id}\r\n"),
+    ] {
+        let err = challenge::validate_peer_id_shape(&padded).unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidPeerId(_)));
+    }
+}
+
+#[test]
+fn test_get_key_response_debug_redacts_the_key() {
+    let response = get_key::GetKeyResponse {
+        key: Some("00112233445566778899aabbccddeeff".to_owned()),
+        sealed_key_b64: Some("c2VhbGVk".to_owned()),
+        seal_nonce_b64: None,
+    };
+    let printed = format!("{response:?}");
+    assert!(
+        !printed.contains("00112233445566778899aabbccddeeff"),
+        "{printed}"
+    );
+    assert!(printed.contains("<redacted>"), "{printed}");
+    assert!(
+        printed.contains("c2VhbGVk"),
+        "ciphertext is not secret: {printed}"
+    );
+}
+
+#[test]
 fn test_resolve_attestation_binding_defaults_to_domain_separator() {
     let binding = attest::resolve_attestation_binding(None).unwrap();
     assert_eq!(binding.len(), 32);

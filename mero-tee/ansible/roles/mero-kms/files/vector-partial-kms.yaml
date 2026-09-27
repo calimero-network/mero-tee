@@ -1,0 +1,35 @@
+# Partial Vector config for the mero-kms image. configure_vector.sh appends the
+# sink when kms-init finds `logs-endpoint` in instance metadata.
+#
+# These lines LEAVE THE TEE. The endpoint is instance metadata, which whoever
+# runs the VM can set, so treat every line below as readable by an operator.
+# mero-kms therefore logs no key material, sealed payload or private key; see
+# "Logging" in mero-kms/README.md before adding a log line there.
+sources:
+  kms_journal:
+    type: journald
+    # A locked replica has no shell, so the journal is its only account of
+    # itself. `mero-kms-init.service` says why a replica never started
+    # (RTMR3, bad metadata); `mero-kms.service` says why it never joined, and
+    # what it released and refused. The shippers collect themselves, as on a
+    # node, so a degraded sink still reports why.
+    include_units:
+      [
+        "mero-kms-init.service",
+        "mero-kms.service",
+        "vector.service",
+        "vmagent.service",
+      ]
+    data_dir: "/etc/vector/data"
+
+transforms:
+  add_labels:
+    type: remap
+    inputs: [kms_journal]
+    source: |
+      .unit = ._SYSTEMD_UNIT
+      .hostname = .host
+      .instance_name = "mero-kms"
+      .instance_type = "gcp"
+      # Substituted by configure_vector.sh from /etc/mero-kms/image-profile.
+      .instance_profile = "__IMAGE_PROFILE__"

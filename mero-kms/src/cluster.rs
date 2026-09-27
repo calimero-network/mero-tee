@@ -185,14 +185,15 @@ fn seal_root(
         joiner_public,
         join_nonce,
     )?;
-    let mut buffer = root.as_bytes().to_vec();
+    // Zeroizing: if sealing fails, the buffer still holds the plaintext root.
+    let mut buffer = Zeroizing::new(root.as_bytes().to_vec());
     key.seal_in_place_append_tag(
         Nonce::assume_unique_for_key(seal_nonce),
         Aad::from(ROOT_SEAL_DOMAIN),
-        &mut buffer,
+        &mut *buffer,
     )
     .map_err(|_| ServiceError::KeyDerivationFailed("sealing the root failed".to_owned()))?;
-    Ok(buffer)
+    Ok(std::mem::take(&mut *buffer))
 }
 
 fn open_root(

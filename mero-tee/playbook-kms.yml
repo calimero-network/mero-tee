@@ -11,6 +11,22 @@
         cache_valid_time: 3600
 
   roles:
+    # Shippers first: the mero-kms role writes their KMS-specific config into
+    # the directories they create. Off until kms-init finds an endpoint.
+    - role: ansible/roles/node-exporter
+      vars:
+        version: "{{ node_exporter_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vmagent
+      vars:
+        vmagent_version: "{{ vmagent_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vector
+      vars:
+        version: "{{ vector_version }}"
+
     - role: ansible/roles/mero-kms
 
     - role: ansible/roles/cleanup
@@ -25,7 +41,8 @@
     # hash). The dm-verity root hash is what the disk is checked against.
     - name: Compute the KMS content hash
       shell: |
-        { find /etc/mero-kms /usr/local/lib/mero-kms -type f 2>/dev/null
+        { find /etc/mero-kms /usr/local/lib/mero-kms /etc/vector /etc/vmagent \
+            /etc/systemd/system/node_exporter.service.d -type f 2>/dev/null
           echo /usr/local/bin/mero-kms
           [ -f /etc/default/grub ] && echo /etc/default/grub
         } | sort -u | xargs -r sha256sum | sha256sum | awk '{print $1}'
