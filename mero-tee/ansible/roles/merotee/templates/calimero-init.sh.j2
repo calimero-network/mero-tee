@@ -547,13 +547,20 @@ fetch_disk_key() {
   if [[ "${1:-}" == create ]]; then
     args+=(--create-identity)
   fi
-  local attempt
+  local attempt out why
   for attempt in $(seq 1 "$DISK_KEY_ATTEMPTS"); do
     rm -f "$DISK_KEY_FILE"
-    if "$BIN_DIR/merod" "${args[@]}" >>"$LOG" 2>&1 && [[ -s "$DISK_KEY_FILE" ]]; then
+    out="$("$BIN_DIR/merod" "${args[@]}" 2>&1)" && [[ -s "$DISK_KEY_FILE" ]] && {
+      printf '%s\n' "$out" >>"$LOG"
       return 0
-    fi
-    log "WARN: data-disk key fetch attempt ${attempt}/${DISK_KEY_ATTEMPTS} failed (kms=$KMS_URL release=${TEE_RELEASE_VERSION:-})"
+    }
+    printf '%s\n' "$out" >>"$LOG"
+    # merod's error, into the journal: $LOG is on this node's tmpfs, which a
+    # locked node has no shell to read, so a reason left only there is lost.
+    # disk-key never prints the key (it goes only to --key-out), just the peer
+    # id, the key file's path and the error chain.
+    why="$(sed -e 's/\x1b\[[0-9;]*m//g' <<<"$out" | grep -v '^[[:space:]]*$' | tail -n 6 | tr '\n' ' ' | cut -c1-800 || true)"
+    log "WARN: data-disk key fetch attempt ${attempt}/${DISK_KEY_ATTEMPTS} failed (kms=$KMS_URL release=${TEE_RELEASE_VERSION:-}): ${why:-no output}"
     if (( attempt < DISK_KEY_ATTEMPTS )); then
       sleep "$DISK_KEY_RETRY_DELAY"
     fi

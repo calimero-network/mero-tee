@@ -428,6 +428,10 @@ run_disk kms-down locked-read-only "$URL" 2.3.70 yes blank down
 [[ "$(rc kms-down)" != 0 ]] || fail "an unreachable KMS must stop the boot"
 never_formatted kms-down
 [[ "$(grep -c '^merod kms disk-key --kms-url' "$(T_ kms-down)/calls")" == 2 ]] || fail "the key fetch was not retried"
+# The reason reaches the journal, not only the node-local log a locked node
+# cannot show anyone: every attempt's WARN carries merod's own error.
+grep -q 'key fetch attempt 1/2 failed .*: kms unreachable' "$(T_ kms-down)/log" \
+  || fail "a failed key fetch must log merod's error with the attempt, not just that it failed"
 no_key_left kms-down
 
 run_disk luks-kms-down locked-read-only "$URL" 2.3.70 yes luks down
