@@ -838,18 +838,34 @@ This node has ~$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -d ' G')G \
 of usable space, not the provisioned disk size, and its state is UNENCRYPTED on \
 the boot disk. Recreate the node to move onto an encrypted data disk."
 else
-  # Wait for the device: the disk is attached at instance creation but udev may
-  # not have made the by-id symlink by the time this unit runs.
-  for _ in $(seq 1 30); do
-    [[ -b "$DATA_DEVICE" ]] && break
+  # Wait for the device. mdma does NOT attach it at instance creation: it
+  # creates the disk and hot-attaches it once the VM is running, because a VM
+  # created with the extra disk can land on a different host pool from the one
+  # the release measured (dispatcher/app/gcp/instances.py, step 1). Creating a
+  # 200 GB disk and attaching it can take well over a minute, so 30 s lost the
+  # race and a locked node refused to start on a disk that was on its way.
+  #
+  # Where a missing disk is fatal anyway (locked-read-only keeps state nowhere
+  # else, and a KMS-backed store needs the encrypted disk), wait for mdma's
+  # attach. Elsewhere a missing disk is a legitimate shape, so keep it short.
+  DATA_DEVICE_WAIT_SECS=30
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" || -n "$KMS_URL" ]]; then
+    DATA_DEVICE_WAIT_SECS=600
+  fi
+  waited=0
+  while [[ ! -b "$DATA_DEVICE" && "$waited" -lt "$DATA_DEVICE_WAIT_SECS" ]]; do
     sleep 1
+    waited=$((waited + 1))
+    if (( waited % 30 == 0 )); then
+      log "Waiting for the data disk at $DATA_DEVICE (${waited}s of ${DATA_DEVICE_WAIT_SECS}s; mdma attaches it after the VM starts)"
+    fi
   done
 
   if [[ ! -b "$DATA_DEVICE" ]]; then
     # No data disk at all. A legitimate shape for a deployment that provisions
     # none, so this is not fatal -- but it is never what an mdma-created node
     # should look like, and the capacity it reports will be the root disk's.
-    log "WARN: no data disk at $DATA_DEVICE after 30s; $CALIMERO_HOME will live \
+    log "WARN: no data disk at $DATA_DEVICE after ${DATA_DEVICE_WAIT_SECS}s; $CALIMERO_HOME will live \
 on the root filesystem. This is expected only where no data disk is provisioned."
   else
     # Never reformat: on any boot after the first, this device holds the node's
