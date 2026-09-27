@@ -95,7 +95,10 @@ Always returns `200` with `{"status":"alive","service":"mero-kms","clusterRootRe
 While a joining replica does not hold the root yet, it also carries
 `lastJoinError`: the peer and the error of its last failed join (for example a
 refused TCB status, or peer measurements that differ). A locked image has no
-console, so this is where to read why a replica has not joined.
+console, so this is where to read why a replica has not joined. The replica
+that was asked carries the other half, `lastJoinRefusal`: why it last refused to
+give the root (such as `peer measurements differ from this replica's: ...`).
+Neither carries a secret.
 
 <Aside type="danger">
 `/health` is **not** gated on anything and does not report version or profile.

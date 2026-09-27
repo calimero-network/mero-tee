@@ -337,7 +337,7 @@ very node release baked in, before anything is published.
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `/get-key` → `503 policy_not_ready` | The replica has not joined its cluster yet (no root) | Check `/health` `clusterRootReady`; check `kms-peers` names live replicas of the **same** release. A replica that cannot join is replaced, not restarted. |
-| A replica never reaches `clusterRootReady` | `kms-peers` names no live replica, names a different release's cluster (different measurements, so the join is refused), or the joiner is a debug TD | Point `kms-peers` at live replicas of the same release image; start a new VM. |
+| A replica never reaches `clusterRootReady` | `kms-peers` names no live replica, names a different release's cluster (different measurements, so the join is refused), or the joiner is a debug TD | Read `lastJoinError` on the joiner's `/health` and `lastJoinRefusal` on the peer's. Point `kms-peers` at live replicas of the same release image; start a new VM. |
 | Every replica is gone | Cluster lost | [Recover a lost cluster](#recover-a-lost-cluster). |
 | Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node image or profile is not the one this release's KMS image bakes in, or the node's TCB status is outside the baked list | Run the node image of the same release and profile as the KMS; never widen anything to fit. |
 | merod refuses the KMS (measurements not in `kms_allowed_*`) | `kms-url` points at a different release's cluster than `tee-release-version` names, or a non-release image | Point the node at its own release's cluster. |

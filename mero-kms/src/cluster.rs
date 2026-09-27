@@ -325,7 +325,10 @@ pub(crate) async fn join_handler(
         &join_binding(&joiner_public),
     )
     .await
-    .inspect_err(|e| warn!("Refused a cluster join: {e}"))?;
+    .inspect_err(|e| {
+        warn!("Refused a cluster join: {e}");
+        tdx.record_join_refusal(e.to_string());
+    })?;
 
     let giver_secret = Zeroizing::new(rand::random::<[u8; 32]>());
     let giver_public = MontgomeryPoint::mul_base_clamped(*giver_secret).0;
@@ -719,6 +722,18 @@ mod tests {
             let refused = join_from(&client, &joiner, &policy(), &format!("http://{addr}")).await;
             assert!(refused.is_err());
             assert!(!joiner.has_root());
+            let health: serde_json::Value = client
+                .get(format!("http://{addr}/health"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let refusal = health["lastJoinRefusal"]
+                .as_str()
+                .expect("the giver says why");
+            assert!(refusal.contains("measurements differ"), "{refusal}");
         }
 
         #[tokio::test]

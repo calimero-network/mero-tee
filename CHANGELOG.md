@@ -69,6 +69,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The refusing side of a failed KMS join now says why too, and the release probe prints both.** `/health` adds `lastJoinRefusal` on the replica that refused a join, next to the joiner's `lastJoinError`. When the joiner times out, `run-cluster-probe.sh` prints both replicas' `/health`, has each quote verified by Intel Trust Authority and diffs their measurements, so a failed probe on a console-less `locked-read-only` image shows the cause in CI.
+
 - **Release runs no longer fail creating the umbrella version release.** The `Upsert umbrella version release links` steps (Release mero-tee and Release mero-kms) and Release mero-kms's `Enforce release notes body update` now use the release token, like the asset uploads. On the Actions `github.token` they were refused with `HTTP 403: Resource not accessible by integration` from 2.3.74, which turned finished releases red and left the umbrella `<ver>` release uncreated (2.3.74's is still missing; a re-run replays the old workflow, so it is created by running the upsert script by hand, see the release pipeline docs).
 
 - **The 2.3.72 node image failed to build on every profile**: Ansible refused `merotee/tasks/main.yml` ("failed at splitting arguments, either an unbalanced jinja2 block or quotes") because the dm-crypt/dm-integrity probe added in #335 had an apostrophe in a shell *comment*, and a free-form `shell: |` string is split into key=value arguments. The comment is reworded, and `ci-workflow-lint` now runs `ansible-playbook --syntax-check` for every profile, so a task file that cannot load fails the PR instead of a packer build (and the KMS release that waits on the image's measurements).
