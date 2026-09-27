@@ -50,6 +50,38 @@ http:
         - cors
       priority: 98
 
+    # Sealed transport: a client (a browser, above all) attests this node's
+    # transport key and seals its requests to it, so the warrant and the
+    # method's arguments of an intent are readable only inside the TD, not here
+    # at the ingress where TLS ends. Traefik sees `POST /sealed/v2` and an
+    # opaque body, nothing more.
+    #
+    # Exempt from `auth-node` because it could not apply it: the route a sealed
+    # request names is inside the envelope, where forwardAuth cannot look. That
+    # is safe ONLY because merod enforces the same boundary itself. In proxy
+    # auth mode (these nodes), merod lets an opened request reach nothing but
+    # what it serves without a credential: the intents route above, and the
+    # probes and public TEE routes. Anything `auth-node` would have guarded is
+    # refused inside the envelope with `sealed_route_unguarded`. That check
+    # arrived in merod 0.11.0-rc.52; an older merod routes an opened request
+    # anywhere, and would turn this router into a bypass of every guard on the
+    # node. `traefik-sealed-route-test.sh` refuses this router with an older
+    # `merodVersion`.
+    #
+    # Exact paths, and POST only: the handshake and the exchange are the whole
+    # envelope surface. Paired with the intents router because intents are the
+    # only thing a sealed request can do here.
+    node-sealed:
+      rule: "(Path(`/sealed/v2/handshake`) || Path(`/sealed/v2`)) && (Method(`POST`) || Method(`OPTIONS`))"
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit-public
+        - cors
+      priority: 96
+
 {% endif %}
     # Direct admission. The other path a caller with no account here may reach,
     # and exempt for the same reason: the request carries its own authority.
