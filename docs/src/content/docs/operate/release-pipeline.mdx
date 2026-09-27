@@ -289,7 +289,7 @@ GH_TOKEN=<release token> GITHUB_REPOSITORY=calimero-network/mero-tee \
 | `ci-kms.yaml` | PR / push (KMS paths) | `cargo fmt` + `clippy -D warnings` + tests on `mero-kms`. |
 | `security-audit.yaml` | Weekly (Mon 04:00) / PR | `cargo audit` against the advisory database. |
 | `release-auditor.yaml` | Weekly (Mon 03:30) / dispatch | Re-verifies recent releases' assets and cosign signatures. |
-| `post-release-mero-tee-node-e2e.yaml` | `workflow_run` after Release mero-tee | Boots fresh TDX VMs and checks their measurement candidates are covered by `published-mrtds.json` — without waiting on the KMS. |
+| `post-release-mero-tee-node-e2e.yaml` | `workflow_run` after a successful Release mero-tee run on `master` of this repository (push or dispatch) | Boots fresh TDX VMs and checks their measurement candidates are covered by `published-mrtds.json` — without waiting on the KMS. |
 
 ### When a post-release probe fails
 
