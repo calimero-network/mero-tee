@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Fixed
+
+- **A node that fails to boot now ships the journal that says why.** `calimero-init` configured vector and vmagent as its very last step, so any `fatal` before it (the KMS unreachable, a data disk that would not open, a refused release pin) exited with no shipper running: no logs, no metrics, and no fleet sidecar, on a locked image with no console. The first production node against a GCP KMS cluster failed exactly this way, and the only symptom was mdma's post-boot health check timing out. Observability now starts straight after the metadata is read, before the binaries, the data disk and the KMS, none of which it depends on; vector reads the journal from the start of the boot.
+
 ### Added
 
 - **KMS replicas ship logs and metrics like fleet nodes do.** The KMS image now carries vector, vmagent and node_exporter, off until `kms-init` finds `logs-endpoint` / `metrics-endpoint` (and `observability-token`) in instance metadata. It then ships the journal of `mero-kms-init`, `mero-kms`, `vector` and `vmagent` to VictoriaLogs (`instance_name="mero-kms"`) and host metrics to VictoriaMetrics (`instance_type="mero-kms"`, `instance_profile`), so KMS data never joins a node's. node_exporter and vmagent listen on loopback only on this image. `mero-kms/README.md` "Logging" states what may be logged now that the journal leaves the TEE. A refused `/get-key` now logs `Refused a key release: <reason>`; before, only 5xx refusals left any trace.
