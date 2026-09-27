@@ -57,11 +57,15 @@ pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router 
 /// Health check endpoint. Also reports whether this replica holds its
 /// cluster's root yet, so a deployer can tell when a new replica has joined.
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
-    Json(serde_json::json!({
+    let mut health = serde_json::json!({
         "status": "alive",
         "service": "mero-kms",
         "clusterRootReady": state.backend.has_root(),
-    }))
+    });
+    if let Some(error) = state.backend.last_join_error() {
+        health["lastJoinError"] = serde_json::Value::String(error);
+    }
+    Json(health)
 }
 
 #[cfg(test)]
