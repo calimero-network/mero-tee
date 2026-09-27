@@ -25,8 +25,8 @@ set -euo pipefail
 #   MAX_JOINER_ATTEMPTS (3)
 #
 # A joiner whose quote measures differently from the bootstrap's is replaced by
-# a new VM, as a production replica that cannot join is: now and then a TD on
-# GCE comes up with another RTMR0 while MRTD and RTMR1-3 are equal. The probe
+# a new VM, as the runbooks replace a replica that cannot join: now and then a
+# TD on GCE comes up with another RTMR0 while MRTD and RTMR1-3 are equal. The probe
 # prints both replicas' event-log diff for it, and fails only when no joiner in
 # MAX_JOINER_ATTEMPTS measures like the bootstrap.
 #
