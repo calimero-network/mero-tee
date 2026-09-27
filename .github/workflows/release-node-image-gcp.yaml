@@ -934,6 +934,10 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           tag_name: mero-tee-v${{ needs.preflight.outputs.image_version }}
+          # The commit this run built the image from. Unset, the tag lands on
+          # the default branch's tip when this step runs, which is a later
+          # commit whenever master moved during the build.
+          target_commitish: ${{ github.sha }}
           make_latest: false
           body_path: artifacts/release-notes.md
           fail_on_unmatched_files: true
