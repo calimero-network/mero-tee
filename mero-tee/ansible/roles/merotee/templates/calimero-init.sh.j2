@@ -123,6 +123,141 @@ LOGS_ENDPOINT=$(get_meta "logs-endpoint")
 # holds, and the mismatch would show up only as 401s at the sink.
 OBSERVABILITY_TOKEN=$(get_meta "observability-token" | tr -d '\r\n')
 
+# --- Observability, FIRST ---------------------------------------------------
+#
+# Started here, straight after the metadata is read and before the binaries, the
+# data disk and the KMS -- none of which vector or vmagent depend on. It used to
+# be the last thing this script did, so any `fatal` above it (a KMS that could
+# not be reached, a data disk that would not open) exited before a shipper ran:
+# the node shipped nothing, its sidecar never started, and a locked image has no
+# console. The boots that most need their journal were the ones that sent none.
+# vector's journald source reads from the start of the boot, so every line this
+# script logs, before and after this point, ships.
+
+# --- Observability credential ----------------------------------------------
+#
+# THE CREDENTIAL ARRIVES AT BOOT, FROM INSTANCE METADATA, and deliberately not
+# from the fleet sidecar.
+#
+# It used to arrive only on the sidecar's `should-join` response. That made the
+# observability path depend on the thing it observes: a poll needs a fleet
+# token, a fleet token needs attested registration, and registration needs the
+# sidecar's main loop to be running. A node whose sidecar never reached its
+# first poll could therefore never ship a log line -- which is precisely the
+# node whose logs you need. One such node cost two hours of reconstructing its
+# internal state from HTTP request counts against the manager, and the question
+# it was reconstructed to answer (why its sidecar never started) was still not
+# answerable at the end.
+#
+# Reading it here breaks that circle completely. This script runs before any
+# unit does, so vector comes up authenticated whether or not the sidecar ever
+# runs, ever registers, or can even reach mdma -- and this script's OWN journal,
+# which is where a node that fails before the sidecar says why, ships with it.
+#
+# The trade: one fleet-wide bearer token now sits in instance metadata rather
+# than being a per-node credential handed over an attested channel. That is
+# weaker, and it is a deliberate choice. It still keeps the standing rule that
+# no secret is baked into the image -- instance metadata is not the image, it
+# is per-instance and rotatable without a release or an MRTD re-allowlist --
+# and the vmauth user this token names is scoped write-only, so a node that
+# leaks it lets someone add junk to the log store, not read the fleet's
+# telemetry. Against that: a node with no logs is a node that cannot be
+# debugged at all, on a profile with no shell to debug it from.
+#
+# Not GCP Secret Manager. mdma creates these instances with no
+# `serviceAccounts` field at all, so there is no cloud identity to read a
+# secret with. The `logs-secret-name` / `metrics-secret-name` keys that used to
+# select that path are no longer read, since every node gets its credential
+# from mdma.
+#
+# The same file the fleet sidecar writes on rotation, and written the same way:
+# `printf '%s'`, no trailing newline, because mdma compares SHA-256 of the token
+# against SHA-256 of this file's contents to decide whether to re-send it. A
+# newline here would make every poll disagree and put the credential on the wire
+# once a second forever.
+OBS_TOKEN_FILE="/etc/vector/provided_token"
+
+if [[ -n "${OBSERVABILITY_TOKEN:-}" ]]; then
+  mkdir -p /etc/vector
+  OBS_TOKEN_TMP="${OBS_TOKEN_FILE}.$$"
+  # `umask` in a subshell, not `chmod` afterwards. This unit sets no `UMask=`,
+  # so systemd's default 0022 creates the file 0644 and a post-hoc chmod closes
+  # the window only after the secret is already on disk world-readable. The
+  # chmod stays as a belt-and-braces assertion of the final mode.
+  #
+  # Same reasoning, and the same fix, as the sidecar's two token writes. Both
+  # files are the SAME credential at the same path, so a difference in how they
+  # are created would be a difference nobody would think to look for.
+  if ( umask 077; printf '%s' "$OBSERVABILITY_TOKEN" > "$OBS_TOKEN_TMP" ); then
+    chmod 600 "$OBS_TOKEN_TMP"
+    mv -f "$OBS_TOKEN_TMP" "$OBS_TOKEN_FILE"
+    # The FINGERPRINT, never the token. Enough to tell "this node holds the same
+    # credential mdma does" apart from "this node holds an old one", which is
+    # the only question worth asking from a log.
+    log "Observability token installed from instance metadata ($(sha256sum "$OBS_TOKEN_FILE" 2>/dev/null | awk '{print $1}'))"
+  else
+    rm -f "$OBS_TOKEN_TMP"
+    log "WARN: could not write $OBS_TOKEN_FILE; vector and vmagent will push unauthenticated"
+  fi
+fi
+
+# Which credential a shipper should present, as the (auth, provider, secret)
+# triple both configure_vector.sh and configure_vmagent.sh take. Sets globals
+# rather than printing, so a caller cannot lose the distinction between the
+# three fields in a word split.
+OBS_AUTH="false"
+OBS_PROVIDER="provided"
+OBS_SECRET=""
+resolve_obs_auth() {
+  if [[ -s "$OBS_TOKEN_FILE" ]]; then
+    OBS_AUTH="true"; OBS_PROVIDER="provided"; OBS_SECRET="$OBS_TOKEN_FILE"
+  else
+    # Still started, not refused. An endpoint with no auth in front of it is a
+    # legitimate deployment (an internal ALB, a local collector), and refusing
+    # would break it. Unauthenticated against a BEARER-GATED endpoint is the
+    # common case and is silent from the node's side -- every write is rejected
+    # at the sink and nothing here ever hears about it -- so say so loudly.
+    OBS_AUTH="false"; OBS_PROVIDER="provided"; OBS_SECRET=""
+  fi
+}
+
+# R7: start vmagent only if metrics-endpoint set
+if [[ -n "${METRICS_ENDPOINT:-}" ]]; then
+  resolve_obs_auth
+  [[ "$OBS_AUTH" == "true" ]] || log "WARN: metrics-endpoint is set but this node has no observability credential; vmagent will push unauthenticated and a bearer-gated endpoint will reject every write"
+  if [[ -f /etc/vmagent/configure_vmagent.sh ]] && [[ -f /etc/vmagent/scrape_config.yml ]]; then
+    # What vmagent is pointed at. The default scrape config targets
+    # node_exporter on localhost:9100, and the role that installs node_exporter
+    # writes its unit file without ever enabling it -- so before this, a vmagent
+    # that started scraped a port with nothing behind it and shipped an empty
+    # series set. Started here rather than unconditionally because it is only
+    # ever a scrape target: with no metrics endpoint there is nobody to scrape
+    # it for.
+    if [[ -f /etc/systemd/system/node_exporter.service ]]; then
+      systemctl enable --now node_exporter >>"$LOG" 2>&1 \
+        || log "WARN: node_exporter did not start; vmagent will scrape nothing"
+    else
+      log "WARN: node_exporter.service is not installed; vmagent will scrape nothing"
+    fi
+    /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$METRICS_ENDPOINT" "$OBS_AUTH" "$OBS_PROVIDER" "$OBS_SECRET" >>"$LOG" 2>&1 \
+      || log "WARN: vmagent configure failed; see $LOG"
+  else
+    log "WARN: vmagent config or script missing, skipping"
+  fi
+fi
+
+# R7: start vector only if logs-endpoint set
+if [[ -n "${LOGS_ENDPOINT:-}" ]]; then
+  resolve_obs_auth
+  [[ "$OBS_AUTH" == "true" ]] || log "WARN: logs-endpoint is set but this node has no observability credential; vector will push unauthenticated and a bearer-gated endpoint will reject every write"
+  if [[ -f /etc/vector/configure_vector.sh ]] && [[ -f /etc/vector/vector_partial.yaml ]]; then
+    /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$LOGS_ENDPOINT" "$OBS_AUTH" "$OBS_PROVIDER" "$OBS_SECRET" >>"$LOG" 2>&1 \
+      || log "WARN: vector configure failed; see $LOG"
+  else
+    log "WARN: vector config or partial missing, skipping"
+  fi
+fi
+
 # --- Binaries ---------------------------------------------------------------
 #
 # Use baked binaries if present (image built with calimero-core); else download
@@ -1037,130 +1172,6 @@ log "Queued non-blocking start for merod, mero-auth, and traefik"
 if [[ "$MEROD_MODE" == "read-only" ]] && systemctl list-unit-files fleet-sidecar.service >/dev/null 2>&1; then
   systemctl start --no-block fleet-sidecar
   log "Queued non-blocking start for fleet-sidecar"
-fi
-
-# --- Observability credential ----------------------------------------------
-#
-# THE CREDENTIAL ARRIVES AT BOOT, FROM INSTANCE METADATA, and deliberately not
-# from the fleet sidecar.
-#
-# It used to arrive only on the sidecar's `should-join` response. That made the
-# observability path depend on the thing it observes: a poll needs a fleet
-# token, a fleet token needs attested registration, and registration needs the
-# sidecar's main loop to be running. A node whose sidecar never reached its
-# first poll could therefore never ship a log line -- which is precisely the
-# node whose logs you need. One such node cost two hours of reconstructing its
-# internal state from HTTP request counts against the manager, and the question
-# it was reconstructed to answer (why its sidecar never started) was still not
-# answerable at the end.
-#
-# Reading it here breaks that circle completely. This script runs before any
-# unit does, so vector comes up authenticated whether or not the sidecar ever
-# runs, ever registers, or can even reach mdma -- and this script's OWN journal,
-# which is where a node that fails before the sidecar says why, ships with it.
-#
-# The trade: one fleet-wide bearer token now sits in instance metadata rather
-# than being a per-node credential handed over an attested channel. That is
-# weaker, and it is a deliberate choice. It still keeps the standing rule that
-# no secret is baked into the image -- instance metadata is not the image, it
-# is per-instance and rotatable without a release or an MRTD re-allowlist --
-# and the vmauth user this token names is scoped write-only, so a node that
-# leaks it lets someone add junk to the log store, not read the fleet's
-# telemetry. Against that: a node with no logs is a node that cannot be
-# debugged at all, on a profile with no shell to debug it from.
-#
-# Not GCP Secret Manager. mdma creates these instances with no
-# `serviceAccounts` field at all, so there is no cloud identity to read a
-# secret with. The `logs-secret-name` / `metrics-secret-name` keys that used to
-# select that path are no longer read, since every node gets its credential
-# from mdma.
-#
-# The same file the fleet sidecar writes on rotation, and written the same way:
-# `printf '%s'`, no trailing newline, because mdma compares SHA-256 of the token
-# against SHA-256 of this file's contents to decide whether to re-send it. A
-# newline here would make every poll disagree and put the credential on the wire
-# once a second forever.
-OBS_TOKEN_FILE="/etc/vector/provided_token"
-
-if [[ -n "${OBSERVABILITY_TOKEN:-}" ]]; then
-  mkdir -p /etc/vector
-  OBS_TOKEN_TMP="${OBS_TOKEN_FILE}.$$"
-  # `umask` in a subshell, not `chmod` afterwards. This unit sets no `UMask=`,
-  # so systemd's default 0022 creates the file 0644 and a post-hoc chmod closes
-  # the window only after the secret is already on disk world-readable. The
-  # chmod stays as a belt-and-braces assertion of the final mode.
-  #
-  # Same reasoning, and the same fix, as the sidecar's two token writes. Both
-  # files are the SAME credential at the same path, so a difference in how they
-  # are created would be a difference nobody would think to look for.
-  if ( umask 077; printf '%s' "$OBSERVABILITY_TOKEN" > "$OBS_TOKEN_TMP" ); then
-    chmod 600 "$OBS_TOKEN_TMP"
-    mv -f "$OBS_TOKEN_TMP" "$OBS_TOKEN_FILE"
-    # The FINGERPRINT, never the token. Enough to tell "this node holds the same
-    # credential mdma does" apart from "this node holds an old one", which is
-    # the only question worth asking from a log.
-    log "Observability token installed from instance metadata ($(sha256sum "$OBS_TOKEN_FILE" 2>/dev/null | awk '{print $1}'))"
-  else
-    rm -f "$OBS_TOKEN_TMP"
-    log "WARN: could not write $OBS_TOKEN_FILE; vector and vmagent will push unauthenticated"
-  fi
-fi
-
-# Which credential a shipper should present, as the (auth, provider, secret)
-# triple both configure_vector.sh and configure_vmagent.sh take. Sets globals
-# rather than printing, so a caller cannot lose the distinction between the
-# three fields in a word split.
-OBS_AUTH="false"
-OBS_PROVIDER="provided"
-OBS_SECRET=""
-resolve_obs_auth() {
-  if [[ -s "$OBS_TOKEN_FILE" ]]; then
-    OBS_AUTH="true"; OBS_PROVIDER="provided"; OBS_SECRET="$OBS_TOKEN_FILE"
-  else
-    # Still started, not refused. An endpoint with no auth in front of it is a
-    # legitimate deployment (an internal ALB, a local collector), and refusing
-    # would break it. Unauthenticated against a BEARER-GATED endpoint is the
-    # common case and is silent from the node's side -- every write is rejected
-    # at the sink and nothing here ever hears about it -- so say so loudly.
-    OBS_AUTH="false"; OBS_PROVIDER="provided"; OBS_SECRET=""
-  fi
-}
-
-# R7: start vmagent only if metrics-endpoint set
-if [[ -n "${METRICS_ENDPOINT:-}" ]]; then
-  resolve_obs_auth
-  [[ "$OBS_AUTH" == "true" ]] || log "WARN: metrics-endpoint is set but this node has no observability credential; vmagent will push unauthenticated and a bearer-gated endpoint will reject every write"
-  if [[ -f /etc/vmagent/configure_vmagent.sh ]] && [[ -f /etc/vmagent/scrape_config.yml ]]; then
-    # What vmagent is pointed at. The default scrape config targets
-    # node_exporter on localhost:9100, and the role that installs node_exporter
-    # writes its unit file without ever enabling it -- so before this, a vmagent
-    # that started scraped a port with nothing behind it and shipped an empty
-    # series set. Started here rather than unconditionally because it is only
-    # ever a scrape target: with no metrics endpoint there is nobody to scrape
-    # it for.
-    if [[ -f /etc/systemd/system/node_exporter.service ]]; then
-      systemctl enable --now node_exporter >>"$LOG" 2>&1 \
-        || log "WARN: node_exporter did not start; vmagent will scrape nothing"
-    else
-      log "WARN: node_exporter.service is not installed; vmagent will scrape nothing"
-    fi
-    /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$METRICS_ENDPOINT" "$OBS_AUTH" "$OBS_PROVIDER" "$OBS_SECRET" >>"$LOG" 2>&1 \
-      || log "WARN: vmagent configure failed; see $LOG"
-  else
-    log "WARN: vmagent config or script missing, skipping"
-  fi
-fi
-
-# R7: start vector only if logs-endpoint set
-if [[ -n "${LOGS_ENDPOINT:-}" ]]; then
-  resolve_obs_auth
-  [[ "$OBS_AUTH" == "true" ]] || log "WARN: logs-endpoint is set but this node has no observability credential; vector will push unauthenticated and a bearer-gated endpoint will reject every write"
-  if [[ -f /etc/vector/configure_vector.sh ]] && [[ -f /etc/vector/vector_partial.yaml ]]; then
-    /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$LOGS_ENDPOINT" "$OBS_AUTH" "$OBS_PROVIDER" "$OBS_SECRET" >>"$LOG" 2>&1 \
-      || log "WARN: vector configure failed; see $LOG"
-  else
-    log "WARN: vector config or partial missing, skipping"
-  fi
 fi
 
 log "Calimero init completed"
