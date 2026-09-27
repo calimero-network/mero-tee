@@ -371,6 +371,40 @@ async fn test_health_endpoint_response() {
     assert_eq!(payload["clusterRootReady"], true);
 }
 
+/// A locked replica has no console: `/health` is where an operator reads why
+/// it has not joined, and the error goes once the replica holds the root.
+#[tokio::test]
+async fn health_reports_the_last_join_error_until_the_replica_holds_the_root() {
+    let health = |backend: Arc<TdxBackend>| async move {
+        let response = create_router(Config::default(), backend)
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        read_json_body(response).await
+    };
+
+    let joining = Arc::new(test_tdx_backend(None));
+    joining.record_join_error("http://10.0.0.2:8080: peer TCB status 'revoked'".to_owned());
+    let payload = health(Arc::clone(&joining)).await;
+    assert_eq!(payload["clusterRootReady"], false);
+    assert_eq!(
+        payload["lastJoinError"],
+        "http://10.0.0.2:8080: peer TCB status 'revoked'"
+    );
+
+    let joined = replica(7);
+    joined.record_join_error("an earlier failure".to_owned());
+    let payload = health(joined).await;
+    assert_eq!(payload["clusterRootReady"], true);
+    assert!(payload.get("lastJoinError").is_none(), "{payload}");
+}
+
 #[tokio::test]
 async fn test_attest_endpoint_rejects_invalid_nonce_length() {
     let app = create_router(Config::default(), replica(7));

@@ -452,7 +452,10 @@ pub(crate) async fn join_until_ready(
                         return;
                     }
                 },
-                Err(e) => warn!(%peer, "Cluster join failed: {e}"),
+                Err(e) => {
+                    warn!(%peer, "Cluster join failed: {e}");
+                    tdx.record_join_error(format!("{peer}: {e}"));
+                }
             }
         }
         tokio::time::sleep(retry).await;
