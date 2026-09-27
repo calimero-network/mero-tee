@@ -423,6 +423,36 @@ async fn test_attest_endpoint_rejects_invalid_nonce_length() {
     assert_eq!(payload["error"], "invalid_attestation_request");
 }
 
+/// The event log is opt-in, and a TD without one says so instead of returning a
+/// quote with nothing beside it.
+#[cfg(feature = "mock-attestation")]
+#[tokio::test]
+async fn the_attest_event_log_is_opt_in() {
+    let nonce_b64 = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    let app = create_router(Config::default(), replica(7));
+    let response = app
+        .oneshot(post_json_request(
+            "/attest",
+            &serde_json::json!({ "nonceB64": nonce_b64 }),
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = read_json_body(response).await;
+    assert!(payload.get("eventLogB64").is_none(), "{payload}");
+
+    let app = create_router(Config::default(), replica(7));
+    let response = app
+        .oneshot(post_json_request(
+            "/attest",
+            &serde_json::json!({ "nonceB64": nonce_b64, "eventLog": true }),
+        ))
+        .await
+        .expect("request should succeed");
+    let payload = read_json_body(response).await;
+    assert_eq!(payload["error"], "attestation_verification_failed");
+}
+
 #[tokio::test]
 async fn test_policy_not_ready_error_maps_to_service_unavailable() {
     let response =

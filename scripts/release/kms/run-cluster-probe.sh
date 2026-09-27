@@ -102,16 +102,18 @@ vm_ip() {
 
 # Quote `label`'s replica, have Intel Trust Authority verify it, and extract its
 # measurements. `transport_key` is true to also commit to its transport key,
-# which only a replica holding the root has.
+# which only a replica holding the root has; `event_log` is true to also fetch
+# its CCEL event log.
 measure() {
   local label="$1"
   local ip="$2"
   local transport_key="$3"
+  local event_log="${4:-false}"
   local nonce
   nonce="$(head -c 32 /dev/urandom | base64 -w0)"
   curl -fsS --max-time 30 -X POST "http://${ip}:${KMS_PORT}/attest" \
     -H 'content-type: application/json' \
-    -d "{\"nonceB64\":\"${nonce}\",\"transportKey\":${transport_key}}" > "${OUT_DIR}/${label}-attest.json"
+    -d "{\"nonceB64\":\"${nonce}\",\"transportKey\":${transport_key},\"eventLog\":${event_log}}" > "${OUT_DIR}/${label}-attest.json"
   mkdir -p "${OUT_DIR}/${label}-ita"
   python3 "${repo_root}/scripts/attestation/shared/verify_tdx_quote_ita.py" \
     --attest-response "${OUT_DIR}/${label}-attest.json" \
@@ -127,19 +129,27 @@ measure() {
 
 # A joiner that never gets the root logs why only inside its VM, and a locked
 # replica has no console. Print what both replicas report on /health
-# (lastJoinError on the joiner, lastJoinRefusal on the bootstrap) and whether
-# they measure the same, which the join requires. Best effort: the probe has
-# already failed.
+# (lastJoinError on the joiner, lastJoinRefusal on the bootstrap), whether they
+# measure the same, which the join requires, and if not, which events of their
+# CCEL event logs differ. Best effort: the probe has already failed.
 explain_failed_join() {
   echo "::group::why the join failed"
   echo "bootstrap /health: $(curl -fsS --max-time 5 "http://${first_ip}:${KMS_PORT}/health" || echo unreachable)"
   echo "joiner /health:    $(curl -fsS --max-time 5 "http://${second_ip}:${KMS_PORT}/health" || echo unreachable)"
-  if measure bootstrap "${first_ip}" false && measure joiner "${second_ip}" false; then
+  if measure bootstrap "${first_ip}" false true && measure joiner "${second_ip}" false true; then
     if diff <(jq -S '.policy' "${OUT_DIR}/bootstrap-measurements.json") \
       <(jq -S '.policy' "${OUT_DIR}/joiner-measurements.json"); then
       echo "the two replicas measure the same"
     else
       echo "::error::the two replicas measure differently, so neither gives the other the root"
+      local event_log="${repo_root}/scripts/attestation/shared/tdx_event_log.py"
+      for label in bootstrap joiner; do
+        echo "${label} event log:"
+        python3 "${event_log}" show "${OUT_DIR}/${label}-attest.json" \
+          --attest-response "${OUT_DIR}/${label}-attest.json" || true
+      done
+      echo "events that differ (A = bootstrap, B = joiner):"
+      python3 "${event_log}" diff "${OUT_DIR}/bootstrap-attest.json" "${OUT_DIR}/joiner-attest.json" || true
     fi
   fi
   echo "::endgroup::"

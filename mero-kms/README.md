@@ -19,7 +19,7 @@ replaced by a new VM that joins its peers. See the [design](../docs/design/gcp-t
 | `GET` | `/health` | `{"status":"alive","service":"mero-kms","clusterRootReady":bool}`, plus `lastJoinError` while a joining replica has no root and `lastJoinRefusal` once a replica has refused a join |
 | `POST` | `/challenge` | Issue a challenge for a peer (503 until the replica holds the root) |
 | `POST` | `/get-key` | Verify the challenge, signature and attestation, and release the node's key |
-| `POST` | `/attest` | KMS self-attestation: a quote over the caller's nonce, optionally reporting the transport key |
+| `POST` | `/attest` | KMS self-attestation: a quote over the caller's nonce, optionally reporting the transport key (`transportKey`) and the CCEL event log (`eventLog`) |
 | `POST` | `/cluster/nonce` | Single-use nonce for a replica joining the cluster |
 | `POST` | `/cluster/join` | Give the root to a replica with exactly this replica's measurements |
 
