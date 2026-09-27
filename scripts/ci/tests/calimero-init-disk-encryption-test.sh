@@ -214,11 +214,14 @@ if [[ "$last" == "$T/dev/mapper/"* ]]; then echo ext4 >"$T/state/mapperfs"; else
 STUB
 
 printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/modprobe"
+# No unnamed disks: the fallback for a missing by-id link must find nothing
+# here, never a disk of the machine running this test.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$BIN/lsblk"
 chmod +x "$BIN"/*
 
 # Every stub must shadow the real tool: these are block-device and mount
 # operations, and this test must never reach the machine running it.
-for tool in merod cryptsetup blkid mount umount mountpoint findmnt mkfs.ext4 modprobe; do
+for tool in merod cryptsetup blkid mount umount mountpoint findmnt mkfs.ext4 modprobe lsblk; do
   [[ "$(PATH="$BIN:$PATH" command -v "$tool")" == "$BIN/$tool" ]] || fail "stub $tool does not shadow the real one"
 done
 

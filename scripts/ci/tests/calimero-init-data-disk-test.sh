@@ -91,10 +91,9 @@ grep -qF 'exit 1' <<<"$unmountable_block" \
        a node that stops here can say why."
 
 # --- it waits for mdma's hot-attach where the disk is required ---------------
-# mdma creates the data disk and attaches it AFTER the VM is running (a VM
-# created with it can land on a different host pool than the release measured),
-# so a locked or KMS-backed node must wait for the attach. 30 s lost the race on
-# the first production node against a GCP KMS, which then refused to start.
+# A locked or KMS-backed node, where a missing disk is fatal, waits long before
+# giving up on it. 30 s lost the race on the first production node against a
+# GCP KMS, when mdma still hot-attached the disk after boot.
 wait_secs=$(grep -oE 'DATA_DEVICE_WAIT_SECS=[0-9]+' <<<"$code" | sort -t= -k2 -n | tail -1 | cut -d= -f2 || true)
 [[ -n "$wait_secs" ]] || fail "no DATA_DEVICE_WAIT_SECS: the data-disk wait is not configurable per profile"
 (( wait_secs >= 300 )) \
@@ -102,6 +101,50 @@ wait_secs=$(grep -oE 'DATA_DEVICE_WAIT_SECS=[0-9]+' <<<"$code" | sort -t= -k2 -n
        starts, which can take minutes, so a locked or KMS-backed node needs >= 300s"
 grep -qF 'if [[ "$IMAGE_PROFILE" == "locked-read-only" || -n "$KMS_URL" ]]; then' <<<"$code" \
   || fail "the long data-disk wait must apply to locked-read-only and KMS-backed nodes"
+
+# --- it finds the disk where udev never names it -----------------------------
+# The first 2.3.80 nodes had the disk attached from VM creation and still never
+# got /dev/disk/by-id/google-data, with no shell or kernel console to say why.
+# The fallback takes the ONE unused whole disk, and never guesses between two.
+# Executed here against a stubbed lsblk/findmnt, not just grepped for.
+fn=$(awk '/^  find_unnamed_data_disk\(\) \{/,/^  \}/' <<<"$body")
+[[ -n "$fn" ]] || fail "no find_unnamed_data_disk: a disk udev did not name is never found"
+grep -qF 'log_block_devices' <<<"$code" \
+  || fail "a node that cannot find its data disk must log what block devices it does see"
+
+run_fallback() { # $1: `lsblk -dnrpo NAME,TYPE,RO` rows; $2: disks with children; $3: mounted disks
+  bash -c '
+    lsblk() {
+      if [[ "$1" == "-dnrpo" ]]; then printf "%s\n" "$ROWS"; return; fi
+      local d="${*: -1}"; echo "$d"
+      [[ " $CHILDREN " == *" $d "* ]] && echo "${d}p1"; return 0
+    }
+    findmnt() { [[ " $MOUNTED " == *" ${*: -1} "* ]]; }
+    '"$fn"'
+    find_unnamed_data_disk
+  ' _ 2>/dev/null
+}
+export ROWS CHILDREN MOUNTED
+
+ROWS=$'/dev/nvme0n1 disk 0\n/dev/nvme0n2 disk 0' CHILDREN="/dev/nvme0n1" MOUNTED=""
+[[ "$(run_fallback)" == "/dev/nvme0n2" ]] \
+  || fail "with a partitioned boot disk and one blank disk, the blank disk must be found"
+
+ROWS=$'/dev/nvme0n1 disk 0\n/dev/nvme0n2 disk 0\n/dev/nvme0n3 disk 0' CHILDREN="/dev/nvme0n1" MOUNTED=""
+out=$(run_fallback || true)
+[[ -z "$out" ]] || fail "two unused disks must not be guessed between; got ${out}"
+
+ROWS=$'/dev/nvme0n1 disk 0\n/dev/loop0 loop 1\n/dev/sr0 rom 1' CHILDREN="/dev/nvme0n1" MOUNTED=""
+out=$(run_fallback || true)
+[[ -z "$out" ]] || fail "loop, rom and the boot disk are never a data disk; got ${out}"
+
+ROWS=$'/dev/nvme0n1 disk 0\n/dev/nvme0n2 disk 1' CHILDREN="/dev/nvme0n1" MOUNTED=""
+out=$(run_fallback || true)
+[[ -z "$out" ]] || fail "a read-only disk is never the data disk; got ${out}"
+
+ROWS=$'/dev/nvme0n1 disk 0\n/dev/nvme0n2 disk 0' CHILDREN="/dev/nvme0n1" MOUNTED="/dev/nvme0n2"
+out=$(run_fallback || true)
+[[ -z "$out" ]] || fail "a disk mounted as a whole is in use, not a data disk to open; got ${out}"
 
 # --- it survives a reboot ---------------------------------------------------
 grep -qF '/etc/fstab' <<<"$body" || fail "the mount is not persisted to /etc/fstab"
