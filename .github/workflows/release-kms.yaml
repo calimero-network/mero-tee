@@ -389,7 +389,7 @@ jobs:
 
       - name: Enforce release notes body update
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh release edit "${{ needs.prepare.outputs.kms_release_tag }}" \
@@ -404,7 +404,7 @@ jobs:
 
       - name: Upsert umbrella version release links
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
           KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
           TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
