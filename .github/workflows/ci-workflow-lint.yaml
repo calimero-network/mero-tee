@@ -250,6 +250,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
 
+      # mdma-supplied group ids used to be spliced into `python3 -c` source run
+      # as root in the TD, so a quote in one id ran code next to merod's keys.
+      # Checks the poll refuses malformed ids and no python body expands a
+      # shell value.
+      - name: Check mdma group ids are validated and never executed
+        id: group_id_injection_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-group-id-injection-test.sh
+
       # The set that diff reads starts EMPTY on the first boot after the build
       # that introduced it, and the join loop skips anything already confirmed --
       # so nothing ever records the namespaces joined under the previous build,
@@ -402,6 +411,7 @@ jobs:
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
+            --checks-line "- mdma group ids never executed: ${{ steps.group_id_injection_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
