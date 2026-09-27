@@ -24,6 +24,10 @@ pub struct KmsAttestRequest {
     /// the caller can have `/get-key` seal the key it releases (see `sealed`).
     #[serde(default)]
     pub transport_key: bool,
+    /// Also return this TD's event log, so a verifier can see which measured
+    /// event makes two TDs' registers differ.
+    #[serde(default)]
+    pub event_log: bool,
 }
 
 /// Response body for the KMS attestation endpoint.
@@ -38,6 +42,9 @@ pub struct KmsAttestResponse {
     /// quote's report data then commits to it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport_public_key_b64: Option<String>,
+    /// Base64 CCEL event log, present when the request asked for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_log_b64: Option<String>,
 }
 
 /// Handler for KMS self-attestation.
@@ -59,11 +66,17 @@ pub(crate) async fn attest_kms_handler(
     };
     let report_data = build_attestation_report_data(&nonce, &binding);
     let quote = state.backend.quote(report_data).await?.quote_bytes;
+    let event_log = if request.event_log {
+        Some(BASE64.encode(state.backend.event_log().await?))
+    } else {
+        None
+    };
 
     Ok(Json(KmsAttestResponse {
         quote_b64: BASE64.encode(quote),
         report_data_hex: hex::encode(report_data),
         transport_public_key_b64: transport_public.map(|public| BASE64.encode(public)),
+        event_log_b64: event_log,
     }))
 }
 

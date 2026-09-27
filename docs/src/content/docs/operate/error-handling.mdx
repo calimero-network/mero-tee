@@ -89,6 +89,12 @@ invalid_attestation_request`) and takes a quote from configfs-tsm; a quote
 failure is reported as `attestation_verification_failed`. This endpoint does not
 depend on the root.
 
+With `eventLog: true` it also returns `eventLogB64`, the TD's CCEL event log:
+every measurement the firmware and boot chain extended into RTMR0-3. It is
+public, and it is how to tell which event makes two replicas' registers differ
+(`scripts/attestation/shared/tdx_event_log.py diff`). A TD without a readable
+log answers `attestation_verification_failed`.
+
 ### `GET /health`
 
 Always returns `200` with `{"status":"alive","service":"mero-kms","clusterRootReady":<bool>}`.

@@ -106,6 +106,9 @@ impl Root {
 }
 
 /// A TDX replica: its own measurements, and the root once it has one.
+/// Where the kernel exposes the TD's CCEL event log.
+const EVENT_LOG_PATH: &str = "/sys/firmware/acpi/tables/data/CCEL";
+
 pub(crate) struct TdxBackend {
     root: RwLock<Option<Root>>,
     own: Measurements,
@@ -274,6 +277,24 @@ impl TdxBackend {
     /// other, and no replica has to share state with another to serve it.
     pub(crate) fn challenge_key(&self) -> Result<Zeroizing<[u8; KEY_LEN]>, ServiceError> {
         self.with_root(|root| Ok(root.derive_salted(CHALLENGE_KEY_SALT, "challenge")))
+    }
+
+    /// This TD's event log: every measurement its firmware and boot chain
+    /// extended into RTMR0-3, as the ACPI CCEL table exposes it. It is public:
+    /// it says what was measured, which the quote already commits to.
+    pub(crate) async fn event_log(&self) -> Result<Vec<u8>, ServiceError> {
+        #[cfg(feature = "mock-attestation")]
+        if self.mock {
+            return Err(ServiceError::AttestationVerificationFailed(
+                "a mock TD has no event log".to_owned(),
+            ));
+        }
+        tokio::task::spawn_blocking(|| std::fs::read(EVENT_LOG_PATH))
+            .await
+            .map_err(|e| ServiceError::AttestationVerificationFailed(e.to_string()))?
+            .map_err(|e| {
+                ServiceError::AttestationVerificationFailed(format!("{EVENT_LOG_PATH}: {e}"))
+            })
     }
 
     pub(crate) async fn quote(

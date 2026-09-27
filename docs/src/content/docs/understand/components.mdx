@@ -29,7 +29,7 @@ Registered in `mero-kms/src/handlers/mod.rs`:
 | `GET /health` | — | `{ status: "alive", service: "mero-kms", clusterRootReady }` (always 200) |
 | `POST /challenge` | `{ peerId }` | `{ challengeId, nonceB64, expiresAt }` |
 | `POST /get-key` | `{ challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64, sealToB64 }` | `{ sealedKeyB64, sealNonceB64 }` |
-| `POST /attest` | `{ nonceB64, bindingB64?, transportKey? }` | `{ quoteB64, reportDataHex, transportPublicKeyB64? }` |
+| `POST /attest` | `{ nonceB64, bindingB64?, transportKey?, eventLog? }` | `{ quoteB64, reportDataHex, transportPublicKeyB64?, eventLogB64? }` |
 | `POST /cluster/nonce` | — | a nonce for a joining replica |
 | `POST /cluster/join` | the joiner's quote and one-time public key | the root sealed to that key, plus the giver's own quote |
 
