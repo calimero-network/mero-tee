@@ -22,6 +22,9 @@
     #     (ansible/roles/mero-traefik/templates/traefik-routing.yml.j2), and
     #   * merod serves those routes on its public router
     #     (`server.admin.public_intents`, set in calimero-init).
+    #   * traefik routes the sealed-transport envelope (`/sealed/v2`), also
+    #     without `auth-node`, so a client can seal its intents to the TD;
+    #     merod limits an opened request to its uncredentialed routes.
     #
     # A per-role default would let one drift from the other, and the failure is
     # silent in the bad direction: the traefik exemption alone opens the path

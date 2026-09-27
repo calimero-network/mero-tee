@@ -352,6 +352,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-forward-auth-test.sh
 
+      # The sealed-transport router is exempt from auth-node because forwardAuth
+      # cannot see inside an envelope. It is safe only relay-only, on exact
+      # paths, rate limited, and in front of a merod (>= 0.11.0-rc.52) that
+      # refuses opened requests for any route a proxy guards.
+      - name: Check the sealed-transport router cannot bypass auth-node
+        id: traefik_sealed_route_test
+        shell: bash
+        run: scripts/ci/tests/traefik-sealed-route-test.sh
+
       # The staging probe's log-auth check only runs on real GCP; this pins the
       # two parts that could make it lie without any cloud: the receiver's
       # token classification and the verdict read from it.
@@ -391,6 +400,7 @@ jobs:
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
+            --checks-line "- sealed router cannot bypass auth-node: ${{ steps.traefik_sealed_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
