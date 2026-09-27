@@ -199,7 +199,12 @@ mistaken for a release.
 ### Node-image release assets
 
 Uploaded to `mero-tee-v<version>` (each with `.sig`, `.pem` and `.bundle.json`
-sidecars; releases before the bundles were added carry only `.sig` and `.pem`):
+sidecars; releases before the bundles were added carry only `.sig` and `.pem`).
+The tag points at the commit the run built the image from, the same commit
+`release-provenance.json` records as `commit_sha`. Releases up to 2.3.78 were
+tagged at the default branch's tip when the upload ran instead, which is a later
+commit if master moved during the build (`mero-tee-v2.3.78` is on `8612ba4`, its
+image was built from `08f6344`); trust `commit_sha` for those.
 
 - `published-mrtds.json` — expected MRTD/RTMR0–3 for each profile. A namespace
   whose TEE policy trusts signed releases has its admitters download this file
