@@ -78,7 +78,7 @@ release's jobs instead, which keeps the original push event.
    on GCE comes up with a different RTMR0 while MRTD and RTMR1–3 are equal, and
    the bootstrap rightly refuses it the root. The probe then prints the event
    log events that differ (`tdx_event_log.py diff`), deletes that VM and starts
-   another, as production replaces a replica that cannot join. It fails only if
+   another, as the runbooks replace a replica that cannot join. It fails only if
    no joiner in `MAX_JOINER_ATTEMPTS` (3) measures like the bootstrap. The
    measurements themselves are never relaxed.
 
