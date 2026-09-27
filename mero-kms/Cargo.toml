@@ -1,6 +1,6 @@
 [package]
 name = "mero-kms"
-version = "2.3.74"
+version = "2.3.75"
 authors = ["Calimero Limited <info@calimero.network>"]
 edition = "2021"
 repository = "https://github.com/calimero-network/mero-tee"
