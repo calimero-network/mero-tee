@@ -95,6 +95,39 @@ impl JoinNonces {
     }
 }
 
+/// Why the last join failed, from each side, for `/health`. A locked replica
+/// has no console and no shell, so this is the only place a failed join shows.
+/// Neither message carries a secret: they name a peer URL, a transport or
+/// verification error, or the measurements a peer's quote already published.
+#[derive(Default)]
+pub(crate) struct JoinStatus {
+    /// This replica's own last failed attempt to get the root; cleared once it
+    /// holds one.
+    last_join_error: Mutex<Option<String>>,
+    /// The last join this replica refused to give the root to.
+    last_refusal: Mutex<Option<String>>,
+}
+
+impl JoinStatus {
+    pub(crate) fn last_join_error(&self) -> Option<String> {
+        read(&self.last_join_error)
+    }
+
+    pub(crate) fn last_refusal(&self) -> Option<String> {
+        read(&self.last_refusal)
+    }
+}
+
+fn read(slot: &Mutex<Option<String>>) -> Option<String> {
+    slot.lock().ok().and_then(|value| value.clone())
+}
+
+fn record(slot: &Mutex<Option<String>>, value: Option<String>) {
+    if let Ok(mut slot) = slot.lock() {
+        *slot = value;
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JoinNonceResponse {
@@ -325,7 +358,10 @@ pub(crate) async fn join_handler(
         &join_binding(&joiner_public),
     )
     .await
-    .inspect_err(|e| warn!("Refused a cluster join: {e}"))?;
+    .inspect_err(|e| {
+        warn!("Refused a cluster join: {e}");
+        record(&state.join_status.last_refusal, Some(e.to_string()));
+    })?;
 
     let giver_secret = Zeroizing::new(rand::random::<[u8; 32]>());
     let giver_public = MontgomeryPoint::mul_base_clamped(*giver_secret).0;
@@ -431,6 +467,7 @@ async fn join_from(
 /// succeeds: until then this replica answers `/get-key` with 503.
 pub(crate) async fn join_until_ready(
     tdx: Arc<TdxBackend>,
+    status: Arc<JoinStatus>,
     policy: AttestationPolicy,
     peers: Vec<String>,
     retry: Duration,
@@ -445,14 +482,19 @@ pub(crate) async fn join_until_ready(
                 Ok(root) => match tdx.set_root(root) {
                     Ok(()) => {
                         info!(%peer, "Joined the cluster");
+                        record(&status.last_join_error, None);
                         return;
                     }
                     Err(e) => {
                         warn!(%peer, "Could not install the root: {e}");
+                        record(&status.last_join_error, Some(format!("{peer}: {e}")));
                         return;
                     }
                 },
-                Err(e) => warn!(%peer, "Cluster join failed: {e}"),
+                Err(e) => {
+                    warn!(%peer, "Cluster join failed: {e}");
+                    record(&status.last_join_error, Some(format!("{peer}: {e}")));
+                }
             }
         }
         tokio::time::sleep(retry).await;
@@ -669,7 +711,11 @@ mod tests {
         }
 
         async fn serve(tdx: Arc<TdxBackend>) -> SocketAddr {
-            let app = create_router(config(), tdx);
+            serve_with(tdx, Arc::default()).await
+        }
+
+        async fn serve_with(tdx: Arc<TdxBackend>, status: Arc<JoinStatus>) -> SocketAddr {
+            let app = create_router(config(), tdx, status);
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             drop(tokio::spawn(
@@ -683,11 +729,13 @@ mod tests {
             let giver = Arc::new(test_tdx_backend(Some(Root::generate())));
             let addr = serve(Arc::clone(&giver)).await;
             let joiner = Arc::new(test_tdx_backend(None));
+            let status = Arc::new(JoinStatus::default());
 
             tokio::time::timeout(
                 Duration::from_secs(20),
                 join_until_ready(
                     Arc::clone(&joiner),
+                    Arc::clone(&status),
                     policy(),
                     vec![format!("http://{addr}")],
                     Duration::from_millis(100),
@@ -695,6 +743,8 @@ mod tests {
             )
             .await
             .expect("the joiner got the root");
+
+            assert_eq!(status.last_join_error(), None);
 
             let path = "merod/storage/locked-read-only/12D3KooWPeer";
             let giver_key = giver.derive_key_hex(path).unwrap();
@@ -710,11 +760,46 @@ mod tests {
                 Some(Root::generate()),
                 &"1".repeat(96),
             ));
-            let addr = serve(giver).await;
+            let giver_status = Arc::new(JoinStatus::default());
+            let addr = serve_with(giver, Arc::clone(&giver_status)).await;
             let joiner = test_tdx_backend(None);
             let client = reqwest::Client::new();
             let refused = join_from(&client, &joiner, &policy(), &format!("http://{addr}")).await;
             assert!(refused.is_err());
+            assert!(!joiner.has_root());
+            let refusal = giver_status.last_refusal().expect("the giver kept why");
+            assert!(refusal.contains("measurements differ"), "{refusal}");
+            let health: serde_json::Value = client
+                .get(format!("http://{addr}/health"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(health["lastJoinRefusal"], refusal.as_str());
+        }
+
+        #[tokio::test]
+        async fn a_joiner_that_keeps_failing_reports_why() {
+            let addr = serve(Arc::new(test_tdx_backend(None))).await;
+            let joiner = Arc::new(test_tdx_backend(None));
+            let status = Arc::new(JoinStatus::default());
+            let peer = format!("http://{addr}");
+            // Never returns: the peer holds no root to give.
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                join_until_ready(
+                    Arc::clone(&joiner),
+                    Arc::clone(&status),
+                    policy(),
+                    vec![peer.clone()],
+                    Duration::from_millis(50),
+                ),
+            )
+            .await;
+            let error = status.last_join_error().expect("the joiner kept why");
+            assert!(error.starts_with(&peer), "{error}");
             assert!(!joiner.has_root());
         }
 

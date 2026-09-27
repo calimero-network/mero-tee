@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use std::sync::Arc;
 
 use crate::backend::TdxBackend;
-use crate::cluster::{self, JoinNonces};
+use crate::cluster::{self, JoinNonces, JoinStatus};
 use crate::stateless_challenge::SpentChallenges;
 use crate::Config;
 
@@ -30,16 +30,23 @@ pub struct AppState {
     pub(crate) backend: Arc<TdxBackend>,
     /// Nonces this replica issued to replicas joining its cluster.
     pub(crate) join_nonces: Arc<JoinNonces>,
+    /// Why the last cluster join failed, from either side.
+    pub(crate) join_status: Arc<JoinStatus>,
     /// The stateless challenges this replica has already accepted.
     pub(crate) spent_challenges: Arc<SpentChallenges>,
 }
 
 /// Create the router with all endpoints.
-pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router {
+pub(crate) fn create_router(
+    config: Config,
+    backend: Arc<TdxBackend>,
+    join_status: Arc<JoinStatus>,
+) -> Router {
     let state = AppState {
         config,
         backend,
         join_nonces: Arc::new(JoinNonces::default()),
+        join_status,
         spent_challenges: Arc::new(SpentChallenges::default()),
     };
 
@@ -55,13 +62,22 @@ pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router 
 }
 
 /// Health check endpoint. Also reports whether this replica holds its
-/// cluster's root yet, so a deployer can tell when a new replica has joined.
+/// cluster's root yet, so a deployer can tell when a new replica has joined,
+/// and, once a join has failed, why (`lastJoinError` on the joiner,
+/// `lastJoinRefusal` on the replica that refused it).
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
-    Json(serde_json::json!({
+    let mut health = serde_json::json!({
         "status": "alive",
         "service": "mero-kms",
         "clusterRootReady": state.backend.has_root(),
-    }))
+    });
+    if let Some(error) = state.join_status.last_join_error() {
+        health["lastJoinError"] = error.into();
+    }
+    if let Some(refusal) = state.join_status.last_refusal() {
+        health["lastJoinRefusal"] = refusal.into();
+    }
+    Json(health)
 }
 
 #[cfg(test)]

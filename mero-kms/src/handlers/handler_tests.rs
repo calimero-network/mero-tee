@@ -352,7 +352,7 @@ fn test_verify_peer_signature_rejects_spoofed_peer_id() {
 
 #[tokio::test]
 async fn test_health_endpoint_response() {
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     let response = app
         .oneshot(
             Request::builder()
@@ -369,11 +369,13 @@ async fn test_health_endpoint_response() {
     assert_eq!(payload["status"], "alive");
     assert_eq!(payload["service"], "mero-kms");
     assert_eq!(payload["clusterRootReady"], true);
+    assert!(payload.get("lastJoinError").is_none());
+    assert!(payload.get("lastJoinRefusal").is_none());
 }
 
 #[tokio::test]
 async fn test_attest_endpoint_rejects_invalid_nonce_length() {
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     let bad_nonce_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 31]);
     let body = serde_json::json!({
         "nonceB64": bad_nonce_b64
@@ -400,7 +402,7 @@ async fn test_policy_not_ready_error_maps_to_service_unavailable() {
 
 #[tokio::test]
 async fn test_challenge_is_single_use_even_when_signature_fails() {
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     let keypair = Keypair::generate_ed25519();
     let peer_id = keypair.public().to_peer_id().to_base58();
     let challenge_body = serde_json::json!({
@@ -458,7 +460,7 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
 async fn an_unsealed_key_request_is_refused_by_default() {
     let config = Config::default();
     assert!(config.require_sealed_key_release);
-    let app = create_router(config, replica(7));
+    let app = create_router(config, replica(7), Default::default());
     let request_body = serde_json::json!({
         "challengeId": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d7",
         "quoteB64": base64::engine::general_purpose::STANDARD.encode(b"quote"),
@@ -534,8 +536,8 @@ async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster
         .public()
         .to_peer_id()
         .to_base58();
-    let replica_a = create_router(Config::default(), replica(7));
-    let replica_b = create_router(Config::default(), replica(7));
+    let replica_a = create_router(Config::default(), replica(7), Default::default());
+    let replica_b = create_router(Config::default(), replica(7), Default::default());
 
     let challenge_id = issue_challenge(&replica_a, &peer_id).await;
     assert_eq!(challenge_id.len(), crate::stateless_challenge::ID_HEX_LEN);
@@ -555,7 +557,7 @@ async fn an_expired_challenge_is_refused() {
         .public()
         .to_peer_id()
         .to_base58();
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     let mut challenge_id = issue_challenge(&app, &peer_id).await;
     // Set the expiry (bytes 16..24) to the epoch.
     challenge_id.replace_range(32..48, &"0".repeat(16));
@@ -571,7 +573,7 @@ async fn a_tampered_challenge_is_refused() {
         .public()
         .to_peer_id()
         .to_base58();
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     let mut challenge_id = issue_challenge(&app, &peer_id).await;
     // Push the expiry (bytes 16..24) far past anything this KMS issues.
     challenge_id.replace_range(32..34, "ff");
@@ -587,7 +589,7 @@ async fn a_malformed_challenge_id_is_refused() {
         .public()
         .to_peer_id()
         .to_base58();
-    let app = create_router(Config::default(), replica(7));
+    let app = create_router(Config::default(), replica(7), Default::default());
     assert_eq!(
         get_key_error(&app, &"a".repeat(32), &peer_id).await,
         "invalid_challenge"
@@ -598,7 +600,11 @@ async fn a_malformed_challenge_id_is_refused() {
 /// cluster yet can neither issue nor check one.
 #[tokio::test]
 async fn a_replica_without_a_root_issues_no_challenge() {
-    let app = create_router(Config::default(), Arc::new(test_tdx_backend(None)));
+    let app = create_router(
+        Config::default(),
+        Arc::new(test_tdx_backend(None)),
+        Default::default(),
+    );
     let response = app
         .oneshot(post_json_request(
             "/challenge",

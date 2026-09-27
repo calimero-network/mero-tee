@@ -93,6 +93,18 @@ depend on the root.
 
 Always returns `200` with `{"status":"alive","service":"mero-kms","clusterRootReady":<bool>}`.
 
+Once a cluster join has failed, it also says why, since a `locked-read-only`
+replica has no console to read the log on:
+
+- `lastJoinError` (on the joining replica): its last failed attempt to get the
+  root, prefixed with the peer URL, for example a refused quote, an unreachable
+  peer, or a collateral fetch that failed while verifying the peer's quote.
+  Cleared once the replica holds the root.
+- `lastJoinRefusal` (on the replica that was asked): why it last refused to give
+  the root, such as `peer measurements differ from this replica's: ...`.
+
+Neither carries a secret.
+
 <Aside type="danger">
 `/health` is **not** gated on anything and does not report version or profile.
 `clusterRootReady: true` says the replica holds its cluster's root; it does not
