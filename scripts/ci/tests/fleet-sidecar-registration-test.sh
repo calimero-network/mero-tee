@@ -49,6 +49,8 @@ fi
 #   ${SB}/challenge      the challenge MDMA hands out
 #   ${SB}/register-code  the HTTP status MDMA answers /nodes/register with
 #   ${SB}/attest-fails   while present, merod's attest route errors
+#   ${SB}/registration-attest-missing  while present, merod predates
+#                        `registration-attest` and answers 404 on it
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 url=""
@@ -67,10 +69,28 @@ case "${url}" in
   *nodes/challenge*)
     printf '{"challenge":"%s","expires_at_ms":1}\n' "$(cat "${SB}/challenge")"
     exit 0 ;;
-  *admin-api/tee/attest*)
+  *admin-api/tee/registration-attest*|*admin-api/tee/attest*)
     [[ -f "${SB}/attest-fails" ]] && exit 22
-    printf '%s\n' "${body}" >> "${SB}/attest-log"
-    echo '{"data":{"quoteB64":"cXVvdGUtYnl0ZXM="}}'
+    route="attest"
+    [[ "${url}" == *registration-attest* ]] && route="registration-attest"
+    out=""
+    prev=""
+    for a in "$@"; do
+      [[ "${prev}" == "-o" ]] && out="${a}"
+      prev="${a}"
+    done
+    if [[ "${route}" == "registration-attest" && -f "${SB}/registration-attest-missing" ]]; then
+      code=404
+      reply='{"error":"not found"}'
+    else
+      code=200
+      reply='{"data":{"quoteB64":"cXVvdGUtYnl0ZXM="}}'
+      printf '%s\n' "${body}" >> "${SB}/attest-log"
+    fi
+    printf '%s\n' "${route}" >> "${SB}/attest-route-log"
+    [[ -n "${out}" ]] && printf '%s' "${reply}" > "${out}"
+    for a in "$@"; do [[ "${a}" == "%{http_code}" ]] && { echo "${code}"; exit 0; }; done
+    echo "${reply}"
     exit 0 ;;
   *nodes/register*)
     printf '%s\n' "${body}" >> "${SB}/register-log"
@@ -100,6 +120,7 @@ export PATH
 source "${SB}/functions.sh"
 
 : > "${SB}/attest-log"
+: > "${SB}/attest-route-log"
 : > "${SB}/register-log"
 echo "chal-one" > "${SB}/challenge"
 echo "200" > "${SB}/register-code"
@@ -153,6 +174,33 @@ sent="$(python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['non
 [[ "$(field 0 enrolment_token)" == "enrolment-token-for-this-instance" ]] \
   || fail "the enrolment token must travel with the registration"
 [[ "$(field 0 quote)" == "cXVvdGUtYnl0ZXM=" ]] || fail "the quote must be forwarded verbatim"
+# The quote comes from the registration route, and mdma is told so.
+[[ "$(sed -n 1p "${SB}/attest-route-log")" == "registration-attest" ]] \
+  || fail "the quote must come from registration-attest: $(cat "${SB}/attest-route-log")"
+[[ "$(wc -l < "${SB}/attest-route-log")" -eq 1 ]] \
+  || fail "a merod that has the route must not also be asked for /attest"
+[[ "$(field 0 quote_binding)" == "registration" ]] \
+  || fail "the registration must say its quote carries the registration binding"
+
+# --- a merod without registration-attest falls back to /attest -------------
+# The image may bundle a merod from before the route. Only a 404 falls back,
+# and the registration then carries no quote_binding, which mdma checks as the
+# unbound shape.
+rm -f "${SB}/fleet-registration.json"
+: > "${SB}/attest-log"
+: > "${SB}/attest-route-log"
+: > "${SB}/register-log"
+touch "${SB}/registration-attest-missing"
+echo "chal-fallback" > "${SB}/challenge"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+rm -f "${SB}/registration-attest-missing"
+[[ "$(registrations)" == "1" ]] || fail "a merod without registration-attest must still register"
+[[ "$(tr '\n' ' ' < "${SB}/attest-route-log")" == "registration-attest attest " ]] \
+  || fail "expected registration-attest then /attest, got: $(cat "${SB}/attest-route-log")"
+[[ -z "$(python3 -c "
+import json,sys
+print(json.loads(sys.stdin.readline()).get('quote_binding',''))
+" < "${SB}/register-log")" ]] || fail "a fallback quote must not claim the registration binding"
 
 # --- no CSR falls back to the four-field binding --------------------------
 # What a node image from before this change sends, and what a node with no
