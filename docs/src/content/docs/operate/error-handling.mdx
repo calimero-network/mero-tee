@@ -92,17 +92,12 @@ depend on the root.
 ### `GET /health`
 
 Always returns `200` with `{"status":"alive","service":"mero-kms","clusterRootReady":<bool>}`.
-
-Once a cluster join has failed, it also says why, since a `locked-read-only`
-replica has no console to read the log on:
-
-- `lastJoinError` (on the joining replica): its last failed attempt to get the
-  root, prefixed with the peer URL, for example a refused quote, an unreachable
-  peer, or a collateral fetch that failed while verifying the peer's quote.
-  Cleared once the replica holds the root.
-- `lastJoinRefusal` (on the replica that was asked): why it last refused to give
-  the root, such as `peer measurements differ from this replica's: ...`.
-
+While a joining replica does not hold the root yet, it also carries
+`lastJoinError`: the peer and the error of its last failed join (for example a
+refused TCB status, or peer measurements that differ). A locked image has no
+console, so this is where to read why a replica has not joined. The replica
+that was asked carries the other half, `lastJoinRefusal`: why it last refused to
+give the root (such as `peer measurements differ from this replica's: ...`).
 Neither carries a secret.
 
 <Aside type="danger">

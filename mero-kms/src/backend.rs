@@ -10,7 +10,7 @@
 //! transport key on [`sealed::TRANSPORT_KEY_PATH`], and the key `/challenge`
 //! nonces are MACed with under a salt of its own ([`CHALLENGE_KEY_SALT`]).
 
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 #[cfg(feature = "mock-attestation")]
 use calimero_tee_attestation::generate_mock_attestation;
@@ -109,6 +109,13 @@ impl Root {
 pub(crate) struct TdxBackend {
     root: RwLock<Option<Root>>,
     own: Measurements,
+    /// Why the last attempt to join the cluster failed, until this replica
+    /// holds the root. A locked image has no console, so `/health` is the only
+    /// place an operator can read it.
+    last_join_error: Mutex<Option<String>>,
+    /// Why this replica last refused to give the root to a joiner: the other
+    /// half of a failed join, read on the replica that was asked.
+    last_join_refusal: Mutex<Option<String>>,
     #[cfg(feature = "mock-attestation")]
     mock: bool,
 }
@@ -119,6 +126,8 @@ impl TdxBackend {
     pub(crate) async fn new(#[cfg(feature = "mock-attestation")] mock: bool) -> EyreResult<Self> {
         let mut backend = Self {
             root: RwLock::new(None),
+            last_join_error: Mutex::new(None),
+            last_join_refusal: Mutex::new(None),
             own: Measurements {
                 mrtd: String::new(),
                 rtmr0: String::new(),
@@ -174,6 +183,39 @@ impl TdxBackend {
 
     pub(crate) fn has_root(&self) -> bool {
         self.root.read().map(|root| root.is_some()).unwrap_or(false)
+    }
+
+    /// Record why a join attempt failed.
+    pub(crate) fn record_join_error(&self, error: String) {
+        if let Ok(mut last) = self.last_join_error.lock() {
+            *last = Some(error);
+        }
+    }
+
+    /// Why the last join attempt failed, while this replica has no root.
+    pub(crate) fn last_join_error(&self) -> Option<String> {
+        if self.has_root() {
+            return None;
+        }
+        self.last_join_error
+            .lock()
+            .ok()
+            .and_then(|last| last.clone())
+    }
+
+    /// Record why this replica refused a join.
+    pub(crate) fn record_join_refusal(&self, refusal: String) {
+        if let Ok(mut last) = self.last_join_refusal.lock() {
+            *last = Some(refusal);
+        }
+    }
+
+    /// Why this replica last refused a join.
+    pub(crate) fn last_join_refusal(&self) -> Option<String> {
+        self.last_join_refusal
+            .lock()
+            .ok()
+            .and_then(|last| last.clone())
     }
 
     /// Install the root. A replica holds exactly one root for its lifetime: a
@@ -262,6 +304,8 @@ pub(crate) fn test_tdx_backend(root: Option<Root>) -> TdxBackend {
 pub(crate) fn test_tdx_backend_with_rtmr3(root: Option<Root>, rtmr3: &str) -> TdxBackend {
     TdxBackend {
         root: RwLock::new(root),
+        last_join_error: Mutex::new(None),
+        last_join_refusal: Mutex::new(None),
         own: Measurements {
             mrtd: "0".repeat(96),
             rtmr0: "0".repeat(96),

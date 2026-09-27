@@ -71,7 +71,6 @@ async fn main() -> eyre::Result<()> {
         )
         .await?,
     );
-    let join_status = Arc::new(cluster::JoinStatus::default());
     if config.kms_bootstrap {
         backend
             .set_root(Root::generate())
@@ -80,15 +79,13 @@ async fn main() -> eyre::Result<()> {
     } else {
         drop(tokio::spawn(cluster::join_until_ready(
             Arc::clone(&backend),
-            Arc::clone(&join_status),
             config.attestation_policy.clone(),
             config.cluster_peers.clone(),
             Duration::from_secs(config.join_retry_secs),
         )));
     }
 
-    let base_app =
-        create_router(config.clone(), backend, join_status).layer(TraceLayer::new_for_http());
+    let base_app = create_router(config.clone(), backend).layer(TraceLayer::new_for_http());
     let app = build_cors_layer(&config.cors_allowed_origins, base_app)?;
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
