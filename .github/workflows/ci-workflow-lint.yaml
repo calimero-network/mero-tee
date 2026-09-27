@@ -322,6 +322,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/vector-image-profile-test.sh
 
+      # The shippers' configure scripts paste instance-metadata values into
+      # vector's YAML and vmagent's systemd unit. A newline there is an extra
+      # ExecStart running as root, beside a node's storage key or a KMS
+      # replica's cluster root. Also pins the KMS image's own labels.
+      - name: Check shipper configs refuse injected URLs and tokens
+        id: observability_injection_test
+        shell: bash
+        run: scripts/ci/tests/observability-config-injection-test.sh
+
       # Every ingress router must carry a request-rate limit, first in its
       # chain. Two of these routes verify signatures for callers holding no
       # credential -- deliberately, since a credential would make both features

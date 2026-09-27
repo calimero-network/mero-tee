@@ -87,9 +87,11 @@ image probe. `ACCEPT_MOCK_ATTESTATION` is inert in the production build.
 </Aside>
 
 <Aside type="caution">
-Metadata is untrusted and only two keys are read, both validated by
-`kms-init`: `kms-bootstrap` and `kms-peers`. A wrong peer address only fails a
-join. Anything that decides what the KMS releases keys to — the node allowlist,
+Metadata is untrusted and every key read is validated by `kms-init`:
+`kms-bootstrap`, `kms-peers`, and the optional observability keys
+(`logs-endpoint`, `metrics-endpoint`, `observability-token`). A wrong peer
+address only fails a join; a wrong endpoint only sends the replica's logs,
+which hold no key material, somewhere else. Anything that decides what the KMS releases keys to — the node allowlist,
 the profile, the listen port — is baked into the image and measured, so it cannot
 be changed without producing a different KMS, which the running cluster refuses
 to join.

@@ -137,13 +137,21 @@ for local development against non-TDX hardware.
 ## KMS instance metadata
 
 Read once at boot by `kms-init` (`ansible/roles/mero-kms/templates/kms-init.sh.j2`).
-Metadata is written by whoever runs the VM, so it is untrusted; only these two
-keys are read, and both are validated.
+Metadata is written by whoever runs the VM, so it is untrusted, and every key
+read is validated.
 
 | Key | Meaning |
 | --- | --- |
 | `kms-bootstrap` | `true` on exactly one replica, the first of a new cluster, which generates the root. Anything other than `true`, `false` or empty stops the boot. Clear it (`false`) once the cluster has formed. |
 | `kms-peers` | Comma-separated base URLs (`http[s]://host[:port]`) of replicas to join from. Required unless `kms-bootstrap=true`. |
+| `logs-endpoint` | Optional. VictoriaLogs ingest URL. vector ships the journal of `mero-kms-init`, `mero-kms`, `vector` and `vmagent` there, labelled `instance_name="mero-kms"`. |
+| `metrics-endpoint` | Optional. Remote-write URL. vmagent ships node_exporter host metrics there, labelled `instance_type="mero-kms"` and `instance_profile`. Both listen on loopback only. |
+| `observability-token` | Optional. Bearer token both shippers present. Read at boot only: rotating it means replacing the replicas, one at a time. |
+
+A URL or token that could inject configuration (anything but a plain http(s)
+URL or a plain token) turns shipping off for that replica; it never fails the
+boot. Anyone who can set the endpoint can read what is shipped, so mero-kms logs
+no key material (see "Logging" in `mero-kms/README.md`).
 
 ## Image-profile pin (baked)
 
@@ -189,7 +197,7 @@ The single source of pinned component versions (`mero-tee/versions.json`):
   "nodeExporterVersion": "1.9.1",
   "vmagentVersion": "1.132.0",
   "vectorVersion": "0.50.0",
-  "imageVersion": "2.3.77",
+  "imageVersion": "2.3.78",
   "merodVersion": "0.11.0-rc.52"
 }
 ```

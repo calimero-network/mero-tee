@@ -48,6 +48,9 @@ async fn main() -> eyre::Result<()> {
         )
         .with_target(true)
         .with_level(true)
+        // stdout is the journal, which vector ships to VictoriaLogs: colour
+        // codes there are noise in every line and split the text queries match.
+        .with_ansi(false)
         .init();
 
     let config = Config::from_env()?;

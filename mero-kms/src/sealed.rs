@@ -109,14 +109,15 @@ fn seal_with_nonce(
         .expand(&info, &AES_256_GCM)
         .map_err(|_| ServiceError::KeyDerivationFailed("HKDF expansion failed".to_owned()))?;
     let key = LessSafeKey::new(UnboundKey::from(okm));
-    let mut buffer = key_hex.as_bytes().to_vec();
+    // Zeroizing: if sealing fails, the buffer still holds the plaintext key.
+    let mut buffer = Zeroizing::new(key_hex.as_bytes().to_vec());
     key.seal_in_place_append_tag(
         Nonce::assume_unique_for_key(nonce),
         Aad::from(peer_id.as_bytes()),
-        &mut buffer,
+        &mut *buffer,
     )
     .map_err(|_| ServiceError::KeyDerivationFailed("sealing the key failed".to_owned()))?;
-    Ok(buffer)
+    Ok(std::mem::take(&mut *buffer))
 }
 
 #[cfg(test)]

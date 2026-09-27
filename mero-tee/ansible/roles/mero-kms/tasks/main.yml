@@ -59,6 +59,7 @@
   loop:
     - /etc/mero-kms
     - /usr/local/lib/mero-kms
+    - /etc/systemd/system/node_exporter.service.d
 
 - name: Install the mero-kms binary
   copy:
@@ -90,6 +91,38 @@
     owner: root
     group: root
     mode: "0755"
+
+# Observability, off until kms-init finds an endpoint in instance metadata.
+# The vector, vmagent and node-exporter roles install the binaries; these are
+# the KMS's own config for them.
+- name: Install the KMS vector partial config
+  copy:
+    src: vector-partial-kms.yaml
+    dest: /etc/vector/vector_partial.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the KMS vmagent scrape config
+  copy:
+    src: vmagent-scrape-config.yml
+    dest: /etc/vmagent/scrape_config.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+# Loopback only. The default VPC's auto-mode `default-allow-internal` rule
+# admits every port from inside it, and nothing but the local vmagent needs
+# host metrics. (vmagent's own listener is loopback too: kms-init passes
+# VMAGENT_HTTP_LISTEN.)
+- name: Bind node_exporter to loopback
+  copy:
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/local/bin/node_exporter --web.listen-address=127.0.0.1:9100
+    dest: /etc/systemd/system/node_exporter.service.d/loopback.conf
+    mode: "0644"
 
 - name: Install mero-kms-init.service
   copy:

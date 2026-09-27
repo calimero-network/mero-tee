@@ -33,6 +33,17 @@ SECRET_PROVIDER="$4"
 SECRET_NAME="$5"
 
 VECTOR_CONFIG_PATH="/etc/vector/vector.yaml"
+# vector.yaml carries the bearer token: create everything owner-only.
+umask 077
+
+# The URL is pasted into vector's YAML, so a newline or quote in it would
+# inject configuration. It comes from instance metadata, which is untrusted, so
+# accept only a plain http(s) URL.
+URL_RE='^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$'
+if [[ ! "$VICTORIA_LOGS_URL" =~ $URL_RE ]]; then
+    echo "Error: Victoria Logs URL is not a plain http(s) URL; refusing to configure" >&2
+    exit 1
+fi
 
 echo "=== Configuring Vector ==="
 echo "Partial config: $PARTIAL_CONFIG_PATH"
@@ -56,6 +67,13 @@ if [ "$AUTH_ENABLED" = "true" ]; then
     /etc/vector/fetch_secret.sh "$SECRET_PROVIDER" "$SECRET_NAME" > /etc/vector/bearer_token
     chmod 600 /etc/vector/bearer_token
 
+    # Pasted into vector's YAML: refuse anything a bearer token cannot contain.
+    if [[ ! "$(cat /etc/vector/bearer_token)" =~ ^[A-Za-z0-9._~+/=-]{1,4096}$ ]]; then
+        rm -f /etc/vector/bearer_token
+        echo "Error: the bearer token has characters a token cannot; refusing to configure" >&2
+        exit 1
+    fi
+
     BEARER_TOKEN=$(cat /etc/vector/bearer_token)
     AUTH_HEADER_LINE="        Authorization: \"Bearer ${BEARER_TOKEN}\""
     echo "Bearer token fetched and saved"
@@ -77,7 +95,9 @@ PARTIAL_CONFIG=$(cat "$PARTIAL_CONFIG_PATH")
 #
 # Written by the playbook at build time and covered by the measured root hash,
 # so a node cannot misreport it. `unknown` rather than a guess if it is absent.
-NODE_PROFILE=$(tr -d '\r\n' < /etc/calimero/image-profile 2>/dev/null || true)
+# A KMS image keeps its profile at /etc/mero-kms/image-profile and says so in
+# OBS_PROFILE_FILE; a node image leaves it unset.
+NODE_PROFILE=$(tr -d '\r\n' < "${OBS_PROFILE_FILE:-/etc/calimero/image-profile}" 2>/dev/null || true)
 NODE_PROFILE=${NODE_PROFILE:-unknown}
 PARTIAL_CONFIG=${PARTIAL_CONFIG//__IMAGE_PROFILE__/$NODE_PROFILE}
 echo "Image profile: ${NODE_PROFILE}"

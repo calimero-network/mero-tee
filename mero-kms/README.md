@@ -75,6 +75,38 @@ one-time X25519 key its quote and signature commit to — gets the key back as
 A request without `sealToB64` is refused unless `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE=false`.
 See `src/sealed.rs`; the format is merod's `kms::sealed`, pinned by shared vectors.
 
+## Logging
+
+The journal leaves the replica. With `logs-endpoint` in its instance metadata,
+`kms-init` starts vector, which ships `mero-kms-init`, `mero-kms`, `vector` and
+`vmagent` to VictoriaLogs. `metrics-endpoint` does the same for vmagent and
+node_exporter host metrics, which listen on loopback only. The labels are
+`instance_name="mero-kms"` (logs) and `instance_type="mero-kms"` (metrics),
+so KMS data never mixes with the fleet's. Metadata is operator-written, so
+anything logged must be safe for an operator to read. The rules:
+
+- **What `/get-key` logs:** `Received key release request`, then either
+  `Key derived successfully` or `Refused a key release: <reason>` (the
+  `ServiceError` message), with the peer ID. Joins log `Joined the cluster`,
+  `Cluster join failed: …` (joiner) and `Refused a cluster join: …` (giver).
+  The KMS dashboard counts these lines.
+- **Log peers, measurements and outcomes; never key material.** Nothing derived
+  from the root (node keys, the challenge key, the transport key), the root
+  itself, X25519 secrets, shared secrets or a sealing buffer may reach a log,
+  an error message or a `/health` field. Public values are fine: peer IDs,
+  public keys, challenge IDs, nonces, quote hashes, MRTD/RTMR0–3, TCB status,
+  URLs, status codes.
+- **A secret-holding type gets no `Debug` or `Display`, or one that redacts.**
+  `Root` and `TransportKey` have none, so logging one does not compile.
+  `GetKeyResponse` redacts `key`. Note that `Zeroizing<T>` *prints* its
+  contents: never format one.
+- **Error messages for crypto failures are static strings**, never a value.
+- **`RUST_LOG=info` is baked** into `kms.env` and measured; metadata cannot
+  change it. tower-http's `TraceLayer` records method, URI, status and latency
+  at DEBUG, and never headers or bodies. Every secret travels in a POST body.
+- **Caller input is validated before it is logged**: a peer ID with leading or
+  trailing whitespace is refused, so a newline cannot forge a log line.
+
 ## Development
 
 ```bash

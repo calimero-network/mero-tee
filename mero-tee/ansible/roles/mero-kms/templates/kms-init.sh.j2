@@ -2,13 +2,17 @@
 # mero-kms boot. Extends RTMR3 so a quote names this image, then reads the two
 # instance-metadata keys a KMS replica takes and hands them to mero-kms.
 #
-# Metadata is written by whoever runs the VM, so it is untrusted, and only two
-# keys are read, both validated:
-#   kms-bootstrap  "true" on the one replica that generates a new cluster root.
-#   kms-peers      Comma-separated base URLs of replicas to join from.
-# A wrong value can only fail a join or start a cluster nobody points nodes at;
-# it cannot change what this image releases keys to, which is baked in
-# (/etc/mero-kms/kms.env) and measured.
+# Metadata is written by whoever runs the VM, so it is untrusted, and every key
+# read is validated:
+#   kms-bootstrap        "true" on the one replica that generates a new cluster root.
+#   kms-peers            Comma-separated base URLs of replicas to join from.
+#   logs-endpoint        Optional. VictoriaLogs ingest URL vector ships the journal to.
+#   metrics-endpoint     Optional. Remote-write URL vmagent ships host metrics to.
+#   observability-token  Optional. Bearer token both present to those endpoints.
+# A wrong value can only fail a join, start a cluster nobody points nodes at,
+# or send this replica's logs somewhere else. That last is why mero-kms logs no
+# secret. None of them can change what this image releases keys to, which is
+# baked in (/etc/mero-kms/kms.env) and measured.
 set -euo pipefail
 
 IMAGE_PROFILE="{{ lockdown_profile }}"
@@ -91,3 +95,47 @@ chmod 0755 "$RUN_DIR"
   echo "MERO_KMS_PEERS=${peers}"
 } > "${RUN_DIR}/cluster.env"
 log "Cluster: bootstrap=${bootstrap} peers=${peers:-none}"
+
+# --- Observability ----------------------------------------------------------
+# Off unless an endpoint is set, as on a node. configure_vector.sh and
+# configure_vmagent.sh refuse a URL or token that could inject configuration,
+# so a bad value turns shipping off for this replica and never fails the boot.
+logs_endpoint="$(get_meta logs-endpoint | tr -d '\r\n')"
+metrics_endpoint="$(get_meta metrics-endpoint | tr -d '\r\n')"
+obs_token="$(get_meta observability-token | tr -d '\r\n')"
+
+obs_auth="false"
+obs_secret=""
+if [[ -n "$obs_token" && ( -n "$logs_endpoint" || -n "$metrics_endpoint" ) ]]; then
+  mkdir -p /etc/vector
+  # umask in the subshell, so the file is never world-readable, even briefly.
+  ( umask 077; printf '%s' "$obs_token" > /etc/vector/provided_token )
+  obs_auth="true"
+  obs_secret="/etc/vector/provided_token"
+  # The fingerprint, never the token.
+  log "Observability token installed ($(sha256sum /etc/vector/provided_token | awk '{print $1}'))"
+fi
+
+export OBS_PROFILE_FILE=/etc/mero-kms/image-profile
+export OBS_INSTANCE_TYPE=mero-kms
+export VMAGENT_HTTP_LISTEN=127.0.0.1:8429
+metrics="off"
+if [[ -n "$metrics_endpoint" ]]; then
+  systemctl enable --now node_exporter || log "WARN: node_exporter did not start"
+  if /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$metrics_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    metrics="on"
+  else
+    log "WARN: vmagent configure failed"
+  fi
+fi
+logs="off"
+if [[ -n "$logs_endpoint" ]]; then
+  if /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$logs_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    logs="on"
+  else
+    log "WARN: vector configure failed"
+  fi
+fi
+log "Observability: logs=${logs} metrics=${metrics} auth=${obs_auth}"

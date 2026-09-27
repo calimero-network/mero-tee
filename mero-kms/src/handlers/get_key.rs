@@ -43,7 +43,11 @@ pub struct GetKeyRequest {
 }
 
 /// Response body for the get-key endpoint.
-#[derive(Debug, Serialize)]
+///
+/// `Debug` is written by hand and redacts `key`: this is the one type here that
+/// holds a node's key in the clear, and a stray `{:?}` would otherwise put it in
+/// the journal, which ships off the replica.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetKeyResponse {
     /// Derived storage encryption key, in the clear. Only for a request that did
@@ -58,6 +62,16 @@ pub struct GetKeyResponse {
     pub seal_nonce_b64: Option<String>,
 }
 
+impl std::fmt::Debug for GetKeyResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GetKeyResponse")
+            .field("key", &self.key.as_ref().map(|_| "<redacted>"))
+            .field("sealed_key_b64", &self.sealed_key_b64)
+            .field("seal_nonce_b64", &self.seal_nonce_b64)
+            .finish()
+    }
+}
+
 /// Key release flow: validate inputs → verify and consume the challenge →
 /// verify peer signature → verify TDX attestation → enforce measurement policy
 /// → derive key from the cluster root.
@@ -66,13 +80,31 @@ pub struct GetKeyResponse {
 /// request replayed to the same replica always fails on the second attempt
 /// regardless of where the first attempt errored (see `stateless_challenge` for
 /// why single use is per replica).
+///
+/// Every refusal is logged with its reason, so an operator can tell a node that
+/// is refused (and why) from one that never asked. `ServiceError` messages hold
+/// no key material, so they may leave the replica with the journal.
 pub(crate) async fn get_key_handler(
     State(state): State<AppState>,
     Json(request): Json<GetKeyRequest>,
 ) -> Result<Json<GetKeyResponse>, ServiceError> {
-    validate_peer_id_shape(&request.peer_id)?;
+    if let Err(e) = validate_peer_id_shape(&request.peer_id) {
+        // Not the peer ID itself: it failed validation, so it may hold anything.
+        warn!("Refused a key release: {e}");
+        return Err(e);
+    }
     info!(peer_id = %request.peer_id, "Received key release request");
+    let released = release_key(&state, &request).await;
+    if let Err(e) = &released {
+        warn!(peer_id = %request.peer_id, "Refused a key release: {e}");
+    }
+    released
+}
 
+async fn release_key(
+    state: &AppState,
+    request: &GetKeyRequest,
+) -> Result<Json<GetKeyResponse>, ServiceError> {
     let quote_bytes = BASE64
         .decode(&request.quote_b64)
         .map_err(|e| ServiceError::InvalidBase64(e.to_string()))?;
@@ -90,7 +122,7 @@ pub(crate) async fn get_key_handler(
         ));
     }
 
-    let challenge_nonce = consume_challenge(&state, &request)?;
+    let challenge_nonce = consume_challenge(state, request)?;
 
     verify_peer_signature(
         &request.peer_id,
