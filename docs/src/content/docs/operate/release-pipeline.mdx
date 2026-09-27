@@ -240,6 +240,32 @@ releases published before the policy asset was renamed keep the URLs they were
 published with.
 </Aside>
 
+### Which token writes releases
+
+Every step that creates or edits a GitHub release uses
+`secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN`:
+the asset uploads, `Enforce release notes body update` in Release mero-kms,
+and `Upsert umbrella version release links` in both release workflows. Steps
+that only read releases (smoke tests, the auditor, the catalog) keep the
+Actions `github.token`.
+
+The umbrella steps used `github.token` until 2.3.75. From 2.3.74 on that token
+was refused (`HTTP 403: Resource not accessible by integration` on
+`POST /releases`) while the uploads, on the release token, still worked, so the
+component releases (`mero-tee-v<ver>`, `mero-kms-v<ver>`) were published but
+the run went red and the umbrella `<ver>` index release was never created. The
+component releases are what merod and MDMA read; the umbrella is an index.
+
+A re-run replays the workflow as it was at its commit, so it does not pick up
+this fix. For a release cut before it (2.3.74, 2.3.75), create the umbrella once
+by hand, with a token that can write releases:
+
+```bash
+GH_TOKEN=<release token> GITHUB_REPOSITORY=calimero-network/mero-tee \
+  VERSION=2.3.75 TARGET_COMMIT=<release commit> \
+  bash scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
+```
+
 ## Guards and audits
 
 | Workflow | Trigger | What it enforces |

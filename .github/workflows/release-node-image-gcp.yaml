@@ -963,7 +963,7 @@ jobs:
 
       - name: Upsert umbrella version release links
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.preflight.outputs.image_version }}
           TARGET_COMMIT: ${{ github.sha }}
         run: bash scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
