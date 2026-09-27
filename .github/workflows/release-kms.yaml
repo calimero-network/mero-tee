@@ -1,0 +1,427 @@
+name: Release mero-kms
+
+# Releases mero-kms as GCP Intel TDX images (docs/design/gcp-tdx-kms.md), one
+# per profile: merotee-kms-<profile>-<version> in family merotee-kms-<profile>.
+# Each image is booted as a two-replica cluster (bootstrap + attested join) and
+# both replicas' quotes are verified by Intel Trust Authority; the measured
+# MRTD/RTMR0-3 become the KMS allowlist of the signed
+# kms-attestation-policy[.<profile>].json that merod applies at
+# `tee.kms.attestation`. Publishes mero-kms-v<version> only from a push to
+# master, and only when that tag does not exist yet; a manual dispatch builds
+# nothing (see scripts/release/kms/get-version-info.sh).
+#
+# The workflow `name:` is the Sigstore identity merod and the verifiers expect;
+# do not rename it.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - Cargo.toml
+      - "mero-kms/Cargo.toml"
+      - Cargo.lock
+      - "mero-kms/src/**"
+      - "mero-tee/playbook-kms.yml"
+      - "mero-tee/ansible/roles/mero-kms/**"
+      - ".github/workflows/release-kms.yaml"
+      - "scripts/attestation/**"
+      - "scripts/release/kms/**"
+  workflow_dispatch:
+    inputs:
+      log_verbosity:
+        description: "Logging verbosity: compact (default) or debug"
+        required: false
+        type: choice
+        options:
+          - compact
+          - debug
+        default: compact
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-kms-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CI_LOG_VERBOSITY: ${{ github.event_name == 'workflow_dispatch' && inputs.log_verbosity || 'compact' }}
+  BINARY_TARGET: x86_64-unknown-linux-gnu
+  PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+  PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
+  PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
+  PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
+  PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
+  VM_PROJECT: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+  VM_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+  VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
+  ITA_APPRAISAL_URL: ${{ vars.ITA_APPRAISAL_URL }}
+  KMS_PORT: "8080"
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version_info.outputs.version }}
+      kms_release_tag: ${{ steps.version_info.outputs.kms_release_tag }}
+      publish_release: ${{ steps.version_info.outputs.publish_release }}
+      target_commit: ${{ steps.version_info.outputs.target_commit }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Validate release helper scripts
+        run: |
+          set -euo pipefail
+          for script in scripts/release/kms/*.sh scripts/release/verify-kms-release-assets.sh; do
+            bash -n "${script}"
+          done
+          python3 -m py_compile \
+            scripts/attestation/shared/verify_tdx_quote_ita.py \
+            scripts/attestation/shared/extract_tdx_policy_candidates.py
+
+      - name: Get version info
+        id: version_info
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_COMMIT: ${{ github.sha }}
+          GH_REF: ${{ github.ref }}
+        run: bash scripts/release/kms/get-version-info.sh
+
+  node-policy:
+    name: Wait for the node release
+    needs: prepare
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Wait for mero-tee-v${{ needs.prepare.outputs.version }} and fetch its node policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NODE_TAG: mero-tee-v${{ needs.prepare.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash scripts/release/kms/wait-for-node-release.sh
+
+      - name: Upload node policy
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-policy
+          path: node-policy/published-mrtds.json
+          retention-days: 2
+
+  build-binary:
+    name: Build mero-kms
+    needs: prepare
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-mero-kms
+
+      # One binary for every profile (the profile is baked into the image's
+      # env), and the archive published is the binary the images run.
+      - name: Build binary
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p mero-kms
+          mkdir -p artifacts
+          tar -czf "artifacts/mero-kms_${BINARY_TARGET}.tar.gz" -C target/release mero-kms
+
+      - name: Upload binary archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: mero-kms-binary
+          path: artifacts/*.tar.gz
+          retention-days: 2
+
+  kms-image:
+    name: Build and probe KMS image (${{ matrix.profile }})
+    needs: [prepare, node-policy, build-binary]
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROFILE: ${{ matrix.profile }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download binary archive
+        uses: actions/download-artifact@v8
+        with:
+          name: mero-kms-binary
+          path: artifacts/
+
+      - name: Download node policy
+        uses: actions/download-artifact@v8
+        with:
+          name: node-policy
+          path: node-policy/
+
+      - name: Stage the binary and the node allowlist the KMS serves
+        run: |
+          set -euo pipefail
+          image_version="$(jq -r '.imageVersion' mero-tee/versions.json)"
+          if [[ "${image_version}" != "${VERSION}" ]]; then
+            echo "::error::mero-tee/versions.json imageVersion ${image_version} != mero-kms ${VERSION}; the image would be named for the wrong release"
+            exit 1
+          fi
+          mkdir -p build probe
+          tar -xzf "artifacts/mero-kms_${BINARY_TARGET}.tar.gz" -C build --no-same-owner
+          jq --arg p "${PROFILE}" '.profiles[$p] | {
+              allowed_tcb_statuses, allowed_mrtd,
+              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
+            }' node-policy/published-mrtds.json > build/node-allowlist.json
+          jq -e 'all(.[]; type == "array" and length > 0)' build/node-allowlist.json >/dev/null \
+            || { echo "::error::mero-tee-v${VERSION} has no complete ${PROFILE} node allowlist"; exit 1; }
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            echo "mode=wif" >> "${GITHUB_OUTPUT}"
+          elif [[ -n "${SA_KEY}" ]]; then
+            echo "mode=key" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::error::Set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_PACKER_SERVICE_ACCOUNT_EMAIL, or GCP_SERVICE_ACCOUNT_KEY."
+            exit 1
+          fi
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode == 'key' }}
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup packer
+        uses: hashicorp/setup-packer@v3.4.0
+        with:
+          version: v1.11.2
+
+      # No IMAGE_SUFFIX: this is the release image mdma deploys. -force lets a
+      # re-run replace an image a failed earlier attempt left behind; the
+      # release tag does not exist yet (publish_release), so nothing published
+      # refers to it.
+      - name: Build the KMS image
+        id: build_image
+        working-directory: mero-tee
+        env:
+          IMAGE_ROLE: kms
+          MERO_KMS_BINARY: ../build/mero-kms
+          KMS_NODE_POLICY_FILE: ../build/node-allowlist.json
+          PACKER_FORCE_BUILD: "true"
+          PACKER_LOG: 1
+        run: |
+          set -euo pipefail
+          ./init.sh
+          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-build.log
+
+      - name: Show build log on failure
+        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+        run: tail -200 /tmp/packer-build.log 2>/dev/null || true
+
+      - name: Record the image
+        id: image
+        run: |
+          set -euo pipefail
+          image="merotee-kms-${PROFILE}-${VERSION//./-}"
+          image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          gcloud compute images describe "${image}" --project "${image_project}" --format=json \
+            | jq --arg project "${image_project}" '{
+                name, family, id, project: $project,
+                self_link: .selfLink, creation_timestamp: .creationTimestamp
+              }' > probe/image.json
+          jq -e --arg f "merotee-kms-${PROFILE}" '.family == $f' probe/image.json >/dev/null \
+            || { echo "::error::${image} is not in family merotee-kms-${PROFILE}"; exit 1; }
+          cat probe/image.json
+          {
+            echo "name=${image}"
+            echo "project=${image_project}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Run the two-replica cluster and measure the image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          IMAGE_PROJECT: ${{ steps.image.outputs.project }}
+          PROBE_NAME: kms-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+          OUT_DIR: probe
+        run: bash scripts/release/kms/run-cluster-probe.sh
+
+      - name: Upload probe artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: kms-probe-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
+          path: probe/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # An image that failed its probe never stays in a release family.
+      - name: Delete the image if it was not proven
+        if: ${{ failure() && steps.build_image.outcome == 'success' }}
+        run: |
+          gcloud compute images delete "merotee-kms-${PROFILE}-${VERSION//./-}" \
+            --project "${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}" --quiet || true
+
+  release-metadata:
+    name: Release Metadata
+    needs: [prepare, node-policy, build-binary, kms-image]
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download binary archive
+        uses: actions/download-artifact@v8
+        with:
+          name: mero-kms-binary
+          path: artifacts/
+
+      - name: Download node policy
+        uses: actions/download-artifact@v8
+        with:
+          name: node-policy
+          path: node-policy/
+
+      - name: Download probe artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: kms-probe-${{ needs.prepare.outputs.version }}-*
+          path: probe-artifacts/
+
+      - name: Install Syft for SBOM generation
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Generate release checksums, manifest, compatibility map and attestation policies
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_WORKFLOW_NAME: ${{ github.workflow }}
+          GH_REF_NAME: ${{ github.ref }}
+          PREP_VERSION: ${{ needs.prepare.outputs.version }}
+          PREP_KMS_RELEASE_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
+          PREP_TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          syft dir:artifacts -o "spdx-json=release-assets/kms-binaries-sbom.spdx.json"
+          bash scripts/release/kms/assemble-release-assets.sh
+
+      - name: Install cosign for keyless signing
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release assets with Sigstore keyless
+        env:
+          COSIGN_YES: "true"
+          PREP_VERSION: ${{ needs.prepare.outputs.version }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash scripts/release/kms/sign-release-assets.sh
+
+      - name: Verify generated signatures (sanity check)
+        env:
+          COSIGN_CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          GH_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/release/kms/verify-generated-signatures.sh
+
+      # release-assets/kms-* is every trust asset and its .sig/.pem/.bundle.json;
+      # the archives' sidecars are named after the archives.
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          tag_name: ${{ needs.prepare.outputs.kms_release_tag }}
+          target_commitish: ${{ needs.prepare.outputs.target_commit }}
+          make_latest: false
+          draft: false
+          body_path: release-assets/release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.tar.gz
+            release-assets/mero-kms_*.tar.gz.sig
+            release-assets/mero-kms_*.tar.gz.pem
+            release-assets/mero-kms_*.tar.gz.bundle.json
+            release-assets/kms-*
+
+      - name: Enforce release notes body update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ needs.prepare.outputs.kms_release_tag }}" \
+            --repo "${{ github.repository }}" \
+            --notes-file release-assets/release-notes.md \
+            --draft=false
+
+      - name: Smoke test published mero-kms release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/verify-kms-release-assets.sh "${{ needs.prepare.outputs.kms_release_tag }}"
+
+      - name: Upsert umbrella version release links
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
+          TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
+        run: bash scripts/release/kms/upsert-umbrella-release-links.sh
+
+      - name: Summarize release-metadata outcome
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          source scripts/ci/logging.sh
+          result_line="$(ci_result "release-kms-release-metadata" "${{ job.status }}" "RELEASE_METADATA_PIPELINE" "kms_tag=${{ needs.prepare.outputs.kms_release_tag }}" "run_id=${GITHUB_RUN_ID}")"
+          ci_info "${result_line}"
+          python3 scripts/ci/summary/write_workflow_summary.py \
+            --output "${GITHUB_STEP_SUMMARY}" \
+            --inputs-line "- KMS tag: ${{ needs.prepare.outputs.kms_release_tag }}" \
+            --inputs-line "- Version: ${{ needs.prepare.outputs.version }}" \
+            --result-line "- Job status: ${{ job.status }}" \
+            --result-line "- ${result_line}" \
+            --artifacts-line "- Release assets uploaded to ${{ needs.prepare.outputs.kms_release_tag }}; images merotee-kms-<profile>-<version>" \
+            --next-line "- Deploy the KMS cluster from the released images; nodes verify it with kms-attestation-policy.json."

@@ -6,8 +6,8 @@ Thanks for your interest in contributing.
 
 This repository contains TEE infrastructure for Calimero, including:
 
-- `mero-kms-phala` (Phala KMS service, root Rust package)
-- `node-image-gcp` (locked image build pipeline)
+- `mero-kms` (the KMS service, root Rust package, run as a GCP TDX cluster image)
+- `node-image-gcp` (locked image build pipeline, for the node and KMS images)
 - release verification scripts and workflows
 
 ## Development setup
@@ -23,7 +23,7 @@ Some workflows/scripts also rely on:
 
 - `gh` (GitHub CLI)
 - `cosign` (for signature verification workflows)
-- `phala` CLI (for staging probe workflows)
+- `gcloud`, Packer and Ansible (for image builds and probe workflows)
 
 ### Build
 
@@ -63,9 +63,10 @@ Conventional-style commit prefixes are preferred (for example `fix:`, `feat:`, `
 
 Release and attestation workflows are security-sensitive. If you modify:
 
-- `.github/workflows/release-kms-phala.yaml`
+- `.github/workflows/release-kms.yaml`
 - `.github/workflows/release-node-image-gcp.yaml`
-- `.github/workflows/kms-phala-staging-probe.yaml`
+- `.github/workflows/kms-tdx-image-probe.yaml`
+- `mero-tee/playbook-kms.yml` and `mero-tee/ansible/roles/mero-kms/`
 - `scripts/policy/*.sh`
 
 please include a brief risk assessment in the PR description.

@@ -48,12 +48,32 @@ fi
 if [[ -n "${PACKER_GCP_SUBNETWORK:-}" ]]; then
   packer_args+=(-var "subnetwork=${PACKER_GCP_SUBNETWORK}")
 fi
+# A non-release build (CI on a branch) names its images apart; see
+# `image_suffix` in ubuntu.pkr.hcl.
+if [[ -n "${IMAGE_SUFFIX:-}" ]]; then
+  packer_args+=(-var "image_suffix=${IMAGE_SUFFIX}")
+fi
+# IMAGE_ROLE=kms builds the mero-kms TDX cluster image instead of the node
+# image; it needs the binary to bake and the node allowlist it serves.
+if [[ "${IMAGE_ROLE:-node}" == "kms" ]]; then
+  [[ -f "${MERO_KMS_BINARY:-}" ]] || { echo "::error::IMAGE_ROLE=kms needs MERO_KMS_BINARY (a built mero-kms binary)"; exit 1; }
+  [[ -f "${KMS_NODE_POLICY_FILE:-}" ]] || { echo "::error::IMAGE_ROLE=kms needs KMS_NODE_POLICY_FILE (the node allowlist JSON)"; exit 1; }
+  packer_args+=(
+    -var "image_role=kms"
+    -var "mero_kms_binary=$(realpath "${MERO_KMS_BINARY}")"
+    -var "kms_node_policy_file=$(realpath "${KMS_NODE_POLICY_FILE}")"
+  )
+fi
 # The base image is pinned in ubuntu.pkr.hcl (`source_image_family`), which is the
 # single source of truth -- the value is deliberately not repeated here or in CI,
 # since a second copy can disagree with the one Packer actually builds from. No
 # override is allowed, for release reproducibility.
 
 packer_cmd=(packer build)
+if [[ "${PACKER_FORCE_BUILD:-false}" == "true" && -n "${IMAGE_SUFFIX:-}" ]]; then
+  echo "::error::PACKER_FORCE_BUILD applies to release builds only, never with IMAGE_SUFFIX"
+  exit 1
+fi
 if [[ "${PACKER_FORCE_BUILD:-false}" == "true" ]]; then
   echo "PACKER_FORCE_BUILD=true; enabling packer -force to replace pre-existing image artifacts"
   packer_cmd+=(-force)
@@ -66,6 +86,6 @@ else
   profiles=(locked-read-only debug-read-only debug)
 fi
 for lockdown_profile in "${profiles[@]}"; do
-  echo "Building profile=${lockdown_profile} image_version=${image_version}"
+  echo "Building role=${IMAGE_ROLE:-node} profile=${lockdown_profile} image_version=${image_version}"
   "${packer_cmd[@]}" -var "lockdown_profile=${lockdown_profile}" "${packer_args[@]}" ubuntu.pkr.hcl
 done

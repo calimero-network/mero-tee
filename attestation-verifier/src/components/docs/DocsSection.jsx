@@ -13,17 +13,15 @@ const CONCEPTS = [
   {
     tag: 'KMS',
     title: 'Key Management Service',
-    body: 'A Phala-hosted service inside a TDX TEE that holds private keys for Calimero contexts. Because it runs in a TEE, not even Phala can access the keys.',
+    body: 'mero-kms runs as a cluster of Intel TDX confidential VMs on GCP. Node storage keys derive from a root that exists only in the replicas\' memory, and a key is released only to a node whose quote matches the release policy.',
     links: [
-      { label: 'Phala Network', href: 'https://phala.network' },
-      { label: 'Phala Cloud', href: 'https://cloud.phala.network' },
       { label: 'mero-kms releases', href: 'https://github.com/calimero-network/mero-tee/releases' },
     ],
   },
   {
     tag: 'RTMR',
     title: 'Runtime Measurement Registers',
-    body: 'Hardware registers in the TDX quote recording cumulative SHA-384 measurements of everything loaded at boot and runtime. RTMR3 is extended by an event log replayed here to verify integrity.',
+    body: 'Hardware registers in the TDX quote recording cumulative SHA-384 measurements of what was loaded at boot. RTMR2 carries the kernel command line (including the image role and profile); RTMR3 is extended once at boot with the role, profile and root hash.',
     links: [
       { label: 'Attestation scripts', href: 'https://github.com/calimero-network/mero-tee/blob/master/scripts/attestation/README.md' },
     ],
@@ -31,11 +29,11 @@ const CONCEPTS = [
 ];
 
 const STEPS = [
-  { n: '01', text: 'Fetch the TDX quote from the KMS or node URL via the backend.' },
+  { n: '01', text: 'Take the TDX quote: fetched from a node URL by the backend, or a KMS /attest response pasted by the operator.' },
   { n: '02', text: 'Send the quote to Intel Trust Authority (ITA), which validates it and returns a signed JWT.' },
   { n: '03', text: 'Verify the JWT signature against Intel\'s public JWKS endpoint.' },
-  { n: '04', text: 'Replay the event log step-by-step and confirm the final RTMR3 matches the hardware quote.' },
-  { n: '05', text: 'Compare the compose hash from the event log against Calimero\'s official GitHub release policy.' },
+  { n: '04', text: 'Check the quote\'s report data is bound to the nonce sent, when one is given.' },
+  { n: '05', text: 'Compare MRTD and RTMR0–3 against Calimero\'s signed release policy on GitHub.' },
 ];
 
 export function DocsSection() {

@@ -250,7 +250,7 @@ jq -e '
 version="${release_tag}"
 kms_tag="mero-kms-v${version}"
 node_image_tag="mero-tee-v${version}"
-kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+kms_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${kms_tag}/kms-attestation-policy.json"
 node_policy_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${node_image_tag}/published-mrtds.json"
 
 jq -n \
@@ -455,7 +455,7 @@ run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
   echo ""
   echo "KMS-side profile policies for the matching release are linked via:"
   echo "- \`${kms_policy_url}\` (default/locked policy alias)"
-  echo "- Profile-specific URLs in \`kms-phala-compatibility-map.json\` under \`.compatibility.profiles.*.kms_policy_url\`"
+  echo "- Profile-specific URLs in \`kms-compatibility-map.json\` under \`.compatibility.profiles.*.kms_policy_url\`"
 } > artifacts/release-notes.md
 
 {

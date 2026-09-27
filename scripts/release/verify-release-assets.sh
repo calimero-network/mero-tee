@@ -75,7 +75,7 @@ fi
 
 echo "Verifying release ${logical_tag} in ${repo}..."
 echo "-> Verifying mero-kms release asset set from ${kms_release_tag}"
-scripts/release/verify-kms-phala-release-assets.sh "${kms_release_tag}"
+scripts/release/verify-kms-release-assets.sh "${kms_release_tag}"
 
 echo "-> Verifying mero-tee release asset set from ${node_release_tag}"
 scripts/release/verify-node-image-gcp-release-assets.sh "${node_release_tag}"

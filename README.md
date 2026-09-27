@@ -1,6 +1,6 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for Phala Cloud) and **GCP node-image build** (Packer-based merod node images with TDX attestation).
+TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (Packer-based merod node images and KMS images with TDX attestation).
 
 > **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
 
@@ -8,14 +8,14 @@ TEE infrastructure for Calimero: **mero-kms-phala** (Key Management Service for 
 
 | Component | Description |
 |-----------|-------------|
-| **mero-kms-phala** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes running in Phala CVMs |
-| **mero-tee/** | GCP Packer build for locked merod node images (debug, debug-read-only, locked-read-only profiles) |
+| **mero-kms** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes. Runs as the frozen, dm-verity-sealed GCP TDX image `merotee-kms-<profile>-<version>`: one 5-replica cluster per release, whose root key exists only in the replicas' memory and is shared only by attested join. See the [design](docs/design/gcp-tdx-kms.md) |
+| **mero-tee/** | GCP Packer build for locked merod node images and the KMS image (debug, debug-read-only, locked-read-only profiles) |
 | **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`) and its own MRTD from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`, polls MDMA for group assignments (sending `peer_id` + `mrtd` so MDMA's MRTD-gated `should_join` can match) and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. See [Fleet HA sidecar lifecycle](#fleet-ha-sidecar-lifecycle) for the join + leave-on-disable reconcile loop. |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start
 
-### Build mero-kms-phala
+### Build mero-kms
 
 ```bash
 cargo build --release
@@ -32,11 +32,12 @@ See [mero-tee/README.md](mero-tee/README.md). Requires Packer, Ansible, and GCP 
 ```bash
 # Verify all release trust assets for a tag
 scripts/release/verify-release-assets.sh X.Y.Z
-
-# Generate pinned merod KMS config from signed release policy
-scripts/policy/generate-merod-kms-phala-attestation-config.sh \
-  --profile locked-read-only X.Y.Z https://<kms-url>/
 ```
+
+merod pins the KMS itself: given `MERO_TEE_VERSION` (node metadata
+`tee-release-version`) and `--kms-url`, it fetches and verifies the release's
+signed `kms-attestation-policy[.<profile>].json` and refuses a KMS whose
+MRTD/RTMR0-3 are not in it.
 
 ## Documentation
 
@@ -49,10 +50,10 @@ All detailed documentation lives in the **[Documentation](https://calimero-netwo
 | Mutual attestation & trust boundaries | [Trust Model](https://calimero-network.github.io/mero-tee/understand/trust-model/) |
 | Challenge/get-key protocol | [Key Release Flow](https://calimero-network.github.io/mero-tee/flows/key-release/) |
 | KMS self-attestation & public verifier | [Attestation Flow](https://calimero-network.github.io/mero-tee/flows/attestation-flow/) |
-| MRTD/RTMR, compose hash, operator verify | [Verification](https://calimero-network.github.io/mero-tee/flows/verification/) |
+| MRTD/RTMR, release policy match, operator verify | [Verification](https://calimero-network.github.io/mero-tee/flows/verification/) |
 | Release classes, CI/CD, pipeline flows | [Release Pipeline](https://calimero-network.github.io/mero-tee/operate/release-pipeline/) |
 | Staging probes, policy promotion, ADRs | [Policy Management](https://calimero-network.github.io/mero-tee/flows/policy-management/) |
-| Phala KMS, GCP nodes, blue-green rollout | [Runbooks](https://calimero-network.github.io/mero-tee/operate/runbooks/) |
+| KMS cluster deploy/recovery, GCP nodes, release rollover | [Runbooks](https://calimero-network.github.io/mero-tee/operate/runbooks/) |
 | All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/operate/config-reference/) |
 | ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/operate/error-handling/) |
 | TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/understand/glossary/) |

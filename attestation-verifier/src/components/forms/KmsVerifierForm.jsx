@@ -8,34 +8,46 @@ const PROFILES = [
   { value: 'locked-read-only', label: 'locked-read-only' },
 ];
 
-export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile, status, onVerify }) {
+const ATTEST_EXAMPLE = `NONCE=$(head -c 32 /dev/urandom | base64 -w0); echo "$NONCE"
+curl -s -X POST http://<kms-replica>:8080/attest \\
+  -H 'content-type: application/json' -d "{\\"nonceB64\\":\\"$NONCE\\"}"`;
+
+export function KmsVerifierForm({ initialReleaseTag, initialProfile, status, onVerify }) {
   const profileRef = useRef(initialProfile || '');
 
   const handleSubmit = (e) => {
     e.preventDefault();
     const form = e.target;
-    const url = form.kms_url?.value?.trim();
+    const attestJson = form.attest_json?.value?.trim();
+    const nonceB64 = form.nonce_b64?.value?.trim() || null;
     const releaseTag = form.release_tag?.value?.trim() || null;
     const profile = profileRef.current || null;
-    if (url) onVerify(url, releaseTag || undefined, profile || undefined);
+    if (attestJson) onVerify(attestJson, nonceB64, releaseTag, profile);
   };
 
   return (
     <form onSubmit={handleSubmit} className="verifier-form">
-      <div className="input-row">
-        <label htmlFor="kms_url" className="sr-only">KMS URL</label>
-        <input
-          id="kms_url"
-          type="url"
-          name="kms_url"
-          placeholder="https://your-kms.phala.network"
-          defaultValue={initialUrl}
+      <div className="input-row input-row--col">
+        <label htmlFor="attest_json" className="hint">
+          mero-kms <code>/attest</code> response (JSON), fetched from inside the KMS network:
+        </label>
+        <pre className="hint">{ATTEST_EXAMPLE}</pre>
+        <textarea
+          id="attest_json"
+          name="attest_json"
+          rows={6}
+          placeholder='{"quoteB64":"…","reportDataHex":"…"}'
           disabled={status === 'loading'}
         />
-        <button type="submit" disabled={status === 'loading'}>
-          {status === 'loading' && <span className="spinner" />}
-          {status === 'loading' ? 'Verifying…' : 'Verify KMS'}
-        </button>
+      </div>
+      <div className="input-row input-row--col">
+        <label htmlFor="nonce_b64" className="hint">Nonce you sent (base64, optional; checks the quote is fresh)</label>
+        <input
+          id="nonce_b64"
+          type="text"
+          name="nonce_b64"
+          disabled={status === 'loading'}
+        />
       </div>
       <div className="input-row input-row--col">
         <label htmlFor="release_tag" className="hint">Release tag (optional, e.g. mero-kms-v1.2.3)</label>
@@ -58,6 +70,12 @@ export function KmsVerifierForm({ initialUrl, initialReleaseTag, initialProfile,
           disabled={status === 'loading'}
           onChange={(v) => { profileRef.current = v; }}
         />
+      </div>
+      <div className="input-row">
+        <button type="submit" disabled={status === 'loading'}>
+          {status === 'loading' && <span className="spinner" />}
+          {status === 'loading' ? 'Verifying…' : 'Verify KMS'}
+        </button>
       </div>
     </form>
   );

@@ -63,6 +63,43 @@ variable "lockdown_profile" {
   }
 }
 
+# Empty for a release. A build from any other ref sets a suffix such as
+# "-d<run number>-<attempt>": the image then gets its own name and a separate "-dev"
+# family, so it can never replace a released image or be picked up by mdma's
+# dispatcher, which resolves images by exact name and exact family.
+variable "image_suffix" {
+  type    = string
+  default = ""
+
+  validation {
+    condition     = var.image_suffix == "" || can(regex("^-[a-z0-9-]{1,9}$", var.image_suffix))
+    error_message = "The image_suffix must be empty or a hyphen followed by at most 9 lowercase letters, digits and hyphens, so the image name stays within 63 characters."
+  }
+}
+
+# "node" builds the merod node image (playbook.yml); "kms" builds the mero-kms
+# TDX cluster image (playbook-kms.yml), which needs mero_kms_binary and
+# kms_node_policy_file.
+variable "image_role" {
+  type    = string
+  default = "node"
+
+  validation {
+    condition     = contains(["node", "kms"], var.image_role)
+    error_message = "The image_role value must be node or kms."
+  }
+}
+
+variable "mero_kms_binary" {
+  type    = string
+  default = ""
+}
+
+variable "kms_node_policy_file" {
+  type    = string
+  default = ""
+}
+
 variable "project_id" {
   type    = string
   default = "calimero-p2p-development"
@@ -114,14 +151,20 @@ source "googlecompute" "this" {
   # them here alone would leave the dispatcher unable to find any image. They
   # still read "questing-25-10" after the base moved to 26.04 LTS; renaming needs
   # a paired mdma change and a deploy ordering, so it is not done here.
-  image_name           = "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}"
-  image_family         = "merotee-ubuntu-questing-${var.lockdown_profile}"
-  image_description    = "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
+  image_name           = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}" : "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}"
+  image_family         = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}" : "merotee-ubuntu-questing-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}"
+  image_description    = var.image_role == "kms" ? "MeroTEE mero-kms TDX cluster ${var.lockdown_profile} image based on Ubuntu 26.04 LTS (Resolute Raccoon)." : "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
   machine_type         = var.instance_type
   disk_size            = 20
   disk_type            = "pd-ssd"
   subnetwork           = var.subnetwork != "" ? var.subnetwork : null
   ssh_username         = "ubuntu"
+  # Keep the base root partition at its base size during the build: the free
+  # space after it is where the last build step writes the dm-verity root (see
+  # the verity-root role). cloud-init would otherwise grow it to fill the disk.
+  metadata = {
+    user-data = "#cloud-config\ngrowpart:\n  mode: \"off\"\nresize_rootfs: false\n"
+  }
   tags                 = ["packer", "merotee"]
 }
 
@@ -129,7 +172,7 @@ build {
   sources = ["source.googlecompute.this"]
 
   provisioner "ansible" {
-    playbook_file   = "playbook.yml"
+    playbook_file   = var.image_role == "kms" ? "playbook-kms.yml" : "playbook.yml"
     ansible_env_vars = [
       "ANSIBLE_CONFIG=ansible.cfg"
     ]
@@ -145,6 +188,8 @@ build {
       "-e", "node_exporter_version=${var.node_exporter_version}",
       "-e", "vmagent_version=${var.vmagent_version}",
       "-e", "vector_version=${var.vector_version}",
+      "-e", "mero_kms_binary=${var.mero_kms_binary}",
+      "-e", "kms_node_policy_file=${var.kms_node_policy_file}",
     ]
   }
 }

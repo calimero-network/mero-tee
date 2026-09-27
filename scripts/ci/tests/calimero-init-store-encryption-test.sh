@@ -6,7 +6,7 @@
 # signing identity -- the key it was admitted under as a ReadOnlyTee -- and its
 # account root, so a plaintext store on the host-readable data disk means a
 # disk snapshot is a copy of an admitted fleet member. The store is therefore
-# encrypted with a key mero-kms-phala releases only to an attested TD, and it
+# encrypted with a key mero-kms releases only to an attested TD, and it
 # has to be encrypted from `merod init` onwards: init is what writes those keys,
 # and a store written in plaintext cannot later be opened encrypted.
 #
@@ -90,7 +90,7 @@ STUB
     fresh) ;;
     half) mkdir -p "$dir/home/default" ;;
     encrypted) mkdir -p "$dir/home/default"
-               printf '[identity]\n\n[tee.kms.phala]\nurl = "https://kms/"\n' >"$dir/home/default/config.toml" ;;
+               printf '[identity]\n\n[tee.kms]\nurl = "https://kms/"\n' >"$dir/home/default/config.toml" ;;
     plaintext) mkdir -p "$dir/home/default"
                printf '[identity]\n' >"$dir/home/default/config.toml" ;;
   esac
@@ -108,7 +108,7 @@ IMAGE_PROFILE="$profile"
 MEROD_MODE="read-only"
 SERVER_PORT=2428
 SWARM_PORT=2528
-KMS_PHALA_URL="$kms_url"
+KMS_URL="$kms_url"
 TEE_RELEASE_VERSION="$release"
 SANITIZED_TEE_RELEASE_VERSION="$release"
 $init_fn
@@ -129,7 +129,7 @@ URL="https://kms.example:8080/"
 
 # --- a new node with a KMS and a release: encrypted from the first write ----
 run_case encrypt locked-read-only "$URL" 2.3.70 yes fresh
-[[ "$(rc encrypt)" == 0 ]] || fail "a fresh node with kms-phala-url and a release should initialise (rc=$(rc encrypt))"
+[[ "$(rc encrypt)" == 0 ]] || fail "a fresh node with kms-url and a release should initialise (rc=$(rc encrypt))"
 init_ran encrypt || fail "merod init was not run for a fresh node"
 init_args encrypt | grep -qF -- "--kms-url $URL" \
   || fail "merod init was not given --kms-url: $(init_args encrypt)"
@@ -143,7 +143,7 @@ init_ran no-release && fail "merod init ran with an unverifiable KMS"
 
 # --- no KMS on locked: refuse; on debug profiles: plaintext, loudly ---------
 run_case locked-no-kms locked-read-only "" 2.3.70 yes fresh
-[[ "$(rc locked-no-kms)" != 0 ]] || fail "locked-read-only must refuse to create a node without kms-phala-url"
+[[ "$(rc locked-no-kms)" != 0 ]] || fail "locked-read-only must refuse to create a node without kms-url"
 init_ran locked-no-kms && fail "locked-read-only created a plaintext node"
 
 run_case debug-no-kms debug-read-only "" 2.3.70 yes fresh

@@ -1,13 +1,13 @@
 ---
 title: Error Handling
-description: The real ServiceError catalog for mero-kms-phala — HTTP status, JSON error tag, cause, and operator action — plus per-endpoint failure modes and the attestation-verifier responses.
+description: The real ServiceError catalog for mero-kms — HTTP status, JSON error tag, cause, and operator action — plus per-endpoint failure modes and the attestation-verifier responses.
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Every `mero-kms-phala` error path returns a consistent JSON body and maps to a
+Every `mero-kms` error path returns a consistent JSON body and maps to a
 stable HTTP status and machine-readable tag. This page catalogs the actual
 `ServiceError` variants (`mero-kms/src/handlers/errors.rs`), what triggers each,
 and what an operator should do.
@@ -35,15 +35,15 @@ human-readable string and may be absent.
 | `400` | `invalid_peer_id` | `peerId` empty, over 128 chars, or non-base58btc. | Send a valid libp2p base58 peer ID. |
 | `400` | `invalid_attestation_request` | `/attest` `nonceB64`/`bindingB64` malformed or not exactly 32 bytes. | Send a base64-encoded 32-byte nonce/binding. |
 | `400` | `invalid_peer_public_key` | `peerPublicKeyB64` not valid base64 or not a decodable libp2p protobuf key. | Send the correct protobuf-encoded public key. |
-| `401` | `invalid_challenge` | Challenge ID malformed, not found, already consumed, expired, or its peer ID does not match the caller. | Request a fresh challenge and retry within the TTL. |
+| `401` | `invalid_challenge` | Challenge ID malformed, not found, already redeemed, expired, MAC'd under another cluster's root, or its peer ID does not match the caller. | Request a fresh challenge and retry within the TTL. |
 | `401` | `invalid_signature` | Signature failed verification against the peer's public key. | Re-sign the canonical `challengeId + nonce + quoteHash + peerId` payload with the node key. |
 | `401` | `attestation_verification_failed` | TDX quote cryptographic verification failed (bad quote / nonce not bound). | Regenerate the quote with the issued nonce in `report_data`. |
 | `401` | `peer_identity_mismatch` | The supplied public key does not derive to the claimed `peerId`. | Send the public key that matches the peer ID. |
 | `401` | `peer_id_mismatch` | The peer-ID hash bound into the attested quote does not match the claimed `peerId`. | Bind the correct peer-ID hash into the quote's `report_data[32..64]`. |
 | `403` | `tcb_status_rejected` | The quote's TCB status is not in the policy allowlist. | Update the platform TCB, or allow the status in the policy if acceptable. |
 | `403` | `measurement_policy_rejected` | An MRTD/RTMR0–3 register is not in the policy allowlist (message names the register). | Ensure the node runs an image whose measurements the policy covers; align profiles / re-probe. |
-| `503` | `policy_not_ready` | The KMS has no usable attestation policy (version unset or fetch failed). | Set `MERO_KMS_VERSION`, confirm the policy asset is reachable, restart. |
-| `500` | `key_derivation_failed` | dstack `get_key` failed (socket unreachable / TDX error). | Verify `/var/run/dstack.sock` is mounted and dstack is healthy. |
+| `503` | `policy_not_ready` | This replica does not hold its cluster's root yet (it has not generated or joined it). | Check `/health` `clusterRootReady` and that `kms-peers` names live replicas of the same release. A replica that cannot join is replaced by a new VM, never restarted. |
+| `500` | `key_derivation_failed` | An internal failure deriving or sealing a key from the root (a poisoned lock, a failed HKDF expansion or seal). | Should not happen; capture the logs and replace the replica. |
 | `401` | `mock_attestation_rejected` | A mock quote was submitted. **Only exists in `mock-attestation` dev builds**; unreachable in production (a mock quote is just an unparseable quote and fails ordinary verification). | N/A in production. |
 
 <Aside type="caution">
@@ -54,53 +54,56 @@ public-key↔peer-ID check, the latter is the attested-quote↔peer-ID binding.
 </Aside>
 
 <Aside type="note">
-Rate limiting: `429 rate_limited` is returned when the challenge store is at
-capacity. This is a **global** `MAX_PENDING_CHALLENGES` cap across the whole
-store, not a per-peer quota, and its `details` is a fixed message
-(`"Too many pending challenges. Retry shortly."`), not `null`.
+Rate limiting: `429 rate_limited` is returned by `/get-key` when a replica's
+replay set already holds `MAX_CONSUMED_CHALLENGES` used, unexpired challenges.
+The cap is per replica, not per peer, and its `details` is a fixed message
+(`"too many recently used challenges; retry shortly"`), not `null`.
+`POST /cluster/nonce` also answers `429` when too many join nonces are
+outstanding.
 </Aside>
 
 ## Failure modes by endpoint
 
 ### `POST /challenge`
 
-Issues a nonce challenge. Validates the peer ID shape (`400 invalid_peer_id`) and
-enforces the store capacity (`429 rate_limited`). It does **not** check policy
-readiness, so it never returns `503 policy_not_ready`. A clock error surfaces as
+Issues a nonce challenge. Validates the peer ID shape (`400 invalid_peer_id`).
+Challenges are MAC'd with a key derived from the cluster root, so a replica that
+does not hold the root yet answers `503 policy_not_ready` here too. It keeps no
+state, so it has no capacity limit. A clock error surfaces as
 `invalid_challenge`.
 
 ### `POST /get-key`
 
-The gated path. In order: peer-ID and challenge-ID shape (`400`/`401`), **policy
-readiness** (`503 policy_not_ready` when the policy is not loaded), challenge
-consumption (`401 invalid_challenge`), signature verification (`401`), TDX
+The gated path. In order: peer-ID and challenge-ID shape (`400`/`401`), **root
+readiness** (`503 policy_not_ready` while the replica has no root), challenge
+redemption (`401 invalid_challenge`), signature verification (`401`), TDX
 attestation verification (`401`), measurement/TCB policy enforcement (`403`), and
-finally key derivation via dstack (`500 key_derivation_failed`). The challenge is
-consumed before the signature/attestation checks, so a replay always fails the
-second time.
+finally key derivation from the cluster root (`500 key_derivation_failed` only on
+an internal failure). The challenge is redeemed before the signature/attestation
+checks, so a replay always fails the second time, whichever replica it reaches.
 
 ### `POST /attest`
 
 KMS self-attestation. Validates the 32-byte nonce/binding (`400
-invalid_attestation_request`) and calls dstack `get_quote`; a dstack failure is
-reported as `attestation_verification_failed`. This endpoint does not depend on
-policy readiness.
+invalid_attestation_request`) and takes a quote from configfs-tsm; a quote
+failure is reported as `attestation_verification_failed`. This endpoint does not
+depend on the root.
 
 ### `GET /health`
 
-Always returns `200` with `{"status":"alive","service":"mero-kms-phala"}`.
+Always returns `200` with `{"status":"alive","service":"mero-kms","clusterRootReady":<bool>}`.
 
 <Aside type="danger">
-`/health` is **not** gated on policy readiness and does not report version or
-profile. Do not use it as a "can this KMS issue keys?" readiness signal — it only
-tells you the process is alive. Use a staging probe or a real `challenge →
-get-key` for readiness.
+`/health` is **not** gated on anything and does not report version or profile.
+`clusterRootReady: true` says the replica holds its cluster's root; it does not
+say the node allowlist covers any particular node. For end-to-end readiness, boot
+a node against the cluster.
 </Aside>
 
 ## Attestation-verifier responses
 
 The separate `attestation-verifier` service (`attestation-verifier/api/verify.js`)
-brokers verification of a KMS or node quote through Intel Trust Authority. Its
+brokers verification of a pasted KMS quote or a fetched node quote through Intel Trust Authority. Its
 responses are independent of the KMS `ServiceError` set:
 
 | HTTP | Meaning |
@@ -109,11 +112,11 @@ responses are independent of the KMS `ServiceError` set:
 | `204` | CORS preflight. |
 | `400` | Invalid request body, validation error, or missing `quote_b64`. |
 | `405` | Method not allowed (non-POST). |
-| `502` | Upstream KMS/node `/attest` failed, or ITA verification failed. |
+| `502` | The node's `/admin-api/tee/attest` failed, or ITA verification failed. |
 | `503` | `ITA_API_KEY` not configured. |
 
 ## Next steps
 
 - [Runbooks](/operate/runbooks/) — the procedures that resolve these errors, including the incident table.
-- [Configuration reference](/operate/config-reference/) — the settings behind `policy_not_ready` and measurement policy.
+- [Configuration reference](/operate/config-reference/) — the cluster settings behind `policy_not_ready` and the baked measurement policy.
 - [Key release](/flows/key-release/) — the `challenge → get-key` flow these errors guard.

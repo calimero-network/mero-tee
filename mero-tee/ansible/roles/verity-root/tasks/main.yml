@@ -1,0 +1,17 @@
+---
+# Installs what the build's last step needs to seal the root behind dm-verity
+# (mero-tee#334). Nothing here changes the running system: the playbook runs
+# the script itself, last, after every other role (see post_tasks).
+- name: Install EROFS tools for the sealed root
+  apt:
+    name: erofs-utils
+    state: present
+    update_cache: false
+
+- name: Install the root-sealing script
+  copy:
+    src: seal-root.sh
+    dest: /usr/local/sbin/calimero-seal-root
+    owner: root
+    group: root
+    mode: "0755"

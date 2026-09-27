@@ -1,10 +1,13 @@
 ---
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
 # Attestation: calimero.role + calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
+# The root itself is sealed behind dm-verity as the last step, and its root hash
+# is on the cmdline too (see the verity-root role).
 # calimero-init extends RTMR[3] with role+profile+root_hash at boot (kernel 6.16+).
-# Root hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod binaries at BUILD time.
-# It is measured as a cmdline string only; nothing re-hashes the files at boot, so it does not stop an
-# offline edit of the boot disk (see mero-tee#334: dm-verity for the root filesystem).
+# calimero.root_hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod
+# binaries at BUILD time and names the build in RTMR3. It is not what stops an offline edit of the
+# boot disk: the dm-verity root hash is, because every block the booted system reads is checked
+# against it (mero-tee#334).
 - hosts: all
   become: true
   vars:
@@ -86,6 +89,9 @@
 
     - role: ansible/roles/merotee-conformance
       when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
+
+    # Installs the root-sealing script; the seal itself is the last post_task.
+    - role: ansible/roles/verity-root
   post_tasks:
     # Ensure each profile has distinct content so MRTD differs (merotee role has created /etc/calimero)
     - name: Record image profile for attestation
@@ -111,7 +117,7 @@
     - name: Add calimero.root_hash to kernel cmdline (measured as a string; see mero-tee#334)
       copy:
         content: |
-          # Root content hash for attestation (RTMR[2]); identifies the build, not checked against the disk at boot
+          # Root content hash for attestation (RTMR[2]); identifies the build. The dm-verity root hash is what the disk is checked against.
           GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
         dest: /etc/default/grub.d/60-calimero-root-hash.cfg
         mode: "0644"
@@ -120,9 +126,19 @@
       command: update-grub
       changed_when: true
 
-    # Remove ubuntu user last (R4); must run after all other tasks since Packer SSHs as ubuntu
-    - name: Remove ubuntu user after conformance checks (R4)
-      include_role:
-        name: ansible/roles/merod-lockdown
-        tasks_from: remove_ubuntu
-      when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
+    # LAST task, on every profile: seal the root behind dm-verity (mero-tee#334).
+    # Anything changed after this is not in the booted image.
+    #
+    # On locked-read-only it also removes the ubuntu user (R4) first. Both run in
+    # one root process: Packer SSHs as ubuntu, so nothing can start after the user
+    # is gone, and the user has to be gone before the root is copied.
+    - name: Seal the root filesystem behind dm-verity
+      command: >-
+        /usr/local/sbin/calimero-seal-root
+        {{ '--remove-user ubuntu' if (lockdown_profile | default('locked-read-only')) == 'locked-read-only' else '' }}
+      changed_when: true
+      register: seal_result
+
+    - name: Show what the seal wrote (partitions, root hash)
+      debug:
+        var: seal_result.stdout_lines

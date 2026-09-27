@@ -2,11 +2,8 @@ name: KMS TDX image probe
 run-name: KMS TDX image probe (${{ inputs.profile }}, ${{ inputs.node_release_tag }})
 
 # Builds the mero-kms TDX cluster image from this commit and runs a two-replica
-# cluster on real TDX VMs (docs/design/gcp-tdx-kms.md): the first replica
-# generates the root, the second joins it through the attested join protocol,
-# and both must then report the same transport key -- which is derived from the
-# root, so equal keys mean one root. Each replica's quote is verified by Intel
-# Trust Authority and its measurements are recorded.
+# cluster on real TDX VMs (scripts/release/kms/run-cluster-probe.sh, the same
+# probe Release mero-kms runs on its release images; docs/design/gcp-tdx-kms.md).
 #
 # Publishes nothing, and deletes its image, VMs and firewall rule at the end.
 
@@ -65,9 +62,9 @@ jobs:
 
       - name: Build mero-kms
         run: |
-          cargo build -p mero-kms-phala --release --locked
+          cargo build -p mero-kms --release --locked
           mkdir -p probe
-          cp target/release/mero-kms-phala probe/mero-kms
+          cp target/release/mero-kms probe/mero-kms
           sha256sum probe/mero-kms | tee probe/mero-kms.sha256
 
       - name: Fetch the node allowlist the KMS serves
@@ -122,143 +119,20 @@ jobs:
         run: |
           set -euo pipefail
           version="$(jq -r '.imageVersion' mero-tee/versions.json)"
-          runner_ip="$(curl -fsS https://api.ipify.org)"
           {
             echo "image=merotee-kms-${PROFILE}-${version//./-}${IMAGE_SUFFIX}"
             echo "image_project=${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
-            echo "tag=kms-probe${IMAGE_SUFFIX}"
-            echo "firewall=kms-probe${IMAGE_SUFFIX}"
-            echo "first=kms-probe${IMAGE_SUFFIX}-a"
-            echo "second=kms-probe${IMAGE_SUFFIX}-b"
-            echo "runner_ip=${runner_ip}"
           } >> "${GITHUB_OUTPUT}"
 
-      # The runner reaches /health and /attest; the replicas reach each other
-      # over the VPC for the join.
-      - name: Open the KMS port to the runner and between replicas
-        run: |
-          gcloud compute firewall-rules create "${{ steps.names.outputs.firewall }}" \
-            --project "${VM_PROJECT}" --network default --direction INGRESS \
-            --action ALLOW --rules "tcp:${KMS_PORT}" \
-            --source-ranges "${{ steps.names.outputs.runner_ip }}/32,10.0.0.0/8" \
-            --target-tags "${{ steps.names.outputs.tag }}" \
-            --description "KMS TDX image probe ${GITHUB_RUN_ID}"
-
-      - name: Start the bootstrap replica
-        run: |
-          gcloud compute instances create "${{ steps.names.outputs.first }}" \
-            --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
-            --machine-type "${VM_MACHINE_TYPE}" \
-            --confidential-compute-type TDX --maintenance-policy TERMINATE \
-            --min-cpu-platform "Intel Sapphire Rapids" \
-            --no-service-account --no-scopes \
-            --image "${{ steps.names.outputs.image }}" \
-            --image-project "${{ steps.names.outputs.image_project }}" \
-            --metadata "kms-bootstrap=true" \
-            --tags "${{ steps.names.outputs.tag }}"
-
-      - name: Wait for the bootstrap replica to hold the root
-        id: first
-        run: |
-          set -euo pipefail
-          ip="$(gcloud compute instances describe "${{ steps.names.outputs.first }}" \
-            --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
-            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
-          internal="$(gcloud compute instances describe "${{ steps.names.outputs.first }}" \
-            --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
-            --format='value(networkInterfaces[0].networkIP)')"
-          echo "ip=${ip}" >> "${GITHUB_OUTPUT}"
-          echo "internal=${internal}" >> "${GITHUB_OUTPUT}"
-          deadline=$(( $(date +%s) + ${{ inputs.wait_timeout_minutes }} * 60 ))
-          until curl -fsS --max-time 5 "http://${ip}:${KMS_PORT}/health" | tee /tmp/health.json | jq -e '.clusterRootReady == true' >/dev/null; do
-            (( $(date +%s) < deadline )) || { echo "::error::bootstrap replica never held a root"; cat /tmp/health.json 2>/dev/null; exit 1; }
-            sleep 10
-          done
-          echo "Bootstrap replica holds the root: $(cat /tmp/health.json)"
-
-      - name: Start the joining replica
-        run: |
-          gcloud compute instances create "${{ steps.names.outputs.second }}" \
-            --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
-            --machine-type "${VM_MACHINE_TYPE}" \
-            --confidential-compute-type TDX --maintenance-policy TERMINATE \
-            --min-cpu-platform "Intel Sapphire Rapids" \
-            --no-service-account --no-scopes \
-            --image "${{ steps.names.outputs.image }}" \
-            --image-project "${{ steps.names.outputs.image_project }}" \
-            --metadata "kms-peers=http://${{ steps.first.outputs.internal }}:${KMS_PORT}" \
-            --tags "${{ steps.names.outputs.tag }}"
-
-      - name: Wait for the joining replica to hold the root
-        id: second
-        run: |
-          set -euo pipefail
-          ip="$(gcloud compute instances describe "${{ steps.names.outputs.second }}" \
-            --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
-            --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
-          echo "ip=${ip}" >> "${GITHUB_OUTPUT}"
-          deadline=$(( $(date +%s) + ${{ inputs.wait_timeout_minutes }} * 60 ))
-          until curl -fsS --max-time 5 "http://${ip}:${KMS_PORT}/health" | tee /tmp/health.json | jq -e '.clusterRootReady == true' >/dev/null; do
-            (( $(date +%s) < deadline )) || { echo "::error::joining replica never got the root"; cat /tmp/health.json 2>/dev/null; exit 1; }
-            sleep 10
-          done
-          echo "Joining replica holds the root: $(cat /tmp/health.json)"
-
-      # The transport key derives from the root, so two replicas report the
-      # same one only if they hold the same root.
-      - name: Check both replicas hold one root, and verify their quotes
+      - name: Run the two-replica cluster and verify both quotes
         env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          IMAGE_PROJECT: ${{ steps.names.outputs.image_project }}
+          PROBE_NAME: kms-probe${{ env.IMAGE_SUFFIX }}
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
-        run: |
-          set -euo pipefail
-          for name in first second; do
-            case "${name}" in
-              first) ip="${{ steps.first.outputs.ip }}" ;;
-              second) ip="${{ steps.second.outputs.ip }}" ;;
-            esac
-            nonce="$(head -c 32 /dev/urandom | base64 -w0)"
-            curl -fsS --max-time 30 -X POST "http://${ip}:${KMS_PORT}/attest" \
-              -H 'content-type: application/json' \
-              -d "{\"nonceB64\":\"${nonce}\",\"transportKey\":true}" > "probe/${name}-attest.json"
-            mkdir -p "probe/${name}-ita"
-            python3 scripts/attestation/shared/verify_tdx_quote_ita.py \
-              --attest-response "probe/${name}-attest.json" \
-              --output-dir "probe/${name}-ita" \
-              --ita-url "${ITA_APPRAISAL_URL:-https://api.trustauthority.intel.com/appraisal/v2/attest}" \
-              --ita-api-key "${ITA_API_KEY}"
-            python3 scripts/attestation/shared/extract_tdx_policy_candidates.py \
-              --claims "probe/${name}-ita/external-attestation-token-claims.json" \
-              --attest-response "probe/${name}-attest.json" \
-              --output-json "probe/${name}-measurements.json" \
-              --allow-missing-tcb
-          done
-          first_key="$(jq -r '.transportPublicKeyB64' probe/first-attest.json)"
-          second_key="$(jq -r '.transportPublicKeyB64' probe/second-attest.json)"
-          echo "bootstrap replica transport key: ${first_key}"
-          echo "joining replica transport key:   ${second_key}"
-          [[ -n "${first_key}" && "${first_key}" != "null" ]] || { echo "::error::no transport key reported"; exit 1; }
-          [[ "${first_key}" == "${second_key}" ]] || { echo "::error::the replicas hold different roots"; exit 1; }
-          if ! diff <(jq -S '.policy' probe/first-measurements.json) <(jq -S '.policy' probe/second-measurements.json); then
-            echo "::error::the two replicas measure differently"
-            exit 1
-          fi
-          {
-            echo "## KMS TDX cluster (${PROFILE})"
-            echo "Both replicas hold one root (transport key \`${first_key}\`)."
-            echo '```json'
-            jq '.policy' probe/first-measurements.json
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Capture serial output on failure
-        if: ${{ failure() }}
-        run: |
-          for vm in "${{ steps.names.outputs.first }}" "${{ steps.names.outputs.second }}"; do
-            echo "::group::serial output of ${vm}"
-            gcloud compute instances get-serial-port-output "${vm}" \
-              --project "${VM_PROJECT}" --zone "${VM_ZONE}" 2>/dev/null | tail -300 || true
-            echo "::endgroup::"
-          done
+          OUT_DIR: probe
+        run: bash scripts/release/kms/run-cluster-probe.sh
 
       - name: Upload probe artifacts
         if: ${{ always() }}
@@ -268,15 +142,9 @@ jobs:
           path: probe/
           if-no-files-found: ignore
 
-      - name: Clean up
+      - name: Delete the probe image
         if: ${{ always() }}
         run: |
-          for vm in "${{ steps.names.outputs.first }}" "${{ steps.names.outputs.second }}"; do
-            [[ -n "${vm}" ]] && gcloud compute instances delete "${vm}" \
-              --project "${VM_PROJECT}" --zone "${VM_ZONE}" --delete-disks=all --quiet || true
-          done
-          [[ -n "${{ steps.names.outputs.firewall }}" ]] && gcloud compute firewall-rules delete \
-            "${{ steps.names.outputs.firewall }}" --project "${VM_PROJECT}" --quiet || true
           image="${{ steps.names.outputs.image }}"
           [[ -n "${image}" && "${image}" == *"${IMAGE_SUFFIX}" ]] && gcloud compute images delete \
             "${image}" --project "${{ steps.names.outputs.image_project }}" --quiet || true

@@ -3,7 +3,7 @@ title: Mero TEE
 description: Attestation, key management, and the release pipeline for merod nodes running in a TEE — Mero TEE proves what code is running and releases keys only to workloads that match a signed policy.
 template: splash
 hero:
-  tagline: TEE infrastructure for Calimero. A node proves what code it is running with a hardware attestation; the KMS releases its storage key only when that attestation matches a signed release policy. This site is how it fits together — and how to operate it.
+  tagline: TEE infrastructure for Calimero. A node proves what code it is running with a hardware attestation; the KMS — a frozen TDX cluster, one per release — releases its storage key only when that attestation matches the node measurements baked into it. This site is how it fits together — and how to operate it.
   actions:
     - text: Read the System Overview
       link: /understand/system-overview/

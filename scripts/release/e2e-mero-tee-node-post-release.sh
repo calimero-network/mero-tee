@@ -2,12 +2,10 @@
 # Post-release: boot a fresh GCP TDX VM per node profile (debug, debug-read-only,
 # locked-read-only), collect measurement-policy-candidates + node-client-verification,
 # and assert probe measurements are covered by published-mrtds.json from the same
-# GitHub release (subset checks; RTMR3 excluded from strict allowlist gate — same as
-# post-release-kms-node-e2e).
+# GitHub release (subset checks; RTMR3 excluded from strict allowlist gate).
 #
-# Does NOT require mero-kms release assets or KMS staging probes (unlike
-# scripts/release/../post-release-kms-node-e2e.yaml). Does NOT run the debug→locked
-# KMS runtime negative probe (that stays in the KMS-node workflow).
+# Does NOT require mero-kms release assets: the KMS image is measured and its
+# cluster exercised by Release mero-kms (release-kms.yaml).
 #
 # Required env:
 #   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT

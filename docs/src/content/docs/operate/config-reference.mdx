@@ -1,6 +1,6 @@
 ---
 title: Configuration Reference
-description: Every configurable knob for the mero-kms-phala service and the mero-tee node-image build — environment variables, image-profile pin, Packer/Ansible variables, and versions.json.
+description: Every configurable knob for the mero-kms service, merod's KMS client and the mero-tee image builds — environment variables, instance metadata, image-profile pin, Packer/Ansible variables, and versions.json.
 sidebar:
   order: 1
 ---
@@ -8,10 +8,10 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 This page enumerates every knob that shapes a Mero TEE deployment: the runtime
-environment variables of the `mero-kms-phala` key-management service, the
-build-time image-profile pin, and the Packer / Ansible / `versions.json` inputs
-that produce a node image. Defaults are taken directly from the code and vars
-files, not from convention.
+environment of the `mero-kms` key-management service, the instance metadata a
+KMS replica reads, merod's `[tee.kms]` client section, and the Packer / Ansible /
+`versions.json` inputs that produce the node and KMS images. Defaults are taken
+directly from the code and vars files, not from convention.
 
 <Aside type="note">
 Mero TEE is pre-1.0. Keys can be added, renamed, or removed between releases.
@@ -22,16 +22,25 @@ names below.
 
 ## KMS environment variables
 
-The `mero-kms-phala` binary reads all of its configuration from the process
+The `mero-kms` binary reads all of its configuration from the process
 environment at startup (`Config::from_env`, `mero-kms/src/config/mod.rs`). Every
 value has a default except where noted; the parser fails fast on a malformed
 value.
+
+**In production none of this is set by an operator.** The KMS image bakes its
+environment into `/etc/mero-kms/kms.env` at build time
+(`ansible/roles/mero-kms/templates/kms.env.j2`), so it is part of the image's
+measurements. The only values that come from outside are the two cluster keys
+that `kms-init` reads from instance metadata and hands over as
+`MERO_KMS_BOOTSTRAP` and `MERO_KMS_PEERS` ([below](#kms-instance-metadata)).
+Changing anything else means building a different image, which a running
+cluster refuses to join.
 
 ### Network
 
 | Variable | Type / Default | Meaning |
 | --- | --- | --- |
-| `LISTEN_ADDR` | `SocketAddr` — `0.0.0.0:8080` | Address and port the HTTP server binds. An unparseable value silently falls back to the default. |
+| `LISTEN_ADDR` | `SocketAddr` — `0.0.0.0:8080` | Address and port the HTTP server binds. An unparseable value silently falls back to the default. The image bakes `0.0.0.0:8080` (`kms_listen_port`); the service is plain HTTP, reachable only inside the VPC. |
 | `CORS_ALLOWED_ORIGINS` | CSV — *(unset → CORS disabled)* | Comma-separated allowed CORS origins. When unset or empty, no `CorsLayer` is installed at all. Each origin must be a valid header value or startup fails. |
 
 <Aside type="caution">
@@ -39,19 +48,29 @@ value.
 disabled (`build_cors_layer`, `mero-kms/src/main.rs`).
 </Aside>
 
-### dstack integration
+### Logging
 
 | Variable | Type / Default | Meaning |
 | --- | --- | --- |
-| `DSTACK_SOCKET_PATH` | string — `/var/run/dstack.sock` | Unix-socket path to the Phala dstack daemon, used for key derivation (`get_key`) and quote generation (`get_quote`). |
+| `RUST_LOG` | `tracing` filter — `info` | Log filter. The image bakes `info`. mero-kms never logs the root or any derived key. |
 
-### Challenge store
+### Challenges
 
 | Variable | Type / Default | Meaning |
 | --- | --- | --- |
-| `CHALLENGE_TTL_SECS` | `u64` — `60` | Lifetime of a challenge nonce in seconds. After expiry the challenge is pruned and can no longer be consumed. |
-| `MAX_PENDING_CHALLENGES` | `usize` — `10000` | Maximum number of concurrent pending challenges **across the whole store** (not per-peer). Inserts past this cap fail with a capacity error, surfaced as `429 rate_limited`. Must be greater than `0` or startup fails. |
-| `REDIS_URL` | `Option<String>` — *(unset → in-memory)* | Redis connection URL (e.g. `redis://localhost:6379`). When set, the challenge store uses Redis with atomic Lua insert/consume scripts; required for multi-instance KMS behind a load balancer. Blank values are treated as unset. |
+| `CHALLENGE_TTL_SECS` | `u64` — `60` | Lifetime of a challenge in seconds. After expiry it can no longer be redeemed. |
+| `MAX_CONSUMED_CHALLENGES` | `usize` — `10000` | How many used, unexpired challenges one replica remembers in order to refuse their replay. When full, `/get-key` answers `429 rate_limited`. Must be greater than `0` or startup fails. |
+
+Challenges are **stateless across replicas** (`mero-kms/src/stateless_challenge.rs`).
+The `challengeId` is 16 random bytes and the expiry (48 hex characters), and the
+nonce is an HMAC-SHA256 over the ID and the peer ID, keyed with a challenge key
+HKDF'd from the cluster root under a salt of its own
+(`mero-kms/tdx-root/challenge-mac/v1`), so no node key path can name it. Any
+replica behind the cluster's URL recomputes the nonce of a challenge another
+replica issued, and a challenge yields the right nonce only for the peer that
+asked for it. An expiry later than `now + CHALLENGE_TTL_SECS` plus 30 seconds of
+clock skew is refused. Each replica remembers the challenges it has redeemed until they expire.
+There is no shared store and no Redis.
 
 ### Profile & key derivation
 
@@ -59,34 +78,49 @@ disabled (`build_cors_layer`, `mero-kms/src/main.rs`).
 | --- | --- | --- |
 | `MERO_KMS_PROFILE` | string — `locked-read-only` | KMS profile cohort. One of `debug`, `debug-read-only`, `locked-read-only`. If an image-profile pin file is present it must match (see below). |
 | `KMS_POLICY_PROFILE` | string — *(deprecated alias)* | Legacy alias for `MERO_KMS_PROFILE`. If both are set they must agree; using it alone logs a deprecation warning. |
-| `KEY_NAMESPACE_PREFIX` | string — `merod/storage` | Namespace prefix for dstack key-derivation paths. Surrounding slashes are trimmed. The full derivation path is `{prefix}/{profile}/{peerId}`. |
+| `KEY_NAMESPACE_PREFIX` | string — `merod/storage` | Namespace prefix for key-derivation paths. Surrounding slashes are trimmed. Keys are HKDF'd from the cluster root on `{prefix}/{profile}/{peerId}`. |
 
-### Attestation policy
+### Node allowlist (baked)
 
 | Variable | Type / Default | Meaning |
 | --- | --- | --- |
-| `MERO_KMS_VERSION` | string — *(unset)* | Release version used to fetch the attestation policy from GitHub releases (e.g. `2.3.51` or `mero-kms-v2.3.51`; the `mero-kms-v` prefix is stripped). When **unset** and not in env-policy mode, the service starts in a degraded state: `/attest` works but `/get-key` is fail-closed with `503 policy_not_ready`. |
-| `ENFORCE_MEASUREMENT_POLICY` | bool — `true` | Whether MRTD/RTMR/TCB measurement checks are enforced. `false` parses quotes but skips policy checks — never safe for production. |
-| `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE` | bool — `true` | Refuse `/get-key` requests that do not ask for the key to be sealed to the node (`sealToB64`). An unsealed key is readable by whatever terminates TLS in front of the KMS. Set in the compose template, so it is part of the KMS's attested compose hash. Setting it `false` serves merods older than 0.11.0-rc.47 (which cannot unseal) and reopens that hole for them. |
-| `USE_ENV_POLICY` | bool — `false` | Load the policy from `ALLOWED_*` env vars instead of a GitHub release. Intended for tests / air-gapped mode. |
-| `MERO_KMS_POLICY_SHA256` | `Option<String>` — *(unset)* | SHA-256 pin (64 hex chars; `0x` prefix and case are normalized) for the fetched policy file, checked in addition to its Sigstore signature (which is always verified). When set, a hash mismatch leaves the policy unloaded, so `/get-key` is fail-closed with `503 policy_not_ready`. |
+| `ENFORCE_MEASUREMENT_POLICY` | bool — `true` | Whether MRTD/RTMR/TCB measurement checks are enforced. `false` parses quotes but skips policy checks — never safe for production; the image bakes `true`. |
+| `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE` | bool — `true` | Refuse `/get-key` requests that do not ask for the key to be sealed to the node (`sealToB64`). An unsealed key is readable by whatever sits on the path to the KMS. The image bakes `true`. Setting it `false` serves merods older than 0.11.0-rc.47 (which cannot unseal) and reopens that hole for them. |
+| `ALLOWED_TCB_STATUSES` | CSV — `uptodate` | Allowed TCB status values (lowercased), for nodes and for joining replicas. |
+| `ALLOWED_MRTD` | CSV — *(empty)* | Allowed node MRTD values. Each entry is a 48-byte (96 hex-char) TDX register value. |
+| `ALLOWED_RTMR0` | CSV — *(empty)* | Allowed node RTMR0 values (48-byte hex). |
+| `ALLOWED_RTMR1` | CSV — *(empty)* | Allowed node RTMR1 values (48-byte hex). |
+| `ALLOWED_RTMR2` | CSV — *(empty)* | Allowed node RTMR2 values (48-byte hex). |
+| `ALLOWED_RTMR3` | CSV — *(empty)* | Allowed node RTMR3 values (48-byte hex). |
 
 Booleans accept `1/true/yes/on` and `0/false/no/off` (case-insensitive).
 
-#### Env-policy allowlists (only when `USE_ENV_POLICY=true`)
+The `ALLOWED_*` values are the node image's measurements for this profile, taken
+from the node release's `published-mrtds.json` at build time. This is the **only**
+policy source: the KMS never fetches a policy at runtime. When enforcement is on,
+every register allowlist (and the TCB status list) must be non-empty or the
+service refuses to start (`validate_policy_requirements`,
+`mero-kms/src/policy.rs`).
+
+### Cluster
+
+The KMS runs as a cluster ([design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md)).
+Keys derive from a root that exists only in the memory of the cluster's
+replicas; quotes come from configfs-tsm.
 
 | Variable | Type / Default | Meaning |
 | --- | --- | --- |
-| `ALLOWED_TCB_STATUSES` | CSV — `uptodate` | Allowed TCB status values (lowercased). |
-| `ALLOWED_MRTD` | CSV — *(empty)* | Allowed MRTD values. Each entry is a 48-byte (96 hex-char) TDX register value. |
-| `ALLOWED_RTMR0` | CSV — *(empty)* | Allowed RTMR0 values (48-byte hex). |
-| `ALLOWED_RTMR1` | CSV — *(empty)* | Allowed RTMR1 values (48-byte hex). |
-| `ALLOWED_RTMR2` | CSV — *(empty)* | Allowed RTMR2 values (48-byte hex). |
-| `ALLOWED_RTMR3` | CSV — *(empty)* | Allowed RTMR3 values (48-byte hex). |
+| `MERO_KMS_BOOTSTRAP` | bool — `false` | Generate the cluster's root instead of joining. Set on exactly one replica, once, when the cluster is created. From `kms-bootstrap` metadata. |
+| `MERO_KMS_PEERS` | CSV — *(empty)* | Base URLs of replicas to join from (`http://10.0.0.5:8080`). Untrusted: a wrong address only fails a join. A replica without `MERO_KMS_BOOTSTRAP` needs at least one. From `kms-peers` metadata. |
+| `MERO_KMS_JOIN_RETRY_SECS` | u64 — `10` | Pause between rounds of join attempts. |
 
-When enforcement is on, every register allowlist (and the TCB status list) must
-be non-empty or the service refuses to start (`validate_policy_requirements`,
-`mero-kms/src/policy.rs`).
+A replica refuses to start in a debug TD, or when RTMR3 was never extended. It
+answers `/get-key` with `503 policy_not_ready` until it holds the root, and
+`/health` reports `clusterRootReady`. It gives the root only to a replica whose
+quote carries exactly its own MRTD and RTMR0–3, is not a debug TD, and has a TCB
+status in `ALLOWED_TCB_STATUSES` (`POST /cluster/nonce`, then
+`POST /cluster/join`; both sides attest). The root is never written to disk and
+there is no backup of it.
 
 ### Development-only knob
 
@@ -100,20 +134,48 @@ without the `mock-attestation` feature, so the variable is inert. It exists only
 for local development against non-TDX hardware.
 </Aside>
 
+## KMS instance metadata
+
+Read once at boot by `kms-init` (`ansible/roles/mero-kms/templates/kms-init.sh.j2`).
+Metadata is written by whoever runs the VM, so it is untrusted; only these two
+keys are read, and both are validated.
+
+| Key | Meaning |
+| --- | --- |
+| `kms-bootstrap` | `true` on exactly one replica, the first of a new cluster, which generates the root. Anything other than `true`, `false` or empty stops the boot. Clear it (`false`) once the cluster has formed. |
+| `kms-peers` | Comma-separated base URLs (`http[s]://host[:port]`) of replicas to join from. Required unless `kms-bootstrap=true`. |
+
 ## Image-profile pin (baked)
 
 | Path | Meaning |
 | --- | --- |
-| `/etc/mero-kms/image-profile` | Optional plain-text file containing the profile name (`debug`, `debug-read-only`, or `locked-read-only`). When present, any `MERO_KMS_PROFILE` env override **must match** it or startup is refused; an empty file also refuses startup. When absent (e.g. the Phala compose deployment), the profile comes from `MERO_KMS_PROFILE`. |
+| `/etc/mero-kms/image-profile` | Plain-text file containing the profile name (`debug`, `debug-read-only`, or `locked-read-only`). When present, any `MERO_KMS_PROFILE` env override **must match** it or startup is refused; an empty file also refuses startup. When absent (a local build), the profile comes from `MERO_KMS_PROFILE`. |
 
-At startup the KMS also extends **RTMR3** with a dstack runtime event
-`calimero.kms.profile=<profile>` (`runtime_event.rs`), giving each profile a
-distinct measurement even on an otherwise identical image. A mismatching
-pre-existing event refuses startup.
+At boot `kms-init` extends **RTMR3** with
+`calimero-rtmr3-v2:kms:<profile>:<root hash>`, the same scheme the node image's
+`calimero-init` uses with role `node`. It is fatal on `locked-read-only`, so a
+quote always names the role, profile and build, and the KMS and node images can
+never measure alike.
 
-## Node-image build inputs
+## merod's KMS client (`[tee.kms]`)
 
-The `mero-tee` node image is built with Packer + Ansible. Build inputs come from
+merod (in `calimero-network/core`) reads its KMS settings from the `[tee.kms]`
+section of `config.toml`:
+
+| Key | Meaning |
+| --- | --- |
+| `tee.kms.url` | The cluster's VPC-internal URL. Node images write it from `kms-url` metadata via `merod init --kms-url`. |
+| `tee.kms.tls.*` | Optional TLS settings for reaching the KMS. |
+| `tee.kms.attestation.*` | The KMS allowlists merod enforces on `/attest`: MRTD, RTMR0–3 and TCB statuses, as published in the release's `kms_allowed_*` lists. merod fills them from the signed release policy named by `MERO_TEE_VERSION` (`tee-release-version` on the node images). |
+
+On the node images, `tee-release-version` metadata names the release, and merod
+fetches and verifies that release's signed `kms-attestation-policy[.<profile>].json`
+(see [below](#attestation-policy-json)).
+
+## Image build inputs
+
+The `mero-tee` node image and the KMS image are built with Packer + Ansible, from
+the same template (`image_role` picks which). Build inputs come from
 three places: `versions.json`, the Packer variables, and CI environment
 overrides consumed by `build-and-release.sh`.
 
@@ -127,8 +189,8 @@ The single source of pinned component versions (`mero-tee/versions.json`):
   "nodeExporterVersion": "1.9.1",
   "vmagentVersion": "1.132.0",
   "vectorVersion": "0.50.0",
-  "imageVersion": "2.3.74",
-  "merodVersion": "0.11.0-rc.49"
+  "imageVersion": "2.3.75",
+  "merodVersion": "0.11.0-rc.50"
 }
 ```
 
@@ -155,6 +217,9 @@ sets the build-host defaults.
 | `zone` | `europe-west4-a` | GCP zone. |
 | `subnetwork` | `""` | Optional build subnetwork. |
 | `version` | `""` (supplied at build) | Image version, threaded into the image name/family. |
+| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`. |
+| `mero_kms_binary` | `""` | `kms` only: path of the `mero-kms` binary to bake in, built from the release commit. |
+| `kms_node_policy_file` | `""` | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
 
 ### Ansible play variables
 
@@ -263,40 +328,30 @@ otherwise all three (`locked-read-only`, `debug-read-only`, `debug`).
 
 ## Attestation-policy JSON
 
-Fetched at KMS startup (unless `USE_ENV_POLICY=true`) from a GitHub release,
-trying the profile-specific asset first and a legacy profile-less asset second
-(`config/policy_loader.rs`):
+Published by the Release mero-kms workflow in release `mero-kms-v<version>`,
+consumed by **merod**, not by the KMS:
 
 ```
-https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v<version>/kms-phala-attestation-policy.<profile>.json
-https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v<version>/kms-phala-attestation-policy.json   # legacy fallback
+https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v<version>/kms-attestation-policy.<profile>.json
+https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v<version>/kms-attestation-policy.json   # locked-read-only
 ```
 
-The document carries a `tag`, `role: "kms"`, `profile`, and a `policy` object
-with `node_allowed_tcb_statuses` / `node_allowed_mrtd` / `node_allowed_rtmr0..3`
-(older `allowed_*` keys are accepted as a fallback). The `tag` and `profile`
-must match what the KMS expects; the legacy profile-less document is only
-accepted for `locked-read-only`.
+Each asset has a `.sig` and a `.bundle.json` beside it; merod verifies the keyless
+cosign signature (a Fulcio certificate issued to the `Release mero-kms` workflow on
+`refs/heads/master` of `calimero-network/mero-tee`, with a Rekor entry) before it
+trusts the document.
 
-Before the document is parsed, its keyless cosign signature is verified: the
-KMS fetches `<asset>.sig` and `<asset>.bundle.json` beside it and requires a
-valid Rekor entry, a detached signature over exactly these bytes, and a Fulcio
-certificate issued to the `Release mero-kms` workflow on `refs/heads/master` of
-`calimero-network/mero-tee` (`config/policy_signature.rs`). An asset whose
-signature is missing or does not verify is refused, and the KMS stays in the
-fail-closed `policy_not_ready` state.
+The document carries a `tag`, `role: "kms"`, `profile`, `kms.provider: "mero-kms"`,
+`merod_config_path: "tee.kms.attestation"`, and a `policy` object with:
 
-The same document pins the KMS for merod: `kms_allowed_tcb_statuses`,
-`kms_allowed_mrtd`, `kms_allowed_rtmr0..3`, and `kms_allowed_event_payload`, the
-released KMS compose hashes. merod refuses a policy without a compose hash, and a
-KMS whose replayed RTMR3 `compose-hash` event is not in the list.
-`scripts/policy/generate-merod-kms-phala-attestation-config.sh` and
-`apply-merod-kms-phala-attestation-config.sh` carry the list into `config.toml`
-as `tee.kms.phala.attestation.allowed_compose_hashes`.
+- `kms_allowed_mrtd`, `kms_allowed_rtmr0..3`, `kms_allowed_tcb_statuses`: the KMS
+  image's measurements, which merod requires of the KMS's `/attest` quote.
+- `node_allowed_mrtd`, `node_allowed_rtmr0..3`, `node_allowed_tcb_statuses`: the node
+  measurements this release's KMS image bakes in, published for audit.
 
 ## Next steps
 
 - [Release pipeline](/operate/release-pipeline/) — how these versions and policies are produced and published.
-- [Runbooks](/operate/runbooks/) — deploying the KMS and node images with these settings.
+- [Runbooks](/operate/runbooks/) — deploying the KMS cluster and node images with these settings.
 - [Error handling](/operate/error-handling/) — what a misconfiguration surfaces as at runtime.
 - [Components](/understand/components/) — where each of these pieces runs.

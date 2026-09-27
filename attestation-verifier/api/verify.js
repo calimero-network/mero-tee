@@ -1,8 +1,11 @@
 /**
  * POST /api/verify
  * Accepts either:
- *   - { kms_url } — backend fetches attestation from KMS, verifies via ITA, returns result
- *   - { attestation } — attestation JSON (for direct paste/script use)
+ *   - { node_url } — backend fetches a fresh attestation from a merod node, verifies via ITA
+ *   - { attestation, nonce_b64? } — a pasted attestation, e.g. a mero-kms `/attest` response.
+ *     mero-kms replicas listen only inside their VPC, so this service cannot fetch from
+ *     them: the operator calls `/attest` from inside the VPC and pastes the response. When
+ *     `nonce_b64` (the nonce sent to `/attest`) is given, the quote must be bound to it.
  */
 import crypto from 'node:crypto';
 import * as jose from 'jose';
@@ -10,34 +13,11 @@ import * as jose from 'jose';
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
 const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
 
-// SSRF protection: allowed host patterns (regex). Default: phala.network, localhost.
-const KMS_ALLOWED_HOSTS = (process.env.KMS_ALLOWED_HOSTS || 'phala\\.network$|^localhost$|^127\\.0\\.0\\.1$')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
-
 // Node (merod) URLs: allow http for IPs and localhost. Pattern: ^\d+\.\d+\.\d+\.\d+$ for IPv4.
 const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$|^localhost$|^127\\.0\\.0\\.1$')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-
-function validateKmsUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('Invalid KMS URL');
-  }
-  if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
-    throw new Error('KMS URL must use HTTPS (except localhost)');
-  }
-  const host = parsed.hostname.toLowerCase();
-  const allowed = KMS_ALLOWED_HOSTS.some((re) => new RegExp(re, 'i').test(host));
-  if (!allowed) {
-    throw new Error('KMS URL host not in allowed list (phala.network, localhost). Set KMS_ALLOWED_HOSTS to override.');
-  }
-}
 
 function validateNodeUrl(url) {
   let parsed;
@@ -75,7 +55,7 @@ function verifyNonceInAttestation(attestation, nonceBytes) {
   }
 }
 
-/** Merod: data.quoteB64; KMS paste: top-level quote_b64. No tree walking / scoring. */
+/** Merod: data.quoteB64; mero-kms `/attest`: top-level quoteB64. No tree walking / scoring. */
 function extractQuote(attestation) {
   if (!attestation || typeof attestation !== 'object') {
     throw new Error('No attestation object');
@@ -153,27 +133,12 @@ export default async function handler(req, res) {
   }
 
   let attestation;
+  let nonceVerified = null;
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const kmsUrl = (body?.kms_url || body?.kmsUrl || '').trim();
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
 
-    if (kmsUrl) {
-      validateKmsUrl(kmsUrl);
-      const nonceBytes = crypto.randomBytes(32);
-      const nonceB64 = nonceBytes.toString('base64');
-      const attestRes = await fetch(`${kmsUrl.replace(/\/$/, '')}/attest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nonceB64 }),
-      });
-      if (!attestRes.ok) {
-        const errText = await attestRes.text();
-        return res.status(502).json({ error: `KMS /attest failed: ${attestRes.status}. ${errText.slice(0, 200)}` });
-      }
-      attestation = await attestRes.json();
-      verifyNonceInAttestation(attestation, nonceBytes);
-    } else if (nodeUrl) {
+    if (nodeUrl) {
       validateNodeUrl(nodeUrl);
       const nonceBytes = crypto.randomBytes(32);
       const nonceHex = nonceBytes.toString('hex');
@@ -203,7 +168,16 @@ export default async function handler(req, res) {
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
-        return res.status(400).json({ error: 'Provide kms_url, node_url, or attestation in request body' });
+        return res.status(400).json({ error: 'Provide node_url, or attestation in request body' });
+      }
+      const nonceB64 = (body?.nonce_b64 || body?.nonceB64 || '').trim();
+      if (nonceB64) {
+        const nonceBytes = Buffer.from(nonceB64, 'base64');
+        if (nonceBytes.length !== 32) {
+          throw new Error('nonce_b64 must be 32 bytes, base64-encoded');
+        }
+        verifyNonceInAttestation(attestation, nonceBytes);
+        nonceVerified = true;
       }
     }
   } catch (e) {
@@ -252,5 +226,6 @@ export default async function handler(req, res) {
     ita_token: itaToken,
     ita_token_verified: itaTokenVerified,
     ita_claims: itaClaims,
+    nonce_verified: nonceVerified,
   });
 }

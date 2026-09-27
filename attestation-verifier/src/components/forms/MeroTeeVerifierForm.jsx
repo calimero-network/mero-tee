@@ -12,13 +12,13 @@ export function MeroTeeVerifierForm({ status, onVerifyByUrl }) {
   return (
     <form onSubmit={handleUrlSubmit} className="verifier-form">
       <div className="input-row">
-        <label htmlFor="mero_tee_url" className="sr-only">KMS URL</label>
+        <label htmlFor="mero_tee_url" className="sr-only">Node URL</label>
         <input
           id="mero_tee_url"
           type="url"
           value={kmsUrl}
           onChange={(e) => setKmsUrl(e.target.value)}
-          placeholder="https://your-kms.phala.network"
+          placeholder="http://<node-ip>:2428"
           disabled={status === 'loading'}
         />
         <button type="submit" disabled={status === 'loading' || !kmsUrl.trim()}>

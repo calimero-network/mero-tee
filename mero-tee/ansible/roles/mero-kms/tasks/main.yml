@@ -1,0 +1,146 @@
+---
+# mero-kms as a TDX cluster replica: keys derive from a root held only in the
+# replicas' memory, and the node allowlist is baked into the image's env. See
+# docs/design/gcp-tdx-kms.md.
+- name: Require the mero-kms binary and the node allowlist
+  assert:
+    that:
+      - mero_kms_binary | length > 0
+      - kms_node_policy_file | length > 0
+    fail_msg: "Pass -e mero_kms_binary=... and -e kms_node_policy_file=... to build a KMS image."
+
+- name: Read the node allowlist this KMS serves
+  set_fact:
+    kms_node_policy: "{{ lookup('file', kms_node_policy_file) | from_json }}"
+
+- name: Refuse an empty node allowlist
+  assert:
+    that:
+      - kms_node_policy[item] | default([]) | length > 0
+    fail_msg: "The node allowlist has no {{ item }}; a KMS with an empty list would serve nobody or everybody."
+  loop:
+    - allowed_tcb_statuses
+    - allowed_mrtd
+    - allowed_rtmr0
+    - allowed_rtmr1
+    - allowed_rtmr2
+    - allowed_rtmr3
+
+# tdx_guest provides both the RTMR3 extend interface and configfs-tsm quotes.
+- name: Install linux-modules-extra for tdx_guest
+  apt:
+    name: "linux-modules-extra-{{ ansible_kernel }}"
+    state: present
+  ignore_errors: true
+  when: ansible_kernel is defined
+
+- name: Ensure grub.d exists
+  file:
+    path: /etc/default/grub.d
+    state: directory
+    mode: "0755"
+
+- name: Add calimero.role=kms and the profile to the kernel cmdline (RTMR2)
+  copy:
+    content: |
+      # Role/profile kernel params for TDX attestation (RTMR[2]): a KMS image
+      # never measures as a node image, or the other way round.
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=kms calimero.profile={{ lockdown_profile }}"
+    dest: /etc/default/grub.d/50-calimero-profile.cfg
+    mode: "0644"
+
+- name: Create mero-kms directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/mero-kms
+    - /usr/local/lib/mero-kms
+
+- name: Install the mero-kms binary
+  copy:
+    src: "{{ mero_kms_binary }}"
+    dest: /usr/local/bin/mero-kms
+    owner: root
+    group: root
+    mode: "0755"
+
+# mero-kms refuses to start under any other profile than the one pinned here.
+- name: Pin the image profile
+  copy:
+    content: "{{ lockdown_profile }}\n"
+    dest: /etc/mero-kms/image-profile
+    mode: "0644"
+
+- name: Bake the KMS configuration and node allowlist
+  template:
+    src: kms.env.j2
+    dest: /etc/mero-kms/kms.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the KMS boot script
+  template:
+    src: kms-init.sh.j2
+    dest: /usr/local/lib/mero-kms/init.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install mero-kms-init.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-kms boot: extend RTMR3, read cluster metadata
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/lib/mero-kms/init.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-kms-init.service
+    mode: "0644"
+
+# No restart in place. A restarted process has lost the root, and with
+# MERO_KMS_BOOTSTRAP still set it would generate a second one: two clusters
+# behind one URL. A replica whose process exits is replaced instead, and the
+# replacement joins from its peers.
+- name: Install mero-kms.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-kms TDX cluster replica
+      Requires=mero-kms-init.service
+      After=mero-kms-init.service
+
+      [Service]
+      EnvironmentFile=/etc/mero-kms/kms.env
+      EnvironmentFile=/run/mero-kms/cluster.env
+      ExecStart=/usr/local/bin/mero-kms
+      Restart=no
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-kms.service
+    mode: "0644"
+
+- name: Enable the KMS units
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - mero-kms-init.service
+    - mero-kms.service

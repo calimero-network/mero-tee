@@ -14,7 +14,7 @@ export function Layout() {
         <div className="page-hero">
           <h1 className="page-hero-title">Attestation Verifier</h1>
           <p className="page-hero-sub">
-            Verify Phala KMS and mero-tee nodes against official Calimero release policy
+            Verify mero-kms and mero-tee nodes against official Calimero release policy
           </p>
         </div>
         <TabNav />

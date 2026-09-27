@@ -20,104 +20,62 @@ lives in Calimero Core — see
 
 ## Plane 1 — the node verifies the KMS
 
-The KMS is stateless and holds no long-term secret of its own, but a node should
-still confirm it is talking to a real KMS enclave before sending a key request.
-The KMS provides `POST /attest` for exactly this: the caller sends a fresh 32-byte
-nonce, and the KMS asks dstack for a TDX quote whose `report_data` is
-`nonce ‖ binding` (`mero-kms/src/handlers/attest.rs`). The caller then checks the
-quote's signature, the nonce binding, and the KMS's own measurements against
-known-good values.
+A node should confirm it is talking to a genuine KMS of **its own release**
+before sending a key request. The KMS provides `POST /attest` for exactly this:
+the caller sends a fresh 32-byte nonce, and the KMS returns a TDX quote (from
+configfs-tsm) whose `report_data` is `nonce ‖ binding`
+(`mero-kms/src/handlers/attest.rs`). The caller then checks the quote's
+signature, the nonce binding, and the KMS's own measurements against known-good
+values.
 
 ```
 report_data[0..32]  = client nonce            (freshness)
-report_data[32..64] = binding                 (defaults to SHA-256("mero-kms-phala-attest-v1"))
+report_data[32..64] = binding                 (defaults to SHA-256("mero-kms-attest-v1"))
 ```
 
-The same endpoint powers the public [attestation verifier](/flows/verification/).
+The same endpoint powers the [attestation verifier](/flows/verification/).
 
 :::caution
 `/attest` proves the KMS is a genuine TDX enclave running a specific measurement.
 It does **not** by itself authenticate the caller or release anything — key
-release is gated separately in Plane 2. Whether a given `merod` client enforces
-Plane 1 before requesting a key is a client-side decision; the KMS's role is to
-make an honest quote available.
+release is gated separately in Plane 2.
 :::
 
 `merod` enforces it whenever a node is pointed at a release (`tee-release-version`
-on the node images): the KMS's TCB status and MRTD/RTMR0–3 must be in the signed
-release policy's `kms_allowed_*` allowlists, **and** the `compose-hash` its RTMR3
-event log measures must be in `kms_allowed_event_payload`. merod replays the
-`eventLog` `/attest` returns, recomputing every RTMR3 event digest from its
-contents, and trusts the compose hash only when the replay reproduces the quote's
-RTMR3. A policy with no compose hash is refused. See
-[the derivation root](#the-derivation-root-the-dstack-app) for why registers
-alone are not enough.
+on the node images): the KMS's quote must not be a debug TD, and its TCB status
+and MRTD/RTMR0–3 must be in the `kms_allowed_*` allowlists of the signed
+`kms-attestation-policy[.<profile>].json` in release `mero-kms-v<version>`. The
+five registers pin the whole KMS image: MRTD and RTMR0–2 cover firmware, kernel
+and the dm-verity root hash on the kernel command line, and `kms-init` extends
+RTMR3 with the image's role, profile and root hash at boot. Because the KMS image
+bakes in its node allowlist, pinning its measurements also pins which nodes it
+will release keys to.
 
-## The derivation root: the dstack app
+## The derivation root: the cluster root
 
-A node's storage and data-disk keys are a pure function of the KMS's dstack
-**app** key and the path `{namespace}/{profile}/{peerId}`
-(`mero-kms/src/handlers/get_key.rs`). mero-kms only decides *when* to ask dstack
-for one. So anything that runs under the same app ID can derive every node's
-keys without going through mero-kms at all:
+A node's storage and data-disk keys are `HKDF(root, "{namespace}/{profile}/{peerId}")`
+(`mero-kms/src/backend.rs`), where `root` is a random 32-byte value that exists
+only in the memory of one release's KMS cluster. So whoever holds the root can
+derive every node key of that release. The design makes sure nobody does
+([design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/gcp-tdx-kms.md),
+[#338](https://github.com/calimero-network/mero-tee/issues/338)):
 
-- **The app owner.** They can upgrade the app to another compose file — a debug
-  image with a shell, or a one-line `get_key` endpoint — and call
-  `get_key("merod/storage/locked-read-only/<peerId>")` from inside it.
-- **A sibling deployment.** A `debug` KMS running under the `locked-read-only`
-  app's ID has a shell and the locked app key.
-- **dstack's KMS itself**, which holds the app key's root.
+| Property | How |
+| --- | --- |
+| **The root is born inside a TD** | The bootstrap replica (`kms-bootstrap=true`) generates it at boot, in RAM. A replica without `kms-bootstrap` never generates one, so a partition cannot split the cluster into two roots. |
+| **It never leaves a TD except to an identical TD** | A replica gives the root only to a joiner whose quote carries **exactly its own** MRTD and RTMR0–3 ("same as me"), is not a debug TD, and has an allowed TCB status. The joiner checks the giver the same way before accepting it. There is no allowlist, config or owner that could admit different code. |
+| **It is never written** | Read-only dm-verity root, `/tmp` and `/var` on tmpfs, no swap, no core dumps, volatile journal. There is no backup. |
+| **The code that holds it cannot be changed** | The image is frozen and sealed behind dm-verity; changing anything (including the node allowlist) makes a different image, with different measurements, that the cluster refuses. A bug is fixed by the next release, never patched in place. |
+| **No shell** | The KMS image carries the node image's `locked-read-only` lockdown. |
 
-Sealed key release protects a key in transit; it cannot protect a key against
-its own derivation root. Three controls narrow who holds that root
-([#338](https://github.com/calimero-network/mero-tee/issues/338)):
+Sealed key release protects a key in transit; the transport key it seals under is
+also derived from the root, so every replica holds the same one. Every upgrade
+brings a new KMS image, a new cluster and a new root, and retiring a release
+deletes its cluster, after which no copy of an old node disk can be opened.
 
-| Control | What it stops | Where |
-| --- | --- | --- |
-| **merod pins the KMS compose hash** | A node trusting a KMS app upgraded to an unreleased compose file, even one whose registers are allowlisted | `merod` (core), `kms_allowed_event_payload` in the signed policy |
-| **One dstack app ID per profile** | A debug KMS, with a shell, sharing the locked KMS's app key | [Deploy the Phala KMS](/operate/runbooks/#deploy-the-phala-kms) |
-| **On-chain compose-hash allowlist on the locked app** | The owner silently upgrading the locked app: an upgrade has to add a compose hash in public, on the app's contract, first | [Deploy the Phala KMS](/operate/runbooks/#deploy-the-phala-kms) |
-
-The node-side pin runs in code on every key fetch. The other two are
-deployment controls, and the pin only fully works with them: a compose hash
-names a compose file, not an app, so the pin says *what* the KMS runs, and the
-app-ID split plus the on-chain allowlist say *who else* can run code with its
-key. What remains is dstack's KMS and, for the on-chain allowlist, whoever
-controls the app contract's owner key — which is why that should be a multisig,
-not a deployer's hot wallet.
-
-### Considered: a node-contributed secret
-
-Mixing a secret only the node holds into the key would take the dstack root out
-of the trust base for confidentiality: `key = HKDF(kms_key, node_secret)`, with
-the KMS half released as today. It is **not adopted yet**, because the only
-place a TD can keep a secret across reboots is the disk the key protects, and
-every choice of where to keep it gives something up:
-
-- **Sealed to the TD's measurements** (a key derived from MRTD/RTMRs): survives
-  reboots, but an image upgrade changes the measurements, and the node can no
-  longer open its own data. Upgrades would need an in-TD re-key before reboot.
-- **Kept by a second, independent KMS** (for example a different dstack app, or
-  a different provider): two roots must collude instead of one. This is the
-  most practical option, at the cost of a second service on the key path.
-- **Generated at first boot and held only in memory**: no root can derive it,
-  but a reboot loses the data, which rules it out for a replica with state.
-
-If a second KMS is adopted, the migration is additive and keyed off the
-existing store:
-
-1. Ship merod that can fetch both halves and derive `HKDF(k1, k2)`, still
-   opening stores created under `k1` alone. A store records which scheme it
-   uses (a version in its KMS key metadata), never inferred.
-2. New nodes create stores under the combined key.
-3. Existing nodes re-encrypt in place — open with `k1`, write under
-   `HKDF(k1, k2)`, swap atomically — and only then record the new scheme. A node
-   that crashes midway reopens with whichever key its recorded scheme names.
-4. Once the fleet has migrated, a later merod refuses the `k1`-only scheme on
-   `locked-read-only`. A node still on it has to be recreated.
-
-The data disk (LUKS2) follows the same steps with a second keyslot: add the
-combined key's slot, then remove the old one.
+What remains trusted is Intel TDX (and Intel PCS collateral), Google's measured
+TDX firmware, and the release workflow that builds the image — it defines what
+"same as me" is. See [Security](/understand/security/#trust-assumptions).
 
 ## Plane 2 — the KMS verifies the node
 
@@ -125,9 +83,10 @@ Key release (`POST /get-key`, `mero-kms/src/handlers/get_key.rs`) never trusts a
 request without a fresh, signed, hardware-attested proof bound to the node's peer
 identity. The steps, in order:
 
-1. **Challenge.** The node calls `POST /challenge { peerId }`. The KMS stores a
-   single-use random 32-byte nonce keyed by a `challengeId` with a TTL
-   (`CHALLENGE_TTL_SECS`, default **60s**) and returns
+1. **Challenge.** The node calls `POST /challenge { peerId }`. The KMS issues a
+   single-use 32-byte nonce under a `challengeId` with a TTL
+   (`CHALLENGE_TTL_SECS`, default **60s**), MAC'd with a key derived from the
+   cluster root so any replica can check it, and returns
    `{ challengeId, nonceB64, expiresAt }`.
 2. **Quote + signature.** The node generates a TDX quote whose `report_data` is
    `nonce ‖ SHA-256(peerId)`, and signs a canonical payload binding the
@@ -135,28 +94,29 @@ identity. The steps, in order:
    private key.
 3. **Key request.** The node calls
    `POST /get-key { challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64 }`.
-4. **Challenge consumed.** The challenge is consumed **before** any crypto check,
-   so a replay always fails on the second attempt regardless of where the first
-   failed.
+4. **Challenge redeemed.** The challenge is checked (MAC, expiry, peer ID) and
+   entered into the replica's replay set **before** any crypto check, so a replay
+   always fails on the second attempt regardless of where the first failed.
 5. **Signature check.** The KMS confirms the supplied public key derives to the
    claimed `peerId`, then verifies the signature over the canonical payload.
 6. **Quote check.** The quote is verified (DCAP signature), and its `report_data`
    must contain the issued nonce **and** `SHA-256(peerId)`.
 7. **Policy check.** The quote's TCB status and all five measurement registers
    (MRTD, RTMR0–3) are checked against the loaded attestation policy.
-8. **Key derivation.** On success the KMS asks dstack to derive the key at path
-   `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default prefix `merod/storage`)
-   and returns `{ key }`. Derivation is deterministic — the same node always
-   receives the same key.
+8. **Key derivation.** On success the KMS derives the key by HKDF from the
+   cluster root on path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default
+   prefix `merod/storage`) and returns it sealed to the node's one-time key.
+   Derivation is deterministic — the same node always receives the same key from
+   any replica of its release's cluster.
 
 Because the profile is part of the derivation path, a debug node and a production
 node with the same `peerId` receive **different** keys even from the same KMS.
 
 ## The attestation policy
 
-The policy is loaded at startup (from a signed release, or from `ALLOWED_*` env
-vars in explicit `USE_ENV_POLICY` mode) and modelled as
-(`mero-kms/src/policy.rs`):
+The node policy is baked into the KMS image (`ALLOWED_*` in
+`/etc/mero-kms/kms.env`, from the node release's `published-mrtds.json` at build
+time), read at startup, and modelled as (`mero-kms/src/policy.rs`):
 
 ```rust
 struct AttestationPolicy {
@@ -170,10 +130,10 @@ struct AttestationPolicy {
 }
 ```
 
-In the release-policy JSON the register keys are `node_allowed_mrtd`,
-`node_allowed_rtmr0..3`, and `node_allowed_tcb_statuses`, with legacy
-`allowed_*` names accepted as a fallback. Each measurement is a 48-byte
-(96-hex-char) SHA-384 value.
+The release publishes the same lists as `node_allowed_mrtd`,
+`node_allowed_rtmr0..3`, and `node_allowed_tcb_statuses` in
+`kms-attestation-policy[.<profile>].json`, for audit; the KMS never fetches them.
+Each measurement is a 48-byte (96-hex-char) SHA-384 value.
 
 :::caution[Fail-closed]
 When `ENFORCE_MEASUREMENT_POLICY` is true (the default), startup validation
@@ -191,8 +151,8 @@ admitting everything.
 | `MRTD` | SHA-384 of the initial VM image at launch | Pins the exact node/KMS image. |
 | `RTMR0` | Firmware (TDVF) measurement | Extended during early boot. |
 | `RTMR1` | OS kernel / boot measurement | Extended during kernel boot. |
-| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**: nothing at boot re-hashes those files against it, so it identifies the image but does not stop an offline edit of the boot disk ([#334](https://github.com/calimero-network/mero-tee/issues/334)). |
-| `RTMR3` | Runtime events after boot | Carries the profile/role separation: the KMS extends it with `calimero.kms.profile=<profile>`; the node image's `calimero-init` extends it with role + profile + root hash. |
+| `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**, so it names the build. The cmdline also carries the **dm-verity root hash**: the root filesystem is a read-only EROFS image sealed as the build's last step, and every block the booted system reads is checked against that hash, so an offline edit of the boot disk is a read error, not different code ([#334](https://github.com/calimero-network/mero-tee/issues/334); `verity-root` role). |
+| `RTMR3` | Runtime events after boot | Carries the profile/role separation: `kms-init` (KMS image) and `calimero-init` (node image) each extend it with role + profile + root hash, fatally on `locked-read-only`. |
 
 ### RTMR3 profile cohort separation
 
@@ -207,17 +167,19 @@ being baked into the key-derivation path.
 | Threat | Mitigation |
 | --- | --- |
 | **Rogue KMS** | A fake KMS cannot produce a valid quote with the expected KMS measurements; Plane 1 verification via `/attest` rejects it. |
-| **KMS app upgraded to another compose file** | merod replays the KMS's RTMR3 event log and refuses any compose hash not in the signed policy's `kms_allowed_event_payload`; the locked app's on-chain allowlist makes an upgrade public before it can run. |
-| **Debug KMS sharing the locked app key** | Each profile's KMS runs under its own dstack app ID, and each profile's compose file (and so its compose hash) differs. |
+| **Modified KMS obtaining the root** | A replica gives the root only to a TD with exactly its own MRTD and RTMR0–3; dm-verity makes an offline edit of the image a read error rather than different code. |
+| **Debug TD holding the root** | Refused in the join whatever it measures as, and a replica refuses to start in one. |
+| **Debug KMS sharing the locked KMS's root** | Each profile is a different image, so the locked cluster refuses a debug replica's join. |
+| **Genuine cluster with a different root** | Leaks nothing (the root exists only inside genuine TDs), but nodes pointed at it would lose their data when it stops. The KMS URL comes from metadata, so this is an availability risk, not a confidentiality one. |
 | **Rogue / tampered node** | A node outside TDX cannot produce a valid quote; a tampered image has different MRTD/RTMR values that the policy rejects. |
-| **Replay** | The challenge nonce is single-use and TTL-bound and is consumed before verification; the `/attest` nonce prevents quote reuse. |
+| **Replay** | The challenge nonce is single-use and TTL-bound and is redeemed before verification; the `/attest` nonce prevents quote reuse. |
 | **Peer-ID spoofing** | `get-key` requires a signature by the key that derives to the claimed `peerId`, and binds `SHA-256(peerId)` into the quote's `report_data`. |
 | **Profile escalation** | Distinct hardware-measured RTMR3 per profile; the policy rejects any RTMR3 not on its allowlist. |
 | **Host reads or edits a node's disk** | The data disk is LUKS2 with dm-integrity, keyed by `merod kms disk-key` from the KMS under the same attestation as the storage key; the disk-unlock identity sits in the LUKS2 header and is useless without a genuine TD. merod's store keeps its own KMS key on top. |
 | **Policy downgrade via metadata** | `tee-release-version` is operator-set, and every release's policy is validly signed. The image bakes its own version as a floor (`/etc/calimero/min-tee-release-version` → `MERO_TEE_MIN_VERSION`); `calimero-init` and merod both refuse an older release. |
-| **Policy tampering** | The release policy can be pinned by SHA-256 (`MERO_KMS_POLICY_SHA256`); a mismatch aborts loading. |
+| **Policy tampering** | The KMS's node allowlist is part of its image and so of its measurements; nothing is fetched at runtime. merod verifies the Sigstore signature of the KMS policy it fetches. |
 
 Rejections surface as typed errors — `tcb_status_rejected` and
 `measurement_policy_rejected` return **403**, challenge/signature/attestation
-failures return **401**, and an unloaded policy returns **503**. See
+failures return **401**, and a replica without its root returns **503**. See
 [error handling](/operate/error-handling/) for the full mapping.

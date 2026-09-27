@@ -1,19 +1,26 @@
-//! mero-kms-phala: Key management service for merod nodes running in Phala Cloud TEE.
+//! mero-kms: Key management service for merod nodes running in a TEE.
 //!
 //! This service validates TDX attestations from merod nodes and releases deterministic
-//! storage encryption keys based on peer ID using Phala's dstack key derivation.
+//! storage encryption keys based on peer ID. It runs as a cluster of plain TDX VMs; keys
+//! derive from a cluster root that exists only in the replicas' memory (see `backend` and
+//! `cluster`), and challenges are stateless so any replica can serve any request (see
+//! `stateless_challenge`).
 
-mod challenge_store;
+mod backend;
+mod cluster;
 mod config;
 mod handlers;
 mod measurement;
 mod policy;
-mod runtime_event;
 mod sealed;
+mod stateless_challenge;
 mod util;
 
 #[cfg(test)]
 mod test_util;
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::http::{HeaderValue, Method};
 use eyre::Result as EyreResult;
@@ -22,9 +29,9 @@ use tower_http::trace::TraceLayer;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
+use crate::backend::{Root, TdxBackend};
 use crate::config::log_startup_config;
 use crate::handlers::create_router;
-use crate::runtime_event::ensure_kms_profile_runtime_event;
 
 pub use crate::config::Config;
 pub use crate::measurement::HexMeasurement;
@@ -43,30 +50,42 @@ async fn main() -> eyre::Result<()> {
         .with_level(true)
         .init();
 
-    let config = Config::from_env().await?;
+    let config = Config::from_env()?;
 
     log_startup_config(&config);
 
-    // Without the `mock-attestation` feature the RTMR3 runtime marker can never
-    // be skipped: there is no mock mode to skip it for.
     #[cfg(feature = "mock-attestation")]
-    let skip_runtime_marker = config.accept_mock_attestation;
+    let mock = config.accept_mock_attestation;
     #[cfg(not(feature = "mock-attestation"))]
-    let skip_runtime_marker = false;
-
-    if skip_runtime_marker {
+    let mock = false;
+    if mock {
         warn!(
             "WARNING: Mock attestation acceptance is enabled. This should NEVER be used in production!"
         );
-        warn!("Skipping KMS profile RTMR3 runtime marker because mock attestation mode is enabled");
-    } else if let Err(err) = ensure_kms_profile_runtime_event(&config.kms_profile) {
-        warn!("Failed to emit KMS profile RTMR3 runtime marker; continuing startup: {err:#}");
-        warn!(
-            "Profile pinning is still enforced, but runtime profile-measurement separation may be reduced"
-        );
     }
 
-    let base_app = create_router(config.clone())?.layer(TraceLayer::new_for_http());
+    let backend = Arc::new(
+        TdxBackend::new(
+            #[cfg(feature = "mock-attestation")]
+            mock,
+        )
+        .await?,
+    );
+    if config.kms_bootstrap {
+        backend
+            .set_root(Root::generate())
+            .map_err(|e| eyre::eyre!("{e}"))?;
+        tracing::info!("Generated a new cluster root; this replica bootstraps the cluster");
+    } else {
+        drop(tokio::spawn(cluster::join_until_ready(
+            Arc::clone(&backend),
+            config.attestation_policy.clone(),
+            config.cluster_peers.clone(),
+            Duration::from_secs(config.join_retry_secs),
+        )));
+    }
+
+    let base_app = create_router(config.clone(), backend).layer(TraceLayer::new_for_http());
     let app = build_cors_layer(&config.cors_allowed_origins, base_app)?;
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;

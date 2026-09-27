@@ -11,8 +11,8 @@ The KMS releases a `merod` node's storage-encryption key only after the node pro
 against the hardware, that it is running an approved measurement. This is a two-round
 challenge-response: the node first gets a fresh nonce, then presents a TDX quote and a
 signature binding that nonce to its identity. The KMS verifies the quote, enforces the
-[measurement policy](/flows/policy-management/), and only then derives and returns the
-key. This is the trust plane where **the KMS verifies the node** (see the
+[measurement policy](/flows/policy-management/), and only then derives the key from its
+cluster root and returns it sealed to the node. This is the trust plane where **the KMS verifies the node** (see the
 [trust model](/understand/trust-model/)).
 
 The quote itself is produced as described in [Attestation Flow](/flows/attestation-flow/);
@@ -21,13 +21,14 @@ here we cover the gate that consumes it.
 ## Endpoints
 
 The KMS serves the release protocol over two unauthenticated routes plus a health
-check:
+check. Any replica of the cluster can serve either route: a node's `/get-key` rarely
+reaches the replica that served its `/challenge`, and it does not need to.
 
 | Method · Path | Body | Purpose |
 | --- | --- | --- |
 | `POST /challenge` | `{ peerId }` | Issue a single-use nonce challenge bound to a peer ID. |
-| `POST /get-key` | `{ challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64 }` | Verify attestation + policy, derive and return the key. |
-| `GET /health` | — | Liveness probe. |
+| `POST /get-key` | `{ challengeId, quoteB64, peerId, peerPublicKeyB64, signatureB64, sealToB64 }` | Verify attestation + policy, derive the key and return it sealed. |
+| `GET /health` | — | Liveness probe, plus `clusterRootReady`. |
 
 ## Round 1 — challenge
 
@@ -37,26 +38,26 @@ check:
    { "peerId": "12D3KooW..." }
    ```
 
-2. **KMS mints a nonce.** It generates a cryptographically random 32-byte nonce and a
-   random 16-byte challenge ID (returned as 32 hex characters — not a UUID), and stores
-   `challengeId -> (nonce, peerId, expiresAt)`.
+2. **KMS mints a stateless challenge.** The challenge ID is 16 random bytes and the
+   expiry, hex-encoded (48 characters). The nonce is an HMAC-SHA256 over the ID and the
+   peer ID under a challenge key HKDF'd from the cluster root. Nothing is stored.
 
 3. **KMS responds:**
 
    ```json
    {
-     "challengeId": "<32 hex chars>",
-     "nonceB64": "<base64 of 32 random bytes>",
+     "challengeId": "<48 hex chars>",
+     "nonceB64": "<base64 of the 32-byte nonce>",
      "expiresAt": 1700000000
    }
    ```
 
-The challenge lives in a **challenge store** — an in-memory `HashMap` behind a mutex
-for single-process use, or a Redis backend (using Lua scripts for atomic
-insert/consume) for multi-instance deployments. A global cap
-(`MAX_PENDING_CHALLENGES`, default 10000) bounds outstanding challenges; exceeding it
-returns `429 rate_limited`. Challenges expire after `CHALLENGE_TTL_SECS` (default
-**60 seconds**) and are pruned lazily.
+Because the nonce is recomputed from the challenge ID with a key only the cluster
+holds, any replica can recompute it, and only for the peer that asked for it
+(`mero-kms/src/stateless_challenge.rs`). A forged ID yields a nonce its forger cannot
+compute, so the node's signature and quote refuse it. Challenges expire after
+`CHALLENGE_TTL_SECS` (default **60 seconds**). A replica without its root cannot issue
+one and answers `503 policy_not_ready`.
 
 ## Round 2 — get-key
 
@@ -65,28 +66,31 @@ signs a payload binding the challenge to its key, and calls `/get-key`:
 
 ```json
 {
-  "challengeId": "<32 hex chars>",
+  "challengeId": "<48 hex chars>",
   "quoteB64": "<base64 raw TDX quote>",
   "peerId": "12D3KooW...",
   "peerPublicKeyB64": "<base64 protobuf libp2p public key>",
-  "signatureB64": "<base64 signature over the canonical payload>"
+  "signatureB64": "<base64 signature over the canonical payload>",
+  "sealToB64": "<base64 one-time X25519 public key>"
 }
 ```
 
-The KMS runs a fixed pipeline. The challenge is **consumed before** any cryptographic
-check, so a replayed request always fails on its second attempt regardless of where
-the first attempt errored:
+The KMS runs a fixed pipeline. The challenge is **redeemed before** any cryptographic
+check, so a request replayed to the same replica always fails on its second attempt
+regardless of where the first attempt errored:
 
 1. **Validate inputs.** Peer-ID shape (base58btc, ≤128 chars) and challenge-ID shape
-   (32 hex chars) are checked; the quote is base64-decoded.
+   (48 hex chars) are checked; the quote is base64-decoded. Without `sealToB64` the
+   request is refused (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, on in every image).
 
-2. **Policy-ready gate.** If the KMS has no loaded policy, key release is refused with
-   `503 policy_not_ready` before anything else — `/get-key` fails closed while
-   `/attest` still works.
+2. **Root gate.** If the replica does not hold its cluster's root yet, key release is
+   refused with `503 policy_not_ready` before anything else — `/get-key` fails closed
+   while `/attest` still works.
 
-3. **Consume the challenge (single-use).** The store atomically fetches and deletes the
-   challenge, checking it belongs to this `peerId` and is not expired. Missing, already
-   consumed, or expired → `401 invalid_challenge`.
+3. **Redeem the challenge (single-use per replica).** The replica checks the token's tag
+   against this `peerId` and its expiry, and enters it in its replay set. A forged,
+   foreign, expired, or already-redeemed challenge → `401 invalid_challenge`; a full
+   replay set (`MAX_CONSUMED_CHALLENGES`) → `429 rate_limited`.
 
 4. **Verify the peer signature.** The submitted public key is decoded, confirmed to
    derive to the claimed `peerId`, and used to verify a signature over the canonical
@@ -95,8 +99,9 @@ the first attempt errored:
    `invalid_signature`.
 
 5. **Verify the attestation.** The quote is checked cryptographically, and its
-   `report_data` must carry the issued nonce in bytes 0–31 and `SHA-256(peerId)` in
-   bytes 32–63. A failed nonce check → `401 invalid_challenge`; a failed identity
+   `report_data` must carry the issued nonce in bytes 0–31 and, in bytes 32–63, a
+   binding over the peer ID and the `sealToB64` key (`SHA-256(peerId)` for a legacy
+   unsealed request). A failed nonce check → `401 invalid_challenge`; a failed identity
    binding → `peer_id_mismatch`; otherwise `attestation_verification_failed`.
 
 6. **Enforce the measurement policy.** The reported TCB status must be in
@@ -105,33 +110,35 @@ the first attempt errored:
    empty allowlist for any enforced register is treated as a rejection, so a
    misconfigured policy fails closed. See [Policy Management](/flows/policy-management/).
 
-7. **Derive the key.** Only now does the KMS call dstack to derive the key along the
-   path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (e.g. `merod/storage/<profile>/<peerId>`).
-   The derivation is deterministic in those inputs.
+7. **Derive the key.** Only now does the KMS derive the key by HKDF from the cluster
+   root along the path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (e.g.
+   `merod/storage/<profile>/<peerId>`). The derivation is deterministic in those inputs,
+   so every replica of the cluster derives the same key.
 
-8. **Return the key:**
+8. **Return the key, sealed** to the node's one-time `sealToB64` key (AES-GCM under an
+   X25519 agreement with the KMS's root-derived transport key):
 
    ```json
-   { "key": "<base64 key material from dstack>" }
+   { "sealedKeyB64": "<base64>", "sealNonceB64": "<base64 12-byte nonce>" }
    ```
 
 ```text
 node ──POST /challenge { peerId }──────────────▶ KMS
 node ◀─{ challengeId, nonceB64, expiresAt }───── KMS
 
-node: build report_data = nonce || SHA-256(peerId)
-node: quote = dstack.get_quote(report_data)
+node: build report_data = nonce || binding(peerId, sealTo)
+node: quote = TDX quote over report_data
 node: sig   = sign({challengeId, nonceHex, quoteHash, peerId})
 
 node ──POST /get-key { challengeId, quoteB64,
                        peerId, peerPublicKeyB64,
-                       signatureB64 }──────────▶ KMS
-                                                 KMS: consume challenge (single-use)
+                       signatureB64, sealToB64 }▶ KMS (any replica)
+                                                 KMS: redeem challenge (tag, expiry, replay set)
                                                  KMS: verify signature -> identity
                                                  KMS: verify quote + nonce + peer bind
                                                  KMS: enforce TCB + MRTD + RTMR0-3
-                                                 KMS: key = dstack.get_key(path)
-node ◀─{ key }────────────────────────────────── KMS
+                                                 KMS: key = HKDF(root, path)
+node ◀─{ sealedKeyB64, sealNonceB64 }─────────── KMS
 ```
 
 <SeqDiagram
@@ -140,42 +147,44 @@ node ◀─{ key }────────────────────�
   lanes={[
     { label: 'merod node', color: '#3fb950' },
     { label: 'KMS', color: '#58a6ff' },
-    { label: 'dstack', color: '#a371f7' },
+    { label: 'Cluster root (in RAM)', color: '#a371f7' },
   ]}
   steps={[
     { from: 0, to: 1, label: 'POST /challenge { peerId }', color: '#a5ff11' },
-    { from: 1, to: 1, label: 'mint 32-byte nonce + challengeId, store' },
+    { from: 1, to: 1, label: 'mint 32-byte nonce; challengeId = nonce‖expiry‖HMAC tag' },
     { from: 1, to: 0, label: '{ challengeId, nonceB64, expiresAt }', color: '#58a6ff' },
-    { from: 0, to: 0, label: 'report_data = nonce || SHA-256(peerId)' },
-    { from: 0, to: 2, label: 'get_quote(report_data)', color: '#a371f7' },
-    { from: 2, to: 0, label: 'raw TDX quote', color: '#a371f7', dashed: true },
+    { from: 0, to: 0, label: 'report_data = nonce || binding(peerId, sealTo)' },
+    { from: 0, to: 0, label: 'TDX quote over report_data' },
     { from: 0, to: 0, label: 'sign { challengeId, nonceHex, quoteHash, peerId }' },
-    { from: 0, to: 1, label: 'POST /get-key { quoteB64, peerId, pubKey, sig }', color: '#a5ff11' },
-    { from: 1, to: 1, label: 'consume challenge (single-use)' },
+    { from: 0, to: 1, label: 'POST /get-key { quoteB64, peerId, pubKey, sig, sealTo }', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'redeem challenge (tag, expiry, replay set)' },
     { from: 1, to: 1, label: 'verify peer signature → identity' },
     { from: 1, to: 1, label: 'verify quote + nonce + peer binding' },
     { from: 1, to: 1, label: 'enforce TCB + MRTD + RTMR0-3 policy' },
-    { from: 1, to: 2, label: 'get_key(namespace/profile/peerId)', color: '#a371f7' },
-    { from: 2, to: 1, label: 'derived key material', color: '#a371f7', dashed: true },
-    { from: 1, to: 0, label: '{ key }', color: '#3fb950' },
+    { from: 1, to: 2, label: 'HKDF(root, namespace/profile/peerId)', color: '#a371f7' },
+    { from: 2, to: 1, label: 'derived key', color: '#a371f7', dashed: true },
+    { from: 1, to: 0, label: '{ sealedKeyB64, sealNonceB64 }', color: '#3fb950' },
     { type: 'divider', label: 'storage key released only on fresh quote + matching measurement policy' },
   ]}
 />
 
 ## Security properties
 
-- **Single-use challenges.** Consumption deletes the challenge atomically, so replaying
-  the same `challengeId` fails.
+- **Single-use challenges, per replica.** Each replica remembers the challenges it has
+  redeemed until they expire. The same request sent to a second replica within the TTL
+  can pass the challenge check there, but it still needs the node's signature and a
+  quote bound to the node's one-time key, and what it releases is sealed to that key,
+  which a replayer does not hold.
 - **Freshness.** The nonce lives in the quote's `report_data`, proving the quote was
   generated for this specific challenge; stale challenges are TTL-pruned.
 - **Identity binding.** The signature ties the request to a key that provably owns the
   `peerId`, and the quote's second `report_data` half re-binds `SHA-256(peerId)` — a
   quote cannot be replayed for a different node.
-- **Deterministic keys.** Because derivation is a pure function of the namespace,
-  profile, and peer ID, a node receives the same key from any KMS instance rooted in the
-  same dstack backend.
-- **Fail-closed policy.** No loaded policy, or an empty allowlist for an enforced
-  register, blocks release rather than allowing it.
+- **Deterministic keys.** Because derivation is a pure function of the cluster root,
+  namespace, profile, and peer ID, a node receives the same key from any replica of its
+  release's cluster — and a different one from any other cluster.
+- **Fail-closed policy.** No root yet, or an empty allowlist for an enforced register,
+  blocks release rather than allowing it.
 
 :::caution
 Mock-quote acceptance exists only under the default-off `mock-attestation` build

@@ -5,13 +5,19 @@ mod challenge;
 pub mod errors;
 mod get_key;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
-use crate::challenge_store::ChallengeStore;
+use std::sync::Arc;
+
+use crate::backend::TdxBackend;
+use crate::cluster::{self, JoinNonces};
+use crate::stateless_challenge::SpentChallenges;
 use crate::Config;
+
+pub(crate) use attest::decode_fixed_b64_32;
 
 const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 
@@ -20,33 +26,41 @@ const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
 pub struct AppState {
     /// Service configuration and attestation policy.
     pub config: Config,
-    /// Backend for storing and consuming single-use challenges.
-    pub challenge_store: ChallengeStore,
+    /// Where keys and quotes come from.
+    pub(crate) backend: Arc<TdxBackend>,
+    /// Nonces this replica issued to replicas joining its cluster.
+    pub(crate) join_nonces: Arc<JoinNonces>,
+    /// The stateless challenges this replica has already accepted.
+    pub(crate) spent_challenges: Arc<SpentChallenges>,
 }
 
 /// Create the router with all endpoints.
-pub fn create_router(config: Config) -> eyre::Result<Router> {
-    let challenge_store = ChallengeStore::from_redis_url(config.redis_url.as_deref())
-        .map_err(|e| eyre::eyre!("failed to initialize challenge store: {}", e))?;
+pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router {
     let state = AppState {
         config,
-        challenge_store,
+        backend,
+        join_nonces: Arc::new(JoinNonces::default()),
+        spent_challenges: Arc::new(SpentChallenges::default()),
     };
 
-    Ok(Router::new()
+    Router::new()
         .route("/health", get(health_handler))
         .route("/challenge", post(challenge::challenge_handler))
         .route("/get-key", post(get_key::get_key_handler))
         .route("/attest", post(attest::attest_kms_handler))
+        .route("/cluster/nonce", post(cluster::join_nonce_handler))
+        .route("/cluster/join", post(cluster::join_handler))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
-        .with_state(state))
+        .with_state(state)
 }
 
-/// Health check endpoint.
-async fn health_handler() -> impl IntoResponse {
+/// Health check endpoint. Also reports whether this replica holds its
+/// cluster's root yet, so a deployer can tell when a new replica has joined.
+async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "alive",
-        "service": "mero-kms-phala"
+        "service": "mero-kms",
+        "clusterRootReady": state.backend.has_root(),
     }))
 }
 

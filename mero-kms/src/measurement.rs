@@ -53,9 +53,36 @@ impl<'de> serde::Deserialize<'de> for HexMeasurement {
     }
 }
 
+/// Whether a quote's hex `tdattributes` marks a debug TD (`TDATTRIBUTES.DEBUG`,
+/// bit 0 of the little-endian field). A debug TD reports the same measurements
+/// as the TD it came from, but its host can read its memory. Anything that is not
+/// 8 bytes of hex counts as debug, so a malformed field fails closed.
+pub(crate) fn is_debug_td(tdattributes_hex: &str) -> bool {
+    match hex::decode(tdattributes_hex.trim()) {
+        Ok(bytes) if bytes.len() == 8 => bytes[0] & 1 == 1,
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_debug_bit_is_bit_zero_of_the_first_byte() {
+        assert!(is_debug_td("0100000000000000"));
+        assert!(!is_debug_td("0000000000000000"));
+        // SEPT_VE_DISABLE, set on production GCP TDs.
+        assert!(!is_debug_td("0000001000000000"));
+        assert!(!is_debug_td("0000000000000001"));
+    }
+
+    #[test]
+    fn malformed_attributes_count_as_debug() {
+        assert!(is_debug_td(""));
+        assert!(is_debug_td("00"));
+        assert!(is_debug_td("zz00000000000000"));
+    }
 
     #[test]
     fn parse_valid_measurement() {

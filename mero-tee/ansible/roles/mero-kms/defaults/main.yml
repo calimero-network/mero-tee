@@ -1,0 +1,10 @@
+---
+# Path, on the machine running Packer, of the mero-kms binary to bake in
+# (built by the release workflow from this commit).
+mero_kms_binary: ""
+# Path, on the machine running Packer, of the node allowlist this KMS serves:
+# {"allowed_tcb_statuses": [...], "allowed_mrtd": [...], "allowed_rtmr0": [...],
+#  ... "allowed_rtmr3": [...]} -- the measurements of the node image released
+# with it. Baked into the image, so it is part of the KMS's own measurements.
+kms_node_policy_file: ""
+kms_listen_port: 8080

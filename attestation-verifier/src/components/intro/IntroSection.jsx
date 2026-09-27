@@ -5,8 +5,9 @@ export function IntroSection() {
     <section className="intro-section">
       <h2>What is the Quote Attestation Verifier?</h2>
       <p>
-        This tool verifies that a Phala KMS (Key Management Service) instance is running trusted,
-        unmodified code inside an Intel TDX Trusted Execution Environment (TEE). It performs:
+        This tool verifies that a mero-kms (Key Management Service) replica or a mero-tee node is
+        running trusted, unmodified code inside an Intel TDX Trusted Execution Environment (TEE). It
+        performs:
       </p>
       <ul>
         <li>
@@ -15,20 +16,17 @@ export function IntroSection() {
           the JWT signature against Intel&apos;s public keys.
         </li>
         <li>
-          <strong>RTMR visualization</strong> — Runtime Measurement Registers (RTMR0–3) are hardware
-          measurements from the quote. RTMR3 is extended at boot/runtime by the event log. We replay
-          the event log and compare replayed values to the quote to verify event log integrity.
-        </li>
-        <li>
-          <strong>Compose hash check</strong> — The event log contains a <code>compose-hash</code>{' '}
-          (64-char hex) that identifies the exact KMS image. We compare it against the official
-          release compatibility map to ensure you&apos;re running a known, released build.
+          <strong>Measurement check</strong> — MRTD and the Runtime Measurement Registers (RTMR0–3)
+          are parsed from the quote and compared with the allowlists of the signed release policy:{' '}
+          <code>kms-attestation-policy.&lt;profile&gt;.json</code> for the KMS,{' '}
+          <code>published-mrtds.json</code> for nodes. The image role and profile are measured into
+          RTMR2 and RTMR3, so a debug image cannot pass as a locked one.
         </li>
       </ul>
       <p className="intro-note">
-        For full verification (including policy allowlists), use the{' '}
+        To verify the release assets themselves (Sigstore signatures, checksums), use the{' '}
         <a
-          href="https://github.com/calimero-network/mero-tee/blob/master/scripts/attestation/README.md"
+          href="https://github.com/calimero-network/mero-tee/tree/master/scripts/release"
           target="_blank"
           rel="noopener noreferrer"
         >

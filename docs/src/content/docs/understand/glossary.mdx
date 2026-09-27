@@ -1,6 +1,6 @@
 ---
 title: Glossary
-description: Definitions for the TEE and Mero TEE terms used across this documentation — TDX, MRTD, RTMR, TCB, quote, attestation policy, dstack, KMS, and more.
+description: Definitions for the TEE and Mero TEE terms used across this documentation — TDX, MRTD, RTMR, TCB, quote, attestation policy, cluster root, KMS, and more.
 sidebar:
   order: 6
 ---
@@ -19,26 +19,44 @@ values.
 
 **Attestation policy** — the allowlist the KMS enforces before releasing a key:
 allowed MRTD, RTMR0–3, and TCB-status values (`AttestationPolicy` in
-`mero-kms/src/policy.rs`). Loaded from a signed GitHub release (or `ALLOWED_*`
-env vars in `USE_ENV_POLICY` mode) and optionally pinned by SHA-256.
+`mero-kms/src/policy.rs`). Baked into the KMS image (`ALLOWED_*` in
+`/etc/mero-kms/kms.env`) from the node release it ships with. The release also
+publishes it, together with the KMS's own measurements (`kms_allowed_*`), as the
+signed `kms-attestation-policy[.<profile>].json` that merod uses to pin the KMS.
 
 **Attestation verifier** — the public React + Vercel-serverless tool
 (`attestation-verifier/`) that verifies a KMS or node quote independently, via
 Intel Trust Authority.
 
+## B
+
+**Bootstrap replica** — the one KMS replica of a new cluster started with
+`kms-bootstrap=true` instance metadata (`MERO_KMS_BOOTSTRAP`). It generates the
+cluster root in RAM; every other replica joins. `kms-bootstrap` is cleared once
+the cluster has formed, since a second bootstrap would mean a second root.
+
 ## C
 
-**Challenge** — a single-use, TTL-bound random 32-byte nonce the KMS issues from
-`POST /challenge`. The node must embed it in its quote's `report_data`. Stored in
-the challenge store and consumed on the first `/get-key` attempt.
+**Challenge** — a single-use, TTL-bound 32-byte nonce the KMS issues from
+`POST /challenge`. The node must embed it in its quote's `report_data`. It is
+stateless: MAC'd with a key derived from the cluster root and carrying its expiry
+and peer ID, so any replica can redeem it; each replica keeps a replay set until
+expiry.
 
-**ChallengeId** — the identifier returned alongside a challenge: 16 random bytes,
-hex-encoded to 32 characters (`mero-kms/src/util.rs`). Used to look up and consume
-the nonce at `/get-key`. (It is not a UUID.)
+**ChallengeId** — the stateless challenge token returned by `/challenge` and echoed
+back to `/get-key`: 16 random bytes and the expiry, hex-encoded to 48 characters. Its
+nonce is an HMAC-SHA256 over the ID and the peer ID under a key derived from the
+cluster root (`mero-kms/src/stateless_challenge.rs`). (It is not a UUID.)
 
-**ChallengeStore** — the storage abstraction for pending challenges
-(`mero-kms/src/challenge_store.rs`). Two backends: an in-memory map (single
-instance) or Redis (multi-instance, using atomic Lua scripts).
+**Cluster** — the five KMS replicas (three zones, at least two regions) that
+serve one release, behind one VPC-internal URL. One cluster per release; an
+upgrade brings a new one.
+
+**Cluster root** — the random 32-byte secret every node key of a release derives
+from (`HKDF(root, "{namespace}/{profile}/{peerId}")`), along with the transport
+key for sealed release and the challenge key. It exists only in the memory of the
+cluster's replicas: never written to disk, never backed up. Losing every replica
+loses it, which costs node replacements, not data.
 
 **Cohort separation** — cryptographic isolation between image profiles: each
 profile extends RTMR3 with a distinct runtime event, so a debug node's quote can
@@ -47,24 +65,22 @@ key-derivation path.
 
 **compatibility-catalog.json** — the repo-root catalog mapping each release
 `version` to its `kms_tag`, `node_image_tag`, and policy URLs. Refreshed after a
-release by the `update-compatibility-catalog` workflow. (Distinct from the
-per-release `kms-phala-compatibility-map.json` asset that the verifier fetches.)
-
-**compose-hash** — a digest identifying the deployed dstack/Phala compose
-configuration, recorded in the quote's event log. The verifier extracts it
-(`attestation-verifier/src/utils/attestation.js`) so an operator can compare the
-running deployment against a known-good value.
+release by the `update-compatibility-catalog` workflow.
 
 **CVM (Confidential VM)** — a VM with hardware-enforced memory encryption and
-isolation. Both `merod` nodes and the KMS run as TDX CVMs; the hypervisor cannot
-read or tamper with their memory.
+isolation. Both `merod` nodes and the KMS run as TDX CVMs on GCP; the hypervisor
+cannot read or tamper with their memory.
 
 ## D
 
-**dstack** — Phala's TEE runtime, reached over a Unix socket
-(`DSTACK_SOCKET_PATH`, default `/var/run/dstack.sock`). It generates TDX quotes,
-emits runtime events (extending RTMR3), and performs the deterministic key
-derivation the KMS relies on.
+**Debug TD** — a TD launched with the `TDATTRIBUTES` debug bit. It reports the
+same measurements as a normal TD of the same image, but its host can read its
+memory, so the KMS refuses to start in one and never gives the root to one.
+
+**dm-verity** — the kernel's block-level integrity check. Both images' root
+filesystems are read-only EROFS sealed behind dm-verity, with the root hash on
+the measured kernel command line, so an offline edit of the boot disk is a read
+error rather than different code.
 
 ## F
 
@@ -80,24 +96,41 @@ trigger — the actual admission, eviction, and key purge happen in Calimero Cor
 a TDX quote and returns a signed JWT with the verified measurements and TCB
 status. The attestation verifier uses it as an independent oracle.
 
+## J
+
+**Join** — how a KMS replica other than the bootstrap one obtains the cluster
+root: `POST /cluster/nonce`, then `POST /cluster/join` with its quote and a
+one-time X25519 key. The giver releases the root, sealed to that key, only if the
+quote carries **exactly its own** MRTD and RTMR0–3 ("same as me"), is not a debug
+TD, and has an allowed TCB status; the joiner checks the giver's quote the same
+way before accepting. Peer addresses come from `kms-peers` metadata and are
+untrusted.
+
 ## K
 
-**Key derivation** — the KMS asks dstack to derive a storage key at the path
-`{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default prefix `merod/storage`). It
-is deterministic: the same inputs always yield the same key, and different
-profiles yield different keys for the same peer.
+**Key derivation** — the KMS derives a storage key by HKDF from the cluster root
+on the path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (default prefix
+`merod/storage`). It is deterministic: the same inputs always yield the same key
+from any replica of the cluster, and different profiles yield different keys for
+the same peer.
 
 **Key release** — the `/challenge` → `/get-key` flow by which an attested node
 obtains its storage encryption key. See [key release](/flows/key-release/).
 
-**KMS (mero-kms-phala)** — the Rust/Axum Key Management Service (`mero-kms/`) that
-validates node attestations and releases storage encryption keys via dstack.
+**KMS (mero-kms)** — the Rust/Axum Key Management Service (`mero-kms/`) that
+validates node attestations and releases storage encryption keys derived from its
+cluster root. It runs as the frozen GCP TDX image `merotee-kms-<profile>-<version>`.
+
+**`kms-url`** — the node instance-metadata key naming the KMS cluster's
+VPC-internal URL. MDMA sets it; `calimero-init` passes it to `merod init
+--kms-url`, which stores it as `tee.kms.url`.
 
 ## M
 
-**MDMA** — the fleet control plane that decides which namespaces a fleet node
-should join. The fleet HA sidecar polls it (`/api/fleet/should-join`) with the
-node's `peer_id` and MRTD, and confirms admissions back to it.
+**MDMA** — the fleet control plane. It deploys each release's KMS cluster and
+nodes, and decides which namespaces a fleet node should join: the fleet HA
+sidecar polls it (`/api/fleet/should-join`) with the node's `peer_id` and MRTD,
+and confirms admissions back to it.
 
 **Measurement** — a hardware-computed hash written into MRTD or an RTMR. In this
 system each is a 48-byte (96-hex-char) SHA-384 value (`HexMeasurement`).
@@ -127,9 +160,6 @@ specific request, preventing replay. Carried in the first 32 bytes of a quote's
 encoded in base58btc. Used as the node's identity in the challenge–response flow
 and as an input to key derivation.
 
-**Phala Cloud** — the confidential-compute host the KMS runs on, providing TDX
-hardware and the dstack runtime.
-
 **Profile** — one of three image build configurations: `debug` (full access),
 `debug-read-only` (read-only root, SSH retained), or `locked-read-only`
 (production: no SSH, locked down). Each writes a distinct RTMR3 event for cohort
@@ -150,7 +180,7 @@ enclave's software identity.
 
 **report_data** — 64 caller-supplied bytes baked into a quote. Mero TEE splits it
 as `nonce ‖ binding`: for `/get-key` the binding is `SHA-256(peerId)`; for
-`/attest` it defaults to `SHA-256("mero-kms-phala-attest-v1")`.
+`/attest` it defaults to `SHA-256("mero-kms-attest-v1")`.
 
 **RTMR (Runtime Measurement Register)** — one of four extend-only registers
 (RTMR0–3) that record measurements across the VM lifecycle. RTMR0 ≈ firmware,
@@ -171,7 +201,8 @@ Its HTTP mapping: `invalid_request` / `invalid_peer_id` (400), `invalid_challeng
 `published-mrtds.json`; no signing key is stored in the repo.
 
 **Storage encryption key** — the key that decrypts a node's on-disk state, derived
-by dstack and released by the KMS after a successful attestation. It is unrelated
+from the cluster root and released by the KMS, sealed, after a successful
+attestation. It is unrelated
 to the per-group keys a `ReadOnlyTee` replica receives in Core.
 
 ## T

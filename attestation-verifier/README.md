@@ -6,15 +6,17 @@ Public web tool for verifying KMS and node attestations via Intel Trust Authorit
 
 ## Deploy
 
-Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `KMS_ALLOWED_HOSTS`, `NODE_ALLOWED_HOSTS`.
+Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALLOWED_HOSTS`.
 
 ## Flow
 
-1. User provides KMS URL or pastes attestation
-2. API fetches `/attest` from KMS
-3. Quote sent to ITA for verification
-4. Nonce binding and JWT verification
-5. Results displayed with measurement comparison
+1. Node: the user gives a node URL and the API fetches `/admin-api/tee/attest` with a fresh nonce.
+   KMS: mero-kms replicas are reachable only inside their VPC, so the operator calls a replica's
+   `/attest` there and pastes the response (optionally with the nonce they sent).
+2. Quote sent to ITA for verification
+3. Nonce binding and JWT verification
+4. MRTD/RTMR0-3 compared with the release policy: `kms-attestation-policy.<profile>.json`
+   (KMS allowlists) or `published-mrtds.json` (nodes)
 
 ## Development
 

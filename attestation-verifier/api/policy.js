@@ -1,6 +1,6 @@
 /**
  * GET /api/policy?tag=mero-kms-v2.1.73&profile=debug
- * Proxies kms-phala-attestation-policy.{profile}.json from GitHub releases (avoids CORS).
+ * Proxies kms-attestation-policy.{profile}.json from GitHub releases (avoids CORS).
  */
 const REPO = 'calimero-network/mero-tee';
 const TAG_RE = /^mero-kms-v[\d.]+$/;
@@ -23,9 +23,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Valid profile required: debug, debug-read-only, locked-read-only' });
   }
 
-  const asset = profile === 'locked-read-only'
-    ? 'kms-phala-attestation-policy.locked-read-only.json'
-    : `kms-phala-attestation-policy.${profile}.json`;
+  const asset = `kms-attestation-policy.${profile}.json`;
   const url = `https://github.com/${REPO}/releases/download/${tag}/${asset}`;
 
   try {

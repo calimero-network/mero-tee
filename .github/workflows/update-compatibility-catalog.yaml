@@ -35,9 +35,16 @@ jobs:
             | sort -V -u)"
           catalog="[]"
           for v in ${versions}; do
+            # Entries already in the catalog stay as recorded: releases before
+            # the GCP TDX KMS published a differently named policy asset.
+            existing="$(jq -c --arg v "${v}" '.releases[]? | select(.version == $v)' compatibility-catalog.json 2>/dev/null || true)"
+            if [[ -n "${existing}" ]]; then
+              catalog="$(echo "${catalog}" | jq --argjson e "${existing}" '. + [$e]')"
+              continue
+            fi
             kms_tag="mero-kms-v${v}"
             node_tag="mero-tee-v${v}"
-            kms_url="https://github.com/${repo}/releases/download/${kms_tag}/kms-phala-attestation-policy.json"
+            kms_url="https://github.com/${repo}/releases/download/${kms_tag}/kms-attestation-policy.json"
             node_url="https://github.com/${repo}/releases/download/${node_tag}/published-mrtds.json"
             entry="$(jq -n \
               --arg v "${v}" \

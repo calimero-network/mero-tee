@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import './TabNav.css';
 
 const TABS = [
-  { path: '/kms', label: 'KMS (Phala)', description: 'Verify Phala Key Management Service attestation' },
+  { path: '/kms', label: 'KMS', description: 'Verify a mero-kms (GCP TDX) attestation' },
   { path: '/mero-tee', label: 'Mero TEE', description: 'Verify mero-tee node attestations' },
 ];
 

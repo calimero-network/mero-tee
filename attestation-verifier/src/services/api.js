@@ -12,12 +12,16 @@ function getApiBase() {
   return typeof window !== 'undefined' ? window.location.origin : '';
 }
 
-export async function verifyKmsAttestation(kmsUrl) {
+/**
+ * Verify a pasted mero-kms `/attest` response. The KMS is reachable only inside its
+ * VPC, so the operator fetches the response there; `nonceB64` is the nonce they sent.
+ */
+export async function verifyKmsAttestation(attestation, nonceB64 = null) {
   const base = getApiBase();
   const res = await fetch(`${base}/api/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ kms_url: kmsUrl }),
+    body: JSON.stringify({ attestation, ...(nonceB64 ? { nonce_b64: nonceB64 } : {}) }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -99,15 +103,15 @@ export async function fetchCompatibilityMap(tag) {
   const base = getApiBase();
   const url = base
     ? `${base}/api/compat-map?tag=${encodeURIComponent(tag)}`
-    : `https://github.com/${REPO}/releases/download/${tag}/kms-phala-compatibility-map.json`;
+    : `https://github.com/${REPO}/releases/download/${tag}/kms-compatibility-map.json`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch compatibility map: ${res.status}`);
   return res.json();
 }
 
 /**
- * Fetch attestation policy (allowed MRTD/RTMR) for a release tag and profile.
- * Returns { policy: { allowed_mrtd, allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3 } }
+ * Fetch the KMS attestation policy for a release tag and profile.
+ * Returns its `policy` object ({ kms_allowed_mrtd, kms_allowed_rtmr0..3, node_allowed_*, ... }).
  */
 export async function fetchAttestationPolicy(tag, profile) {
   const base = getApiBase();

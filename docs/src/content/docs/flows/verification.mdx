@@ -1,6 +1,6 @@
 ---
 title: Verification
-description: What the attestation verifier checks — the quote signature chain via Intel Trust Authority, freshness, measurements, and the compose-hash policy match.
+description: What the attestation verifier checks — the quote signature chain via Intel Trust Authority, freshness, measurements, and the match against a signed release policy.
 sidebar:
   order: 3
 ---
@@ -10,9 +10,9 @@ import SeqDiagram from '../../../components/SeqDiagram.astro';
 Getting a quote back is not the same as trusting it. **Verification** is the set of
 checks that turn a raw TDX quote into a verdict: that it was produced by genuine Intel
 TDX hardware, that it is fresh (not replayed), that its measurements are the ones you
-expect, and that its running configuration matches a known release. Mero TEE ships a
+expect, and that they match a known release. Mero TEE ships a
 public **attestation verifier** — a web app plus a stateless `/api/verify` serverless
-function — that performs these checks against a live KMS or node.
+function — that performs these checks on a KMS attestation or against a live node.
 
 The quote-production step this consumes is described in
 [Attestation Flow](/flows/attestation-flow/); the register model is shared with
@@ -24,11 +24,12 @@ Calimero Core's
 The verifier establishes four independent properties. A quote is only trustworthy when
 all four hold.
 
-1. **Freshness (nonce binding).** When the verifier fetches the attestation itself
-   (given a KMS or node URL), it generates a fresh 32-byte nonce, sends it, and then
-   confirms the first 32 bytes of the returned `reportDataHex` equal that nonce. A
-   mismatch means the attestation was not produced for this request — a possible
-   replay — and is rejected.
+1. **Freshness (nonce binding).** When the verifier fetches a node's attestation
+   itself, it generates a fresh 32-byte nonce, sends it, and then confirms the first 32
+   bytes of the returned `reportDataHex` equal that nonce. For a pasted KMS attestation
+   it does the same with the nonce the operator sent to `/attest`, when given
+   (`nonce_b64`). A mismatch means the attestation was not produced for this request —
+   a possible replay — and is rejected.
 
 2. **Quote authenticity (signature chain).** The verifier submits the quote to **Intel
    Trust Authority (ITA)** (`https://api.trustauthority.intel.com/appraisal/v2/attest`
@@ -41,30 +42,27 @@ all four hold.
 
 3. **Measurements.** The ITA claims carry the quote's measurement registers — MRTD,
    RTMR0–3 — and the TCB status (`attester_tcb_status`, e.g. `UpToDate`,
-   `SWHardeningNeeded`, `OutOfDate`). The verifier surfaces these, and independently
-   **replays RTMR0–3 from the dstack event log** (each register is the SHA-384 extend of
-   its `event_type:event:payload` entries, starting from the zero register) and compares
-   the replayed value against the value in the quote. A match confirms the event log
-   faithfully explains the register.
+   `SWHardeningNeeded`, `OutOfDate`). The verifier surfaces these, parsed from the quote
+   itself and cross-checked against the claims.
 
-4. **Policy / compose-hash match.** From the event log the verifier extracts the
-   `compose-hash` (and `app-id`) event — the RTMR3 (`imr == 3`) entry that measures the
-   deployed Docker Compose configuration. It compares that 64-hex `compose_hash` against
-   the per-profile expected values published in the release **compatibility map**
-   (`kms-phala-compatibility-map.json`, under `compatibility.profiles.<profile>.event_payload`).
-   A match identifies which release profile the instance is running; no match means the
-   running configuration is not a recognized release.
+4. **Release policy match.** The verifier compares MRTD and RTMR0–3 against a signed
+   release: for a KMS, the `kms_allowed_*` lists of the release's
+   `kms-attestation-policy.<profile>.json`; for a node, the profile's entry in
+   `published-mrtds.json`. All five registers pin the image — firmware, kernel, the
+   dm-verity root hash on the command line, and the role/profile/root-hash event in
+   RTMR3 — so a match identifies the release and profile the instance runs; no match
+   means it is not a released image.
 
 ```text
-verifier ── nonce (32 random bytes) ──▶ KMS /attest  (or node /admin-api/tee/attest)
-verifier ◀── { quoteB64, reportDataHex, eventLog } ──
+verifier ── nonce (32 random bytes) ──▶ node /admin-api/tee/attest
+          (or: operator ── nonce ──▶ KMS /attest inside the VPC, pastes the response)
+verifier ◀── { quoteB64, reportDataHex } ──
 
 1. reportDataHex[0..32] == nonce ?                 -> freshness / anti-replay
 2. quote ──▶ Intel Trust Authority ──▶ signed JWT
    verify JWT signature vs Intel JWKS              -> quote authenticity
-3. read MRTD / RTMR0-3 / tcb_status from claims
-   replay RTMR0-3 from event log, compare          -> measurement integrity
-4. compose-hash (imr==3) vs release compat map     -> known-release policy match
+3. read MRTD / RTMR0-3 / tcb_status                -> measurements
+4. MRTD / RTMR0-3 vs signed release policy         -> known-release match
 ```
 
 <SeqDiagram
@@ -76,14 +74,14 @@ verifier ◀── { quoteB64, reportDataHex, eventLog } ──
     { label: 'Intel Trust Authority', color: '#f0883e' },
   ]}
   steps={[
-    { from: 0, to: 1, label: 'verify request (kms_url / node_url)', color: '#a5ff11' },
-    { from: 1, to: 1, label: 'fresh 32-byte nonce, fetch /attest → quote + eventLog' },
+    { from: 0, to: 1, label: 'verify request (node_url, or pasted KMS attestation + nonce)', color: '#a5ff11' },
+    { from: 1, to: 1, label: 'fresh 32-byte nonce, fetch node attest → quote' },
     { from: 1, to: 1, label: 'reportDataHex[0..32] == nonce ? (freshness / anti-replay)' },
     { from: 1, to: 2, label: 'submit quote for appraisal', color: '#f0883e' },
     { from: 2, to: 1, label: 'signed JWT', color: '#f0883e', dashed: true },
     { from: 1, to: 1, label: 'verify JWT signature vs Intel JWKS (authenticity)' },
-    { from: 1, to: 1, label: 'read MRTD / RTMR0-3 / tcb_status; replay RTMR0-3 from event log' },
-    { from: 1, to: 1, label: 'compose-hash (imr==3) vs release compatibility map' },
+    { from: 1, to: 1, label: 'read MRTD / RTMR0-3 / tcb_status' },
+    { from: 1, to: 1, label: 'MRTD / RTMR0-3 vs signed release policy' },
     { from: 1, to: 0, label: 'verdict', color: '#58a6ff' },
     { type: 'divider', label: 'trustworthy only when all four properties hold' },
   ]}
@@ -93,18 +91,19 @@ verifier ◀── { quoteB64, reportDataHex, eventLog } ──
 
 `/api/verify` works from any one of:
 
-- **`kms_url`** — the verifier fetches `/attest` from the KMS itself (nonce generated
-  server-side, freshness checked). Hosts are constrained by an allow-list
-  (`phala.network`, localhost by default) as SSRF protection.
-- **`node_url`** — the verifier fetches `/admin-api/tee/attest` from a `merod` node.
-- **`attestation`** — a pre-fetched attestation JSON pasted directly (no server-side
-  freshness check, since the verifier did not choose the nonce).
+- **`node_url`** — the verifier fetches `/admin-api/tee/attest` from a `merod` node
+  (nonce generated server-side, freshness checked). Hosts are constrained by an
+  allow-list (`NODE_ALLOWED_HOSTS`) as SSRF protection.
+- **`attestation`** (+ optional **`nonce_b64`**) — a pre-fetched attestation JSON,
+  pasted. This is the only way to verify a KMS: replicas listen only inside their VPC,
+  so the verifier never fetches from one. Call `/attest` from inside the VPC with a
+  nonce you chose and paste the response together with that nonce.
 
 :::note
-Freshness is only enforced on the URL-fetch paths, where the verifier controls the
-nonce. When an attestation is pasted in, the verifier can still check the ITA signature,
-measurements, and compose-hash, but it cannot vouch that the quote was minted for *this*
-session.
+Freshness is checked when the verifier chose the nonce (`node_url`) or was told it
+(`nonce_b64`). Without either, the verifier can still check the ITA signature and the
+measurements against the release, but it cannot vouch that the quote was minted for
+*this* session.
 :::
 
 ## Two internal trust planes
@@ -113,10 +112,9 @@ The public verifier is the operator-facing tool. Inside the system, two automate
 verification relationships run continuously (see the [trust model](/understand/trust-model/)):
 
 - **A node verifies the KMS** before requesting a key: it pulls a quote via `/attest`
-  with a fresh nonce, compares the KMS measurements against the signed release policy,
-  and replays the RTMR3 event log to check the KMS's compose hash against the policy's
-  `kms_allowed_event_payload` — the same compose-hash check as step 4 above, enforced
-  on every key fetch.
+  with a fresh nonce, refuses a debug TD, and compares the KMS's TCB status and MRTD /
+  RTMR0–3 against the `kms_allowed_*` lists of the signed release policy — the same
+  check as step 4 above, enforced on every key fetch.
 - **The KMS verifies a node** on every key request: the quote signature, the nonce
   binding, and the full measurement policy are checked in [Key Release](/flows/key-release/).
 
@@ -135,7 +133,7 @@ values and version pairings used for that comparison are managed in
 [Policy Management](/flows/policy-management/).
 
 :::caution
-The RTMR3 `compose-hash` value is authoritative **only** when read from a verified
-quote's event log. The same value taken from provisioning metadata or operator-supplied
-config proves nothing — only the TDX-attested value can be trusted.
+Measurements are authoritative **only** when read from a verified quote. The same values
+taken from provisioning metadata, an image label or operator-supplied config prove
+nothing — only the TDX-attested values can be trusted.
 :::

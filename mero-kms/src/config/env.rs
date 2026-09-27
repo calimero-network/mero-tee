@@ -2,8 +2,6 @@
 
 use eyre::{bail, Result as EyreResult};
 
-use crate::util::SHA256_HEX_LEN;
-
 fn parse_bool_flag(raw: &str) -> EyreResult<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -37,28 +35,6 @@ pub fn parse_csv_env(name: &str, lowercase: bool) -> Option<Vec<String>> {
             .filter(|s| !s.is_empty())
             .collect()
     })
-}
-
-/// Validate and normalize a SHA-256 hex pin (exactly 64 hex chars, lowercase, no `0x`).
-pub fn normalize_hash_pin(raw: &str) -> EyreResult<String> {
-    let normalized = raw.trim().trim_start_matches("0x").to_ascii_lowercase();
-    if normalized.len() != SHA256_HEX_LEN {
-        bail!(
-            "MERO_KMS_POLICY_SHA256 must contain exactly {} hex chars (got {})",
-            SHA256_HEX_LEN,
-            normalized.len()
-        );
-    }
-    if !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("MERO_KMS_POLICY_SHA256 contains non-hex characters");
-    }
-    Ok(normalized)
-}
-
-/// Compute the SHA-256 hash of `bytes` and return it as a lowercase hex string.
-pub fn hash_bytes_hex(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 /// Read an environment variable as a UTF-8 string, returning `None` when not
@@ -123,39 +99,5 @@ mod tests {
     #[test]
     fn parse_bool_flag_rejects_unknown() {
         assert!(parse_bool_flag("maybe").is_err());
-    }
-
-    #[test]
-    fn normalize_hash_pin_accepts_valid_sha256() {
-        let valid = "ab".repeat(32);
-        let result = normalize_hash_pin(&valid).unwrap();
-        assert_eq!(result, valid);
-    }
-
-    #[test]
-    fn normalize_hash_pin_strips_0x_prefix_and_lowercases() {
-        let upper = "AB".repeat(32);
-        let result = normalize_hash_pin(&format!("0x{upper}")).unwrap();
-        assert_eq!(result, "ab".repeat(32));
-    }
-
-    #[test]
-    fn normalize_hash_pin_rejects_wrong_length() {
-        assert!(normalize_hash_pin("abcd").is_err());
-    }
-
-    #[test]
-    fn normalize_hash_pin_rejects_non_hex() {
-        let non_hex = "zz".repeat(32);
-        assert!(normalize_hash_pin(&non_hex).is_err());
-    }
-
-    #[test]
-    fn hash_bytes_hex_returns_consistent_sha256() {
-        let hash = hash_bytes_hex(b"hello");
-        assert_eq!(hash.len(), 64);
-        let hash2 = hash_bytes_hex(b"hello");
-        assert_eq!(hash, hash2);
-        assert_ne!(hash, hash_bytes_hex(b"world"));
     }
 }

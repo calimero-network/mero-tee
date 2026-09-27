@@ -47,18 +47,23 @@ false, the guarantees above it do not hold.
    and layers policy on top. This is a real trust boundary: a bug in that crate
    is a bug in the KMS's verification.
 
-4. **dstack.** Quote generation and storage-key derivation are delegated to
-   dstack: the KMS asks dstack for its own quote (`/attest`) and, on success,
-   asks dstack to derive the node key at a deterministic path. We trust dstack's
-   TCB to bind quotes honestly and to derive keys deterministically and
-   confidentially.
+4. **Google's TDX firmware and the KMS release workflow.** The KMS runs on GCP
+   Confidential VMs. Google's firmware is measured (MRTD), so a change shows up,
+   but it is Google's; Google can stop VMs (availability) but cannot read TD
+   memory. The release workflow that builds the KMS image defines what "same as
+   me" means for the cluster join, and so which code may ever hold a cluster
+   root. The build is not reproducible yet (the base image is pinned to a
+   family, and apt installs from live repositories), so outsiders cannot yet
+   rebuild the image to check its measurements.
 
-5. **The signed policy chain.** The measurement allowlists the KMS enforces come
-   from a release policy signed with **keyless Sigstore** (Fulcio certificate +
-   Rekor transparency log), issued under the GitHub Actions OIDC identity
+5. **The signed policy chain.** The KMS measurements merod pins come from a
+   release policy (`kms-attestation-policy[.<profile>].json`) signed with
+   **keyless Sigstore** (Fulcio certificate + Rekor transparency log), issued
+   under the GitHub Actions OIDC identity
    (`https://token.actions.githubusercontent.com`) and verified by
    `--certificate-identity-regexp` + `--certificate-oidc-issuer`
-   (`scripts/release/verify-kms-phala-release-assets.sh`). Trusting the policy
+   (`scripts/release/verify-kms-release-assets.sh`). The node allowlist the KMS
+   enforces is baked into its image and so covered by those same measurements. Trusting the policy
    means trusting that pipeline identity and the Sigstore/Rekor infrastructure —
    there is **no signing private key** stored in the repository (`SECURITY.md`).
 
@@ -78,12 +83,12 @@ listed control blocks it **given the trust assumptions above hold**.
 | --- | --- | --- |
 | **On-path network (MITM)** | Observe/drop traffic; replay a captured request once. | Obtain a key: `/get-key` binds a single-use, TTL-bound challenge nonce that is **consumed before any crypto check**, so a replay fails on the second attempt (`get_key.rs`, [Trust Model](/understand/trust-model/)). Impersonate the KMS: a fake KMS cannot produce a valid quote with the expected KMS measurements (Plane 1 `/attest`). |
 | **Malicious node operator (no TEE)** | Send arbitrary key requests. | Get a key from outside TDX: a machine that is not genuine TDX cannot produce a DCAP-valid quote, and `verify_attestation` rejects it. Spoof another node's identity: the request must carry a signature by the key that derives to the claimed `peerId`, and the quote's `report_data` must contain `SHA-256(peerId)` (`hash_peer_id`, `get_key.rs`). |
-| **Tampered / unapproved node image (inside TDX)** | Boot and attest as a real TDX guest. | Pass policy: a modified image yields different MRTD/RTMR measurements, and the KMS rejects any register value not on its allowlist (`measurement_policy_rejected`, 403). Escalate profile: each image profile has a distinct hardware-measured RTMR3; a debug node's quote is rejected by a production policy. **Gap:** this holds for what is measured -- firmware, kernel, initrd and cmdline. The root filesystem is not integrity-checked at boot, so an offline edit to the boot disk that leaves grub alone keeps the same measurements ([#334](https://github.com/calimero-network/mero-tee/issues/334)). |
+| **Tampered / unapproved node image (inside TDX)** | Boot and attest as a real TDX guest. | Pass policy: a modified image yields different MRTD/RTMR measurements, and the KMS rejects any register value not on its allowlist (`measurement_policy_rejected`, 403). Escalate profile: each image profile has a distinct hardware-measured RTMR3; a debug node's quote is rejected by a production policy. The root filesystem is covered too: it is a read-only EROFS image behind dm-verity, whose root hash is on the measured cmdline, so an offline edit to the boot disk fails every read of a changed block ([#334](https://github.com/calimero-network/mero-tee/issues/334)). /etc and /var are a tmpfs overlay: nothing the running node writes reaches the boot disk. |
 | **Cloud project / host operator of a node VM** | Snapshot, read and rewrite the node's disks; set instance metadata (KMS URL, `tee-release-version`, log/metrics endpoints); read the serial port. | Read the node's data: the data disk is LUKS2 (aes-xts + hmac-sha256 integrity) with a key the KMS releases only to the attested TD, so a snapshot is ciphertext and an offline edit fails to read rather than decrypting into something merod acts on. Downgrade the KMS policy: `tee-release-version` below the image's own version is refused (`MERO_TEE_MIN_VERSION`), and every profile pins its own policy profile (`MERO_TEE_PROFILE`), so a node is verified only against its own profile's KMS policy. Harvest memory from the boot disk: the journal is volatile, core dumps and swap are off, and the boot log is not sent to the serial console on `locked-read-only`. |
 | **Node on outdated microcode / TCB** | Produce a syntactically valid quote. | Get a key if its TCB status is not allow-listed: `enforce_tcb_status` rejects any status outside `allowed_tcb_statuses` (`tcb_status_rejected`, 403). |
-| **Compromised KMS host / operator** | Restart the service, change env/config, deny service. | Silently weaken policy to "allow everything": startup **fails closed** — with enforcement on, every register allowlist *and* the TCB allowlist must be non-empty or the service refuses to start (`validate_policy_requirements`, `policy.rs`). Forge a signed policy: policies are Sigstore-signed and can be SHA-256-pinned (`MERO_KMS_POLICY_SHA256`). The KMS holds no long-term secret of its own to exfiltrate. |
+| **Cloud project / host operator of the KMS** | Stop or delete replicas (deny service), set `kms-bootstrap` / `kms-peers` metadata, snapshot disks, start their own genuine cluster. | Read the cluster root: it lives only in TD memory, is never written (read-only verity root, tmpfs, no swap or core dumps), and is given only to a TD with exactly the same measurements that is not a debug TD. Change what the KMS releases keys to: the node allowlist, profile and environment are baked into the image and measured, and metadata can only choose bootstrap-or-join and peer addresses. A cluster they start themselves holds a different root and derives no existing node's keys. Deleting every replica loses the root: running nodes carry on, restarted nodes of that release are replaced from a new cluster. |
 | **Attacker with a captured valid quote** | Present it again. | Reuse it: the `report_data` nonce binds a quote to one challenge, and the challenge is single-use. A quote pasted into the public verifier without a verifier-chosen nonce is flagged as **not freshness-checked** ([Verification](/flows/verification/)). |
-| **SSRF via the public verifier** | Ask the verifier to fetch a URL. | Reach arbitrary internal hosts: `/api/verify` constrains targets to regex allowlists — `KMS_ALLOWED_HOSTS` (default `phala.network`, localhost) and `NODE_ALLOWED_HOSTS` (default IPv4, localhost), with HTTPS required except localhost (`verify.js`). |
+| **SSRF via the public verifier** | Ask the verifier to fetch a URL. | Reach arbitrary internal hosts: `/api/verify` fetches only node URLs, constrained to the `NODE_ALLOWED_HOSTS` regex allowlist (default IPv4, localhost), and never fetches from a KMS (`verify.js`). |
 | **Oversized / malformed request** | Send junk to any endpoint. | Exhaust the KMS: request bodies are capped at **64 KiB** (`MAX_REQUEST_BODY_BYTES`, `handlers/mod.rs`); malformed input maps to typed 4xx errors, never a panic. |
 | **Supply-chain (release artifacts)** | Publish a fake release or tamper an asset. | Pass verification: assets ship with Sigstore `.sig`/`.pem` bundles and Rekor entries; `cosign verify-blob` checks the GitHub OIDC identity before an operator trusts a policy or MRTD set (`scripts/release/`, `SECURITY.md`). |
 
@@ -127,8 +132,8 @@ mitigations group into four mechanisms:
   [Configuration Reference](/operate/config-reference/) for the knobs.
 
 Rejections are typed: `measurement_policy_rejected` and `tcb_status_rejected`
-return **403**, challenge/signature/attestation failures return **401**, an
-unloaded policy returns **503** (`handlers/errors.rs`). See
+return **403**, challenge/signature/attestation failures return **401**, a
+replica without its root returns **503** (`handlers/errors.rs`). See
 [error handling](/operate/error-handling/) for the full mapping.
 
 ## Non-guarantees
@@ -141,14 +146,19 @@ Being explicit about what Mero TEE does **not** promise:
   available, but whether a given `merod` client verifies the KMS *before*
   requesting a key is a client decision, not something the KMS can force
   ([Trust Model](/understand/trust-model/)).
-- **Pasted attestations are not freshness-checked.** The public verifier can only
-  vouch that a quote was minted for *this* session on its URL-fetch paths, where
-  it chose the nonce ([Verification](/flows/verification/)).
+- **Pasted attestations are freshness-checked only against the nonce you give.**
+  The public verifier can vouch that a quote was minted for *this* session only
+  when it chose the nonce (a node URL) or you pass the nonce you sent to `/attest`
+  ([Verification](/flows/verification/)).
 - **Release provenance ≠ runtime state.** Sigstore signatures prove an artifact
   is authentic; only a live attested quote proves what an instance is *running*.
   Full trust needs both.
-- **Trust anchors are assumed sound.** Intel/ITA, dstack, and the
-  `calimero-tee-attestation` crate are trusted, not verified, by this repo.
+- **Trust anchors are assumed sound.** Intel/ITA, Google's TDX firmware, and
+  the `calimero-tee-attestation` crate are trusted, not verified, by this repo.
+- **No backup of a cluster root.** Losing every replica of a release's cluster
+  loses its root for good. That is a deliberate trade: a backup would add a
+  reader. It costs node replacements (new cluster, new nodes that sync from
+  peers), not data.
 
 ## Reporting a vulnerability
 
