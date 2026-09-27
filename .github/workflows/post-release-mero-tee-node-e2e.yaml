@@ -88,7 +88,10 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'workflow_run' &&
             github.event.workflow_run.conclusion == 'success' &&
-            github.event.workflow_run.head_branch == 'master') ||
+            github.event.workflow_run.head_branch == 'master' &&
+            github.event.workflow_run.head_repository.full_name == github.repository &&
+            (github.event.workflow_run.event == 'push' ||
+              github.event.workflow_run.event == 'workflow_dispatch')) ||
           (github.event_name == 'push' && github.ref == 'refs/heads/master') }}
     steps:
       - name: Checkout code
@@ -105,6 +108,9 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
           WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || '' }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name || '' }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
+          WORKFLOW_RUN_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name || '' }}
           INPUT_RELEASE_VERSION: ${{ github.event.inputs.release_version || '' }}
         run: |
           set -euo pipefail
@@ -137,12 +143,22 @@ jobs:
           }
 
           if [[ "${EVENT_NAME}" == "workflow_run" ]]; then
-            if [[ "${{ github.event.workflow_run.name }}" != "Release mero-tee" ]]; then
-              echo "::error::Expected workflow_run from 'Release mero-tee', got '${{ github.event.workflow_run.name }}'."
+            if [[ "${WORKFLOW_RUN_NAME}" != "Release mero-tee" ]]; then
+              echo "::error::Expected workflow_run from 'Release mero-tee', got '${WORKFLOW_RUN_NAME}'."
               exit 1
             fi
             if [[ "${WORKFLOW_RUN_HEAD_BRANCH}" != "master" ]]; then
               echo "::error::Expected master workflow_run, got branch '${WORKFLOW_RUN_HEAD_BRANCH}'."
+              exit 1
+            fi
+            # A branch name alone does not say which repository the run came
+            # from, so check that too, and that it was a release trigger.
+            if [[ "${WORKFLOW_RUN_HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]]; then
+              echo "::error::Expected workflow_run from ${GITHUB_REPOSITORY}, got '${WORKFLOW_RUN_HEAD_REPO}'."
+              exit 1
+            fi
+            if [[ "${WORKFLOW_RUN_EVENT}" != "push" && "${WORKFLOW_RUN_EVENT}" != "workflow_dispatch" ]]; then
+              echo "::error::Expected a push or workflow_dispatch release run, got '${WORKFLOW_RUN_EVENT}'."
               exit 1
             fi
             version="$(jq -r '.imageVersion // empty' "mero-tee/versions.json")"
