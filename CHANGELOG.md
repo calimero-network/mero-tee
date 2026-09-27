@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **A locked node waits for its data disk instead of refusing to start.** mdma creates the data disk and hot-attaches it only after the VM is running (a VM created with it can land on a different host pool from the one the release measured), but `calimero-init` gave the disk 30 s to appear. Creating and attaching 200 GB can take longer, so the first 2.3.79 node against a GCP KMS logged `no data disk ... after 30s` and then refused to keep state on the root disk. `locked-read-only` and KMS-backed nodes, where a missing disk is fatal anyway, now wait up to 600 s and say so every 30 s; other profiles keep 30 s. Covered by `calimero-init-data-disk-test.sh`.
+
 - **A node that fails to boot now ships the journal that says why.** `calimero-init` configured vector and vmagent as its very last step, so any `fatal` before it (the KMS unreachable, a data disk that would not open, a refused release pin) exited with no shipper running: no logs, no metrics, and no fleet sidecar, on a locked image with no console. The first production node against a GCP KMS cluster failed exactly this way, and the only symptom was mdma's post-boot health check timing out. Observability now starts straight after the metadata is read, before the binaries, the data disk and the KMS, none of which it depends on; vector reads the journal from the start of the boot.
 
 ### Added

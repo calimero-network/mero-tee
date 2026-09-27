@@ -90,6 +90,19 @@ grep -qF 'exit 1' <<<"$unmountable_block" \
        is full -- which is the bug this fixes. calimero-init's journal ships, so
        a node that stops here can say why."
 
+# --- it waits for mdma's hot-attach where the disk is required ---------------
+# mdma creates the data disk and attaches it AFTER the VM is running (a VM
+# created with it can land on a different host pool than the release measured),
+# so a locked or KMS-backed node must wait for the attach. 30 s lost the race on
+# the first production node against a GCP KMS, which then refused to start.
+wait_secs=$(grep -oE 'DATA_DEVICE_WAIT_SECS=[0-9]+' <<<"$code" | sort -t= -k2 -n | tail -1 | cut -d= -f2 || true)
+[[ -n "$wait_secs" ]] || fail "no DATA_DEVICE_WAIT_SECS: the data-disk wait is not configurable per profile"
+(( wait_secs >= 300 )) \
+  || fail "the longest data-disk wait is ${wait_secs}s; mdma hot-attaches the disk after the VM
+       starts, which can take minutes, so a locked or KMS-backed node needs >= 300s"
+grep -qF 'if [[ "$IMAGE_PROFILE" == "locked-read-only" || -n "$KMS_URL" ]]; then' <<<"$code" \
+  || fail "the long data-disk wait must apply to locked-read-only and KMS-backed nodes"
+
 # --- it survives a reboot ---------------------------------------------------
 grep -qF '/etc/fstab' <<<"$body" || fail "the mount is not persisted to /etc/fstab"
 grep -qF 'nofail' <<<"$body" \
