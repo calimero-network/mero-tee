@@ -85,6 +85,11 @@ node_exporter host metrics, which listen on loopback only. The labels are
 so KMS data never mixes with the fleet's. Metadata is operator-written, so
 anything logged must be safe for an operator to read. The rules:
 
+- **What `/get-key` logs:** `Received key release request`, then either
+  `Key derived successfully` or `Refused a key release: <reason>` (the
+  `ServiceError` message), with the peer ID. Joins log `Joined the cluster`,
+  `Cluster join failed: …` (joiner) and `Refused a cluster join: …` (giver).
+  The KMS dashboard counts these lines.
 - **Log peers, measurements and outcomes; never key material.** Nothing derived
   from the root (node keys, the challenge key, the transport key), the root
   itself, X25519 secrets, shared secrets or a sealing buffer may reach a log,
