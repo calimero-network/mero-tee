@@ -828,7 +828,7 @@ An **empty** report never erases a value MDMA already holds (only a different
 non-empty one overwrites), which is what lets an older and a newer sidecar be
 live at once during a fleet roll.
 
-### The two edges the image opens
+### The edges the image opens
 
 Being a relay means accepting a write from a caller with no account on this
 node, so the image has to open exactly one path — and it is a path that carries
@@ -839,7 +839,7 @@ authorship grant on the owning group. A node token would prove none of that, and
 requiring one would make the feature unreachable for exactly the callers it
 exists for.
 
-Both edges are driven by the single Ansible variable `fleet_delegated_access`
+All three edges are driven by the single Ansible variable `fleet_delegated_access`
 (defined at play level in `mero-tee/playbook.yml`; on for the ReadOnly fleet
 profiles, off for `debug`):
 
@@ -847,11 +847,36 @@ profiles, off for `debug`):
 | --- | --- |
 | Traefik (`traefik-routing.yml.j2`) | Adds a `node-api-intents` router for `PathRegexp(^/admin-api/contexts/[0-9a-f]{64}/intents$)`, `GET`/`POST`/`OPTIONS` only, at a higher priority than the auth-guarded `node-api` catch-all and **without** the `auth-node` forwardAuth middleware. A `PathPrefix` on `/admin-api/contexts/` would have exempted every context route on the node, `DELETE` included. |
 | `merod` (`calimero-init.sh.j2`) | Sets `server.admin.public_intents=true`, which moves those same two routes onto core's public router. |
+| Traefik (`node-sealed`) | Routes `POST /sealed/v2/handshake` and `POST /sealed/v2` (exact paths, plus `OPTIONS`) to `merod`, also without `auth-node`: forwardAuth cannot see the route a sealed request names, which is inside the envelope. See [sealing the intent](#sealing-the-intent-to-the-td) below. |
 
 They are one variable rather than two defaults on purpose: these nodes run
 `merod` in proxy auth mode, so **Traefik is the only gate**. An exemption added
 there without the matching `merod` setting still opens the path — the drift is
 silent in the unsafe direction.
+
+### Sealing the intent to the TD
+
+TLS from a browser ends at Traefik, on the host, outside the TD. Everything in an
+intent (the warrant and the method's arguments) is plaintext there. With the
+`node-sealed` router, a client can instead attest `merod`'s transport key
+(`POST /admin-api/tee/attest`, already public) and seal the intent to it: Traefik
+forwards opaque `POST /sealed/v2` requests, and only `merod`, inside the TD,
+opens them. mero-js does this with `connectCloud({ seal })`.
+
+The router is exempt from `auth-node` because forwardAuth could not apply to it,
+and that is safe only because `merod` enforces the boundary itself: in proxy auth
+mode it lets an opened request reach nothing but what it serves without a
+credential, which here is the intents route and the public probes and TEE routes.
+A sealed request for anything `auth-node` guards is refused inside the envelope
+with `403 sealed_route_unguarded`. So on these nodes intents are sealed, while
+logins (`/auth/`, served by mero-auth, outside `merod`) and session-bearing reads
+are not.
+
+`merod` enforces that rule from 0.11.0-rc.52. An older `merod` routes an opened
+request anywhere, which would make the router a way around every guard on the
+node, so `scripts/ci/tests/traefik-sealed-route-test.sh` refuses the router with
+an older `merodVersion`. It also pins the router to the relay-only block, to the
+two exact paths, and to the tight rate-limit tier.
 
 ## TLS: the certificate a browser needs
 
