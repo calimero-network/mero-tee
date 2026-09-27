@@ -838,30 +838,79 @@ This node has ~$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -d ' G')G \
 of usable space, not the provisioned disk size, and its state is UNENCRYPTED on \
 the boot disk. Recreate the node to move onto an encrypted data disk."
 else
-  # Wait for the device. mdma does NOT attach it at instance creation: it
-  # creates the disk and hot-attaches it once the VM is running, because a VM
-  # created with the extra disk can land on a different host pool from the one
-  # the release measured (dispatcher/app/gcp/instances.py, step 1). Creating a
-  # 200 GB disk and attaching it can take well over a minute, so 30 s lost the
-  # race and a locked node refused to start on a disk that was on its way.
+  # Wait for the device, and find it even where udev never names it.
   #
+  # mdma creates the VM with the disk attached as deviceName "data", which GCE's
+  # udev rule (65-gce-disk-naming.rules, via google_nvme_id on NVMe) links as
+  # /dev/disk/by-id/google-data. On the first 2.3.80 nodes that link never
+  # appeared although GCP listed the disk as attached from creation, and a
+  # locked image has no shell or kernel console to say why. So where the link
+  # is missing, fall back to the ONE whole disk that has nothing on it the
+  # kernel knows of: no partitions, no holders, not read-only, not mounted. The
+  # boot disk is partitioned and never qualifies. Two candidates is a guess, and
+  # this never guesses: it takes none. Picking by structure, not by NVMe
+  # enumeration order, is what keeps /dev/nvme0n2 out of this script.
+  #
+  # Nothing is trusted more for having been found this way. The link itself is
+  # derived from metadata the host supplies, and what the disk holds is decided
+  # below by `blkid -p` and the KMS-keyed LUKS header, never by its name.
+  find_unnamed_data_disk() {
+    # A count, not an array length: the brace-hash spelling opens a Jinja comment.
+    local disk type ro found="" count=0
+    while read -r disk type ro; do
+      [[ "$type" == "disk" && "$ro" == "0" ]] || continue
+      [[ "$disk" == /dev/loop* || "$disk" == /dev/ram* || "$disk" == /dev/zram* ]] && continue
+      # Any child (a partition, a dm/crypt holder) means the disk is in use.
+      [[ "$(lsblk -nrpo NAME "$disk" 2>/dev/null | wc -l)" == 1 ]] || continue
+      findmnt -rn -S "$disk" >/dev/null 2>&1 && continue
+      found="$disk"
+      count=$((count + 1))
+    done < <(lsblk -dnrpo NAME,TYPE,RO 2>/dev/null)
+    (( count == 1 )) || return 1
+    printf '%s' "$found"
+  }
+
+  # What the guest sees, for the journal: the only account a locked node can
+  # give of a disk it could not find.
+  log_block_devices() {
+    log "Block devices: $(lsblk -o NAME,SIZE,TYPE,RO,MODEL,SERIAL 2>&1 | tr '\n' ';')"
+    local by_id
+    by_id="$(dirname "$DATA_DEVICE_LINK")"
+    log "${by_id}: $(ls -1 "$by_id" 2>&1 | tr '\n' ' ')"
+    local f
+    for f in /usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_nvme_id; do
+      [[ -e "$f" ]] && log "present: $f" || log "MISSING: $f"
+    done
+  }
+
   # Where a missing disk is fatal anyway (locked-read-only keeps state nowhere
-  # else, and a KMS-backed store needs the encrypted disk), wait for mdma's
-  # attach. Elsewhere a missing disk is a legitimate shape, so keep it short.
+  # else, and a KMS-backed store needs the encrypted disk), wait long. Elsewhere
+  # a missing disk is a legitimate shape, so keep it short.
   DATA_DEVICE_WAIT_SECS=30
   if [[ "$IMAGE_PROFILE" == "locked-read-only" || -n "$KMS_URL" ]]; then
     DATA_DEVICE_WAIT_SECS=600
   fi
+  # udev names the disk within a second or two of boot when it names it at
+  # all; give it that long before accepting a disk it did not name.
+  DATA_DEVICE_NAMING_GRACE_SECS=10
+  DATA_DEVICE_LINK="$DATA_DEVICE"
   waited=0
   while [[ ! -b "$DATA_DEVICE" && "$waited" -lt "$DATA_DEVICE_WAIT_SECS" ]]; do
+    if (( waited >= DATA_DEVICE_NAMING_GRACE_SECS )) && fallback="$(find_unnamed_data_disk)"; then
+      log "WARN: $DATA_DEVICE was never created; using $fallback, the only unused whole disk"
+      log_block_devices
+      DATA_DEVICE="$fallback"
+      break
+    fi
     sleep 1
     waited=$((waited + 1))
     if (( waited % 30 == 0 )); then
-      log "Waiting for the data disk at $DATA_DEVICE (${waited}s of ${DATA_DEVICE_WAIT_SECS}s; mdma attaches it after the VM starts)"
+      log "Waiting for the data disk at $DATA_DEVICE (${waited}s of ${DATA_DEVICE_WAIT_SECS}s)"
     fi
   done
 
   if [[ ! -b "$DATA_DEVICE" ]]; then
+    log_block_devices
     # No data disk at all. A legitimate shape for a deployment that provisions
     # none, so this is not fatal -- but it is never what an mdma-created node
     # should look like, and the capacity it reports will be the root disk's.
