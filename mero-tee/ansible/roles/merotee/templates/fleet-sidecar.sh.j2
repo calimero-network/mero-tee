@@ -671,8 +671,8 @@ try:
 except Exception as exc:
   print(f'sidecar: failed to parse get-capabilities JSON: {exc}', file=sys.stderr)
   caps = 0
-print('true' if caps & $CAN_AUTHOR_ON_BEHALF else 'false')
-" 2>>"$LOG" || echo "false"
+print('true' if caps & int(sys.argv[1]) else 'false')
+" "$CAN_AUTHOR_ON_BEHALF" 2>>"$LOG" || echo "false"
 }
 
 poll_mdma() {
@@ -731,11 +731,23 @@ print(json.dumps({
   # An HTTP 200 that returns a non-JSON / wrong-shape body (proxy error page,
   # truncated response) must NOT be read as "no assignments" — that would
   # trigger leaves just like a swallowed error. Reject it as a poll failure.
+  #
+  # Every `group_id` must also be a 32-byte hex namespace id, the only shape
+  # mdma issues (either case: mdma decodes ids with `bytes.fromhex`), since the
+  # id goes on to `meroctl` and the state files. One malformed entry fails the
+  # WHOLE poll rather than being dropped: dropping it would make that namespace
+  # look unassigned and trigger its irreversible leave.
   if ! echo "$response" | python3 -c "
-import sys, json
+import sys, json, re
 data = json.load(sys.stdin)
-if not isinstance(data.get('assignments'), list):
+assignments = data.get('assignments')
+if not isinstance(assignments, list):
     sys.exit(1)
+for a in assignments:
+    gid = a.get('group_id') if isinstance(a, dict) else None
+    if not isinstance(gid, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', gid):
+        print('sidecar: malformed group_id in should-join response', file=sys.stderr)
+        sys.exit(1)
 " 2>>"$LOG"; then
     log "WARN: /api/fleet/should-join returned an unparseable/unexpected body; skipping reconcile this cycle (state preserved)"
     return 1
@@ -794,8 +806,17 @@ confirm_assignment() {
   # to permanently mark the group confirmed even though mdma never
   # heard about it — re-creating the original fire-once bug on the
   # confirm step. stderr goes to the log so ops still see what failed.
+  # Encoded by json.dumps rather than by hand, so every value is escaped.
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+  "peer_id": sys.argv[1],
+  "group_id": sys.argv[2],
+  "authorship_ready": sys.argv[3] == "true",
+}, separators=(",", ":")))' "$peer_id" "$group_id" "$authorship_ready" 2>>"$LOG") || return 1
   if curl -sf --max-time 10 "${headers[@]}" \
-      -d "{\"peer_id\":\"$peer_id\",\"group_id\":\"$group_id\",\"authorship_ready\":$authorship_ready}" \
+      -d "$body" \
       "${MDMA_URL}/api/fleet/confirm" 2>>"$LOG"; then
     return 0
   else
@@ -840,10 +861,10 @@ reconcile_authorship() {
     was=$(echo "$recorded" | python3 -c "
 import sys, json
 try:
-  print('true' if json.load(sys.stdin).get('$group_id') else 'false')
+  print('true' if json.load(sys.stdin).get(sys.argv[1]) else 'false')
 except Exception:
   print('false')
-" 2>/dev/null || echo "false")
+" "$group_id" 2>/dev/null || echo "false")
     [[ "$now" == "$was" ]] && continue
     if confirm_assignment "$peer_id" "$group_id" "$now"; then
       log "Authorship grant for $group_id is now $now; reported to mdma"
@@ -853,9 +874,9 @@ try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-state['$group_id'] = $( [[ "$now" == "true" ]] && echo True || echo False )
+state[sys.argv[1]] = sys.argv[2] == 'true'
 print(json.dumps(state, sort_keys=True))
-" 2>>"$LOG" || echo "$updated")
+" "$group_id" "$now" 2>>"$LOG" || echo "$updated")
       changed=1
     fi
   done
@@ -865,10 +886,10 @@ print(json.dumps(state, sort_keys=True))
   local pruned
   pruned=$(python3 -c "
 import json, sys
-state = json.loads('''$updated''')
-keep = set(json.loads('''$confirmed'''))
+state = json.loads(sys.argv[1])
+keep = set(json.loads(sys.argv[2]))
 print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
-" 2>>"$LOG" || echo "$updated")
+" "$updated" "$confirmed" 2>>"$LOG" || echo "$updated")
   if [[ "$pruned" != "$recorded" ]] || [[ $changed -eq 1 ]]; then
     save_authorship "$pruned"
   fi
@@ -2306,9 +2327,9 @@ try:
   a = json.load(sys.stdin)
 except Exception:
   a = []
-a.append('$group_id')
+a.append(sys.argv[1])
 print(json.dumps(sorted(set(a))))
-" 2>>"$LOG" || echo "$admitted")"
+" "$group_id" 2>>"$LOG" || echo "$admitted")"
 }
 
 # --- Main loop ---
@@ -2469,7 +2490,7 @@ except:
   for group_id in $(echo "$desired" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
     # Skip groups we've already confirmed. Membership is stable until
     # mdma drops the assignment (handled by the prune below).
-    if echo "$confirmed" | python3 -c "import sys,json; sys.exit(0 if '$group_id' in json.load(sys.stdin) else 1)" 2>/dev/null; then
+    if echo "$confirmed" | python3 -c "import sys,json; sys.exit(0 if sys.argv[1] in json.load(sys.stdin) else 1)" "$group_id" 2>/dev/null; then
       continue
     fi
     if join_group "$group_id" "$response"; then
@@ -2493,9 +2514,9 @@ except:
         confirmed=$(echo "$confirmed" | python3 -c "
 import sys, json
 c = json.load(sys.stdin)
-c.append('$group_id')
+c.append(sys.argv[1])
 print(json.dumps(sorted(set(c))))
-" 2>>"$LOG" || echo "$confirmed")
+" "$group_id" 2>>"$LOG" || echo "$confirmed")
         # Record what we just reported, so the reconcile pass below only fires
         # on an actual later change.
         save_authorship "$(load_authorship | python3 -c "
@@ -2504,9 +2525,9 @@ try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-state['$group_id'] = $( [[ "$authorship" == "true" ]] && echo True || echo False )
+state[sys.argv[1]] = sys.argv[2] == 'true'
 print(json.dumps(state, sort_keys=True))
-" 2>>"$LOG" || load_authorship)"
+" "$group_id" "$authorship" 2>>"$LOG" || load_authorship)"
       fi
     fi
     # No `break`: keep iterating to give other assignments a fair shot
@@ -2537,11 +2558,11 @@ print(json.dumps(state, sort_keys=True))
   # BEFORE the prunes below — the diff needs the dropped entries still there.
   # leave_group is idempotent / non-fatal.
   to_leave=$(python3 -c "
-import json
-des = set(json.loads('''$desired'''))
-adm = set(json.loads('''$(load_admitted)'''))
+import json, sys
+des = set(json.loads(sys.argv[1]))
+adm = set(json.loads(sys.argv[2]))
 print(json.dumps(sorted(adm - des)))
-" 2>>"$LOG" || echo '[]')
+" "$desired" "$(load_admitted)" 2>>"$LOG" || echo '[]')
 
   for group_id in $(echo "$to_leave" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
     leave_group "$group_id"
@@ -2552,11 +2573,11 @@ print(json.dumps(sorted(adm - des)))
   # confirmed set so a future re-add is recognised as new on the
   # next cycle.
   confirmed=$(python3 -c "
-import json
-des = set(json.loads('''$desired'''))
-con = set(json.loads('''$confirmed'''))
+import json, sys
+des = set(json.loads(sys.argv[1]))
+con = set(json.loads(sys.argv[2]))
 print(json.dumps(sorted(con & des)))
-" 2>/dev/null || echo '[]')
+" "$desired" "$confirmed" 2>/dev/null || echo '[]')
 
   save_confirmed "$confirmed"
 
@@ -2564,11 +2585,11 @@ print(json.dumps(sorted(con & des)))
   # been left above, so keeping it would re-issue a leave every poll forever.
   # After the leave, for the same reason the confirmed prune is.
   save_admitted "$(python3 -c "
-import json
-des = set(json.loads('''$desired'''))
-adm = set(json.loads('''$(load_admitted)'''))
+import json, sys
+des = set(json.loads(sys.argv[1]))
+adm = set(json.loads(sys.argv[2]))
 print(json.dumps(sorted(adm & des)))
-" 2>/dev/null || echo '[]')"
+" "$desired" "$(load_admitted)" 2>/dev/null || echo '[]')"
 
   # Last, and over the pruned `confirmed` set: the authorship grant arrives
   # long after admission, so it has to be re-read for namespaces we already

@@ -1093,9 +1093,13 @@ keys on every healthy replica at once.
 So `poll_mdma` captures curl's body and exit status separately and returns:
 
 - **`0` + a validated body** only on HTTP 200 whose body parses as an
-  `{"assignments": [...]}` object; or
+  `{"assignments": [...]}` object in which every `group_id` is a 32-byte hex
+  namespace id; or
 - **`1` with no stdout** on any curl error, non-2xx, timeout, or
-  unparseable/wrong-shape body.
+  unparseable/wrong-shape body, including a single malformed `group_id`.
+
+A malformed id fails the whole poll rather than being dropped: dropping it would
+make that namespace look unassigned and trigger its leave.
 
 On a `1`, the main loop skips the entire reconcile — no `desired` computed, no
 join, no leave, no prune — and preserves `fleet-confirmed.json` and

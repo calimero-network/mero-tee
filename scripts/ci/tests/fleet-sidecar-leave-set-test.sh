@@ -87,7 +87,7 @@ gated on something else: ${awk_out}"
 
 # --- the leave diff reads the admitted set ---------------------------------
 
-leave_block="$(sed -n '/to_leave=\$(python3/,/^" 2>/p' <<< "${code}")"
+leave_block="$(sed -n '/to_leave=\$(python3/,/^" /p' <<< "${code}")"
 [[ -n "${leave_block}" ]] || fail "could not find the to_leave computation"
 
 grep -q 'load_admitted' <<< "${leave_block}" \
