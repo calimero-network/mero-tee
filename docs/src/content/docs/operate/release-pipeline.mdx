@@ -152,7 +152,11 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 2. **`profile_pipeline`** (matrix over the three profiles) — the measurement
    step, which **boots a real TDX VM**:
    - Run `build-and-release.sh <profile>` (Packer + Ansible) to build the GCP
-     image.
+     image. Its last step seals the root behind dm-verity, and it checks the files
+     the image must carry twice: on the build host before the seal, and inside
+     the sealed EROFS image after it (`seal-root.sh --require`). Today that is
+     GCE's disk-naming rule and `google_nvme_id`, which name the data disk
+     `/dev/disk/by-id/google-data`; a missing one fails the build.
    - Create an ephemeral firewall rule and a **`c3-standard-4` Intel TDX** VM
      from the new image, with the same **200 GB `pd-balanced` data disk (device
      name `data`)** mdma attaches to every node at creation. The disk is part of
