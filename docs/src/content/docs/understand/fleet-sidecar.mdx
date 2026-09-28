@@ -385,7 +385,7 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    `admitted = admitted ∩ desired`, and persist them — so a future re-add is
    recognized as new, and a namespace just left is not left again every second.
 7. **Answer namespace-admin questions** carried by an assignment's `verify`,
-   for confirmed namespaces, once each. See
+   for confirmed namespaces, again whenever the answer changes. See
    [Answering mdma's namespace-admin questions](#answering-mdmas-namespace-admin-questions).
 8. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
@@ -870,11 +870,18 @@ is retried next cycle: "not a member" read off a truncated page is a false
 verdict about a real admin. An account *found* on a full page is certain, so it
 is reported.
 
-**Once per question.** Each `(namespace, founder, account)` verdict MDMA
-acknowledged is recorded in `/mnt/data/fleet/fleet-verifications.json` and not
-re-read or re-posted while MDMA keeps sending the same `verify`; a failed POST is
-not recorded, so it is retried. A question MDMA stops asking is forgotten, so
-asking it again later is answered afresh. Warnings are edge-triggered — one line
+**Once per answer, not once per question.** A just-joined node may answer from
+governance that has not synced yet (the account not listed, or not yet an
+admin), and a merod that predates derived ids reports no `founding` at all.
+MDMA lets only a positive verdict decide and keeps a request pending on a
+negative one, so a node whose answer later *improves* has to say so. The answer
+is therefore re-read each cycle while MDMA keeps asking, and posted only when it
+differs from the verdict MDMA last acknowledged, which is recorded per
+`(namespace, founder, account)` in `/mnt/data/fleet/fleet-verifications.json`.
+The dedupe is on the question *and* its answer (`founder_matches`,
+`account_role`): an unchanged answer is never re-sent. A failed POST is not
+recorded, so it is retried. A question MDMA stops asking is forgotten, so asking
+it again later is answered afresh. Warnings are edge-triggered — one line
 when a question becomes unanswerable, not one a second. None of it can block or
 fail the join, leave or inventory loop. Covered by
 `scripts/ci/tests/fleet-sidecar-verification-test.sh`.

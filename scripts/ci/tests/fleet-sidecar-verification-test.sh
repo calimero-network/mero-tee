@@ -11,9 +11,12 @@
 #
 # Every way this is wrong is quiet:
 #   * "not a member" read off a TRUNCATED member page is a false verdict about a
-#     real admin, posted once and never corrected;
+#     real admin;
 #   * a verdict recorded before mdma acknowledged it is lost for good;
 #   * re-posting an unchanged verdict writes to mdma once a second;
+#   * NOT re-posting a changed one strands a real admin: mdma lets only a
+#     positive verdict decide, and a just-joined node's first answer may come
+#     from governance that has not synced yet (or a merod with no `founding`);
 #   * a body carrying anything beyond the verdict leaks the membership the
 #     inventory is careful never to send;
 #   * a malformed `verify` that reached the poll gate would fail every poll,
@@ -200,13 +203,13 @@ keys="$(python3 -c 'import json,sys; print(",".join(sorted(json.loads(sys.argv[1
   || fail "the verification body must carry only the verdict fields, got: ${keys}"
 grep -q "${OTHER}" "${SB}/post-log" && fail "an account mdma did not name crossed the wire"
 
-# 2. The same question again: answered once, not once a second -- and not even
-#    re-read, since a recorded verdict needs no meroctl.
+# 2. The same question with the same answer: posted once, not once a second.
+#    It IS re-read (that is how a changed answer is noticed), just not re-sent.
 : > "${SB}/meroctl-log"
 reconcile_verification peer1 "$(response "${NS1}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS1}")"
 reconcile_verification peer1 "$(response "${NS1}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS1}")"
-expect_posts 1 "an answered question must not be re-posted"
-[[ ! -s "${SB}/meroctl-log" ]] || fail "an answered question must not be re-read: $(cat "${SB}/meroctl-log")"
+expect_posts 1 "an unchanged answer must not be re-posted"
+grep -q "namespace get ${NS1}" "${SB}/meroctl-log" || fail "a pending question must be re-read to notice a change"
 
 # 3. No founding on this replica (V1 genesis, or a forged one): false. Still a
 #    verdict, still posted.
@@ -293,4 +296,35 @@ reconcile_verification peer1 "${bad}" "$(confirmed "${NS3}")" || fail "a malform
 expect_posts 8 "a malformed verify must be ignored"
 reconcile_verification peer1 "not json" "$(confirmed)" || fail "an unparseable response must not fail the loop"
 
-echo "OK: fleet sidecar namespace verification — 10 checks, $(posts) verdicts posted"
+# 11. The answer improves: re-posted once per CHANGE. A just-joined replica
+#     has not synced the account yet (null), then governance lands (Admin); the
+#     same answer twice more stays at one post each. Then a merod upgrade makes
+#     `founding` appear (false -> true), which is a change too.
+: > "${SB}/post-log"
+q3="$(response "${NS3}:${FOUNDER}:${ADMIN}")"
+namespace "${NS3}" ""
+members "${NS3}" "${FOUNDER}=Admin"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+expect_posts 1 "the same (null) answer twice must post once"
+[[ "$(field account_role)" == "null" ]] || fail "unsynced: $(last_body)"
+members "${NS3}" "${FOUNDER}=Admin" "${ADMIN}=Admin"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+expect_posts 2 "null then Admin must post twice, and the repeat Admin not at all"
+[[ "$(field account_role)" == '"Admin"' ]] || fail "synced: $(last_body)"
+[[ "$(field founder_matches)" == "false" ]] || fail "no founding yet: $(last_body)"
+namespace "${NS3}" "${FOUNDER}"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+expect_posts 3 "founding appearing after an upgrade must be reported once"
+[[ "$(field founder_matches)" == "true" ]] || fail "upgraded: $(last_body)"
+# An answer that becomes unreadable again is not a change: nothing posted, and
+# the last delivered verdict stays on record.
+rm -f "${SB}/ns/${NS3}"
+reconcile_verification peer1 "${q3}" "$(confirmed "${NS3}")"
+expect_posts 3 "an unreadable answer must not be posted as a change"
+grep -q '"founder_matches": true' "${SB}/fleet-verifications.json" \
+  || fail "an unreadable cycle must keep the last delivered verdict: $(cat "${SB}/fleet-verifications.json")"
+
+echo "OK: fleet sidecar namespace verification — 11 checks, $(posts) verdicts posted"
