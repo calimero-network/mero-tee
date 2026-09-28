@@ -33,6 +33,15 @@ all four hold.
    from the quote bytes Intel Trust Authority appraises, never from fields returned
    beside them (a node's `quote.body`, a pasted `reportDataHex`).
 
+   Freshness does not say the URL *is* the attested TD: a server there can forward
+   the attest call to a genuine node. So a node is also asked to bind its transport
+   key (`bindTransportKey`), the quote must commit to it, and the verifier opens a
+   sealed session to that key over the same URL (`/sealed/v2`, one request to
+   `/admin-api/health`). Only the holder of the key completes it, so
+   `transport_verified: true` means the server at the URL is the attested TD, and
+   `false` that it is not. A node that serves no sealed transport (only relay nodes
+   do) reports `null`: the page then says the verifier cannot tell.
+
 2. **Quote authenticity (signature chain).** The verifier submits the quote to **Intel
    Trust Authority (ITA)** (`https://api.trustauthority.intel.com/appraisal/v2/attest`
    by default, keyed by `ITA_API_KEY`). ITA cryptographically appraises that the quote
