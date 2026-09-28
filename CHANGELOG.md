@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **Registration quotes come from merod's `registration-attest` route.** The sidecar now asks for its registration quote on `POST /admin-api/tee/registration-attest`, which carries a registration-only report-data binding, and tells mdma so with `quote_binding: "registration"`. A merod that predates the route answers 404, and only then does the sidecar fall back to `/admin-api/tee/attest` as before. `traefik-tee-route-test.sh` pins the public TEE router to `info` and `attest`. Covered by `fleet-sidecar-registration-test.sh`.
+
 - **The fleet sidecar's python helpers take their values as argv.** They used to splice values into the `python3 -c` source, so any value with a quote in it broke the helper, and its `|| echo` fallback silently kept the old state. The `/api/fleet/confirm` body is now built with `json.dumps`. `poll_mdma` also checks that every `group_id` is 32-byte hex and otherwise fails the poll, so the loop skips reconcile under the existing safety gate. Covered by `fleet-sidecar-json-args-test.sh`.
 
 - **A failed data-disk key fetch says why, in the journal.** `calimero-init` logged only `data-disk key fetch attempt N/10 failed`; merod's actual error went to `/run/calimero/calimero-init.log`, a tmpfs file a locked node has no shell to read. The first 2.3.82 node failed ten times with no reason anywhere, and the KMS logged nothing, since the request never got as far as a refusal. Every attempt's WARN now carries merod's last lines (ANSI stripped, at most 800 characters). `merod kms disk-key` never prints the key, which goes only to `--key-out`. Covered by `calimero-init-disk-encryption-test.sh`.

@@ -367,6 +367,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-forward-auth-test.sh
 
+      # Everything under /admin-api/tee/ except info and attest is on core's
+      # protected router, which only traefik guards on these nodes.
+      - name: Check the public TEE router serves only info and attest
+        id: traefik_tee_route_test
+        shell: bash
+        run: scripts/ci/tests/traefik-tee-route-test.sh
+
       # The sealed-transport router is exempt from auth-node because forwardAuth
       # cannot see inside an envelope. It is safe only relay-only, on exact
       # paths, rate limited, and in front of a merod (>= 0.11.0-rc.52) that
@@ -418,6 +425,7 @@ jobs:
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
             --checks-line "- sealed router cannot bypass auth-node: ${{ steps.traefik_sealed_route_test.outcome }}" \
+            --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \

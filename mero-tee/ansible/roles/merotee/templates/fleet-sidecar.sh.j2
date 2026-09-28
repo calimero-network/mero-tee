@@ -1861,39 +1861,55 @@ save_fleet_token() {
   FLEET_TOKEN="$token"
 }
 
-# Ask merod for a quote committing to `nonce_hex`.
+# Ask merod for a quote committing to `nonce_hex`, for registration.
 #
-# `/admin-api/tee/attest` is mounted unauthenticated (on `tee::service()`, not
-# `protected_service()`), so this reaches it over loopback with no token — which
-# is why no core change was needed for any of this.
+# Prints two lines: the report-data binding the quote carries, then the quote.
 #
-# Deliberately NO `application_id`: `build_report_data(nonce, None)` leaves the
-# second half of report data as zeros, and the whole identity binding lives in
-# the nonce. mdma verifies against zeros for that half and its own code says the
-# check is vacuous, so sending an application id here would change what mdma
-# must expect for no gain.
+# `/admin-api/tee/registration-attest` is on core's protected router, which the
+# ingress does not expose, and fills report data bytes `32..64` with a
+# registration-only binding the public `/attest` never produces; the sidecar
+# reaches it over loopback. mdma is told which one it got (`quote_binding`), so
+# it can require the registration binding once every node sends it.
+#
+# A merod that predates the route answers 404, and only then does this fall
+# back to `/attest` with nothing bound (the binding line is then empty), which
+# mdma accepts until it is told not to. Any other failure is a failure: falling
+# back on a 5xx would hide a broken route behind the older shape.
 attest_quote() {
   local nonce_hex="$1"
   local port="$2"
-  local body
-  body=$(curl -sf --max-time 30 -H "Content-Type: application/json" \
-    -d "{\"nonce\":\"${nonce_hex}\"}" \
-    "http://127.0.0.1:${port}/admin-api/tee/attest" 2>>"$LOG") || {
-    log "WARN: /admin-api/tee/attest did not answer; cannot register this pass"
+  local request out code binding="registration"
+  request=$(python3 -c 'import json, sys; print(json.dumps({"nonce": sys.argv[1]}))' "$nonce_hex") \
+    || return 1
+  out="$(mktemp)"
+  code=$(curl -s -o "$out" -w '%{http_code}' --max-time 30 -H "Content-Type: application/json" \
+    -d "$request" "http://127.0.0.1:${port}/admin-api/tee/registration-attest" 2>>"$LOG") || code="000"
+  if [[ "$code" == "404" ]]; then
+    binding=""
+    code=$(curl -s -o "$out" -w '%{http_code}' --max-time 30 -H "Content-Type: application/json" \
+      -d "$request" "http://127.0.0.1:${port}/admin-api/tee/attest" 2>>"$LOG") || code="000"
+  fi
+  if [[ "$code" != 2* ]]; then
+    rm -f "$out"
+    log "WARN: merod's attest route answered ${code}; cannot register this pass"
     return 1
-  }
-  echo "$body" | python3 -c "
+  fi
+  local quote
+  quote=$(python3 -c "
 import json, sys
-payload = json.load(sys.stdin)
+payload = json.load(open(sys.argv[1]))
 data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
 quote = data.get('quoteB64') or payload.get('quoteB64') or ''
 if not isinstance(quote, str) or not quote.strip():
     sys.exit(1)
 print(quote.strip())
-" 2>>"$LOG" || {
-    log "WARN: /admin-api/tee/attest returned no quoteB64; cannot register this pass"
+" "$out" 2>>"$LOG") || {
+    rm -f "$out"
+    log "WARN: merod's attest route returned no quoteB64; cannot register this pass"
     return 1
   }
+  rm -f "$out"
+  printf '%s\n%s\n' "$binding" "$quote"
 }
 
 # Register this node's identity with mdma, binding it to a fresh quote.
@@ -1954,8 +1970,10 @@ if csr:
 print(hashlib.sha256('|'.join(parts).encode()).hexdigest())
 " "$challenge" "$peer_id" "$account" "$relay_url" "$csr_b64" 2>>"$LOG") || return 1
 
-  local quote
-  quote=$(attest_quote "$nonce_hex" "$port") || return 1
+  local attested quote_binding quote
+  attested=$(attest_quote "$nonce_hex" "$port") || return 1
+  quote_binding=$(sed -n 1p <<< "$attested")
+  quote=$(sed -n 2p <<< "$attested")
 
   local body
   body=$(python3 -c '
@@ -1968,8 +1986,10 @@ payload = {"peer_id": sys.argv[1],
            "enrolment_token": sys.argv[7]}
 if sys.argv[6]:
     payload["csr"] = sys.argv[6]
+if sys.argv[8]:
+    payload["quote_binding"] = sys.argv[8]
 print(json.dumps(payload))
-' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" "$(get_enrolment_token)" 2>>"$LOG") || return 1
+' "$peer_id" "$account" "$relay_url" "$challenge" "$quote" "$csr_b64" "$(get_enrolment_token)" "$quote_binding" 2>>"$LOG") || return 1
 
   # The response body matters now: this call is where the fleet token is
   # ISSUED. mdma mints one scoped to this peer id once the quote verifies, so
