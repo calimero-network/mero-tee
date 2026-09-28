@@ -225,6 +225,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-direct-admission-test.sh
 
+      # Device-key login needs the node's own key, which only merod knows. The
+      # sidecar records it and restarts mero-auth, only when it changes.
+      - name: Test fleet-sidecar records the device-key login node key
+        id: sidecar_login_key_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-login-key-test.sh
+
       # Secrets must be CREATED restricted, not created loose and tightened.
       # None of these units set `UMask=`, so systemd's default 0022 makes a
       # token 0644 and a later `chmod` closes the window only after the secret
@@ -386,6 +393,21 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-forward-auth-test.sh
 
+      # merod scopes a device-key session by X-Auth-Account / X-Auth-Device
+      # (server.proxy_identity). Only mero-auth may write them: auth-node
+      # replaces them, and every entrypoint strips a client's.
+      - name: Check a client cannot name the account merod scopes it as
+        id: traefik_proxy_identity_test
+        shell: bash
+        run: scripts/ci/tests/traefik-proxy-identity-test.sh
+
+      # mero-auth's account_proof provider refuses to start without the node's
+      # key, and a mero-auth that does not start takes forwardAuth down.
+      - name: Check mero-auth-start enables device-key login only with a node key
+        id: mero_auth_device_login_test
+        shell: bash
+        run: scripts/ci/tests/mero-auth-device-login-test.sh
+
       # Everything under /admin-api/tee/ except info and attest is on core's
       # protected router, which only traefik guards on these nodes.
       - name: Check the public TEE router serves only info and attest
@@ -430,6 +452,9 @@ jobs:
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
             --checks-line "- fleet-sidecar verification test: ${{ steps.sidecar_verification_test.outcome }}" \
+            --checks-line "- fleet-sidecar login node key test: ${{ steps.sidecar_login_key_test.outcome }}" \
+            --checks-line "- mero-auth device-key login test: ${{ steps.mero_auth_device_login_test.outcome }}" \
+            --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \

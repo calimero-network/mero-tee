@@ -63,6 +63,22 @@ INVENTORY_FULL_INTERVAL=900
 # short enough that a node is registered and certifiable within a minute of
 # merod answering.
 ACCOUNT_RETRY_INTERVAL=15
+# Device-key login (mero-auth's `account_proof` provider) on a relay image.
+#
+# The provider cannot start without this node's own device signing key: it is
+# what every login statement names, and checking it is what stops a statement
+# signed for another node being replayed here. The key lives in merod's store,
+# not in the image, so the sidecar reads it from merod and records it in
+# LOGIN_NODE_KEY_FILE; `mero-auth-start` enables the provider only once that
+# file holds one. Only on a relay image: the build creates
+# DEVICE_KEY_LOGIN_MARKER there (`fleet_delegated_access`), and without it the
+# sidecar records nothing and never restarts mero-auth.
+DEVICE_KEY_LOGIN_MARKER="/etc/calimero/device-key-login"
+LOGIN_NODE_KEY_FILE="/mnt/data/fleet/login-node-key"
+# Until merod names a key, ask again at this interval; once it has, re-read at
+# the slower one, so a re-keyed node is picked up without polling merod at 1 Hz.
+LOGIN_NODE_KEY_RETRY_INTERVAL=15
+LOGIN_NODE_KEY_RECHECK_INTERVAL=300
 # How often a node with no fleet token retries registration. Each attempt costs
 # a TDX quote and spends a single-use challenge, so this is not something to do
 # on the 1 Hz loop; long enough to be cheap, short enough that a node is usable
@@ -2546,6 +2562,92 @@ reconcile_executor_account() {
   return 0
 }
 
+# This node's device signing key, as `GET /admin-api/identity` publishes it:
+# 64 lowercase hex, or nothing when merod has not minted one yet (404) or
+# cannot be reached.
+read_login_node_key() {
+  local port="$1" body
+  body=$(curl -sf --max-time 5 "http://127.0.0.1:${port}/admin-api/identity" 2>/dev/null) || return 0
+  printf '%s' "$body" | python3 -c '
+import json, re, sys
+try:
+  obj = json.load(sys.stdin)
+  data = obj.get("data") if isinstance(obj.get("data"), dict) else obj
+  key = str((data or {}).get("publicKey") or "").strip().lower()
+except Exception:
+  key = ""
+print(key if re.fullmatch(r"[0-9a-f]{64}", key) else "")
+' 2>>"$LOG"
+}
+
+# Whether mero-auth's current run began after FILE was last written, so that
+# `mero-auth-start` read this version of it. Strictly after: both are whole
+# seconds, and a restart too many is harmless where one too few is not.
+mero_auth_started_after() {
+  local started written
+  started=$(systemctl show -p ActiveEnterTimestamp --value mero-auth 2>/dev/null) || return 1
+  [[ -n "$started" ]] || return 1
+  started=$(date -d "$started" +%s 2>/dev/null) || return 1
+  written=$(stat -c %Y "$1" 2>/dev/null) || return 1
+  (( started > written ))
+}
+
+# Record the key device-key login needs, and restart mero-auth when it changes.
+#
+# Restarts on CHANGE only: mero-auth reads the key at startup, so it has to be
+# restarted to see a new one, and restarting it for an unchanged key would drop
+# forwardAuth for every caller for no reason. Sessions survive the restart
+# (they live in mero-auth's database on the data disk).
+#
+# The file is written before the restart and via a temp file, so a crash leaves
+# either the old key or the new one, never a torn value `mero-auth-start` would
+# refuse. A failed restart is logged and retried at the next check rather than
+# recorded as done: the file then already holds the key, so the retry compares
+# against the key mero-auth is known to be running with, LOGIN_NODE_KEY_ACTIVE.
+reconcile_login_node_key() {
+  [[ -e "$DEVICE_KEY_LOGIN_MARKER" ]] || return 0
+
+  local now_ts key recorded tmp
+  now_ts=$(date +%s)
+  (( now_ts >= LOGIN_NODE_KEY_NEXT_CHECK )) || return 0
+
+  key=$(read_login_node_key "$SERVER_PORT")
+  if [[ -z "$key" ]]; then
+    LOGIN_NODE_KEY_NEXT_CHECK=$(( now_ts + LOGIN_NODE_KEY_RETRY_INTERVAL ))
+    return 0
+  fi
+  LOGIN_NODE_KEY_NEXT_CHECK=$(( now_ts + LOGIN_NODE_KEY_RECHECK_INTERVAL ))
+  [[ "$key" != "${LOGIN_NODE_KEY_ACTIVE:-}" ]] || return 0
+
+  recorded=$(tr -d '[:space:]' < "$LOGIN_NODE_KEY_FILE" 2>/dev/null || true)
+  if [[ "$key" != "$recorded" ]]; then
+    mkdir -p "$(dirname "$LOGIN_NODE_KEY_FILE")"
+    tmp="${LOGIN_NODE_KEY_FILE}.$$"
+    ( umask 077; printf '%s\n' "$key" > "$tmp" ) && mv -f "$tmp" "$LOGIN_NODE_KEY_FILE" || {
+      rm -f "$tmp"
+      log "WARN: could not record the node key for device-key login; retrying in ${LOGIN_NODE_KEY_RETRY_INTERVAL}s"
+      LOGIN_NODE_KEY_NEXT_CHECK=$(( now_ts + LOGIN_NODE_KEY_RETRY_INTERVAL ))
+      return 0
+    }
+  elif mero_auth_started_after "$LOGIN_NODE_KEY_FILE"; then
+    # Recorded earlier (a previous boot, or before this sidecar restarted) and
+    # mero-auth's current run began after that, so `mero-auth-start` already
+    # read it: restarting would change nothing.
+    LOGIN_NODE_KEY_ACTIVE="$key"
+    log "Device-key login is on for node key $key"
+    return 0
+  fi
+
+  if systemctl restart mero-auth >>"$LOG" 2>&1; then
+    LOGIN_NODE_KEY_ACTIVE="$key"
+    log "Device-key login is on for node key $key (mero-auth restarted)"
+  else
+    log "WARN: recorded node key $key but mero-auth did not restart; retrying in ${LOGIN_NODE_KEY_RETRY_INTERVAL}s"
+    LOGIN_NODE_KEY_NEXT_CHECK=$(( now_ts + LOGIN_NODE_KEY_RETRY_INTERVAL ))
+  fi
+  return 0
+}
+
 # Register when the identity mdma holds is not the one this node now has.
 #
 # Re-registers on CHANGE rather than on a timer: a registration does not expire,
@@ -2890,6 +2992,10 @@ LAST_ACCOUNT_ATTEMPT=0
 # Registration retry clock. 0 so a node with no token registers on its first
 # pass rather than waiting out an interval on every boot.
 LAST_REGISTRATION_ATTEMPT=0
+# Device-key login clock and the key mero-auth is known to run with. 0 and
+# empty, so the first pass reads merod's key straight away.
+LOGIN_NODE_KEY_NEXT_CHECK=0
+LOGIN_NODE_KEY_ACTIVE=""
 
 # Before the first poll, so the very first `admitted - desired` diff already
 # knows about everything this node joined under the previous build.
@@ -2925,6 +3031,9 @@ while true; do
   # costs a registered node nothing.
   reconcile_executor_account
   reconcile_registration "$PEER_ID" "$EXECUTOR_ACCOUNT" "$RELAY_URL" "$SERVER_PORT"
+  # Also before the poll: device-key login depends on merod alone, not on
+  # mdma, so an mdma outage must not keep it off.
+  reconcile_login_node_key
 
   if ! response=$(poll_mdma "$PEER_ID" "$MRTD"); then
     # Edge-triggered, because this runs at 1 Hz. Says WHICH of the two shapes

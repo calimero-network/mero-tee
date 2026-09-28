@@ -54,28 +54,30 @@ default_src = ["'self'"]
 script_src = ["'self'", "'unsafe-inline'", "'unsafe-eval'"]
 style_src = ["'self'", "'unsafe-inline'"]
 
-# Authentication providers: none.
+# Authentication providers: none in this file, and no providers table.
 #
 # A fleet relay is operated by Calimero and serves several tenants' namespaces
-# at once. Nobody should be holding an interactive login on it, so no provider
-# is enabled and no new token can be minted here.
+# at once, so nobody holds a password login on it. The one way in is
+# device-key login (`account_proof`): a keyholder proves an account root and a
+# certified device, and gets a session scoped to its own contexts. That
+# provider needs this node's device signing key, which only exists at runtime,
+# so `mero-auth-start` appends the `providers` and `account_proof` tables to a
+# copy of this file once the fleet sidecar has recorded the key, on relay
+# images only.
+# Declaring either table here would make that copy declare it twice, which TOML
+# refuses; scripts/ci/tests/mero-auth-device-login-test.sh checks both.
 #
-# `user_password` was the only one that ever worked. A `near_wallet = true`
-# entry and a `[near]` block pointing at NEAR testnet also sat here, and never
-# did anything: `mero-auth` implements one provider
-# (`crates/auth/src/providers/impls/user_password.rs`), `providers` is a
-# `HashMap<String, bool>` so an unregistered name matches nothing, and
-# `AuthConfig` has no `deny_unknown_fields` so serde discarded the block in
-# silence. The image was advertising a login it could not perform.
+# Without the appended tables no provider is enabled and no new token can be
+# minted: `create_providers` returns an empty set cleanly, and token
+# *validation* still works for `auth-node`.
+#
+# `user_password` was the only provider that ever worked here, and it is off.
+# A `near_wallet = true` entry and a `[near]` block pointing at NEAR testnet
+# also sat here once, and never did anything: `providers` is a
+# `HashMap<String, bool>`, so an unregistered name matches nothing, and the
+# `[near]` block was discarded in silence. The image was advertising a login it
+# could not perform.
 #
 # What this does NOT affect: the fleet sidecar talks to
 # `http://127.0.0.1:<port>/admin-api/...` directly and `meroctl` uses the local
-# `--home`, so neither passes through Traefik's `auth-node` forwardAuth. What it
-# closes is external access to `/jsonrpc` and `/admin-api/` through the ingress,
-# which on this machine had no legitimate user.
-#
-# `create_providers` collects enabled registrations into a `Vec` and returns it
-# unconditionally, so an empty set starts cleanly -- token *validation* still
-# works for `auth-node`, there is simply no way to obtain a new one.
-[providers]
-user_password = false
+# `--home`, so neither passes through Traefik's `auth-node` forwardAuth.

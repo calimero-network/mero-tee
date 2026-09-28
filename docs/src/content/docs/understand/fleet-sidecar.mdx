@@ -965,6 +965,12 @@ profiles, off for `debug`):
 | `merod` (`calimero-init.sh.j2`) | Sets `server.admin.delegated_access=true`, which moves those same two routes onto core's public router. |
 | Traefik (`node-sealed`) | Routes `POST /sealed/v2/handshake` and `POST /sealed/v2` (exact paths, plus `OPTIONS`) to `merod`, also without `auth-node`: forwardAuth cannot see the route a sealed request names, which is inside the envelope. See [sealing the intent](#sealing-the-intent-to-the-td) below. |
 
+The same variable also turns on device-key login, scoped per tenant: the
+sidecar reads this node's device signing key from `GET /admin-api/identity`,
+records it for `mero-auth-start` and restarts mero-auth when it changes, and
+merod takes each session's account from the proxy (`server.proxy_identity`).
+See [device-key login](/operate/config-reference/#device-key-login-and-who-merod-thinks-the-caller-is).
+
 They are one variable rather than two defaults on purpose: these nodes run
 `merod` in proxy auth mode, so **Traefik is the only gate**. An exemption added
 there without the matching `merod` setting still opens the path — the drift is

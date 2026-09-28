@@ -323,9 +323,33 @@ http:
       forwardAuth:
         address: "http://127.0.0.1:3001/auth/validate"
         trustForwardHeader: false
+        # `X-Auth-Account` / `X-Auth-Device` name a device-key session's account
+        # and device; merod scopes the caller by them (`server.proxy_identity`).
+        # Traefik REPLACES each listed header on the forwarded request, so a
+        # client cannot supply its own on a guarded route. Every other route is
+        # covered by `strip-proxy-identity` on the entrypoints.
         authResponseHeaders:
           - X-Auth-User
           - X-Auth-Permissions
+          - X-Auth-Account
+          - X-Auth-Device
+
+    # Removes the two headers merod reads a caller's identity from, on EVERY
+    # request, before any router runs: attached to both entrypoints in
+    # config.yml, not to routers, so a router added later cannot forget it.
+    #
+    # Needed because some routes skip `auth-node` — intents, admission, the
+    # sealed envelope, the auth service itself — and on those nothing else would
+    # overwrite a client's `X-Auth-Account`. merod (`server.proxy_identity`)
+    # would then read it as the caller and scope the request as that account.
+    # On guarded routes `auth-node` runs after this and sets them from
+    # mero-auth's answer. An empty value is Traefik's spelling of "delete".
+    # Pinned by scripts/ci/tests/traefik-proxy-identity-test.sh.
+    strip-proxy-identity:
+      headers:
+        customRequestHeaders:
+          X-Auth-Account: ""
+          X-Auth-Device: ""
 
 
 # The certificate served on `websecure`, for every hostname.

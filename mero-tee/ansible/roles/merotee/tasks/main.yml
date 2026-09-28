@@ -179,6 +179,27 @@
     group: root
     mode: "0755"
 
+# The baked config enables no provider; this wrapper adds device-key login on
+# a relay image once the node's key is recorded (see the script's header).
+- name: Install the mero-auth start wrapper
+  copy:
+    src: mero-auth-start.sh
+    dest: /usr/local/lib/calimero/mero-auth-start.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+# What makes this image a device-key-login relay, for mero-auth-start and the
+# fleet sidecar alike: its presence, nothing in it. Baked, so measured.
+- name: Mark this image as serving device-key login
+  copy:
+    content: ""
+    dest: /etc/calimero/device-key-login
+    owner: root
+    group: root
+    mode: "0644"
+  when: fleet_delegated_access | default(false) | bool
+
 - name: Create mero-auth systemd service file
   copy:
     content: |
@@ -197,7 +218,11 @@
         # unit's output is shipped to an endpoint set in instance metadata, and
         # verbose auth logging is request-level detail about who authenticates
         # to this node.
-        ExecStart=/usr/local/bin/mero-auth --config /etc/calimero/auth.toml
+        #
+        # Through `mero-auth-start`, which runs mero-auth on the baked
+        # /etc/calimero/auth.toml, or on a copy with device-key login added once
+        # this relay's node key is recorded.
+        ExecStart=/usr/local/lib/calimero/mero-auth-start.sh
         Restart=always
         # A core dump of this process is its keys, written to disk.
         LimitCORE=0
@@ -509,6 +534,26 @@
       baked merod ({{ merod_version | default('unknown') }}) does not list
       --delegated-access, so it does not know the server.admin.delegated_access
       key calimero-init writes (core 0.11.0-rc.43 or later is needed).
+      Bump merodVersion in mero-tee/versions.json, or build with
+      -e fleet_delegated_access=false.
+  when: fleet_delegated_access | default(false) | bool
+
+# Device-key login on a relay (`mero-auth-start`) is only safe with merod
+# taking each caller's account from the proxy (`server.proxy_identity`, set by
+# calimero-init). A merod without it ignores the key — silently, as it would any
+# unknown key — and answers every tenant's session node-wide: the listings return
+# every tenant's contexts, namespaces and groups. So it is asserted here, the
+# same way `--delegated-access` is.
+- name: Assert the baked merod reads the caller's identity from the proxy
+  assert:
+    that:
+      - merod_init_help.rc == 0
+      - "'--proxy-identity' in merod_init_help.stdout"
+    fail_msg: >-
+      This image enables device-key login on a relay (fleet_delegated_access),
+      but the baked merod ({{ merod_version | default('unknown') }}) does not
+      list --proxy-identity, so it does not know the server.proxy_identity key
+      calimero-init writes and would answer every tenant's session node-wide.
       Bump merodVersion in mero-tee/versions.json, or build with
       -e fleet_delegated_access=false.
   when: fleet_delegated_access | default(false) | bool

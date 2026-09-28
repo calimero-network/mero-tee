@@ -279,6 +279,11 @@
       - "'LimitCORE=0' in (service_files.results[1].content | b64decode)"
       - "'--verbose' not in (service_files.results[1].content | b64decode)"
       - "'listen_addr = \"127.0.0.1:3001\"' in (service_files.results[2].content | b64decode)"
+      # mero-auth-start appends these tables on a relay; declared here too,
+      # TOML would refuse the result and mero-auth would not start.
+      - "'[providers]' not in (service_files.results[2].content | b64decode)"
+      - "'[account_proof]' not in (service_files.results[2].content | b64decode)"
+      - "'mero-auth-start.sh' in (service_files.results[1].content | b64decode)"
       - "'level: DEBUG' not in (service_files.results[3].content | b64decode)"
       - "'insecure: true' not in (service_files.results[3].content | b64decode)"
       - "'dashboard: true' not in (service_files.results[3].content | b64decode)"
