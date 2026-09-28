@@ -101,6 +101,16 @@ RECOVERY_FULL_INTERVAL=86400
 # INCOMPLETE read rather than as a complete one, which is what keeps a `full`
 # post from pruning rows for contexts that merely fell off page one.
 MEROCTL_PAGE_LIMIT=100
+# The verification read pages a namespace's members itself, over loopback HTTP
+# (see `read_verification`), so one role question costs at most
+# VERIFICATION_MAX_PAGES requests of VERIFICATION_PAGE_SIZE rows and
+# VERIFICATION_READ_BUDGET seconds. 1000 is core's `MAX_LIST_LIMIT`; a node that
+# clamps lower only means more pages. Running out of pages or time answers
+# "unknown" -- nothing is posted -- never "not a member". The read runs inside
+# the one-second reconcile loop, which is why the budget is small.
+VERIFICATION_PAGE_SIZE=1000
+VERIFICATION_MAX_PAGES=10
+VERIFICATION_READ_BUDGET=20
 # Hard stop on the group walk. A cycle in the parent/child index would otherwise
 # hang the sidecar; `seen` already prevents revisiting, so this only bounds the
 # pathological case of a genuinely enormous namespace — which is likewise
@@ -952,12 +962,13 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 #   {"verdict": {"founder_matches": bool, "account_role": "Admin"|...|null}}
 #   {"incomplete": "<why>"}  -- nothing trustworthy to say this cycle
 #
-# `incomplete` is the load-bearing half. A failed or unparseable read, or a
-# member list that came back at core's page limit WITHOUT the account in it,
-# must not be reported: "not a member" read off a truncated page is a false
-# verdict about a real admin, and saying nothing is the honest answer.
-# A member FOUND on a truncated page is a certain answer, so it is reported --
-# otherwise a namespace with a hundred members could never be verified at all.
+# `incomplete` is the load-bearing half. A failed or unparseable read of ANY
+# page, a list that changed while it was being paged, or running out of pages
+# or time before the list ends must not be reported: "not a member" read off
+# part of the list is a false verdict about a real admin, and saying nothing is
+# the honest answer. A member FOUND on any page is a certain answer, so paging
+# stops there; "not a member" (null) is reported only once every page has been
+# read.
 #
 # Diagnostics ride the `incomplete` value rather than stderr, so the caller can
 # log them edge-triggered instead of once a second.
@@ -967,16 +978,23 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 read_verification() {
   local namespace_id="$1" founder="$2" account="$3" genesis_op_hash="${4:-}"
   MEROCTL_CMD="$MEROCTL" \
-  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  SERVER_PORT="${SERVER_PORT:-2428}" \
+  PAGE_SIZE="$VERIFICATION_PAGE_SIZE" \
+  MAX_PAGES="$VERIFICATION_MAX_PAGES" \
+  BUDGET="$VERIFICATION_READ_BUDGET" \
   python3 - "$namespace_id" "$founder" "$account" "$genesis_op_hash" <<'PY' 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
 import json
 import os
 import shlex
 import subprocess
 import sys
+import time
 
 MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
-PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+SERVER_PORT = str(int(os.environ["SERVER_PORT"]))
+PAGE_SIZE = int(os.environ["PAGE_SIZE"])
+MAX_PAGES = int(os.environ["MAX_PAGES"])
+BUDGET = int(os.environ["BUDGET"])
 NAMESPACE_ID = sys.argv[1].strip()
 FOUNDER = sys.argv[2].strip().lower()
 ACCOUNT = sys.argv[3].strip().lower()
@@ -1045,32 +1063,97 @@ else:
     founder_matches = same(founder, FOUNDER)
 
 # role: the namespace IS its root group, so its members are the namespace's.
-response = meroctl("group", "members", "list", NAMESPACE_ID)
-entries = response.get("members")
-if not isinstance(entries, list) and isinstance(response.get("data"), dict):
-    entries = response["data"].get("members")
-if not isinstance(entries, list):
-    incomplete("group members list " + NAMESPACE_ID + " had no 'members' array")
+#
+# Paged over loopback HTTP, not `meroctl group members list`: that command
+# sends no offset/limit (see MEROCTL_PAGE_LIMIT), so it can only ever see page
+# one. `GET /admin-api/groups/<id>/members?offset=&limit=` is the same handler
+# with the query string meroctl does not expose, returning {"members": [...]}
+# sorted by account.
+#
+# Each page after the first starts ON the previous page's last row (offset
+# advances by rows-1). That row must come back first; if it does not, the list
+# changed under us -- a member removed before the offset shifts every later row
+# left, which could step over the account -- and the read is incomplete. The
+# list counts as exhausted only when a page brings no row beyond that anchor,
+# never merely because a page came back short: a node that clamps `limit`
+# lower than asked would make a full page look like the last one.
+DEADLINE = time.monotonic() + BUDGET
+
+
+def members_page(offset):
+    remaining = DEADLINE - time.monotonic()
+    if remaining <= 0:
+        incomplete(
+            "group members of " + NAMESPACE_ID + " not read within "
+            + str(BUDGET) + "s (stopped at offset " + str(offset) + ")"
+        )
+    url = (
+        "http://127.0.0.1:" + SERVER_PORT + "/admin-api/groups/" + NAMESPACE_ID
+        + "/members?offset=" + str(offset) + "&limit=" + str(PAGE_SIZE)
+    )
+    what = "GET /admin-api/groups/" + NAMESPACE_ID + "/members at offset " + str(offset)
+    try:
+        proc = subprocess.run(
+            ["curl", "-sf", "--max-time", str(max(1, min(10, int(remaining)))), url],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:
+        incomplete(what + " did not run: " + str(exc))
+    if proc.returncode != 0:
+        incomplete(what + " failed (curl exit " + str(proc.returncode) + ")")
+    try:
+        payload = json.loads(proc.stdout)
+    except Exception as exc:
+        incomplete(what + " returned unparseable JSON: " + str(exc))
+    rows = payload.get("members") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) and isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        rows = payload["data"].get("members")
+    if not isinstance(rows, list):
+        incomplete(what + " had no 'members' array")
+    ids = []
+    for row in rows:
+        identity = (row.get("identity") or row.get("account")) if isinstance(row, dict) else None
+        if not isinstance(identity, str) or not identity.strip():
+            incomplete(what + " returned a member row with no account")
+        ids.append(identity.strip().lower())
+    return rows, ids
+
 
 role = None
 found = False
-for entry in entries:
-    if not isinstance(entry, dict):
-        continue
-    identity = entry.get("identity") or entry.get("account")
-    if isinstance(identity, str) and identity.strip().lower() == ACCOUNT:
-        found = True
-        role = entry.get("role")
+exhausted = False
+offset = 0
+anchor = None
+for _ in range(MAX_PAGES):
+    rows, ids = members_page(offset)
+    # The last row of this page sits at `offset + len(ids) - 1`; the next page
+    # starts there, on the anchor.
+    next_offset, next_anchor = offset + len(ids) - 1, ids[-1] if ids else None
+    if anchor is not None:
+        if not ids or ids[0] != anchor:
+            incomplete("group members of " + NAMESPACE_ID + " changed while paging; re-reading next cycle")
+        rows, ids = rows[1:], ids[1:]
+    if not ids:
+        exhausted = True
         break
+    for entry, identity in zip(rows, ids):
+        if identity == ACCOUNT:
+            found = True
+            role = entry.get("role")
+            break
+    if found:
+        break
+    offset, anchor = next_offset, next_anchor
 
+if not found and not exhausted:
+    incomplete(
+        "group members of " + NAMESPACE_ID + " run past " + str(MAX_PAGES)
+        + " pages of " + str(PAGE_SIZE) + " without the account"
+    )
 if found and (not isinstance(role, str) or not role.strip()):
     incomplete("the member entry for the account carries no role")
-if not found and len(entries) >= PAGE_LIMIT:
-    # meroctl passes no offset/limit, so page two is unreachable from here.
-    incomplete(
-        "group members list " + NAMESPACE_ID + " came back at the "
-        + str(PAGE_LIMIT) + "-row page limit without the account"
-    )
 
 done({"verdict": {"founder_matches": founder_matches, "account_role": role.strip() if found else None}})
 PY
@@ -1110,7 +1193,7 @@ save_verifications() {
 }
 
 # Per-question record of the last warning logged, so a question that stays
-# unanswerable (a namespace whose member list is always truncated, an mdma
+# unanswerable (a namespace too large to page within the cap, an mdma
 # refusing the POST) logs once when it starts and once when it clears, not
 # once a second. In memory: a restart re-logs, which is the right amount.
 declare -A VERIFICATION_WARNED=()

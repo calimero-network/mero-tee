@@ -99,9 +99,14 @@ done
 exit 1
 STUB
 
-# `curl`: records "<url> <token header> <body>" per POST to ${SB}/post-log and
-# answers ${SB}/reply (default `{"status":"pinned"}`), or fails while
-# ${SB}/post-fails exists.
+# `curl`, two roles:
+#   * merod's paged `GET http://127.0.0.1:<port>/admin-api/groups/<ns>/members
+#     ?offset=&limit=`, which the verification role lookup reads: slices the
+#     list in ${SB}/members/<ns> (missing file = HTTP error). Paging itself is
+#     covered by fleet-sidecar-verification-test.sh.
+#   * mdma: records "<url> <token header> <body>" per POST to ${SB}/post-log
+#     and answers ${SB}/reply (default `{"status":"pinned"}`), or fails while
+#     ${SB}/post-fails exists.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body="" url="" token="" prev=""
@@ -111,6 +116,20 @@ for a in "$@"; do
   [[ "${a}" == http* ]] && url="${a}"
   prev="${a}"
 done
+if [[ "${url}" == http://127.0.0.1:*/admin-api/groups/*/members\?* ]]; then
+  exec python3 - "${url}" "${SB}" <<'PY'
+import json, os, sys
+from urllib.parse import parse_qs, urlparse
+u = urlparse(sys.argv[1])
+q = parse_qs(u.query)
+offset, limit = int(q["offset"][0]), int(q["limit"][0])
+path = os.path.join(sys.argv[2], "members", u.path.split("/")[3])
+if not os.path.exists(path):
+    sys.exit(22)
+rows = json.load(open(path))["members"]
+print(json.dumps({"members": rows[offset:offset + limit]}))
+PY
+fi
 [[ -f "${SB}/post-fails" ]] && exit 22
 printf '%s\t%s\t%s\n' "${url}" "${token}" "${body}" >> "${SB}/post-log"
 cat "${SB}/reply" 2>/dev/null || echo '{"status":"pinned"}'

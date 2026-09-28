@@ -846,9 +846,16 @@ Once the namespace is confirmed, `reconcile_verification` answers it from the
 local merod:
 
 ```bash
-meroctl ... namespace get          <NAMESPACE>   # data.founding.founderAccountId
-meroctl ... group members list     <NAMESPACE>   # the account's role, or none
+meroctl ... namespace get <NAMESPACE>                        # data.founding.founderAccountId
+curl http://127.0.0.1:{server-port}/admin-api/groups/<NAMESPACE>/members?offset=N&limit=1000
+                                                             # members[].role, paged until the account or the end
 ```
+
+The member list is read over loopback rather than with
+`meroctl group members list`, because meroctl sends no `offset`/`limit` and so
+only ever sees core's first page of 100. The route is the same handler, on
+core's admin router, which has no guard in merod's default proxy auth mode (the
+same reason `/admin-api/usage` and the registration quote are read this way).
 
 and posts `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` with
 `{"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}`.
@@ -869,11 +876,26 @@ and posts `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` with
 the member list is read inside the TEE, and only a verdict about the one account
 MDMA already supplied leaves. The body carries exactly those five fields.
 
-**A partial read is never an answer.** A failed or unparseable read, or a member
-list at core's 100-row page limit *without* the account in it, posts nothing and
-is retried next cycle: "not a member" read off a truncated page is a false
-verdict about a real admin. An account *found* on a full page is certain, so it
-is reported.
+**A partial read is never an answer.** The sidecar pages through the member list
+until it finds the account, which is certain and ends the read, or reaches the
+end of the list. `null` ("not a member") is reported only once every page has
+been read. Anything short of that posts nothing and is retried next cycle,
+because "not a member" read off part of the list is a false verdict about a real
+admin. That covers a failed or unparseable page (first or later), a list that
+changed between two pages, and running out of pages or time:
+
+- **Pages overlap by one row.** Each page after the first starts on the previous
+  page's last account, and that account must come back first. If it does not,
+  a member was added or removed before the offset and later rows shifted, which
+  could have stepped over the account.
+- **The end is an empty page, not a short one.** The list is exhausted only when
+  a page brings nothing past that overlap row. A node that clamps `limit` below
+  what was asked then costs extra pages instead of a false `null`.
+- **Bounded work per cycle.** At most `VERIFICATION_MAX_PAGES` (10) pages of
+  `VERIFICATION_PAGE_SIZE` (1000, core's `MAX_LIST_LIMIT`) rows in
+  `VERIFICATION_READ_BUDGET` (20 s). A namespace too large to read in that budget
+  is answered only if the account is found. Absence there stays "unknown", and
+  nothing is posted.
 
 **Once per answer, not once per question.** A just-joined node may answer from
 governance that has not synced yet (the account not listed, or not yet an
@@ -1267,7 +1289,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Admin verification | `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` — body `{"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}`; asked by `assignments[].verify` (legacy form adds `verify.genesis_op_hash`) |
-| Verification probes | `meroctl … namespace get <NS>` → `data.founding.founderAccountId` (legacy question: `data.legacyFounding.{founderAccountId,genesisOpHash}`); `meroctl … group members list <NS>` → `members[].role` |
+| Verification probes | `meroctl … namespace get <NS>` → `data.founding.founderAccountId` (legacy question: `data.legacyFounding.{founderAccountId,genesisOpHash}`); `GET http://127.0.0.1:{server-port}/admin-api/groups/<NS>/members?offset=&limit=1000` (loopback, paged, pages overlap by one row) → `members[].role` |
 | Verification state | `/mnt/data/fleet/fleet-verifications.json` |
 | Legacy founding pin | `POST {MDMA_URL}/api/fleet/namespaces/<ns>/founding` — body `{"peer_id", "founder_account_id", "genesis_op_hash"}`; returns `{"status"}`; asked by `assignments[].pin_founding` |
 | Founding pin state | `/mnt/data/fleet/fleet-founding-pins.json` |
