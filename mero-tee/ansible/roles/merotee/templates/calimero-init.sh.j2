@@ -928,6 +928,12 @@ else
     for f in /usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_nvme_id; do
       [[ -e "$f" ]] && log "present: $f" || log "MISSING: $f"
     done
+    # What this boot's root is, and what the rule directory holds. The build
+    # proves both files are in the sealed image, so a MISSING above with these
+    # says whether the boot mounted a different root or something hides them.
+    log "root: $(findmnt -no SOURCE,FSTYPE,OPTIONS / 2>&1 | tr '\n' ' ')"
+    log "/usr/lib/udev/rules.d: $(ls -1 /usr/lib/udev/rules.d 2>&1 | grep -iE 'gce|google|nvme|disk' | tr '\n' ' ')"
+    log "nvme: $(command -v nvme || echo 'not installed')"
   }
 
   # Where a missing disk is fatal anyway (locked-read-only keeps state nowhere

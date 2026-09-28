@@ -22,11 +22,15 @@
 # system: GRUB still reads the kernel, initrd and grub.cfg from it, and all three
 # are measured (RTMR1, RTMR2). Changing them changes the measurements.
 #
-# Usage: seal-root.sh [--remove-user NAME]
+# Usage: seal-root.sh [--remove-user NAME] [--require PATH]...
 #
 # SEAL_SYSROOT (default /) seals a root mounted elsewhere. It exists for the
 # test in scripts/ci/tests/seal-root-test.sh, which runs this against a disk
 # image on a loop device.
+#   --require      A path (absolute, as the booted system sees it) that must be
+#                  in the sealed root; checked INSIDE the EROFS image once it is
+#                  written, so a file the build installed but the copy lost fails
+#                  the build instead of a node. Repeatable.
 #   --remove-user  Delete this user first (the Packer build user on the locked
 #                  profile). Done here, in the same root process, because it has
 #                  to happen before the root is copied and nothing can run as
@@ -52,10 +56,15 @@ die() {
 }
 
 remove_user=""
+required=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --remove-user)
       remove_user="${2:?--remove-user needs a name}"
+      shift 2
+      ;;
+    --require)
+      required+=("${2:?--require needs a path}")
       shift 2
       ;;
     *) die "unknown argument: $1" ;;
@@ -63,7 +72,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(id -u)" == 0 ]] || die "must run as root"
-for tool in mkfs.erofs veritysetup sgdisk partprobe blkid dracut update-grub findmnt lsblk; do
+for tool in mkfs.erofs dump.erofs veritysetup sgdisk partprobe blkid dracut update-grub findmnt lsblk; do
   command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
 
@@ -166,6 +175,15 @@ mkfs.erofs -zlz4hc -T0 "${exclude[@]}" "$root_part" "$ROOT_DIR"
 cat "$fstab_base" > "$FSTAB"
 rm -f "$fstab_base"
 log "Wrote the EROFS root to $root_part"
+
+# What the booted system will actually see, checked in the image itself rather
+# than on the build host it was copied from. dump.erofs exits 0 either way; only
+# a path it found is printed as "Path : ...".
+for path in ${required[@]+"${required[@]}"}; do
+  dump.erofs --path="$path" "$root_part" 2>/dev/null | grep -q '^Path :' \
+    || die "$path is not in the sealed root, although the build installed it"
+  log "Sealed root holds $path"
+done
 
 roothash_file="$(mktemp)"
 veritysetup format "$root_part" "$verity_part" --root-hash-file="$roothash_file" >/dev/null

@@ -11,6 +11,11 @@
 - hosts: all
   become: true
   vars:
+    # Installed by the merotee role, required in the sealed root (post_tasks).
+    gce_udev_paths:
+      - /usr/lib/udev/rules.d/65-gce-disk-naming.rules
+      - /usr/lib/udev/google_nvme_id
+
     # Delegated execution: whether this image is a RELAY, i.e. whether a
     # keyholder with no account on this node may present a signed warrant to it
     # and have it write on their behalf.
@@ -135,10 +140,30 @@
     # On locked-read-only it also removes the ubuntu user (R4) first. Both run in
     # one root process: Packer SSHs as ubuntu, so nothing can start after the user
     # is gone, and the user has to be gone before the root is copied.
+    # The GCE disk-naming rule and helper (roles/merotee/files/gce-udev). 2.3.87
+    # nodes logged MISSING for both although the build installed them, so their
+    # presence is asserted twice: here, on the build host after every role has
+    # run, and by the seal inside the EROFS image it writes. Whichever fails
+    # names the step that loses them.
+    - name: Stat the GCE disk-naming files before sealing
+      stat:
+        path: "{{ item }}"
+      register: gce_udev_files
+      loop: "{{ gce_udev_paths }}"
+
+    - name: Assert the GCE disk-naming files survived every role
+      assert:
+        that: item.stat.exists
+        fail_msg: "{{ item.item }} was installed by the merotee role but is gone before the seal"
+      loop: "{{ gce_udev_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
     - name: Seal the root filesystem behind dm-verity
       command: >-
         /usr/local/sbin/calimero-seal-root
         {{ '--remove-user ubuntu' if (lockdown_profile | default('locked-read-only')) == 'locked-read-only' else '' }}
+        {% for path in gce_udev_paths %}--require {{ path }} {% endfor %}
       changed_when: true
       register: seal_result
 

@@ -56,6 +56,8 @@ LABEL=UEFI /boot/efi vfat umask=0077 0 1
 tmpfs /scratch tmpfs defaults 0 0
 EOF
 echo "merod" > "$r/usr/local/bin/merod"
+mkdir -p "$r/usr/lib/udev/rules.d"
+echo "rule" > "$r/usr/lib/udev/rules.d/65-gce-disk-naming.rules"
 echo "build log" > "$r/var/log/build.log"
 echo "scratch" > "$r/tmp/scratch"
 echo "module" > "$r/root/.ansible/module.py"
@@ -78,7 +80,10 @@ echo "linux /vmlinuz root=PARTUUID=base ro ${GRUB_CMDLINE_LINUX_DEFAULT}" > "$SE
 EOF
 chmod +x "$stubs/dracut" "$stubs/update-grub"
 
-SEAL_SYSROOT="$r" PATH="$stubs:$PATH" bash ${SEAL_TRACE:+-x} "$script" | tee "$work/seal.log"
+SEAL_SYSROOT="$r" PATH="$stubs:$PATH" bash ${SEAL_TRACE:+-x} "$script" \
+  --require /usr/lib/udev/rules.d/65-gce-disk-naming.rules | tee "$work/seal.log"
+grep -q "Sealed root holds /usr/lib/udev/rules.d/65-gce-disk-naming.rules" "$work/seal.log" \
+  || fail "the seal did not check a --require path inside the image"
 
 part_of() { blkid -c /dev/null -t "PARTLABEL=$1" -o device | grep "^${loop}" | head -n1; }
 root_part="$(part_of calimero-root)"
