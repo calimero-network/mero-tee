@@ -122,7 +122,7 @@ async fn release_key(
         ));
     }
 
-    let challenge_nonce = consume_challenge(state, request)?;
+    let (challenge_nonce, challenge_expires_at) = open_challenge(state, request)?;
 
     verify_peer_signature(
         &request.peer_id,
@@ -148,6 +148,8 @@ async fn release_key(
         &request.peer_id,
     )
     .await?;
+
+    spend_challenge(state, request, challenge_expires_at)?;
 
     let key_path = key_path_for_peer(&state.config, &request.peer_id);
     let key_hex = state.backend.derive_key_hex(&key_path)?;
@@ -274,27 +276,43 @@ pub(crate) fn hash_peer_id(peer_id: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// The nonce `request`'s challenge was issued with, marking the challenge used
-/// on this replica. It is recomputed from the challenge itself
-/// (`stateless_challenge`), so a challenge any replica of the cluster issued is
-/// accepted.
-fn consume_challenge(state: &AppState, request: &GetKeyRequest) -> Result<[u8; 32], ServiceError> {
+/// The nonce and expiry `request`'s challenge was issued with. It is
+/// recomputed from the challenge itself (`stateless_challenge`), so a challenge
+/// any replica of the cluster issued is accepted, and one none of them issued
+/// to this peer is refused here, before any other work.
+fn open_challenge(
+    state: &AppState,
+    request: &GetKeyRequest,
+) -> Result<([u8; 32], u64), ServiceError> {
     let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     let key = state.backend.challenge_key()?;
-    let (nonce, expires_at) = stateless_challenge::open(
+    stateless_challenge::open(
         &key,
         &request.challenge_id,
         &request.peer_id,
         now,
         state.config.challenge_ttl_secs,
-    )?;
+    )
+}
+
+/// Mark `request`'s challenge used on this replica.
+///
+/// Only once the request has verified, so the spent-challenge cache holds
+/// challenges that released a key and nothing else: neither a forged ID nor a
+/// genuine one presented with a bad signature or quote can take a place in it.
+/// Keyed on the lowercase ID, the form this KMS issues.
+fn spend_challenge(
+    state: &AppState,
+    request: &GetKeyRequest,
+    expires_at: u64,
+) -> Result<(), ServiceError> {
+    let now = unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))?;
     state.spent_challenges.spend(
-        &request.challenge_id,
+        &request.challenge_id.to_ascii_lowercase(),
         expires_at,
         now,
         state.config.max_consumed_challenges,
-    )?;
-    Ok(nonce)
+    )
 }
 
 /// Build the key derivation path: `{namespace}/{profile}/{peerId}`.

@@ -46,7 +46,7 @@ reaches the replica that served its `/challenge`, and it does not need to.
 
    ```json
    {
-     "challengeId": "<48 hex chars>",
+     "challengeId": "<112 hex chars>",
      "nonceB64": "<base64 of the 32-byte nonce>",
      "expiresAt": 1700000000
    }
@@ -66,7 +66,7 @@ signs a payload binding the challenge to its key, and calls `/get-key`:
 
 ```json
 {
-  "challengeId": "<48 hex chars>",
+  "challengeId": "<112 hex chars>",
   "quoteB64": "<base64 raw TDX quote>",
   "peerId": "12D3KooW...",
   "peerPublicKeyB64": "<base64 protobuf libp2p public key>",
@@ -75,22 +75,22 @@ signs a payload binding the challenge to its key, and calls `/get-key`:
 }
 ```
 
-The KMS runs a fixed pipeline. The challenge is **redeemed before** any cryptographic
-check, so a request replayed to the same replica always fails on its second attempt
-regardless of where the first attempt errored:
+The KMS runs a fixed pipeline. The challenge is **checked first** and **redeemed
+last**, just before the key is derived: a made-up challenge costs one MAC, and only a
+request that verified can take a place in the replay set, so a request replayed to the
+same replica after a release always fails:
 
 1. **Validate inputs.** Peer-ID shape (base58btc, ≤128 chars) and challenge-ID shape
-   (48 hex chars) are checked; the quote is base64-decoded. Without `sealToB64` the
+   (112 hex chars) are checked; the quote is base64-decoded. Without `sealToB64` the
    request is refused (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, on in every image).
 
 2. **Root gate.** If the replica does not hold its cluster's root yet, key release is
    refused with `503 policy_not_ready` before anything else — `/get-key` fails closed
    while `/attest` still works.
 
-3. **Redeem the challenge (single-use per replica).** The replica checks the token's tag
-   against this `peerId` and its expiry, and enters it in its replay set. A forged,
-   foreign, expired, or already-redeemed challenge → `401 invalid_challenge`; a full
-   replay set (`MAX_CONSUMED_CHALLENGES`) → `429 rate_limited`.
+3. **Check the challenge.** The replica checks the ID's tag against this `peerId` and
+   its expiry, and recomputes the nonce. A forged, foreign or expired challenge →
+   `401 invalid_challenge`. Nothing is recorded yet.
 
 4. **Verify the peer signature.** The submitted public key is decoded, confirmed to
    derive to the claimed `peerId`, and used to verify a signature over the canonical
@@ -110,12 +110,17 @@ regardless of where the first attempt errored:
    empty allowlist for any enforced register is treated as a rejection, so a
    misconfigured policy fails closed. See [Policy Management](/flows/policy-management/).
 
-7. **Derive the key.** Only now does the KMS derive the key by HKDF from the cluster
+7. **Redeem the challenge (single-use per replica).** Only a request that passed every
+   check above is entered in the replay set. An already-redeemed challenge →
+   `401 invalid_challenge`; a full replay set (`MAX_CONSUMED_CHALLENGES`) →
+   `429 rate_limited`.
+
+8. **Derive the key.** Only now does the KMS derive the key by HKDF from the cluster
    root along the path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (e.g.
    `merod/storage/<profile>/<peerId>`). The derivation is deterministic in those inputs,
    so every replica of the cluster derives the same key.
 
-8. **Return the key, sealed** to the node's one-time `sealToB64` key (AES-GCM under an
+9. **Return the key, sealed** to the node's one-time `sealToB64` key (AES-GCM under an
    X25519 agreement with the KMS's root-derived transport key):
 
    ```json

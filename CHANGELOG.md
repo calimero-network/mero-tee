@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **mero-kms records a challenge or join nonce only once its request has verified.** `challengeId` now carries an HMAC tag (112 hex characters) that is checked first, and `/get-key` redeems the challenge after the signature and attestation verify, just before deriving the key, so the replay set holds only challenges that released a key. Join nonces are stateless (random bytes, expiry and an HMAC tag under a per-process key) instead of a table of outstanding nonces, and are remembered only once the join verifies.
+
 - **The attestation verifier reads everything from the quote bytes.** In node mode it used MRTD/RTMR0–3 from the `quote.body` a node returns beside its quote, and checked the nonce against that JSON's `reportdata` only when present; the pasted KMS flow checked a pasted `reportDataHex`. Both now read `report_data` and the measurements from the quote Intel Trust Authority appraises, the node flow always checks the nonce, and only the quote is passed back to the page.
 
 - **Registration quotes come from merod's `registration-attest` route.** The sidecar now asks for its registration quote on `POST /admin-api/tee/registration-attest`, which carries a registration-only report-data binding, and tells mdma so with `quote_binding: "registration"`. A merod that predates the route answers 404, and only then does the sidecar fall back to `/admin-api/tee/attest` as before. `traefik-tee-route-test.sh` pins the public TEE router to `info` and `attest`. Covered by `fleet-sidecar-registration-test.sh`.

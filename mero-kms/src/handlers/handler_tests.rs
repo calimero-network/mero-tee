@@ -498,7 +498,7 @@ async fn test_policy_not_ready_error_maps_to_service_unavailable() {
 }
 
 #[tokio::test]
-async fn test_challenge_is_single_use_even_when_signature_fails() {
+async fn a_request_that_fails_verification_does_not_spend_its_challenge() {
     let app = create_router(Config::default(), replica(7));
     let keypair = Keypair::generate_ed25519();
     let peer_id = keypair.public().to_peer_id().to_base58();
@@ -545,9 +545,11 @@ async fn test_challenge_is_single_use_even_when_signature_fails() {
         .await
         .expect("request should succeed");
 
-    assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+    // Refused on the same check again, not as a spent challenge: a request that
+    // fails verification takes no place in the spent-challenge cache.
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
     let second_payload = read_json_body(second).await;
-    assert_eq!(second_payload["error"], "invalid_challenge");
+    assert_eq!(second_payload["error"], "invalid_peer_public_key");
 }
 
 /// Sealed release is the default: a request that does not name a key to seal
@@ -624,9 +626,8 @@ async fn get_key_error(app: &Router, challenge_id: &str, peer_id: &str) -> Strin
 }
 
 /// Replicas share no storage: a challenge one replica issued must pass on any
-/// other replica of the same cluster, once per replica. (Another cluster opens
-/// it to a different nonce, which the node's signature and quote then fail;
-/// `stateless_challenge`'s tests cover that binding.)
+/// other replica of the same cluster. (Another cluster, holding another root,
+/// refuses its tag; `stateless_challenge`'s tests cover that binding.)
 #[tokio::test]
 async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster() {
     let peer_id = Keypair::generate_ed25519()
@@ -643,9 +644,112 @@ async fn a_challenge_from_one_replica_is_accepted_by_another_of_the_same_cluster
         "invalid_peer_public_key"
     );
     assert_eq!(
-        get_key_error(&replica_b, &challenge_id, &peer_id).await,
+        get_key_error(
+            &create_router(Config::default(), replica(8)),
+            &challenge_id,
+            &peer_id
+        )
+        .await,
+        "invalid_challenge",
+        "another cluster"
+    );
+}
+
+/// A well-formed, in-window ID this cluster did not issue is refused before
+/// any other check, so made-up IDs cost a MAC and take no cache place.
+#[tokio::test]
+async fn a_made_up_challenge_is_refused_first() {
+    let peer_id = Keypair::generate_ed25519()
+        .public()
+        .to_peer_id()
+        .to_base58();
+    let app = create_router(Config::default(), replica(7));
+    let mut made_up = issue_challenge(&app, &peer_id).await;
+    // Keep the random part and the expiry; replace the tag.
+    made_up.replace_range(
+        48..,
+        &"0".repeat(crate::stateless_challenge::ID_HEX_LEN - 48),
+    );
+    assert_eq!(
+        get_key_error(&app, &made_up, &peer_id).await,
         "invalid_challenge"
     );
+}
+
+/// The whole release, over a mock quote: a challenge releases a key once, and
+/// only a request that verified spends it. The cache holds one entry, so a
+/// failed request that spent its challenge would leave no room for the good one.
+#[cfg(feature = "mock-attestation")]
+#[tokio::test]
+async fn a_challenge_releases_a_key_once_and_only_a_verified_request_spends_it() {
+    use curve25519_dalek::montgomery::MontgomeryPoint;
+
+    let keypair = Keypair::generate_ed25519();
+    let peer_id = keypair.public().to_peer_id().to_base58();
+    let config = Config {
+        accept_mock_attestation: true,
+        max_consumed_challenges: 1,
+        ..Config::default()
+    };
+    let app = create_router(config, replica(7));
+
+    let challenge = app
+        .clone()
+        .oneshot(post_json_request(
+            "/challenge",
+            &serde_json::json!({ "peerId": peer_id }),
+        ))
+        .await
+        .expect("request should succeed");
+    let challenge = read_json_body(challenge).await;
+    let challenge_id = challenge["challengeId"]
+        .as_str()
+        .expect("challengeId")
+        .to_owned();
+    let nonce: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(challenge["nonceB64"].as_str().expect("nonceB64"))
+        .expect("base64 nonce")
+        .try_into()
+        .expect("32-byte nonce");
+
+    let seal_to = MontgomeryPoint::mul_base_clamped([0x33; 32]).0;
+    let mut report_data = [0u8; 64];
+    report_data[..32].copy_from_slice(&nonce);
+    report_data[32..].copy_from_slice(&crate::sealed::request_binding(&seal_to, &peer_id));
+    let quote = calimero_tee_attestation::generate_mock_attestation(report_data).quote_bytes;
+    let payload =
+        get_key::build_signature_payload(&challenge_id, &nonce, &quote, &peer_id, Some(&seal_to))
+            .expect("payload");
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let request = |signature: Vec<u8>| {
+        serde_json::json!({
+            "challengeId": challenge_id,
+            "quoteB64": b64(&quote),
+            "peerId": peer_id,
+            "peerPublicKeyB64": b64(&keypair.public().encode_protobuf()),
+            "signatureB64": b64(&signature),
+            "sealToB64": b64(&seal_to),
+        })
+    };
+    let get_key = |body: serde_json::Value| {
+        let app = app.clone();
+        async move {
+            app.oneshot(post_json_request("/get-key", &body))
+                .await
+                .expect("request should succeed")
+        }
+    };
+
+    let refused = get_key(request(vec![0; 64])).await;
+    assert_eq!(read_json_body(refused).await["error"], "invalid_signature");
+
+    let signature = keypair.sign(&payload).expect("sign");
+    let released = get_key(request(signature.clone())).await;
+    assert_eq!(released.status(), StatusCode::OK);
+    assert!(read_json_body(released).await["sealedKeyB64"].is_string());
+
+    let replayed = get_key(request(signature)).await;
+    assert_eq!(read_json_body(replayed).await["error"], "invalid_challenge");
 }
 
 #[tokio::test]

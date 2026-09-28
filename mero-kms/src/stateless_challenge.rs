@@ -8,18 +8,22 @@
 //! cluster root.
 //!
 //! ```text
-//! challengeId = hex(random[16] ‖ expires_at as u64 big-endian)       48 hex chars
-//! nonce       = HMAC-SHA256(challenge_key, DOMAIN ‖ id bytes ‖ peer_id)
+//! challengeId = hex(random[16] ‖ expires_at as u64 big-endian ‖ tag[32])    112 hex chars
+//! tag         = HMAC-SHA256(challenge_key, TAG_DOMAIN ‖ random ‖ expires_at ‖ peer_id)
+//! nonce       = HMAC-SHA256(challenge_key, DOMAIN ‖ random ‖ expires_at ‖ peer_id)
 //! ```
 //!
-//! Nothing here checks that an ID is genuine, and nothing needs to. A forged ID
-//! yields a nonce its forger cannot compute, and `/get-key` then fails on the
-//! peer signature and the quote, both of which must carry the real nonce.
+//! The tag makes an ID one this cluster issued to this peer, checked before
+//! anything else is spent on the request. A forged ID is refused outright, so
+//! it can take no place in [`SpentChallenges`].
 //!
-//! Replay is refused per replica, by [`SpentChallenges`]. A captured request
-//! replayed at a *different* replica within the TTL gets past this check, and
-//! gains nothing from it: the response is sealed to the requesting node's key
-//! (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`), and the request is signed by it.
+//! Replay is refused per replica, by [`SpentChallenges`], which records an ID
+//! only once the request carrying it has verified: a genuine challenge that
+//! came with a bad signature or quote takes no place either. A captured
+//! request replayed at a *different* replica within the TTL gets past this
+//! check, and gains nothing from it: the response is sealed to the requesting
+//! node's key (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`), and the request is
+//! signed by it.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -31,8 +35,12 @@ use crate::backend::KEY_LEN;
 use crate::handlers::errors::ServiceError;
 
 const DOMAIN: &[u8] = b"mero-kms/tdx-challenge/v1\0";
+const TAG_DOMAIN: &[u8] = b"mero-kms/tdx-challenge-id/v1\0";
 const RANDOM_BYTES: usize = 16;
-const ID_BYTES: usize = RANDOM_BYTES + 8;
+/// `random ‖ expires_at`: what the nonce and the tag are computed over.
+const BODY_BYTES: usize = RANDOM_BYTES + 8;
+const TAG_BYTES: usize = 32;
+const ID_BYTES: usize = BODY_BYTES + TAG_BYTES;
 
 /// Length of a hex-encoded stateless challenge ID.
 pub(crate) const ID_HEX_LEN: usize = ID_BYTES * 2;
@@ -44,16 +52,20 @@ const CLOCK_SKEW_SECS: u64 = 30;
 
 /// Issue a challenge for `peer_id`, valid until `expires_at`.
 pub(crate) fn issue(key: &[u8; KEY_LEN], peer_id: &str, expires_at: u64) -> (String, [u8; 32]) {
+    let mut body = [0u8; BODY_BYTES];
+    body[..RANDOM_BYTES].copy_from_slice(&random::<[u8; RANDOM_BYTES]>());
+    body[RANDOM_BYTES..].copy_from_slice(&expires_at.to_be_bytes());
     let mut id = [0u8; ID_BYTES];
-    id[..RANDOM_BYTES].copy_from_slice(&random::<[u8; RANDOM_BYTES]>());
-    id[RANDOM_BYTES..].copy_from_slice(&expires_at.to_be_bytes());
-    (hex::encode(id), nonce(key, &id, peer_id))
+    id[..BODY_BYTES].copy_from_slice(&body);
+    id[BODY_BYTES..].copy_from_slice(mac(key, TAG_DOMAIN, &body, peer_id).as_ref());
+    (hex::encode(id), nonce(key, &body, peer_id))
 }
 
 /// Recover the nonce and expiry of `challenge_id` as issued to `peer_id`.
 ///
-/// Refuses an ID that is malformed, expired, or expires later than any this
-/// cluster would have issued at `now` with `ttl_secs`.
+/// Refuses an ID that is malformed, was not issued by this cluster to
+/// `peer_id`, is expired, or expires later than any this cluster would have
+/// issued at `now` with `ttl_secs`.
 pub(crate) fn open(
     key: &[u8; KEY_LEN],
     challenge_id: &str,
@@ -69,8 +81,22 @@ pub(crate) fn open(
                 "challenge ID must be {ID_HEX_LEN} hex characters"
             ))
         })?;
+    let (body, tag) = id.split_at(BODY_BYTES);
+    let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    let mut tagged = Vec::with_capacity(TAG_DOMAIN.len() + BODY_BYTES + peer_id.len());
+    tagged.extend_from_slice(TAG_DOMAIN);
+    tagged.extend_from_slice(body);
+    tagged.extend_from_slice(peer_id.as_bytes());
+    hmac::verify(&hmac_key, &tagged, tag).map_err(|_| {
+        ServiceError::InvalidChallenge(
+            "Challenge validation failed: not a challenge this KMS issued to this peer".to_owned(),
+        )
+    })?;
+    let body: [u8; BODY_BYTES] = body.try_into().map_err(|_| {
+        ServiceError::InvalidChallenge("challenge ID has the wrong length".to_owned())
+    })?;
     let mut expiry = [0u8; 8];
-    expiry.copy_from_slice(&id[RANDOM_BYTES..]);
+    expiry.copy_from_slice(&body[RANDOM_BYTES..]);
     let expires_at = u64::from_be_bytes(expiry);
     if expires_at < now {
         return Err(ServiceError::InvalidChallenge(
@@ -82,19 +108,23 @@ pub(crate) fn open(
             "Challenge validation failed: challenge expires later than this KMS issues".to_owned(),
         ));
     }
-    Ok((nonce(key, &id, peer_id), expires_at))
+    Ok((nonce(key, &body, peer_id), expires_at))
 }
 
-fn nonce(key: &[u8; KEY_LEN], id: &[u8; ID_BYTES], peer_id: &str) -> [u8; 32] {
+fn nonce(key: &[u8; KEY_LEN], body: &[u8; BODY_BYTES], peer_id: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(mac(key, DOMAIN, body, peer_id).as_ref());
+    out
+}
+
+fn mac(key: &[u8; KEY_LEN], domain: &[u8], body: &[u8; BODY_BYTES], peer_id: &str) -> hmac::Tag {
     let key = hmac::Key::new(hmac::HMAC_SHA256, key);
     let mut ctx = hmac::Context::with_key(&key);
-    ctx.update(DOMAIN);
-    // The ID is fixed-length, so the peer ID that follows it is unambiguous.
-    ctx.update(id);
+    ctx.update(domain);
+    // The body is fixed-length, so the peer ID that follows it is unambiguous.
+    ctx.update(body);
     ctx.update(peer_id.as_bytes());
-    let mut out = [0u8; 32];
-    out.copy_from_slice(ctx.sign().as_ref());
-    out
+    ctx.sign()
 }
 
 /// Challenge IDs this replica has already accepted at `/get-key`, each kept
@@ -162,20 +192,46 @@ mod tests {
     }
 
     #[test]
-    fn the_nonce_is_bound_to_the_peer_the_key_and_the_expiry() {
-        let (id, issued) = issue(&KEY, PEER, NOW + TTL);
-        assert_ne!(
-            open(&KEY, &id, "12D3KooWOther", NOW, TTL).unwrap().0,
-            issued
-        );
-        assert_ne!(open(&[1; KEY_LEN], &id, PEER, NOW, TTL).unwrap().0, issued);
+    fn an_id_opens_only_for_its_peer_its_key_and_its_expiry() {
+        let (id, _) = issue(&KEY, PEER, NOW + TTL);
+        for refused in [
+            open(&KEY, &id, "12D3KooWOther", NOW, TTL),
+            open(&[1; KEY_LEN], &id, PEER, NOW, TTL),
+        ] {
+            assert!(matches!(refused, Err(ServiceError::InvalidChallenge(_))));
+        }
 
-        // Moving the expiry changes the nonce, so a stretched challenge is a
-        // different, unanswerable one.
+        // Moving the expiry breaks the tag, so a stretched challenge is refused.
         let mut bytes = hex::decode(&id).unwrap();
-        bytes[ID_BYTES - 1] ^= 1;
+        bytes[BODY_BYTES - 1] ^= 1;
         let stretched = hex::encode(bytes);
-        assert_ne!(open(&KEY, &stretched, PEER, NOW, TTL).unwrap().0, issued);
+        assert!(matches!(
+            open(&KEY, &stretched, PEER, NOW, TTL),
+            Err(ServiceError::InvalidChallenge(_))
+        ));
+    }
+
+    /// What keeps made-up IDs out of [`SpentChallenges`]: without the key, a
+    /// well-formed, in-window ID does not open.
+    #[test]
+    fn a_forged_id_is_refused() {
+        let mut body = [0u8; BODY_BYTES];
+        body[RANDOM_BYTES..].copy_from_slice(&(NOW + TTL).to_be_bytes());
+        let mut forged = [0u8; ID_BYTES];
+        forged[..BODY_BYTES].copy_from_slice(&body);
+        assert!(matches!(
+            open(&KEY, &hex::encode(forged), PEER, NOW, TTL),
+            Err(ServiceError::InvalidChallenge(_))
+        ));
+    }
+
+    #[test]
+    fn the_nonce_differs_per_peer_and_per_key() {
+        let (_, mine) = issue(&KEY, PEER, NOW + TTL);
+        let (_, theirs) = issue(&KEY, "12D3KooWOther", NOW + TTL);
+        let (_, other_key) = issue(&[1; KEY_LEN], PEER, NOW + TTL);
+        assert_ne!(mine, theirs);
+        assert_ne!(mine, other_key);
     }
 
     #[test]

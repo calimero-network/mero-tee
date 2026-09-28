@@ -131,8 +131,8 @@ routes are documented in full in [Key Release](/flows/key-release/).
 
 ### Round 1 — get a challenge
 
-Send any base58btc peer ID. The KMS returns a stateless challenge ID (48 hex
-characters: 16 random bytes and the expiry) plus the base64 nonce, an HMAC of the
+Send any base58btc peer ID. The KMS returns a stateless challenge ID (112 hex
+characters: 16 random bytes, the expiry and a tag) plus the base64 nonce, an HMAC of the
 ID and the peer ID under a root-derived key, and its expiry:
 
 ```bash
@@ -143,7 +143,7 @@ curl -s -X POST http://localhost:8080/challenge \
 
 ```json
 {
-  "challengeId": "<48 hex chars>",
+  "challengeId": "<112 hex chars>",
   "nonceB64": "aGVsbG8td29ybGQtZXhhbXBsZS0zMi1ieXRlcy1ub25jZQ==",
   "expiresAt": 1753104000
 }
@@ -161,7 +161,7 @@ signature binding all of it to the peer identity:
 curl -s -X POST http://localhost:8080/get-key \
   -H 'content-type: application/json' \
   -d '{
-    "challengeId": "<48 hex chars from round 1>",
+    "challengeId": "<112 hex chars from round 1>",
     "quoteB64":    "<base64 raw TDX quote with the nonce in report_data>",
     "peerId":      "12D3KooWEyoppNCUx8Yx66oV9fJnriXwCcXwDDUA2kj6vnc6iDEp",
     "peerPublicKeyB64": "<base64 protobuf libp2p public key>",

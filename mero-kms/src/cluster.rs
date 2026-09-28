@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::Json;
@@ -51,47 +51,94 @@ const JOIN_DOMAIN: &[u8] = b"mero-kms/cluster/join/v1";
 const GIVE_DOMAIN: &[u8] = b"mero-kms/cluster/give/v1";
 const ROOT_SEAL_DOMAIN: &[u8] = b"mero-kms/cluster/root-seal/v1";
 
-/// How long a join nonce stays valid, and how many may be outstanding.
-const JOIN_NONCE_TTL: Duration = Duration::from_secs(60);
-const MAX_JOIN_NONCES: usize = 1024;
+/// How long a join nonce stays valid.
+const JOIN_NONCE_TTL_SECS: u64 = 60;
+const JOIN_NONCE_DOMAIN: &[u8] = b"mero-kms/cluster/join-nonce/v1";
+const JOIN_NONCE_RANDOM: usize = 8;
+const JOIN_NONCE_BODY: usize = JOIN_NONCE_RANDOM + 8;
 
-/// Single-use nonces this replica issued to joiners.
-#[derive(Default)]
-pub(crate) struct JoinNonces(Mutex<HashMap<[u8; 32], Instant>>);
+/// Join nonces this replica issues, checked without keeping any state per
+/// nonce issued.
+///
+/// ```text
+/// nonce = random[8] ‖ expires_at as u64 big-endian ‖ tag[16]
+/// tag   = HMAC-SHA256(key, JOIN_NONCE_DOMAIN ‖ random ‖ expires_at)[..16]
+/// ```
+///
+/// `key` is generated at startup and never leaves the process. `/cluster/nonce`
+/// is unauthenticated, so a table of outstanding nonces is one anyone can fill,
+/// and a full one turned away the replicas that replace retired ones: with the
+/// root held only in memory, that is how a cluster loses it. Only a nonce whose
+/// join has verified is remembered, until it expires, so it works once.
+pub(crate) struct JoinNonces {
+    key: ring::hmac::Key,
+    spent: Mutex<HashMap<[u8; 32], u64>>,
+}
+
+impl Default for JoinNonces {
+    fn default() -> Self {
+        Self {
+            key: ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &rand::random::<[u8; 32]>()),
+            spent: Mutex::default(),
+        }
+    }
+}
 
 impl JoinNonces {
-    fn issue(&self) -> Result<[u8; 32], ServiceError> {
-        let mut nonces = self.lock()?;
-        let now = Instant::now();
-        nonces.retain(|_, expiry| *expiry > now);
-        if nonces.len() >= MAX_JOIN_NONCES {
-            return Err(ServiceError::RateLimited(
-                "too many outstanding join nonces".to_owned(),
+    fn issue(&self, now: u64) -> [u8; 32] {
+        let mut nonce = [0u8; 32];
+        nonce[..JOIN_NONCE_RANDOM].copy_from_slice(&rand::random::<[u8; JOIN_NONCE_RANDOM]>());
+        nonce[JOIN_NONCE_RANDOM..JOIN_NONCE_BODY]
+            .copy_from_slice(&(now + JOIN_NONCE_TTL_SECS).to_be_bytes());
+        let tag = self.tag(&nonce[..JOIN_NONCE_BODY]);
+        nonce[JOIN_NONCE_BODY..].copy_from_slice(&tag.as_ref()[..32 - JOIN_NONCE_BODY]);
+        nonce
+    }
+
+    /// The expiry of `nonce`, if this replica issued it and it has not expired.
+    fn open(&self, nonce: &[u8; 32], now: u64) -> Result<u64, ServiceError> {
+        let tag = self.tag(&nonce[..JOIN_NONCE_BODY]);
+        // Constant time: which byte differs must not show in the timing.
+        let differs = tag.as_ref()[..32 - JOIN_NONCE_BODY]
+            .iter()
+            .zip(&nonce[JOIN_NONCE_BODY..])
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        if differs != 0 {
+            return Err(ServiceError::InvalidChallenge(
+                "unknown join nonce".to_owned(),
             ));
         }
-        let nonce: [u8; 32] = rand::random();
-        let _ = nonces.insert(nonce, now + JOIN_NONCE_TTL);
-        Ok(nonce)
-    }
-
-    /// Remove `nonce` whatever happens next, so a failed join cannot be retried
-    /// with it.
-    fn consume(&self, nonce: &[u8; 32]) -> Result<(), ServiceError> {
-        match self.lock()?.remove(nonce) {
-            Some(expiry) if expiry > Instant::now() => Ok(()),
-            Some(_) => Err(ServiceError::InvalidChallenge(
+        let mut expiry = [0u8; 8];
+        expiry.copy_from_slice(&nonce[JOIN_NONCE_RANDOM..JOIN_NONCE_BODY]);
+        let expires_at = u64::from_be_bytes(expiry);
+        if expires_at < now {
+            return Err(ServiceError::InvalidChallenge(
                 "join nonce expired".to_owned(),
-            )),
-            None => Err(ServiceError::InvalidChallenge(
-                "unknown join nonce".to_owned(),
-            )),
+            ));
         }
+        Ok(expires_at)
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<[u8; 32], Instant>>, ServiceError> {
-        self.0
+    /// Record `nonce` as used by a verified join, or refuse it if it already was.
+    fn spend(&self, nonce: &[u8; 32], expires_at: u64, now: u64) -> Result<(), ServiceError> {
+        let mut spent = self
+            .spent
             .lock()
-            .map_err(|_| ServiceError::KeyDerivationFailed("nonce lock poisoned".to_owned()))
+            .map_err(|_| ServiceError::KeyDerivationFailed("nonce lock poisoned".to_owned()))?;
+        spent.retain(|_, expiry| *expiry >= now);
+        if spent.insert(*nonce, expires_at).is_some() {
+            return Err(ServiceError::InvalidChallenge(
+                "join nonce already used".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn tag(&self, body: &[u8]) -> ring::hmac::Tag {
+        let mut ctx = ring::hmac::Context::with_key(&self.key);
+        ctx.update(JOIN_NONCE_DOMAIN);
+        ctx.update(body);
+        ctx.sign()
     }
 }
 
@@ -299,7 +346,7 @@ pub(crate) async fn join_nonce_handler(
     State(state): State<AppState>,
 ) -> Result<Json<JoinNonceResponse>, ServiceError> {
     state.backend.with_root(|_| Ok(()))?;
-    let nonce = state.join_nonces.issue()?;
+    let nonce = state.join_nonces.issue(now()?);
     Ok(Json(JoinNonceResponse {
         nonce_b64: BASE64.encode(nonce),
     }))
@@ -312,7 +359,7 @@ pub(crate) async fn join_handler(
 ) -> Result<Json<JoinResponse>, ServiceError> {
     let tdx = &state.backend;
     let nonce = decode_32("nonceB64", &request.nonce_b64)?;
-    state.join_nonces.consume(&nonce)?;
+    let nonce_expires_at = state.join_nonces.open(&nonce, now()?)?;
     let joiner_public = decode_32("joinerPublicB64", &request.joiner_public_b64)?;
     let quote = BASE64
         .decode(&request.quote_b64)
@@ -330,6 +377,9 @@ pub(crate) async fn join_handler(
         warn!("Refused a cluster join: {e}");
         tdx.record_join_refusal(e.to_string());
     })?;
+    // After verification, so only a join that verified is remembered, and
+    // before the root is sealed, so a nonce gives the root at most once.
+    state.join_nonces.spend(&nonce, nonce_expires_at, now()?)?;
 
     let giver_secret = Zeroizing::new(rand::random::<[u8; 32]>());
     let giver_public = MontgomeryPoint::mul_base_clamped(*giver_secret).0;
@@ -464,6 +514,10 @@ pub(crate) async fn join_until_ready(
         }
         tokio::time::sleep(retry).await;
     }
+}
+
+fn now() -> Result<u64, ServiceError> {
+    crate::util::unix_now_secs().map_err(|e| ServiceError::InvalidChallenge(e.to_string()))
 }
 
 fn decode_32(field: &str, value: &str) -> Result<[u8; 32], ServiceError> {
@@ -648,12 +702,51 @@ mod tests {
     }
 
     #[test]
-    fn a_join_nonce_works_once() {
+    fn a_join_nonce_is_spent_once_and_only_by_a_verified_join() {
         let nonces = JoinNonces::default();
-        let nonce = nonces.issue().unwrap();
-        nonces.consume(&nonce).unwrap();
-        assert!(nonces.consume(&nonce).is_err());
-        assert!(nonces.consume(&[0; 32]).is_err());
+        let nonce = nonces.issue(1_000);
+        let expires_at = nonces.open(&nonce, 1_000).unwrap();
+        // Opening spends nothing: a join that then fails to verify leaves the
+        // nonce usable, and leaves nothing behind.
+        assert_eq!(nonces.open(&nonce, 1_001).unwrap(), expires_at);
+        nonces.spend(&nonce, expires_at, 1_001).unwrap();
+        assert!(nonces.spend(&nonce, expires_at, 1_002).is_err());
+    }
+
+    #[test]
+    fn a_join_nonce_this_replica_did_not_issue_is_refused() {
+        let nonces = JoinNonces::default();
+        assert!(nonces.open(&[0; 32], 1_000).is_err());
+        let mut nonce = nonces.issue(1_000);
+        nonce[JOIN_NONCE_RANDOM] ^= 1;
+        assert!(nonces.open(&nonce, 1_000).is_err(), "stretched expiry");
+        assert!(
+            JoinNonces::default()
+                .open(&nonces.issue(1_000), 1_000)
+                .is_err(),
+            "another replica's nonce"
+        );
+    }
+
+    #[test]
+    fn an_expired_join_nonce_is_refused() {
+        let nonces = JoinNonces::default();
+        let nonce = nonces.issue(1_000);
+        assert!(nonces.open(&nonce, 1_000 + JOIN_NONCE_TTL_SECS).is_ok());
+        assert!(nonces.open(&nonce, 1_001 + JOIN_NONCE_TTL_SECS).is_err());
+    }
+
+    /// Issuing keeps no state, so nothing a caller does to `/cluster/nonce`
+    /// can turn away a joiner.
+    #[test]
+    fn issuing_join_nonces_holds_nothing() {
+        let nonces = JoinNonces::default();
+        for _ in 0..10_000 {
+            let _ = nonces.issue(1_000);
+        }
+        assert!(nonces.spent.lock().unwrap().is_empty());
+        let nonce = nonces.issue(1_000);
+        assert!(nonces.open(&nonce, 1_000).is_ok());
     }
 
     /// Two replicas over real HTTP: the joiner runs the whole protocol against
