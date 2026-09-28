@@ -160,7 +160,8 @@ binding.
 
 Deployed on Vercel. Environment: `ITA_API_KEY`, `ITA_APPRAISAL_URL` (defaults to
 the ITA v2 appraisal endpoint), and `NODE_ALLOWED_HOSTS`, a regex allowlist a
-node URL must match before any outbound request is made (**SSRF protection**). The
+node URL must match before any outbound request is made (**SSRF protection**); the
+address must also be public, unless `NODE_ALLOW_PRIVATE=1` for local development. The
 verifier never fetches from a KMS. A node request generates a fresh 32-byte nonce,
 a pasted attestation is checked against the `nonce_b64` supplied with it, and a
 quote whose `report_data` does not carry the nonce is rejected. See

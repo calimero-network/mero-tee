@@ -140,7 +140,9 @@ load; otherwise fill the form and submit.
 
 :::caution
 The backend enforces an **SSRF allowlist** on node URLs: they must match
-`NODE_ALLOWED_HOSTS` (by default a bare IPv4 address or localhost). It never
+`NODE_ALLOWED_HOSTS` (by default a bare IPv4 address) and name a public address:
+loopback, private, link-local, CGNAT and reserved ranges are refused unless
+`NODE_ALLOW_PRIVATE=1` (local development). Redirects are not followed. It never
 fetches from a KMS. `ITA_API_KEY` must be configured or `/api/verify` returns
 `503`.
 :::

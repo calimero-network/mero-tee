@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The attestation verifier fetches only public node addresses.** `node_url` must now name a public address (loopback, private, link-local, CGNAT and reserved ranges are refused, also for hostnames allowed through `NODE_ALLOWED_HOSTS`), redirects are not followed, the node fetch has a timeout, and a failing node's response body is no longer echoed. The default allowlist no longer includes `localhost`; `NODE_ALLOW_PRIVATE=1` allows loopback and private addresses for local development.
+
 - **node_exporter and vmagent listen on loopback on node images too.** node_exporter started with no listen address (`:9100` on every interface) and vmagent defaulted to `-httpListenAddr=:8429`; both now bind `127.0.0.1`, as on the KMS image. vmagent scrapes node_exporter locally and only pushes, so nothing off the node used either port. Covered by `vmagent-node-identity-test.sh`.
 
 - **mero-kms records a challenge or join nonce only once its request has verified.** `challengeId` now carries an HMAC tag (112 hex characters) that is checked first, and `/get-key` redeems the challenge after the signature and attestation verify, just before deriving the key, so the replay set holds only challenges that released a key. Join nonces are stateless (random bytes, expiry and an HMAC tag under a per-process key) instead of a table of outstanding nonces, and are remembered only once the join verifies.

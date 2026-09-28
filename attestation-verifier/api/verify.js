@@ -8,33 +8,89 @@
  *     `nonce_b64` (the nonce sent to `/attest`) is given, the quote must be bound to it.
  */
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import * as jose from 'jose';
 
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
 const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
 
-// Node (merod) URLs: allow http for IPs and localhost. Pattern: ^\d+\.\d+\.\d+\.\d+$ for IPv4.
-const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$|^localhost$|^127\\.0\\.0\\.1$')
+// Node (merod) URLs: comma-separated host regexes. Default: a bare IPv4
+// address. Whatever this allows, the address fetched must be a public one (see
+// `isPublicAddress`) unless NODE_ALLOW_PRIVATE=1, which is for local
+// development against a node on localhost or a private network.
+const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+const NODE_ALLOW_PRIVATE = process.env.NODE_ALLOW_PRIVATE === '1';
+const NODE_FETCH_TIMEOUT_MS = 20_000;
 
-function validateNodeUrl(url) {
+// IPv4 ranges that are not the public internet: this host, private networks,
+// CGNAT, loopback, link-local (cloud metadata), protocol assignments,
+// benchmarking, documentation, multicast and reserved.
+const NON_PUBLIC_V4 = [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24],
+  ['224.0.0.0', 4], ['240.0.0.0', 4],
+];
+
+function v4ToInt(addr) {
+  return addr.split('.').reduce((acc, octet) => (acc * 256) + Number(octet), 0);
+}
+
+function isPublicAddress(addr) {
+  if (net.isIPv4(addr)) {
+    const value = v4ToInt(addr);
+    return !NON_PUBLIC_V4.some(([base, bits]) => {
+      const size = 2 ** (32 - bits);
+      const start = v4ToInt(base);
+      return value >= start && value < start + size;
+    });
+  }
+  if (net.isIPv6(addr)) {
+    const a = addr.toLowerCase();
+    const mapped = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPublicAddress(mapped[1]);
+    // Loopback, unspecified, unique-local (fc00::/7), link-local (fe80::/10),
+    // multicast, and the NAT64 / IPv4-compatible forms of the v4 ranges above.
+    return !(a === '::1' || a === '::' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a)
+      || /^ff/.test(a) || a.startsWith('64:ff9b:') || a.startsWith('::'));
+  }
+  return false;
+}
+
+/**
+ * The node URL, if its host is allowed and every address it names is public.
+ * A hostname is resolved here and each address checked; the fetch resolves it
+ * again, so an allowlist of hostnames is only as good as those names' DNS.
+ */
+async function checkNodeUrl(url) {
   let parsed;
   try {
     parsed = new URL(url);
   } catch {
     throw new Error('Invalid node URL');
   }
-  // Nodes typically use HTTP; allow for IPs and localhost
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Node URL must use HTTP or HTTPS');
   }
-  const host = parsed.hostname.toLowerCase();
-  const allowed = NODE_ALLOWED_HOSTS.some((re) => new RegExp(re).test(host));
-  if (!allowed) {
-    throw new Error('Node URL host not in allowed list (IP addresses, localhost). Set NODE_ALLOWED_HOSTS to override.');
+  if (parsed.username || parsed.password) {
+    throw new Error('Node URL must not carry credentials');
   }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!NODE_ALLOWED_HOSTS.some((re) => new RegExp(re).test(host))) {
+    throw new Error('Node URL host not in allowed list. Set NODE_ALLOWED_HOSTS to override.');
+  }
+  if (NODE_ALLOW_PRIVATE) return parsed;
+  const addresses = net.isIP(host)
+    ? [host]
+    : (await dns.lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+  if (addresses.length === 0 || !addresses.every(isPublicAddress)) {
+    throw new Error('Node URL must name a public address');
+  }
+  return parsed;
 }
 
 // TDX quote layout (Intel TDX DCAP): a 48-byte header, then the TD report body.
@@ -152,18 +208,26 @@ export default async function handler(req, res) {
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
 
     if (nodeUrl) {
-      validateNodeUrl(nodeUrl);
+      const node = await checkNodeUrl(nodeUrl);
       const nonceBytes = crypto.randomBytes(32);
       const nonceHex = nonceBytes.toString('hex');
-      const base = nodeUrl.replace(/\/$/, '');
-      const attestRes = await fetch(`${base}/admin-api/tee/attest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nonce: nonceHex }),
-      });
+      const base = `${node.origin}${node.pathname.replace(/\/$/, '')}`;
+      let attestRes;
+      try {
+        attestRes = await fetch(`${base}/admin-api/tee/attest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nonce: nonceHex }),
+          // A redirect would lead to a host that was never checked.
+          redirect: 'manual',
+          signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
+        });
+      } catch {
+        return res.status(502).json({ error: 'Node /admin-api/tee/attest did not answer' });
+      }
       if (!attestRes.ok) {
-        const errText = await attestRes.text();
-        return res.status(502).json({ error: `Node /admin-api/tee/attest failed: ${attestRes.status}. ${errText.slice(0, 200)}` });
+        // The status only: the body is the node's, and is not echoed.
+        return res.status(502).json({ error: `Node /admin-api/tee/attest failed: ${attestRes.status}` });
       }
       const raw = await attestRes.json();
       const data = raw?.data ?? raw;
