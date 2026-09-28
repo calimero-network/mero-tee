@@ -86,6 +86,17 @@ grep -q -- '-remoteWrite.bearerTokenFile=' "$unit" \
 grep -q -- '-remoteWrite.url=https://victoria-lb.test/api/v1/write' "$unit" \
   || fail "the remote write URL is wrong or missing"
 
+# vmagent's own HTTP listener stays on loopback unless a caller says otherwise:
+# it only pushes, and nothing off the node needs to reach it.
+grep -q -- '-httpListenAddr=127.0.0.1:8429' "$unit" \
+  || fail "vmagent must listen on loopback by default:
+$(grep ExecStart -A4 "$unit")"
+
+# node_exporter, which vmagent scrapes locally, likewise.
+EXPORTER_TASKS="${REPO_ROOT}/mero-tee/ansible/roles/node-exporter/tasks/main.yml"
+grep -q 'ExecStart=/usr/local/bin/node_exporter --web.listen-address=127.0.0.1:9100' "$EXPORTER_TASKS" \
+  || fail "node_exporter must listen on 127.0.0.1:9100"
+
 # Unauthenticated deployments must still get labels.
 rm -f "$unit"
 "${SB}/configure.sh" "${SB}/vmagent/scrape_config.yml" \
@@ -105,4 +116,4 @@ grep -q -- '-remoteWrite.label=instance_profile=unknown' "$unit" \
        not an empty label:
 $(grep ExecStart -A4 "$unit")"
 
-echo "PASS: vmagent is started with instance_name, instance_type and instance_profile labels"
+echo "PASS: vmagent is started with instance_name, instance_type and instance_profile labels, on loopback"
