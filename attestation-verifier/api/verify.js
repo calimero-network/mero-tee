@@ -10,6 +10,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import { createSealedFetch, transportKeyBinding } from '@calimero-network/mero-js';
 import * as jose from 'jose';
 
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
@@ -124,6 +125,48 @@ function verifyNonceInQuote(quoteB64, nonceBytes) {
   }
 }
 
+/**
+ * The node's transport key, if its quote commits to it: report_data[32..64]
+ * must be core's `attest_transport_binding(zeros, key)`. `null` when the node
+ * reports no key (it predates sealed transport).
+ */
+async function boundTransportKey(quoteB64, transportKeyHex) {
+  if (typeof transportKeyHex !== 'string' || !transportKeyHex) return null;
+  const key = Buffer.from(transportKeyHex, 'hex');
+  if (key.length !== 32) throw new Error('Node reported a malformed transportPublicKey');
+  const expected = Buffer.from(await transportKeyBinding(new Uint8Array(32), key));
+  if (!quoteReportData(quoteB64).subarray(32, 64).equals(expected)) {
+    throw new Error('Quote does not commit to the transport key the node reported');
+  }
+  return key;
+}
+
+/**
+ * Whether whoever answers at `base` holds the attested transport key: one
+ * sealed request, whose handshake only the holder of the key can complete.
+ *
+ * A quote proves some attested TD holds the key, and a nonce proves the quote
+ * is fresh, but neither says the URL IS that TD: a server there can forward
+ * the attest call to a genuine node and answer with its quote. Completing a
+ * handshake to the attested key over this URL is what does. `null` when the
+ * node serves no sealed transport (only relay nodes do), so this cannot be
+ * told either way.
+ */
+async function answersAsTheAttestedKey(base, key) {
+  const guardedFetch = (input, init = {}) =>
+    fetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS) });
+  const sealed = createSealedFetch({ baseUrl: base, transportPublicKey: key, fetch: guardedFetch });
+  try {
+    const response = await sealed(`${base}/admin-api/health`);
+    return response.ok;
+  } catch (e) {
+    // No sealed endpoint at all (404/405 at the handshake) is "cannot tell";
+    // anything else -- a handshake that fails against the attested key -- is no.
+    if (e?.status === 404 || e?.status === 405) return null;
+    return false;
+  }
+}
+
 /** Merod: data.quoteB64; mero-kms `/attest`: top-level quoteB64. No tree walking / scoring. */
 function extractQuote(attestation) {
   if (!attestation || typeof attestation !== 'object') {
@@ -203,6 +246,7 @@ export default async function handler(req, res) {
 
   let attestation;
   let nonceVerified = null;
+  let transportVerified = null;
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
@@ -212,16 +256,23 @@ export default async function handler(req, res) {
       const nonceBytes = crypto.randomBytes(32);
       const nonceHex = nonceBytes.toString('hex');
       const base = `${node.origin}${node.pathname.replace(/\/$/, '')}`;
-      let attestRes;
-      try {
-        attestRes = await fetch(`${base}/admin-api/tee/attest`, {
+      const attest = (body) =>
+        fetch(`${base}/admin-api/tee/attest`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nonce: nonceHex }),
+          body: JSON.stringify(body),
           // A redirect would lead to a host that was never checked.
           redirect: 'manual',
           signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
         });
+      let attestRes;
+      try {
+        attestRes = await attest({ nonce: nonceHex, bindTransportKey: true });
+        // A merod from before sealed transport refuses the unknown field; ask
+        // it again without, and report the transport check as undecided.
+        if (attestRes.status === 400) {
+          attestRes = await attest({ nonce: nonceHex });
+        }
       } catch {
         return res.status(502).json({ error: 'Node /admin-api/tee/attest did not answer' });
       }
@@ -240,6 +291,8 @@ export default async function handler(req, res) {
       attestation = { quoteB64: quoteB64.trim() };
       verifyNonceInQuote(attestation.quoteB64, nonceBytes);
       nonceVerified = true;
+      const transportKey = await boundTransportKey(attestation.quoteB64, data?.transportPublicKey);
+      transportVerified = transportKey ? await answersAsTheAttestedKey(base, transportKey) : null;
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
@@ -302,5 +355,6 @@ export default async function handler(req, res) {
     ita_token_verified: itaTokenVerified,
     ita_claims: itaClaims,
     nonce_verified: nonceVerified,
+    transport_verified: transportVerified,
   });
 }

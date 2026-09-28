@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The attestation verifier checks that the node URL is the attested TD.** Node mode asks for a quote that binds the node's transport key, requires the quote to commit to the key reported, and opens a sealed session to that key over the same URL (mero-js `createSealedFetch`). `transport_verified` is `true` when the server at the URL completes it, `false` when it cannot, and `null` for a node that serves no sealed transport; the page says which. A merod that refuses `bindTransportKey` is asked again without it.
+
 - **`server-port` and `swarm-port` metadata must be ports.** calimero-init passed them to `merod init` and the fleet sidecar put `server-port` into its loopback attest URL unchecked. Both now take a decimal number from 1 to 65535 and otherwise use the default (2428 / 2528) with a warning. Covered by `metadata-port-test.sh`.
 
 - **The release measures the machine mdma actually creates.** Since mdma creates each node with its 200 GB data disk attached (a TDX guest does not see one hot-attached later), the first 2.3.85 node against the 2.3.85 KMS was refused with `measurement_policy_rejected - RTMR0 '36dd50c4…' is not in allowlist`: the disk is part of the machine RTMR0 measures, and the release measured its VMs without one. The release's measurement VM and the staging probe (which the post-release check uses) now boot with the same disk as mdma: 200 GB `pd-balanced`, device name `data`, deleted with the VM.
