@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The attestation verifier fetches only public node addresses.** `node_url` must now name a public address (loopback, private, link-local, CGNAT and reserved ranges are refused, also for hostnames allowed through `NODE_ALLOWED_HOSTS`), redirects are not followed, the node fetch has a timeout, and a failing node's response body is no longer echoed. The default allowlist no longer includes `localhost`; `NODE_ALLOW_PRIVATE=1` allows loopback and private addresses for local development.
+
 - **mero-kms records a challenge or join nonce only once its request has verified.** `challengeId` now carries an HMAC tag (112 hex characters) that is checked first, and `/get-key` redeems the challenge after the signature and attestation verify, just before deriving the key, so the replay set holds only challenges that released a key. Join nonces are stateless (random bytes, expiry and an HMAC tag under a per-process key) instead of a table of outstanding nonces, and are remembered only once the join verifies.
 
 - **The attestation verifier reads everything from the quote bytes.** In node mode it used MRTD/RTMR0–3 from the `quote.body` a node returns beside its quote, and checked the nonce against that JSON's `reportdata` only when present; the pasted KMS flow checked a pasted `reportDataHex`. Both now read `report_data` and the measurements from the quote Intel Trust Authority appraises, the node flow always checks the nonce, and only the quote is passed back to the page.

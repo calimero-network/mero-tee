@@ -95,7 +95,8 @@ verifier ◀── { quoteB64 } ──
 
 - **`node_url`** — the verifier fetches `/admin-api/tee/attest` from a `merod` node
   (nonce generated server-side, freshness checked). Hosts are constrained by an
-  allow-list (`NODE_ALLOWED_HOSTS`) as SSRF protection.
+  allow-list (`NODE_ALLOWED_HOSTS`) and must be public addresses, redirects are not
+  followed, and a failing node's response body is not echoed (SSRF protection).
 - **`attestation`** (+ optional **`nonce_b64`**) — a pre-fetched attestation JSON,
   pasted. This is the only way to verify a KMS: replicas listen only inside their VPC,
   so the verifier never fetches from one. Call `/attest` from inside the VPC with a
