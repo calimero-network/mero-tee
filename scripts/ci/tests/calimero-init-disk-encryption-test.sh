@@ -119,6 +119,8 @@ case "$1" in
     cp "$kf" "$T/state/luks-key"
     echo luks >"$T/state/device"
     rm -f "$T/state/tokens"
+    # What --progress-json prints while the integrity wipe runs.
+    echo '{"device":"x","device_bytes":"50000000000","device_size":"200000000000","speed":"1","eta_ms":"90000","time_ms":"1"}'
     ;;
   token)
     [[ "$2" == import ]] || exit 1
@@ -304,6 +306,9 @@ for want in '--type luks2' '--cipher aes-xts-plain64' '--key-size 512' '--integr
   grep -qF -- "$want" <<<"$fmt" || fail "luksFormat is missing '$want': $fmt"
 done
 grep -qF -- '--integrity-no-wipe' <<<"$fmt" && fail "luksFormat must not skip the integrity wipe (see the template)"
+grep -qF -- '--progress-json' <<<"$fmt" || fail "luksFormat must report wipe progress (--progress-json; --batch-mode silences the text form)"
+logged fresh 'Integrity wipe: 25% (50 of 200 GB, 1m30s left)' \
+  || fail "the integrity wipe's progress did not reach the log"
 grep -qF -- "$(T_ fresh)/dev/google-data" <<<"$fmt" || fail "luksFormat did not target the data disk"
 token="$(head -1 "$(T_ fresh)/state/tokens")"
 python3 - "$token" <<'PY' || fail "the imported LUKS2 token is not a calimero-kms-identity token holding the identity: $token"

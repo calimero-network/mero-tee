@@ -918,7 +918,7 @@ profiles, off for `debug`):
 | Edge | What it does |
 | --- | --- |
 | Traefik (`traefik-routing.yml.j2`) | Adds a `node-api-intents` router for `PathRegexp(^/admin-api/contexts/[0-9a-f]{64}/intents$)`, `GET`/`POST`/`OPTIONS` only, at a higher priority than the auth-guarded `node-api` catch-all and **without** the `auth-node` forwardAuth middleware. A `PathPrefix` on `/admin-api/contexts/` would have exempted every context route on the node, `DELETE` included. |
-| `merod` (`calimero-init.sh.j2`) | Sets `server.admin.public_intents=true`, which moves those same two routes onto core's public router. |
+| `merod` (`calimero-init.sh.j2`) | Sets `server.admin.delegated_access=true`, which moves those same two routes onto core's public router. |
 | Traefik (`node-sealed`) | Routes `POST /sealed/v2/handshake` and `POST /sealed/v2` (exact paths, plus `OPTIONS`) to `merod`, also without `auth-node`: forwardAuth cannot see the route a sealed request names, which is inside the envelope. See [sealing the intent](#sealing-the-intent-to-the-td) below. |
 
 They are one variable rather than two defaults on purpose: these nodes run

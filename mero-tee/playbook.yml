@@ -21,7 +21,7 @@
     #   * traefik exempts `/admin-api/contexts/<ctx>/intents` from `auth-node`
     #     (ansible/roles/mero-traefik/templates/traefik-routing.yml.j2), and
     #   * merod serves those routes on its public router
-    #     (`server.admin.public_intents`, set in calimero-init).
+    #     (`server.admin.delegated_access`, set in calimero-init).
     #   * traefik routes the sealed-transport envelope (`/sealed/v2`), also
     #     without `auth-node`, so a client can seal its intents to the TD;
     #     merod limits an opened request to its uncredentialed routes.
