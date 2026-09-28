@@ -38,6 +38,12 @@ AUTHORSHIP_FILE="/mnt/data/fleet/fleet-authorship.json"
 # the last authoritative (`full`) post landed. Change detection compares against
 # this, so a steady-state node posts nothing at all. See `reconcile_inventory`.
 INVENTORY_FILE="/mnt/data/fleet/fleet-inventory.json"
+# The namespace-admin verdict mdma last ACKNOWLEDGED for each question, keyed
+# by "<namespace>|<founder account>|<account>". Dedupe is on the question AND
+# its answer: an unchanged verdict is not re-posted, a changed one is. An entry
+# is forgotten once no assignment carries that question. See
+# `reconcile_verification`.
+VERIFICATION_FILE="/mnt/data/fleet/fleet-verifications.json"
 POLL_INTERVAL=1
 # How often the group tree is WALKED. Not the post interval — a walk that finds
 # nothing changed posts nothing. Core exposes no "contexts changed" signal, so
@@ -115,6 +121,7 @@ mkdir -p "$(dirname "$CONFIRMED_FILE")"
 [[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
 [[ -f "$AUTHORSHIP_FILE" ]] || echo '{}' > "$AUTHORSHIP_FILE"
 [[ -f "$INVENTORY_FILE" ]] || echo '{"namespaces":{},"last_full":0}' > "$INVENTORY_FILE"
+[[ -f "$VERIFICATION_FILE" ]] || echo '{}' > "$VERIFICATION_FILE"
 
 # Baked at image build time by Ansible (not from instance metadata)
 MDMA_URL="{{ fleet_mdma_url }}"
@@ -893,6 +900,310 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
   if [[ "$pruned" != "$recorded" ]] || [[ $changed -eq 1 ]]; then
     save_authorship "$pruned"
   fi
+}
+
+# --- namespace admin verification -------------------------------------------
+#
+# mdma lets any CURRENT admin of a namespace enable HA, not only whoever claimed
+# it first. It cannot check that itself: who administers a namespace is
+# governance state readable only by a member holding the group's key, and mdma
+# holds none. This node is an attested TEE that has joined the namespace, so it
+# can answer -- and it answers ONLY the question it was asked.
+#
+# The question rides a `should-join` assignment as
+#   "verify": {"founder_account_id": "<64 hex>", "account_id": "<64 hex>"}
+# and the answer is two facts about accounts mdma ALREADY named:
+#
+#   founder_matches  merod's `founding.founderAccountId` for the namespace equals
+#                    the named founder. Core derives a namespace id from its
+#                    founder (`domain_hash("calimero.namespace.id.v1", [founder,
+#                    salt])`) and every replica that applied the V2 genesis
+#                    keeps that pair. A replica of a forged or legacy V1 genesis
+#                    has none, which answers false.
+#   account_role     the named account's role in the namespace root group
+#                    (`Admin`, `Member`, `ReadOnly`, `ReadOnlyTee`), or null if
+#                    it is not a member.
+#
+# PRIVACY: the same property `member_count` keeps in the inventory. The member
+# list is read here, inside the TEE and inside the group's key, and only a
+# yes/no-shaped verdict about one supplied account leaves. No roster, no other
+# account id, and nothing mdma did not already send crosses the wire.
+#
+# Admission is untouched by any of this: a namespace carrying `verify` is joined
+# exactly as any other assignment, and whether this node is let in is core's
+# decision. The verdict is asked only once the namespace is confirmed.
+
+# Answer one verification question from the local merod.
+#
+# Prints ONE JSON object and returns 0:
+#   {"verdict": {"founder_matches": bool, "account_role": "Admin"|...|null}}
+#   {"incomplete": "<why>"}  -- nothing trustworthy to say this cycle
+#
+# `incomplete` is the load-bearing half. A failed or unparseable read, or a
+# member list that came back at core's page limit WITHOUT the account in it,
+# must not be reported: "not a member" read off a truncated page is a false
+# verdict about a real admin, and saying nothing is the honest answer.
+# A member FOUND on a truncated page is a certain answer, so it is reported --
+# otherwise a namespace with a hundred members could never be verified at all.
+#
+# Diagnostics ride the `incomplete` value rather than stderr, so the caller can
+# log them edge-triggered instead of once a second.
+read_verification() {
+  local namespace_id="$1" founder="$2" account="$3"
+  MEROCTL_CMD="$MEROCTL" \
+  PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
+  python3 - "$namespace_id" "$founder" "$account" <<'PY' 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
+import json
+import os
+import shlex
+import subprocess
+import sys
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
+NAMESPACE_ID = sys.argv[1].strip()
+FOUNDER = sys.argv[2].strip().lower()
+ACCOUNT = sys.argv[3].strip().lower()
+
+
+def done(obj):
+    print(json.dumps(obj, sort_keys=True))
+    sys.exit(0)
+
+
+def incomplete(why):
+    done({"incomplete": why})
+
+
+def meroctl(*args):
+    what = "meroctl " + " ".join(args)
+    try:
+        proc = subprocess.run(
+            MEROCTL + ["--output-format", "json", *args],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as exc:
+        incomplete(what + " did not run: " + str(exc))
+    if proc.returncode != 0:
+        incomplete(what + " exited " + str(proc.returncode) + ": " + proc.stderr.strip()[:200])
+    try:
+        payload = json.loads(proc.stdout)
+    except Exception as exc:
+        incomplete(what + " returned unparseable JSON: " + str(exc))
+    if not isinstance(payload, dict):
+        incomplete(what + " returned a non-object")
+    return payload
+
+
+# founding: `GET /admin-api/namespaces/<id>` -> {"data": {..., "founding":
+# {"founderAccountId", "salt"}}}. Absent on a V1 genesis, and on a merod that
+# predates derived ids -- both answer false.
+response = meroctl("namespace", "get", NAMESPACE_ID)
+data = response.get("data") if isinstance(response.get("data"), dict) else response
+founding = data.get("founding")
+founder = None
+if isinstance(founding, dict):
+    founder = founding.get("founderAccountId") or founding.get("founder_account_id")
+founder_matches = isinstance(founder, str) and founder.strip().lower() == FOUNDER
+
+# role: the namespace IS its root group, so its members are the namespace's.
+response = meroctl("group", "members", "list", NAMESPACE_ID)
+entries = response.get("members")
+if not isinstance(entries, list) and isinstance(response.get("data"), dict):
+    entries = response["data"].get("members")
+if not isinstance(entries, list):
+    incomplete("group members list " + NAMESPACE_ID + " had no 'members' array")
+
+role = None
+found = False
+for entry in entries:
+    if not isinstance(entry, dict):
+        continue
+    identity = entry.get("identity") or entry.get("account")
+    if isinstance(identity, str) and identity.strip().lower() == ACCOUNT:
+        found = True
+        role = entry.get("role")
+        break
+
+if found and (not isinstance(role, str) or not role.strip()):
+    incomplete("the member entry for the account carries no role")
+if not found and len(entries) >= PAGE_LIMIT:
+    # meroctl passes no offset/limit, so page two is unreachable from here.
+    incomplete(
+        "group members list " + NAMESPACE_ID + " came back at the "
+        + str(PAGE_LIMIT) + "-row page limit without the account"
+    )
+
+done({"verdict": {"founder_matches": founder_matches, "account_role": role.strip() if found else None}})
+PY
+}
+
+# POST one verdict. Returns curl's success, like `confirm_assignment`: the
+# caller records a verdict only once mdma has it, so a failure is retried.
+post_verification() {
+  local peer_id="$1" namespace_id="$2" founder="$3" account="$4" verdict="$5"
+
+  local body
+  body=$(python3 -c '
+import json, sys
+verdict = json.loads(sys.argv[5])
+print(json.dumps({
+  "peer_id": sys.argv[1],
+  "founder_account_id": sys.argv[3],
+  "account_id": sys.argv[4],
+  "founder_matches": verdict["founder_matches"] is True,
+  "account_role": verdict["account_role"],
+}, separators=(",", ":")))' "$peer_id" "$namespace_id" "$founder" "$account" "$verdict" 2>>"$LOG") || return 1
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  curl -sf --max-time 10 "${headers[@]}" \
+    -d "$body" \
+    "${MDMA_URL}/api/fleet/namespaces/${namespace_id}/verification" >/dev/null 2>>"$LOG"
+}
+
+load_verifications() {
+  cat "$VERIFICATION_FILE" 2>/dev/null || echo '{}'
+}
+
+save_verifications() {
+  echo "$1" > "$VERIFICATION_FILE"
+}
+
+# Per-question record of the last warning logged, so a question that stays
+# unanswerable (a namespace whose member list is always truncated, an mdma
+# refusing the POST) logs once when it starts and once when it clears, not
+# once a second. In memory: a restart re-logs, which is the right amount.
+declare -A VERIFICATION_WARNED=()
+
+verification_warn() {
+  local key="$1" message="$2"
+  if [[ "${VERIFICATION_WARNED[$key]:-}" != "$message" ]]; then
+    VERIFICATION_WARNED[$key]="$message"
+    log "WARN: $message; will retry next cycle"
+  fi
+}
+
+# Answer every verification question mdma asks about a namespace this node has
+# confirmed, and answer it AGAIN whenever the answer changes.
+#
+# Once per (question, answer), not once per question. A just-joined node may
+# answer from governance that has not synced yet -- the account not listed, or
+# not yet promoted -- and a merod that predates derived namespace ids reports no
+# `founding` at all. mdma lets only a positive verdict decide and keeps a
+# request pending on a negative one, so a node whose answer later improves
+# (governance synced, merod upgraded) has to say so. It still posts only on a
+# change: the answer is re-read each cycle, but an unchanged one is not sent.
+#
+# Runs after the join loop and the prune, over the pruned confirmed set, and
+# NEVER fails the loop: every failure is a logged warning and a retry. It posts
+# nothing for an assignment without `verify`, which is every assignment an older
+# mdma sends.
+reconcile_verification() {
+  local peer_id="$1"
+  local response="$2"
+  local confirmed="$3"
+
+  # Every well-formed question in this response, as TSV
+  # "<group_id>\t<founder>\t<account>\t<confirmed 0|1>". Malformed ones are
+  # dropped here and only here: `verify` is advisory, so a bad one must never
+  # reach the poll gate, the join, or the leave.
+  local questions
+  questions=$(python3 - "$response" "$confirmed" <<'PY' 2>>"$LOG"
+import json, re, sys
+HEX = re.compile(r"[0-9a-fA-F]{64}")
+try:
+    assignments = json.loads(sys.argv[1]).get("assignments") or []
+    confirmed = set(json.loads(sys.argv[2]))
+except Exception:
+    sys.exit(0)
+for entry in assignments:
+    if not isinstance(entry, dict):
+        continue
+    verify = entry.get("verify")
+    group_id = entry.get("group_id")
+    if not isinstance(verify, dict) or not isinstance(group_id, str):
+        continue
+    founder = verify.get("founder_account_id")
+    account = verify.get("account_id")
+    if not all(isinstance(v, str) and HEX.fullmatch(v) for v in (group_id, founder, account)):
+        continue
+    print("\t".join([group_id, founder.lower(), account.lower(), "1" if group_id in confirmed else "0"]))
+PY
+) || questions=""
+
+  local recorded updated keys=()
+  recorded=$(load_verifications)
+  updated="$recorded"
+
+  local group_id founder account is_confirmed key same answer verdict
+  while IFS=$'\t' read -r group_id founder account is_confirmed; do
+    [[ -n "$group_id" ]] || continue
+    key="$(printf '%s' "$group_id" | tr 'A-F' 'a-f')|${founder}|${account}"
+    keys+=("$key")
+    # Not yet a member: nothing local to read. Asked again on the cycle after
+    # the join is confirmed.
+    [[ "$is_confirmed" == "1" ]] || continue
+
+    answer=$(read_verification "$group_id" "$founder" "$account")
+    verdict=$(python3 -c '
+import json, sys
+try:
+    verdict = json.loads(sys.argv[1]).get("verdict")
+except Exception:
+    verdict = None
+print(json.dumps(verdict) if isinstance(verdict, dict) else "")' "$answer" 2>/dev/null || echo "")
+    if [[ -z "$verdict" ]]; then
+      verification_warn "$key" "cannot verify ${account} in ${group_id} yet: $(python3 -c '
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("incomplete") or "no answer")
+except Exception:
+    print("no answer")' "$answer" 2>/dev/null || echo "no answer")"
+      continue
+    fi
+
+    # The dedupe: this exact answer to this exact question already landed.
+    # Compared as parsed JSON, so key order in the stored copy cannot matter.
+    same=$(python3 -c '
+import json, sys
+print("1" if json.loads(sys.argv[1]).get(sys.argv[2]) == json.loads(sys.argv[3]) else "0")' \
+      "$updated" "$key" "$verdict" 2>/dev/null || echo "0")
+    if [[ "$same" == "1" ]]; then
+      unset "VERIFICATION_WARNED[$key]"
+      continue
+    fi
+
+    if ! post_verification "$peer_id" "$group_id" "$founder" "$account" "$verdict"; then
+      verification_warn "$key" "POST /api/fleet/namespaces/${group_id}/verification failed for ${account}"
+      continue
+    fi
+
+    updated=$(python3 -c '
+import json, sys
+state = json.loads(sys.argv[1])
+state[sys.argv[2]] = json.loads(sys.argv[3])
+print(json.dumps(state, sort_keys=True))' "$updated" "$key" "$verdict" 2>>"$LOG" || echo "$updated")
+    unset "VERIFICATION_WARNED[$key]"
+    log "Verified ${account} in namespace ${group_id} for mdma: ${verdict}"
+  done <<< "$questions"
+
+  # Forget questions mdma no longer asks, so asking one again later is
+  # answered afresh rather than inheriting a verdict that may have gone stale.
+  local pruned
+  pruned=$(python3 -c '
+import json, sys
+state = json.loads(sys.argv[1])
+keep = set(sys.argv[2:])
+print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))' \
+    "$updated" ${keys[@]+"${keys[@]}"} 2>>"$LOG" || echo "$updated")
+  if [[ "$pruned" != "$recorded" ]]; then
+    save_verifications "$pruned"
+  fi
+  return 0
 }
 
 # --- context inventory ------------------------------------------------------
@@ -2623,6 +2934,11 @@ print(json.dumps(sorted(adm & des)))
   # long after admission, so it has to be re-read for namespaces we already
   # hold. Runs after the prune so a namespace we just left is not re-reported.
   reconcile_authorship "$PEER_ID" "$confirmed"
+
+  # mdma's namespace-admin questions, over the same pruned set: only a namespace
+  # this node is confirmed in has local governance state to answer from. A no-op
+  # for every assignment without `verify`, and never fatal.
+  reconcile_verification "$PEER_ID" "$response" "$confirmed" || true
 
   # Context inventory, also over the pruned set. Walking the group tree costs a
   # `meroctl` subprocess per group, so it runs on its own much slower clock than
