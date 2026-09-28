@@ -95,11 +95,23 @@ rm -f "$RTMR3_EXTEND_FILE"
 systemctl stop vmagent vector 2>/dev/null || true
 systemctl disable vmagent vector 2>/dev/null || true
 
-# Optional with defaults
-SERVER_PORT=$(get_meta "server-port")
-SERVER_PORT=${SERVER_PORT:-2428}
-SWARM_PORT=$(get_meta "swarm-port")
-SWARM_PORT=${SWARM_PORT:-2528}
+# Optional with defaults. A port is a decimal number from 1 to 65535; anything
+# else in metadata is ignored for the default rather than handed to merod.
+metadata_port() {
+  local key="$1" default="$2" value
+  value=$(get_meta "$key" | tr -d '\r\n')
+  if [[ -z "$value" ]]; then
+    echo "$default"
+  elif [[ "$value" =~ ^[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )); then
+    echo "$((10#$value))"
+  else
+    # `log` also writes stdout, which is this function's answer.
+    log "WARN: ignoring $key metadata that is not a port; using $default" >&2
+    echo "$default"
+  fi
+}
+SERVER_PORT=$(metadata_port "server-port" 2428)
+SWARM_PORT=$(metadata_port "swarm-port" 2528)
 TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
 # The mero-kms endpoint this node's storage key comes from. Stamped by
 # mdma's dispatcher at creation. Untrusted like all metadata, and that is fine:

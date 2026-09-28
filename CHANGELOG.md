@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **`server-port` and `swarm-port` metadata must be ports.** calimero-init passed them to `merod init` and the fleet sidecar put `server-port` into its loopback attest URL unchecked. Both now take a decimal number from 1 to 65535 and otherwise use the default (2428 / 2528) with a warning. Covered by `metadata-port-test.sh`.
+
 - **The attestation verifier fetches only public node addresses.** `node_url` must now name a public address (loopback, private, link-local, CGNAT and reserved ranges are refused, also for hostnames allowed through `NODE_ALLOWED_HOSTS`), redirects are not followed, the node fetch has a timeout, and a failing node's response body is no longer echoed. The default allowlist no longer includes `localhost`; `NODE_ALLOW_PRIVATE=1` allows loopback and private addresses for local development.
 
 - **node_exporter and vmagent listen on loopback on node images too.** node_exporter started with no listen address (`:9100` on every interface) and vmagent defaulted to `-httpListenAddr=:8429`; both now bind `127.0.0.1`, as on the KMS image. vmagent scrapes node_exporter locally and only pushes, so nothing off the node used either port. Covered by `vmagent-node-identity-test.sh`.

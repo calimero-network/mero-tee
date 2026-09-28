@@ -1137,7 +1137,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Reported authorship state | `/mnt/data/fleet/fleet-authorship.json` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
 | Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}`; returns `{"fleet_token"}` |
-| Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/attest` — body `{"nonce"}`, unauthenticated |
+| Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/registration-attest` (on 404, `/admin-api/tee/attest`) — body `{"nonce"}`, loopback; `server-port` must be 1–65535, else 2428 |
 | Registration state | `/mnt/data/fleet/fleet-registration.json` |
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
