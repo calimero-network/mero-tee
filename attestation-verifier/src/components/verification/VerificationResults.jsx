@@ -49,6 +49,24 @@ export function VerificationResults({ result }) {
       {!isKms && result.nonce_verified && (
         <p className="results-footer">Quote is bound to a fresh nonce this verifier sent to the node.</p>
       )}
+      {!isKms && result.transport_verified === true && (
+        <p className="results-footer">
+          The server at this URL completed a sealed handshake with the transport key the quote commits
+          to, so it is the attested TD itself.
+        </p>
+      )}
+      {!isKms && result.transport_verified === false && (
+        <p className="results-footer">
+          ⚠ The server at this URL could not complete a sealed handshake with the transport key the quote
+          commits to. The quote may come from another node, relayed through this URL.
+        </p>
+      )}
+      {!isKms && result.transport_verified == null && result.ita_token_verified != null && (
+        <p className="results-footer">
+          This node serves no sealed transport, so the verifier cannot tell whether the server at this URL
+          is the attested TD or relays another node's quote.
+        </p>
+      )}
       {result.tagToUse && (
         <p className="results-footer">
           Checked against release: {result.tagToUse}
