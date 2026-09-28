@@ -654,6 +654,27 @@ profile) or the header was tampered with. Not formatting it -- see $LOG."
 # header and no token. The next boot refuses it (below) instead of reformatting:
 # on the first boot there is nothing to lose, but code that reformats "a LUKS
 # device without our token" is code that can wipe a real disk. Recreate the node.
+WIPE_PROGRESS_SECS=30
+
+# Turns cryptsetup's `--progress-json` lines into one journal line each:
+#   Integrity wipe: 42% (84 of 200 GB, 3m20s left)
+# Reads until cryptsetup closes stdout; a pipeline under `pipefail` still
+# reports luksFormat's own exit status.
+log_wipe_progress() {
+  local line done_b size_b eta_ms
+  local re='"device_bytes":"([0-9]+)".*"device_size":"([0-9]+)".*"eta_ms":"([0-9]+)"'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $re ]]; then
+      done_b="${BASH_REMATCH[1]}" size_b="${BASH_REMATCH[2]}" eta_ms="${BASH_REMATCH[3]}"
+      (( size_b > 0 )) || continue
+      log "Integrity wipe: $(( done_b * 100 / size_b ))% ($(( done_b / 1000000000 )) of \
+$(( size_b / 1000000000 )) GB, $(( eta_ms / 60000 ))m$(( eta_ms / 1000 % 60 ))s left)"
+    elif [[ -n "$line" ]]; then
+      echo "$line" >>"$LOG"
+    fi
+  done
+}
+
 format_encrypted_data_disk() {
   log "Data disk is blank; creating an encrypted LUKS2 volume (aes-xts-plain64, \
 hmac-sha256 integrity) keyed from the KMS. The integrity wipe covers the whole \
@@ -671,12 +692,17 @@ device and can take a long time on the first boot."
 
   modprobe dm_crypt 2>/dev/null || true
   modprobe dm_integrity 2>/dev/null || true
+  # The wipe prints nothing for minutes, and a silent journal reads as a hung
+  # node. `--batch-mode` turns cryptsetup's text progress off, but not its JSON
+  # progress: one line every WIPE_PROGRESS_SECS, logged here as a percentage.
+  # stderr goes to $LOG as before; any other stdout line is kept there too.
   cryptsetup luksFormat --type luks2 \
       --cipher aes-xts-plain64 --key-size 512 \
       --integrity hmac-sha256 \
       --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+      --progress-json --progress-frequency "$WIPE_PROGRESS_SECS" \
       --batch-mode --key-file "$DISK_KEY_FILE" \
-      "$DATA_DEVICE" >>"$LOG" 2>&1 \
+      "$DATA_DEVICE" 2>>"$LOG" | log_wipe_progress \
     || fatal "cryptsetup luksFormat failed on $DATA_DEVICE; see $LOG"
 
   local identity_b64 token_json
@@ -863,8 +889,10 @@ else
   # udev rule (65-gce-disk-naming.rules, via google_nvme_id on NVMe) links as
   # /dev/disk/by-id/google-data. On the first 2.3.80 nodes that link never
   # appeared although GCP listed the disk as attached from creation, and a
-  # locked image has no shell or kernel console to say why. So where the link
-  # is missing, fall back to the ONE whole disk that has nothing on it the
+  # locked image has no shell or kernel console to say why: the image shipped
+  # neither half of that rule (2.3.86 logged MISSING for both), and now vendors
+  # them (roles/merotee/files/gce-udev). So where the link is still missing,
+  # fall back to the ONE whole disk that has nothing on it the
   # kernel knows of: no partitions, no holders, not read-only, not mounted. The
   # boot disk is partitioned and never qualifies. Two candidates is a guess, and
   # this never guesses: it takes none. Picking by structure, not by NVMe
@@ -1188,22 +1216,21 @@ fi
 # than a broken one. The `authorship_ready` the sidecar reports to mdma is what
 # keeps clients from being sent to it — mdma only advertises a relay the node
 # itself confirmed can write.
-# DELIBERATELY the OLD key spelling, and it moves LAST.
+# The CURRENT key spelling, `server.admin.delegated_access`.
 #
-# Core renamed this to `server.admin.delegated_access` and kept a serde alias,
-# so a NEW merod reads the old spelling correctly. The reverse does not hold: an
-# OLD merod handed the NEW key ignores it, finds no `public_intents`, defaults
-# to false, and replicates without ever relaying — no error anywhere, because a
-# missing optional key is not an error, and the symptom appears days later in a
-# browser as "the relay does not answer".
-#
-# The old spelling is the one that works against both, so it is what a script
-# baked into an image whose merod pin can move independently must write. Switch
-# once `merodVersion` is guaranteed past the rename.
+# Core renamed `public_intents` to `delegated_access` in 0.11.0-rc.43 and kept
+# the old spelling as a serde alias. This used to write the old spelling, so an
+# image could pair with a merod from before the rename. That now breaks every
+# node: `merod init` writes `delegated_access = false`, adding `public_intents`
+# beside it is the same field twice, and merod refuses the whole config.toml
+# ("duplicate field `delegated_access`"). The first 2.3.86 nodes booted and
+# registered but never relayed. The image bakes its own merod, and
+# `merodVersion` is far past the rename, which the build asserts (the
+# `--delegated-access` help probe in tasks/main.yml).
 log "Enabling delegated access on the admin API..."
 "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-  'server.admin.public_intents=true' \
-  || log "WARN: failed to enable public intents; this node will replicate but not relay"
+  'server.admin.delegated_access=true' \
+  || log "WARN: failed to enable delegated access; this node will replicate but not relay"
 {% endif %}
 
 # TLS material for traefik.

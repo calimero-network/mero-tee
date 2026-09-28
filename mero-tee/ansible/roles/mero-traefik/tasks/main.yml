@@ -43,14 +43,6 @@
     group: root
     mode: "0755"
 
-- name: Copy traefik metrics user generator script
-  copy:
-    src: generate-metrics-user.sh
-    dest: /etc/traefik/generate-metrics-user.sh
-    owner: root
-    group: root
-    mode: "0755"
-
 - name: Create traefik systemd service file
   copy:
     content: |
