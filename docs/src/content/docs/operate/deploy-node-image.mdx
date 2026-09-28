@@ -189,8 +189,8 @@ scripts. All are optional except where noted:
 
 | Metadata key | Effect | Default |
 | --- | --- | --- |
-| `server-port` | merod admin/server port | `2428` |
-| `swarm-port` | merod libp2p swarm port | `2528` |
+| `server-port` | merod admin/server port (1–65535; anything else falls back to the default) | `2428` |
+| `swarm-port` | merod libp2p swarm port (1–65535; anything else falls back to the default) | `2528` |
 | `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and `MERO_TEE_PROFILE` (the image's profile), so merod verifies the KMS against that profile's signed policy. **Refused if older than the image** (downgrade protection) | unset → env file removed |
 | `kms-url` | the VPC-internal URL of the release's KMS cluster, which the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter` | unset → vmagent stays off |

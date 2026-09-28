@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **`server-port` and `swarm-port` metadata must be ports.** calimero-init passed them to `merod init` and the fleet sidecar put `server-port` into its loopback attest URL unchecked. Both now take a decimal number from 1 to 65535 and otherwise use the default (2428 / 2528) with a warning. Covered by `metadata-port-test.sh`.
+
 - **The release measures the machine mdma actually creates.** Since mdma creates each node with its 200 GB data disk attached (a TDX guest does not see one hot-attached later), the first 2.3.85 node against the 2.3.85 KMS was refused with `measurement_policy_rejected - RTMR0 '36dd50c4…' is not in allowlist`: the disk is part of the machine RTMR0 measures, and the release measured its VMs without one. The release's measurement VM and the staging probe (which the post-release check uses) now boot with the same disk as mdma: 200 GB `pd-balanced`, device name `data`, deleted with the VM.
 
 - **The attestation verifier fetches only public node addresses.** `node_url` must now name a public address (loopback, private, link-local, CGNAT and reserved ranges are refused, also for hostnames allowed through `NODE_ALLOWED_HOSTS`), redirects are not followed, the node fetch has a timeout, and a failing node's response body is no longer echoed. The default allowlist no longer includes `localhost`; `NODE_ALLOW_PRIVATE=1` allows loopback and private addresses for local development.

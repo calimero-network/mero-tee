@@ -1826,14 +1826,22 @@ print(json.dumps(state, sort_keys=True))
 # allowlisted image saying what its account is is exactly what attestation is
 # for. The binding goes in the quote's report-data nonce.
 
-# The merod HTTP port, for `/admin-api/tee/attest`. Same instance-metadata key
-# and same default `calimero-init` uses, rather than a second source of truth.
+# The merod HTTP port, for the loopback attest calls. Same instance-metadata
+# key, default and validation `calimero-init` uses, rather than a second source
+# of truth: a decimal number from 1 to 65535, else the default, because the
+# value becomes part of a URL.
 get_server_port() {
   local port
   port=$(curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/attributes/server-port" \
     2>/dev/null | tr -d '\r\n' || true)
-  echo "${port:-2428}"
+  if [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )); then
+    echo "$((10#$port))"
+  else
+    # `log` also writes stdout, which is this function's answer.
+    [[ -z "$port" ]] || log "WARN: ignoring server-port metadata that is not a port; using 2428" >&2
+    echo 2428
+  fi
 }
 
 load_registration() {
