@@ -44,6 +44,11 @@ INVENTORY_FILE="/mnt/data/fleet/fleet-inventory.json"
 # is forgotten once no assignment carries that question. See
 # `reconcile_verification`.
 VERIFICATION_FILE="/mnt/data/fleet/fleet-verifications.json"
+# The legacy founding pin mdma last ACKNOWLEDGED for each namespace:
+# {"<namespace>": {"founder_account_id", "genesis_op_hash"}}. One POST per
+# (namespace, founder, genesis hash); forgotten once no assignment asks for the
+# pin. See `reconcile_founding_pin`.
+FOUNDING_PIN_FILE="/mnt/data/fleet/fleet-founding-pins.json"
 POLL_INTERVAL=1
 # How often the group tree is WALKED. Not the post interval — a walk that finds
 # nothing changed posts nothing. Core exposes no "contexts changed" signal, so
@@ -930,6 +935,14 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 #                    salt])`) and every replica that applied the V2 genesis
 #                    keeps that pair. A replica of a forged or legacy V1 genesis
 #                    has none, which answers false.
+#                    A LEGACY question carries a third field,
+#                      "genesis_op_hash": "<64 hex>",
+#                    and is answered from `legacyFounding` instead: true only
+#                    when BOTH its `founderAccountId` and its `genesisOpHash`
+#                    equal the ones mdma named, and `founding` is not read. A
+#                    question without it is the derived check above, which
+#                    `legacyFounding` can never satisfy. mdma learns the legacy
+#                    pair from a pin (see `reconcile_founding_pin`).
 #   account_role     the named account's role in the namespace root group
 #                    (`Admin`, `Member`, `ReadOnly`, `ReadOnlyTee`), or null if
 #                    it is not a member.
@@ -959,14 +972,17 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 #
 # Diagnostics ride the `incomplete` value rather than stderr, so the caller can
 # log them edge-triggered instead of once a second.
+#
+# An optional fourth argument, the question's `genesis_op_hash`, makes it the
+# legacy check: `founder_matches` is then read off `legacyFounding` alone.
 read_verification() {
-  local namespace_id="$1" founder="$2" account="$3"
+  local namespace_id="$1" founder="$2" account="$3" genesis_op_hash="${4:-}"
   MEROCTL_CMD="$MEROCTL" \
   SERVER_PORT="${SERVER_PORT:-2428}" \
   PAGE_SIZE="$VERIFICATION_PAGE_SIZE" \
   MAX_PAGES="$VERIFICATION_MAX_PAGES" \
   BUDGET="$VERIFICATION_READ_BUDGET" \
-  python3 - "$namespace_id" "$founder" "$account" <<'PY' 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
+  python3 - "$namespace_id" "$founder" "$account" "$genesis_op_hash" <<'PY' 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
 import json
 import os
 import shlex
@@ -982,6 +998,7 @@ BUDGET = int(os.environ["BUDGET"])
 NAMESPACE_ID = sys.argv[1].strip()
 FOUNDER = sys.argv[2].strip().lower()
 ACCOUNT = sys.argv[3].strip().lower()
+GENESIS_OP_HASH = sys.argv[4].strip().lower()
 
 
 def done(obj):
@@ -1020,11 +1037,30 @@ def meroctl(*args):
 # predates derived ids -- both answer false.
 response = meroctl("namespace", "get", NAMESPACE_ID)
 data = response.get("data") if isinstance(response.get("data"), dict) else response
-founding = data.get("founding")
-founder = None
-if isinstance(founding, dict):
-    founder = founding.get("founderAccountId") or founding.get("founder_account_id")
-founder_matches = isinstance(founder, str) and founder.strip().lower() == FOUNDER
+
+
+def same(value, want):
+    return isinstance(value, str) and value.strip().lower() == want
+
+
+if GENESIS_OP_HASH:
+    # legacy question: `legacyFounding` {"founderAccountId", "genesisOpHash"},
+    # present only on a replica of a V1 genesis and only on a merod new enough
+    # to report it. Both fields must match; `founding` is not consulted, so a
+    # derived namespace cannot answer a legacy question.
+    legacy = data.get("legacyFounding")
+    founder_matches = (
+        isinstance(legacy, dict)
+        and same(legacy.get("founderAccountId"), FOUNDER)
+        and same(legacy.get("genesisOpHash"), GENESIS_OP_HASH)
+    )
+else:
+    # derived question: `founding` only. `legacyFounding` never satisfies it.
+    founding = data.get("founding")
+    founder = None
+    if isinstance(founding, dict):
+        founder = founding.get("founderAccountId") or founding.get("founder_account_id")
+    founder_matches = same(founder, FOUNDER)
 
 # role: the namespace IS its root group, so its members are the namespace's.
 #
@@ -1191,9 +1227,11 @@ reconcile_verification() {
   local confirmed="$3"
 
   # Every well-formed question in this response, as TSV
-  # "<group_id>\t<founder>\t<account>\t<confirmed 0|1>". Malformed ones are
-  # dropped here and only here: `verify` is advisory, so a bad one must never
-  # reach the poll gate, the join, or the leave.
+  # "<group_id>\t<founder>\t<account>\t<confirmed 0|1>\t<genesis hash or ->".
+  # Malformed ones are dropped here and only here: `verify` is advisory, so a
+  # bad one must never reach the poll gate, the join, or the leave. A
+  # `genesis_op_hash` that is present but not 64 hex drops the question too:
+  # answering it by the derived rule would answer a question mdma did not ask.
   local questions
   questions=$(python3 - "$response" "$confirmed" <<'PY' 2>>"$LOG"
 import json, re, sys
@@ -1212,9 +1250,14 @@ for entry in assignments:
         continue
     founder = verify.get("founder_account_id")
     account = verify.get("account_id")
+    genesis = verify.get("genesis_op_hash")
+    if genesis is None:
+        genesis = "-"
+    elif not (isinstance(genesis, str) and HEX.fullmatch(genesis)):
+        continue
     if not all(isinstance(v, str) and HEX.fullmatch(v) for v in (group_id, founder, account)):
         continue
-    print("\t".join([group_id, founder.lower(), account.lower(), "1" if group_id in confirmed else "0"]))
+    print("\t".join([group_id, founder.lower(), account.lower(), "1" if group_id in confirmed else "0", genesis.lower()]))
 PY
 ) || questions=""
 
@@ -1222,16 +1265,21 @@ PY
   recorded=$(load_verifications)
   updated="$recorded"
 
-  local group_id founder account is_confirmed key same answer verdict
-  while IFS=$'\t' read -r group_id founder account is_confirmed; do
+  local group_id founder account is_confirmed genesis key same answer verdict
+  while IFS=$'\t' read -r group_id founder account is_confirmed genesis; do
     [[ -n "$group_id" ]] || continue
-    key="$(printf '%s' "$group_id" | tr 'A-F' 'a-f')|${founder}|${account}"
+    # `-` is "no genesis hash" (an empty TSV field would collapse into its
+    # neighbour). A legacy question is keyed by its hash as well, so a derived
+    # and a legacy question about the same accounts never share a verdict; a
+    # derived one keeps the three-part key it had before legacy questions.
+    [[ "$genesis" == "-" ]] && genesis=""
+    key="$(printf '%s' "$group_id" | tr 'A-F' 'a-f')|${founder}|${account}${genesis:+|${genesis}}"
     keys+=("$key")
     # Not yet a member: nothing local to read. Asked again on the cycle after
     # the join is confirmed.
     [[ "$is_confirmed" == "1" ]] || continue
 
-    answer=$(read_verification "$group_id" "$founder" "$account")
+    answer=$(read_verification "$group_id" "$founder" "$account" "$genesis")
     verdict=$(python3 -c '
 import json, sys
 try:
@@ -1285,6 +1333,243 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
     "$updated" ${keys[@]+"${keys[@]}"} 2>>"$LOG" || echo "$updated")
   if [[ "$pruned" != "$recorded" ]]; then
     save_verifications "$pruned"
+  fi
+  return 0
+}
+
+# --- legacy namespace founding pin ------------------------------------------
+#
+# A namespace founded before derived ids (a V1 genesis) has no `founding` for
+# `founder_matches` to read, so no admin of it could ever be verified. What such
+# a replica does keep is who founded it and which genesis op did, and core
+# reports that as `legacyFounding: {founderAccountId, genesisOpHash}` on
+# `namespace get` -- only for a V1 genesis, only on a merod new enough to say.
+#
+# mdma cannot read it (no group key), so it asks ONE node to pin it: the claim
+# holder's active assignment of a legacy namespace with no pin yet carries
+#   "pin_founding": true
+# and this node, once confirmed, posts
+#   POST /api/fleet/namespaces/<ns>/founding
+#   {"peer_id", "founder_account_id", "genesis_op_hash"}
+# mdma then asks later verifications with that `genesis_op_hash`, which
+# `read_verification` answers from `legacyFounding` alone.
+#
+# Nothing is posted when `legacyFounding` is absent (a derived namespace, or a
+# merod that predates the field) or unreadable: there is no pair to pin, and
+# guessing one would pin the wrong founder. Admission, confirm, leave and the
+# inventory never depend on any of this.
+
+# Read the legacy founding pair from the local merod.
+#
+# Prints ONE JSON object and returns 0:
+#   {"pin": {"founder_account_id": "<hex>", "genesis_op_hash": "<hex>"}}
+#   {"none": "<why>"}  -- nothing to pin this cycle
+read_founding_pin() {
+  local namespace_id="$1"
+  MEROCTL_CMD="$MEROCTL" \
+  python3 - "$namespace_id" <<'PY' 2>>"$LOG" || echo '{"none": "founding pin helper failed"}'
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
+NAMESPACE_ID = sys.argv[1].strip()
+HEX = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def done(obj):
+    print(json.dumps(obj, sort_keys=True))
+    sys.exit(0)
+
+
+what = "meroctl namespace get " + NAMESPACE_ID
+try:
+    proc = subprocess.run(
+        MEROCTL + ["--output-format", "json", "namespace", "get", NAMESPACE_ID],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+except Exception as exc:
+    done({"none": what + " did not run: " + str(exc)})
+if proc.returncode != 0:
+    done({"none": what + " exited " + str(proc.returncode) + ": " + proc.stderr.strip()[:200]})
+try:
+    response = json.loads(proc.stdout)
+except Exception as exc:
+    done({"none": what + " returned unparseable JSON: " + str(exc)})
+if not isinstance(response, dict):
+    done({"none": what + " returned a non-object"})
+data = response.get("data") if isinstance(response.get("data"), dict) else response
+
+legacy = data.get("legacyFounding")
+if legacy is None:
+    done({"none": "no legacyFounding (not a V1 genesis, or merod predates the field)"})
+if not isinstance(legacy, dict):
+    done({"none": "legacyFounding is not an object"})
+founder = legacy.get("founderAccountId")
+genesis = legacy.get("genesisOpHash")
+if not (isinstance(founder, str) and HEX.fullmatch(founder.strip())):
+    done({"none": "legacyFounding.founderAccountId is not 64 hex"})
+if not (isinstance(genesis, str) and HEX.fullmatch(genesis.strip())):
+    done({"none": "legacyFounding.genesisOpHash is not 64 hex"})
+done({"pin": {"founder_account_id": founder.strip().lower(), "genesis_op_hash": genesis.strip().lower()}})
+PY
+}
+
+# POST one pin. Prints mdma's `status` and returns curl's success: the caller
+# records a pin only once mdma has it, so a failure is retried.
+post_founding_pin() {
+  local peer_id="$1" namespace_id="$2" founder="$3" genesis_op_hash="$4"
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({
+  "peer_id": sys.argv[1],
+  "founder_account_id": sys.argv[2],
+  "genesis_op_hash": sys.argv[3],
+}, separators=(",", ":")))' "$peer_id" "$founder" "$genesis_op_hash" 2>>"$LOG") || return 1
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  local reply
+  reply=$(curl -sf --max-time 10 "${headers[@]}" \
+    -d "$body" \
+    "${MDMA_URL}/api/fleet/namespaces/${namespace_id}/founding" 2>>"$LOG") || return 1
+  python3 -c '
+import json, sys
+try:
+    status = json.loads(sys.argv[1]).get("status")
+except Exception:
+    status = None
+print(status if isinstance(status, str) and status else "unknown")' "$reply" 2>/dev/null || echo "unknown"
+}
+
+load_founding_pins() {
+  cat "$FOUNDING_PIN_FILE" 2>/dev/null || echo '{}'
+}
+
+save_founding_pins() {
+  echo "$1" > "$FOUNDING_PIN_FILE"
+}
+
+# Pin the legacy founding of every confirmed namespace whose assignment carries
+# `pin_founding: true`, once per (namespace, founder, genesis hash).
+#
+# mdma's answer is final for that pair whatever it says -- `pinned`,
+# `unchanged`, `conflicted` (another pin disagrees; mdma keeps the request from
+# deciding) or `ignored` -- so any 2xx is recorded and not re-sent; only a
+# failed POST is retried, next cycle. The pair is re-read each cycle while mdma
+# keeps asking, and a different pair (which a V1 genesis should never produce)
+# is posted again. A namespace mdma stops asking about is forgotten.
+#
+# Runs after `reconcile_verification`, over the pruned confirmed set, and NEVER
+# fails the loop: every failure is a logged, edge-triggered warning.
+reconcile_founding_pin() {
+  local peer_id="$1"
+  local response="$2"
+  local confirmed="$3"
+
+  # Confirmed namespaces whose assignment asks for a pin, one per line. Only a
+  # literal `true` asks; anything else is ignored.
+  local asked
+  asked=$(python3 - "$response" "$confirmed" <<'PY' 2>>"$LOG"
+import json, re, sys
+HEX = re.compile(r"[0-9a-fA-F]{64}")
+try:
+    assignments = json.loads(sys.argv[1]).get("assignments") or []
+    confirmed = set(json.loads(sys.argv[2]))
+except Exception:
+    sys.exit(0)
+seen = set()
+for entry in assignments:
+    if not isinstance(entry, dict) or entry.get("pin_founding") is not True:
+        continue
+    group_id = entry.get("group_id")
+    if not (isinstance(group_id, str) and HEX.fullmatch(group_id)) or group_id in seen:
+        continue
+    seen.add(group_id)
+    print(group_id + "\t" + ("1" if group_id in confirmed else "0"))
+PY
+) || asked=""
+
+  local recorded updated keys=()
+  recorded=$(load_founding_pins)
+  updated="$recorded"
+
+  local group_id is_confirmed key answer pin same founder genesis status
+  while IFS=$'\t' read -r group_id is_confirmed; do
+    [[ -n "$group_id" ]] || continue
+    key="$(printf '%s' "$group_id" | tr 'A-F' 'a-f')"
+    keys+=("$key")
+    # Not yet a member: nothing local to read.
+    [[ "$is_confirmed" == "1" ]] || continue
+
+    answer=$(read_founding_pin "$group_id")
+    pin=$(python3 -c '
+import json, sys
+try:
+    pin = json.loads(sys.argv[1]).get("pin")
+except Exception:
+    pin = None
+print(json.dumps(pin, sort_keys=True) if isinstance(pin, dict) else "")' "$answer" 2>/dev/null || echo "")
+    if [[ -z "$pin" ]]; then
+      verification_warn "founding-pin|$key" "cannot pin the founding of ${group_id}: $(python3 -c '
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("none") or "no answer")
+except Exception:
+    print("no answer")' "$answer" 2>/dev/null || echo "no answer")"
+      continue
+    fi
+
+    same=$(python3 -c '
+import json, sys
+print("1" if json.loads(sys.argv[1]).get(sys.argv[2]) == json.loads(sys.argv[3]) else "0")' \
+      "$updated" "$key" "$pin" 2>/dev/null || echo "0")
+    if [[ "$same" == "1" ]]; then
+      unset "VERIFICATION_WARNED[founding-pin|$key]"
+      continue
+    fi
+
+    founder=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["founder_account_id"])' "$pin" 2>/dev/null) || continue
+    genesis=$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["genesis_op_hash"])' "$pin" 2>/dev/null) || continue
+
+    if ! status=$(post_founding_pin "$peer_id" "$group_id" "$founder" "$genesis"); then
+      verification_warn "founding-pin|$key" "POST /api/fleet/namespaces/${group_id}/founding failed"
+      continue
+    fi
+
+    updated=$(python3 -c '
+import json, sys
+state = json.loads(sys.argv[1])
+state[sys.argv[2]] = json.loads(sys.argv[3])
+print(json.dumps(state, sort_keys=True))' "$updated" "$key" "$pin" 2>>"$LOG" || echo "$updated")
+    unset "VERIFICATION_WARNED[founding-pin|$key]"
+    case "$status" in
+      pinned|unchanged|ignored)
+        log "Pinned the legacy founding of namespace ${group_id} for mdma (founder ${founder}, genesis ${genesis}): ${status}" ;;
+      conflicted)
+        log "WARN: mdma reports the legacy founding pin for namespace ${group_id} (founder ${founder}, genesis ${genesis}) conflicts with another" ;;
+      *)
+        log "WARN: mdma answered the legacy founding pin for namespace ${group_id} with unrecognised status '${status}'; recorded, not re-sent" ;;
+    esac
+  done <<< "$asked"
+
+  local pruned
+  pruned=$(python3 -c '
+import json, sys
+state = json.loads(sys.argv[1])
+keep = set(sys.argv[2:])
+print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))' \
+    "$updated" ${keys[@]+"${keys[@]}"} 2>>"$LOG" || echo "$updated")
+  if [[ "$pruned" != "$recorded" ]]; then
+    save_founding_pins "$pruned"
   fi
   return 0
 }
@@ -3022,6 +3307,10 @@ print(json.dumps(sorted(adm & des)))
   # this node is confirmed in has local governance state to answer from. A no-op
   # for every assignment without `verify`, and never fatal.
   reconcile_verification "$PEER_ID" "$response" "$confirmed" || true
+
+  # Legacy founding pins, over the same pruned set: a no-op for every
+  # assignment without `pin_founding`, and never fatal.
+  reconcile_founding_pin "$PEER_ID" "$response" "$confirmed" || true
 
   # Context inventory, also over the pruned set. Walking the group tree costs a
   # `meroctl` subprocess per group, so it runs on its own much slower clock than
