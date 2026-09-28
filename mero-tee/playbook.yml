@@ -15,6 +15,7 @@
     gce_udev_paths:
       - /usr/lib/udev/rules.d/65-gce-disk-naming.rules
       - /usr/lib/udev/google_nvme_id
+      - /usr/sbin/nvme
 
     # Delegated execution: whether this image is a RELAY, i.e. whether a
     # keyholder with no account on this node may present a signed warrant to it
@@ -145,6 +146,24 @@
     # presence is asserted twice: here, on the build host after every role has
     # run, and by the seal inside the EROFS image it writes. Whichever fails
     # names the step that loses them.
+    # AFTER every role, and in particular after merod-lockdown. The base image's
+    # `google-compute-engine` package owns these same two paths (`lib/udev/*`),
+    # and lockdown's `openssh-server` purge takes it along (it depends on OS
+    # Login and the guest agent), so dpkg deleted whatever was at those paths --
+    # including the copies the merotee role wrote. Every locked-read-only image
+    # since the rule was vendored shipped without it; the debug profiles, which
+    # skip lockdown, kept it. The 2.3.89 build caught this with the assert below.
+    - name: Install the GCE disk-naming udev rule and helper
+      copy:
+        src: "ansible/roles/merotee/files/gce-udev/{{ item.name }}"
+        dest: "{{ item.dest }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
+        - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }
+
     - name: Stat the GCE disk-naming files before sealing
       stat:
         path: "{{ item }}"
@@ -154,7 +173,7 @@
     - name: Assert the GCE disk-naming files survived every role
       assert:
         that: item.stat.exists
-        fail_msg: "{{ item.item }} was installed by the merotee role but is gone before the seal"
+        fail_msg: "{{ item.item }} is missing just before the seal (installed above, or by the merotee role for nvme-cli)"
       loop: "{{ gce_udev_files.results }}"
       loop_control:
         label: "{{ item.item }}"
