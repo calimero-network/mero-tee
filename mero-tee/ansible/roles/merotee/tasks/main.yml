@@ -18,16 +18,8 @@
     name: nvme-cli
     state: present
 
-- name: Install the GCE disk-naming udev rule and helper
-  copy:
-    src: "gce-udev/{{ item.name }}"
-    dest: "{{ item.dest }}/{{ item.name }}"
-    owner: root
-    group: root
-    mode: "{{ item.mode }}"
-  loop:
-    - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
-    - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }
+# The rule and helper themselves are installed in the playbook's post_tasks,
+# AFTER merod-lockdown: see the note there.
 
 # Ensure tdx_guest module for RTMR3 extend (TDX Confidential VMs)
 - name: Install linux-modules-extra for tdx_guest (RTMR3 extend)
