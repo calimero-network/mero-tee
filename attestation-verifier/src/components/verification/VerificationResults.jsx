@@ -5,8 +5,9 @@ import { QuoteJsonCard } from './QuoteJsonCard.jsx';
 /**
  * Shared verification results display.
  * Single responsibility: render result cards from verification data.
- * KMS results carry `matches` (release profiles whose KMS allowlists hold the quote)
- * and `nonce_verified`; node results compare against published-mrtds.json.
+ * KMS results carry `matches` (release profiles whose KMS allowlists hold the quote);
+ * node results compare against published-mrtds.json. Both carry `nonce_verified`,
+ * checked against the quote's own report_data.
  */
 export function VerificationResults({ result }) {
   if (!result) return null;
@@ -44,6 +45,9 @@ export function VerificationResults({ result }) {
             ? 'Quote is bound to the nonce you sent to /attest.'
             : 'No nonce given: freshness of the pasted quote was not checked.'}
         </p>
+      )}
+      {!isKms && result.nonce_verified && (
+        <p className="results-footer">Quote is bound to a fresh nonce this verifier sent to the node.</p>
       )}
       {result.tagToUse && (
         <p className="results-footer">

@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **The attestation verifier reads everything from the quote bytes.** In node mode it used MRTD/RTMR0–3 from the `quote.body` a node returns beside its quote, and checked the nonce against that JSON's `reportdata` only when present; the pasted KMS flow checked a pasted `reportDataHex`. Both now read `report_data` and the measurements from the quote Intel Trust Authority appraises, the node flow always checks the nonce, and only the quote is passed back to the page.
+
 - **Registration quotes come from merod's `registration-attest` route.** The sidecar now asks for its registration quote on `POST /admin-api/tee/registration-attest`, which carries a registration-only report-data binding, and tells mdma so with `quote_binding: "registration"`. A merod that predates the route answers 404, and only then does the sidecar fall back to `/admin-api/tee/attest` as before. `traefik-tee-route-test.sh` pins the public TEE router to `info` and `attest`. Covered by `fleet-sidecar-registration-test.sh`.
 
 - **The fleet sidecar's python helpers take their values as argv.** They used to splice values into the `python3 -c` source, so any value with a quote in it broke the helper, and its `|| echo` fallback silently kept the old state. The `/api/fleet/confirm` body is now built with `json.dumps`. `poll_mdma` also checks that every `group_id` is 32-byte hex and otherwise fails the poll, so the loop skips reconcile under the existing safety gate. Covered by `fleet-sidecar-json-args-test.sh`.

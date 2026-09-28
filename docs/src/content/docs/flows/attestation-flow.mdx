@@ -91,8 +91,9 @@ runs the expected measurement.
    The transport key is derived from the cluster root, so every replica of a
    cluster reports the same one.
 
-The caller confirms freshness by checking that the first 32 bytes of `reportDataHex`
-equal the nonce it sent.
+The caller confirms freshness by checking that the first 32 bytes of the quote's own
+`report_data` equal the nonce it sent. `reportDataHex` is a convenience copy; a verifier
+reads the value from the quote bytes it has checked the signature of.
 
 :::caution
 `/attest` does **not** release any key and does **not** enforce the measurement
@@ -120,8 +121,8 @@ verifier has checked the quote it produced:
                           POST /admin-api/tee/attest { nonce }    (node)
 3. Component -> TDX:      quote over (nonce || binding)   (configfs-tsm)
 4. TDX      -> component: quote
-5. Component -> verifier: { quoteB64, reportDataHex, ... }
-6. Verifier: report_data[0..32] == nonce ?     (freshness)
+5. Component -> verifier: { quoteB64, ... }
+6. Verifier: quote report_data[0..32] == nonce ?  (freshness)
 7. Verifier: quote signature chain valid ?     (see Verification)
 8. Verifier: measurements match policy ?       (see Policy Management)
 ```
@@ -140,7 +141,7 @@ verifier has checked the quote it produced:
     { from: 1, to: 2, label: 'quote(report_data)', color: '#a371f7' },
     { from: 2, to: 1, label: 'raw TDX quote', color: '#a371f7', dashed: true },
     { from: 1, to: 0, label: '{ quoteB64, reportDataHex, transportPublicKeyB64? }', color: '#3fb950' },
-    { from: 0, to: 0, label: 'reportDataHex[0..32] == nonce ? (freshness)' },
+    { from: 0, to: 0, label: 'quote report_data[0..32] == nonce ? (freshness)' },
     { type: 'divider', label: 'fresh, identity-bound quote exists — no key released, policy not enforced' },
   ]}
 />
