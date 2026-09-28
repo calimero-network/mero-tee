@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Fixed
 
+- **node_exporter and vmagent listen on loopback on node images too.** node_exporter started with no listen address (`:9100` on every interface) and vmagent defaulted to `-httpListenAddr=:8429`; both now bind `127.0.0.1`, as on the KMS image. vmagent scrapes node_exporter locally and only pushes, so nothing off the node used either port. Covered by `vmagent-node-identity-test.sh`.
+
 - **mero-kms records a challenge or join nonce only once its request has verified.** `challengeId` now carries an HMAC tag (112 hex characters) that is checked first, and `/get-key` redeems the challenge after the signature and attestation verify, just before deriving the key, so the replay set holds only challenges that released a key. Join nonces are stateless (random bytes, expiry and an HMAC tag under a per-process key) instead of a table of outstanding nonces, and are remembered only once the join verifies.
 
 - **The attestation verifier reads everything from the quote bytes.** In node mode it used MRTD/RTMR0–3 from the `quote.body` a node returns beside its quote, and checked the nonce against that JSON's `reportdata` only when present; the pasted KMS flow checked a pasted `reportDataHex`. Both now read `report_data` and the measurements from the quote Intel Trust Authority appraises, the node flow always checks the nonce, and only the quote is passed back to the page.

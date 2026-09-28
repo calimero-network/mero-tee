@@ -121,7 +121,7 @@ Type=simple
 ExecStart=/usr/local/bin/vmagent \\
   -promscrape.config=$CONFIG_FILE \\
   -remoteWrite.url=$REMOTE_WRITE_URL \\
-  -httpListenAddr=${VMAGENT_HTTP_LISTEN:-:8429} $BEARER_TOKEN_FLAG $EXTRA_LABELS
+  -httpListenAddr=${VMAGENT_HTTP_LISTEN:-127.0.0.1:8429} $BEARER_TOKEN_FLAG $EXTRA_LABELS
 Restart=always
 RestartSec=10
 
