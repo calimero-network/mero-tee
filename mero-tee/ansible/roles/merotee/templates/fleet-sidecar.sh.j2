@@ -2111,8 +2111,47 @@ print(json.dumps({
   return 1
 }
 
-# Write an envelope for every linked member of every namespace this node serves,
-# on change and on a slow periodic pass.
+# Remove one envelope for an account that is no longer a member. Returns
+# curl's success; mdma answers 200 whether or not the row still existed, so a
+# retry after a lost response is harmless.
+delete_recovery_envelope() {
+  local peer_id="$1" account="$2" namespace_id="$3"
+
+  local body
+  body=$(python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "account_id": sys.argv[2], "namespace_id": sys.argv[3]}))
+' "$peer_id" "$account" "$namespace_id" 2>>"$LOG") || return 1
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+
+  if curl -sf --max-time 15 -X DELETE "${headers[@]}" \
+      -d "$body" \
+      "${MDMA_URL}/api/fleet/recovery-envelope" >/dev/null 2>>"$LOG"; then
+    return 0
+  fi
+  log "WARN: DELETE /api/fleet/recovery-envelope failed for $account in $namespace_id"
+  return 1
+}
+
+# Write an envelope for every member of every namespace this node serves, on
+# change and on a slow periodic pass, and remove the envelopes of accounts that
+# have left.
+#
+# Removal is what stops mdma listing a namespace under a login whose account
+# was removed from it: the envelope is the only membership edge mdma has, and
+# without this it outlived the membership forever. It is deliberately narrow:
+#
+#   * only after a COMPLETE read, the same bar as writing. A read that failed
+#     part-way is not evidence that anyone left;
+#   * only for accounts THIS node wrote for before (they are in its state file).
+#     A relay that has not caught up on a join has no entry for the new member,
+#     so it can never delete an envelope another, better-synced relay wrote.
+#
+# The local entry is dropped once mdma confirms, so a member who later rejoins
+# starts again from version 1 rather than from a number mdma would refuse for a
+# new row.
 #
 # `version` is monotonic per (account, namespace) and survives restarts because
 # it lives in RECOVERY_FILE rather than in memory or in wall-clock: mdma rejects
@@ -2188,6 +2227,34 @@ print(json.dumps(state, sort_keys=True))
 " "${namespace_id}/${account}" "$version" "$digest" 2>/dev/null || echo "$state")
         wrote_any=true
         log "Recovery envelope written for $account in $namespace_id (v$version)"
+      fi
+    done
+
+    # Accounts this node wrote for in this namespace that the complete read no
+    # longer lists: they left, or were removed. See the note above.
+    local departed
+    # On stdin, one JSON document per line, rather than as arguments: both grow
+    # with the membership and an argument is capped at 128 KiB.
+    departed=$(printf '%s\n%s\n' "$state" "$plan" | python3 -c '
+import json, sys
+lines = sys.stdin.read().split("\n")
+state, plan = json.loads(lines[0]), json.loads(lines[1])
+prefix = sys.argv[1] + "/"
+current = set(plan.get("accounts") or {})
+for key in sorted((state.get("envelopes") or {})):
+    if key.startswith(prefix) and key[len(prefix):] not in current:
+        print(key[len(prefix):])
+' "$namespace_id" 2>>"$LOG") || departed=""
+    for account in $departed; do
+      if delete_recovery_envelope "$peer_id" "$account" "$namespace_id"; then
+        state=$(echo "$state" | python3 -c "
+import sys, json
+state = json.load(sys.stdin)
+(state.get('envelopes') or {}).pop(sys.argv[1], None)
+print(json.dumps(state, sort_keys=True))
+" "${namespace_id}/${account}" 2>/dev/null || echo "$state")
+        wrote_any=true
+        log "Recovery envelope removed for $account in $namespace_id: no longer a member"
       fi
     done
   done

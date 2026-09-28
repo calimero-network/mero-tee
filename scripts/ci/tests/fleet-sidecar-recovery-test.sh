@@ -134,18 +134,28 @@ STUB
 
 # `curl`: PUT /recovery-envelope
 # appends its body to ${SB}/put-log, or fails while ${SB}/put-fails exists.
+# DELETE /recovery-envelope appends to ${SB}/delete-log, or fails while
+# ${SB}/delete-fails exists.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body=""
 prev=""
 url=""
+method=""
 for a in "$@"; do
   [[ "${prev}" == "-d" ]] && body="${a}"
+  [[ "${prev}" == "-X" ]] && method="${a}"
   [[ "${a}" == https://* ]] && url="${a}"
   prev="${a}"
 done
 case "${url}" in
   *recovery-envelope*)
+    if [[ "${method}" == "DELETE" ]]; then
+      [[ -f "${SB}/delete-fails" ]] && exit 22
+      printf '%s\n' "${body}" >> "${SB}/delete-log"
+      echo '{"status":"deleted"}'
+      exit 0
+    fi
     [[ -f "${SB}/put-fails" ]] && exit 22
     printf '%s\n' "${body}" >> "${SB}/put-log"
     echo '{"status":"ok"}'
@@ -166,11 +176,17 @@ source "${SB}/functions.sh"
 : > "${SB}/contexts"
 : > "${SB}/devices"
 : > "${SB}/put-log"
+: > "${SB}/delete-log"
 : > "${SB}/sealed-plaintexts"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 puts() { awk 'NF{n++} END{print n+0}' "${SB}/put-log"; }
-reset_state() { rm -f "${SB}/fleet-recovery.json"; : > "${SB}/put-log"; : > "${SB}/sealed-plaintexts"; }
+reset_state() { rm -f "${SB}/fleet-recovery.json"; : > "${SB}/put-log"; : > "${SB}/delete-log"; : > "${SB}/sealed-plaintexts"; }
+deletes() { awk 'NF{n++} END{print n+0}' "${SB}/delete-log"; }
+known() { python3 -c "
+import json, sys
+print(sys.argv[1] in (json.load(open(sys.argv[2])).get('envelopes') or {}))
+" "$1" "${SB}/fleet-recovery.json"; }
 field() { python3 -c "
 import json, sys
 print(json.loads(sys.stdin.read().strip().split(chr(10))[int(sys.argv[1])])[sys.argv[2]])
@@ -279,5 +295,65 @@ reset_state
 echo "${NS}=" > "${SB}/members"
 reconcile_recovery "peer1" "${CONFIRMED}" false
 [[ "$(puts)" == "0" ]] || fail "no members means no envelopes, got $(puts)"
+
+# --- a member who leaves has their envelope removed -------------------------
+# The envelope is the only (account, namespace) edge mdma holds, and mdma lists
+# a namespace under every login whose account has one. Left in place, a removed
+# member kept seeing the namespace forever.
+reset_state
+echo "${NS}=alice,bob" > "${SB}/members"
+echo "${NS}=ctx1" > "${SB}/contexts"
+echo "${NS}=" > "${SB}/devices"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(puts)" == "2" ]] || fail "setup: expected envelopes for alice and bob, got $(puts)"
+: > "${SB}/put-log"
+echo "${NS}=alice" > "${SB}/members"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(deletes)" == "1" ]] || fail "bob left, so exactly one envelope should be removed, got $(deletes)"
+grep -q '"account_id": *"bob"' "${SB}/delete-log" || fail "the removal should name bob"
+grep -q '"namespace_id": *"ns01"' "${SB}/delete-log" || fail "the removal should name the namespace"
+grep -q '"peer_id": *"peer1"' "${SB}/delete-log" || fail "the removal should name this peer"
+[[ "$(known ns01/bob)" == "False" ]] || fail "a confirmed removal should drop bob from local state"
+[[ "$(known ns01/alice)" == "True" ]] || fail "alice is still a member and must stay in local state"
+
+# --- and removal is not repeated once confirmed ----------------------------
+: > "${SB}/delete-log"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(deletes)" == "0" ]] || fail "bob's removal was confirmed and should not be sent again, got $(deletes)"
+
+# --- a member who rejoins starts again from version 1 ----------------------
+# mdma bounds a NEW row's version, so carrying bob's old counter forward could
+# earn a 409 on the one write that matters.
+: > "${SB}/put-log"
+echo "${NS}=alice,bob" > "${SB}/members"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(puts)" == "1" ]] || fail "bob rejoined and should be written once, got $(puts)"
+[[ "$(field 0 version)" == "1" ]] || fail "a rejoined member should restart at version 1, got $(field 0 version)"
+
+# --- an incomplete read removes NOTHING ------------------------------------
+# A read that failed part-way is not evidence that anyone left.
+: > "${SB}/delete-log"
+echo "${NS}=ERR" > "${SB}/contexts"
+echo "${NS}=alice" > "${SB}/members"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(deletes)" == "0" ]] || fail "an incomplete read must remove nothing, got $(deletes)"
+echo "${NS}=ctx1" > "${SB}/contexts"
+
+# --- a failed removal is kept, so it retries --------------------------------
+: > "${SB}/delete-log"
+touch "${SB}/delete-fails"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+rm -f "${SB}/delete-fails"
+[[ "$(known ns01/bob)" == "True" ]] || fail "an unconfirmed removal must stay in local state to be retried"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(deletes)" == "1" ]] || fail "a failed removal must be retried, got $(deletes)"
+
+# --- a relay never removes an envelope it did not write ---------------------
+# A relay that has not caught up on a join has no entry for the new member, so
+# its (stale) view that they are absent must not delete another relay's write.
+reset_state
+echo "${NS}=alice" > "${SB}/members"
+reconcile_recovery "peer1" "${CONFIRMED}" false
+[[ "$(deletes)" == "0" ]] || fail "nothing this node wrote has gone, so nothing should be removed, got $(deletes)"
 
 echo "PASS: fleet sidecar recovery-envelope behaviour"

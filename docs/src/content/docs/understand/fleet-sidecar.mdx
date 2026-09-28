@@ -819,6 +819,28 @@ Four things this writer has to get right, none of which fail loudly:
   ciphertexts would see a change on every pass, burn a version each time, and
   rewrite MDMA forever for data that never moved.
 
+#### Members who leave
+
+An envelope is the only `(account, namespace)` edge MDMA holds, and MDMA lists a
+namespace in the cloud console of every login whose account has one. So an
+envelope that outlives the membership keeps showing the namespace to someone who
+was removed from it.
+
+After a **complete** read, the sidecar removes the envelope of every account it
+wrote for in that namespace that the read no longer lists
+(`DELETE {MDMA_URL}/api/fleet/recovery-envelope`), then drops that account from
+its state file. Two limits keep this from deleting anything it should not:
+
+- **Only after a complete read.** The same bar as writing: a read that failed
+  part-way is not evidence that anyone left.
+- **Only accounts this node wrote for before.** A relay that has not caught up
+  on a join has no entry for the new member, so its out-of-date view cannot
+  remove an envelope a better-synced relay wrote.
+
+Dropping the local entry means a member who later rejoins starts again at
+version 1. MDMA bounds a new row's version, so carrying the old counter forward
+could earn a `409` on that first write.
+
 MDMA's `ciphertext` field is a single opaque string, while a sealed envelope is
 four values (`accountRootEpoch`, `ephemeralPublicKey`, `nonce`, `ciphertext`) and
 a recovering holder needs all four. The whole envelope is JSON-encoded into that
@@ -1228,6 +1250,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Registration state | `/mnt/data/fleet/fleet-registration.json` |
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
+| Recovery envelope removal | `DELETE {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id"}` |
 | Admin verification | `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` — body `{"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}`; asked by `assignments[].verify` |
 | Verification probes | `meroctl … namespace get <NS>` → `data.founding.founderAccountId`; `GET http://127.0.0.1:{server-port}/admin-api/groups/<NS>/members?offset=&limit=1000` (loopback, paged, pages overlap by one row) → `members[].role` |
 | Verification state | `/mnt/data/fleet/fleet-verifications.json` |
