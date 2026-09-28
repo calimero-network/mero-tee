@@ -113,10 +113,10 @@ jobs:
       CI_LOG_VERBOSITY: ${{ inputs.log_verbosity }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -152,7 +152,7 @@ jobs:
 
       - name: Authenticate to GCP via workload identity
         if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
@@ -161,14 +161,14 @@ jobs:
 
       - name: Authenticate to GCP via service account key
         if: ${{ steps.auth_mode.outputs.mode != 'wif' }}
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
           create_credentials_file: true
           export_environment_variables: true
 
       - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Prepare probe parameters
         id: params
@@ -593,7 +593,7 @@ jobs:
         # two releases without anyone being able to look at it. A failed run is
         # exactly when these artifacts are worth keeping.
         if: ${{ always() && steps.params.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-gcp-staging-probe-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.params.outputs.artifacts_dir }}/
