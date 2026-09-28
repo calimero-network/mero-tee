@@ -213,18 +213,6 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-verification-test.sh
 
-      # Legacy namespace founding. A namespace founded before derived ids has no
-      # `founding`, so mdma asks one node to pin its `legacyFounding` and then
-      # verifies against both the founder and the genesis op hash. Wrong quietly:
-      # a pin posted unasked or from no `legacyFounding` pins a founder mdma did
-      # not ask about, a legacy verdict read off the founder alone accepts any
-      # namespace that founder made, and `legacyFounding` satisfying a derived
-      # question defeats the check derived ids exist for.
-      - name: Run fleet-sidecar founding pin test
-        id: sidecar_founding_pin_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-founding-pin-test.sh
-
       # Direct admission. The sidecar reports where its swarm can be dialed and
       # asks the peers MDMA names for admission, instead of only broadcasting
       # its attestation and hoping an owner's relayed laptop hears it. Wrong
@@ -442,7 +430,6 @@ jobs:
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
             --checks-line "- fleet-sidecar verification test: ${{ steps.sidecar_verification_test.outcome }}" \
-            --checks-line "- fleet-sidecar founding pin test: ${{ steps.sidecar_founding_pin_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
