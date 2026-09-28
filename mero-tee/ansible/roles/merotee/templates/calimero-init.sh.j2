@@ -1237,6 +1237,26 @@ log "Enabling delegated access on the admin API..."
 "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
   'server.admin.delegated_access=true' \
   || log "WARN: failed to enable delegated access; this node will replicate but not relay"
+
+# Who a device-key session belongs to. merod runs in proxy auth mode, so it
+# installs no guard of its own and, without this, sees every caller as
+# anonymous: the caller-scoped listings answer node-wide and `POST .../query`
+# refuses. With it, merod takes the account and device from the
+# `X-Auth-Account` / `X-Auth-Device` headers that traefik's `auth-node` copies
+# from mero-auth, and scopes each tenant to its own groups.
+#
+# Safe here because traefik is the only way in: it replaces those two headers on
+# every route `auth-node` guards and strips them on every other route
+# (`strip-proxy-identity` on both entrypoints), and merod listens on loopback.
+#
+# FATAL on failure, unlike the key above. A relay whose mero-auth has
+# device-key login on (`mero-auth-start`) but whose merod ignores the caller's
+# identity would list every tenant's contexts to any one of them. Refusing to
+# start is the failure that cannot leak.
+log "Taking device-key callers' identity from the proxy..."
+"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+  'server.proxy_identity=true' \
+  || fatal "failed to set server.proxy_identity; refusing to serve device-key sessions node-wide"
 {% endif %}
 
 # TLS material for traefik.

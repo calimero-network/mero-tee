@@ -21,6 +21,11 @@ entryPoints:
   # to fix nothing for the browser ones.
   web:
     address: ":80"
+    # Before every router on this entrypoint; see `strip-proxy-identity` in
+    # routing.yml for why it is here rather than on each router.
+    http:
+      middlewares:
+        - strip-proxy-identity@file
   # TLS is declared on the entrypoint rather than per router, so a router opts
   # in to HTTPS by listing `websecure` and nothing else. A router that named the
   # entrypoint but forgot its own `tls` block would otherwise serve cleartext on
@@ -30,6 +35,8 @@ entryPoints:
     address: ":443"
     http:
       tls: {}
+      middlewares:
+        - strip-proxy-identity@file
 
 providers:
   file:

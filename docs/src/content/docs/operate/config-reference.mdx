@@ -302,6 +302,30 @@ asserted at build time — admission on every image, delegated execution only
 where the image was built to relay — so a template regression cannot reach a
 release.
 
+#### Device-key login, and who merod thinks the caller is
+
+A relay also lets a keyholder open a **session**: mero-auth's `account_proof`
+provider, device-key login. The session is scoped to `context:query`,
+`context:intent`, `context:subscribe` and the caller-scoped listings
+(`context:list-own`, `namespace:list-own`, `group:list-own`), and it goes
+through `auth-node` like any other token. Three things make that safe on a
+multi-tenant node, all driven by `fleet_delegated_access`:
+
+| Edge | What it does |
+| --- | --- |
+| mero-auth (`mero-auth-start.sh`) | Runs mero-auth on the baked `/etc/calimero/auth.toml`, which enables no provider, until the fleet sidecar has recorded this node's device signing key in `/mnt/data/fleet/login-node-key`; then on a `/run` copy adding `[providers] account_proof = true` and `[account_proof] node_key = …, allowed_audiences = []`. The provider refuses to start without the key, and a mero-auth that does not start takes every forwardAuth with it, so it is never enabled early. Only on an image carrying the `/etc/calimero/device-key-login` marker. |
+| merod (`calimero-init.sh.j2`) | Sets `server.proxy_identity=true` (core 0.11.0-rc.60+). In proxy auth mode core installs no guard, so without it every caller is anonymous: the listings answer **node-wide** and `/query` refuses. With it, merod takes the account and device from `X-Auth-Account` / `X-Auth-Device` and scopes each caller to its own groups. Fatal if it cannot be set. |
+| Traefik | `auth-node` lists both headers in `authResponseHeaders`, so mero-auth's answer replaces a client's on every guarded route; `strip-proxy-identity`, on **both entrypoints**, deletes them from every request before any router runs, so the exempt routes above cannot carry a forged account. |
+
+The sidecar re-reads the key from `GET /admin-api/identity` every five minutes
+and restarts mero-auth only when it changes. The value a browser has to pin is
+that same `publicKey`. `allowed_audiences = []` accepts a session for any client
+origin: the session decides who may *ask*, never what the answer contains,
+since every read re-checks membership and every write needs the member's own
+warrant. `scripts/ci/tests/traefik-proxy-identity-test.sh`,
+`mero-auth-device-login-test.sh` and `fleet-sidecar-login-key-test.sh` pin the
+three edges.
+
 The base image is hardcoded for reproducibility: `source_image_family =
 ubuntu-2604-lts-amd64` from `ubuntu-os-cloud` (Ubuntu 26.04 LTS, comfortably past
 the kernel 6.17+ that RTMR3 sysfs support needs), `disk_size = 20` GB `pd-ssd`.
