@@ -154,7 +154,11 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
    - Run `build-and-release.sh <profile>` (Packer + Ansible) to build the GCP
      image.
    - Create an ephemeral firewall rule and a **`c3-standard-4` Intel TDX** VM
-     from the new image.
+     from the new image, with the same **200 GB `pd-balanced` data disk (device
+     name `data`)** mdma attaches to every node at creation. The disk is part of
+     the machine RTMR0 measures: an image measured without it publishes an RTMR0
+     no mdma node has, and the KMS refuses every node's key request. The staging
+     probe, which the post-release check uses, boots the same shape.
    - Collect TEE info and a TDX quote from the node's admin API, then verify the
      quote externally against **Intel Trust Authority**.
    - Emit `mrtd-<profile>.json` (MRTD + RTMR0–3), a provenance record, and the

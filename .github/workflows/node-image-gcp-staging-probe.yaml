@@ -322,6 +322,10 @@ jobs:
             metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
             rm -f "${TOKEN_FILE}"
           fi
+          # The data disk mdma attaches at creation (dispatcher/app/gcp/instances.py)
+          # is part of the machine RTMR0 measures: a VM measured without it publishes
+          # an RTMR0 no mdma node has, and the KMS refuses every node. Same size, type
+          # and device name as mdma; the disk itself is unused here.
           gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
             --project "${{ steps.params.outputs.vm_project }}" \
             --zone "${{ steps.params.outputs.vm_zone }}" \
@@ -335,6 +339,7 @@ jobs:
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
             --metadata "${metadata}" \
+            --create-disk "size=200GB,type=pd-balanced,device-name=data,auto-delete=yes" \
             --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
 
       - name: Wait for VM and admin API readiness
