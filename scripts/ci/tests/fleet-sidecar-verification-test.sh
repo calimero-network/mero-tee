@@ -10,8 +10,11 @@
 #   {"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}
 #
 # Every way this is wrong is quiet:
-#   * "not a member" read off a TRUNCATED member page is a false verdict about a
-#     real admin;
+#   * "not a member" read off a TRUNCATED member list is a false verdict about a
+#     real admin -- whether it stopped at a page limit, a page cap, a failed
+#     page, or a list that shifted between pages;
+#   * an admin beyond the first page never found at all leaves mdma's request
+#     to expire;
 #   * a verdict recorded before mdma acknowledged it is lost for good;
 #   * re-posting an unchanged verdict writes to mdma once a second;
 #   * NOT re-posting a changed one strands a real admin: mdma lets only a
@@ -23,7 +26,9 @@
 #     which is the leave path's safety gate.
 #
 # Same harness as fleet-sidecar-authorship-test.sh: render the template, source
-# the function half, drive it against stubbed `meroctl` and `curl`.
+# the function half, drive it against stubbed `meroctl` and `curl`. The member
+# pages are read through `curl` on loopback (meroctl sends no offset/limit), so
+# the curl stub also plays merod's `GET /admin-api/groups/<ns>/members`.
 #
 # Usage: scripts/ci/tests/fleet-sidecar-verification-test.sh
 set -euo pipefail
@@ -83,8 +88,8 @@ call_line="$(grep -n 'reconcile_verification "\$PEER_ID"' <<< "${loop}" | head -
 mkdir -p "${SB}/bin" "${SB}/ns" "${SB}/members"
 
 # `meroctl`: `namespace get <ns>` from ${SB}/ns/<ns> (missing file = the command
-# fails), `group members list <ns>` from ${SB}/members/<ns>. Every call is
-# appended to ${SB}/meroctl-log so a test can assert nothing was read.
+# fails). Every call is appended to ${SB}/meroctl-log so a test can assert
+# nothing was read.
 cat > "${SB}/bin/meroctl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${SB}/meroctl-log"
@@ -96,18 +101,20 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     cat "${f}"
     exit 0
   fi
-  if [[ "${args[i]}" == "members" && "${args[i + 1]:-}" == "list" ]]; then
-    f="${SB}/members/${args[i + 2]}"
-    [[ -f "${f}" ]] || { echo "Group not found" >&2; exit 1; }
-    cat "${f}"
-    exit 0
-  fi
 done
 exit 1
 STUB
 
-# `curl`: records "<url> <token header> <body>" per POST to ${SB}/post-log, or
-# fails while ${SB}/post-fails exists.
+# `curl`, two roles:
+#   * merod's `GET http://127.0.0.1:<port>/admin-api/groups/<ns>/members
+#     ?offset=&limit=`: slices the full list in ${SB}/members/<ns> (missing file
+#     = HTTP error). Logged to ${SB}/get-log as "<ns> <offset> <limit>".
+#     ${SB}/clamp caps the page size the way a node's own limit would;
+#     ${SB}/get-fails-at holds an offset whose page fails; ${SB}/mutate-after
+#     holds an offset after whose page the first member is dropped, as if
+#     removed between two reads.
+#   * mdma: records "<url> <token header> <body>" per POST to ${SB}/post-log,
+#     or fails while ${SB}/post-fails exists.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body="" url="" token="" prev=""
@@ -117,6 +124,36 @@ for a in "$@"; do
   [[ "${a}" == http* ]] && url="${a}"
   prev="${a}"
 done
+if [[ "${url}" == http://127.0.0.1:*/admin-api/groups/*/members\?* ]]; then
+  exec python3 - "${url}" <<'PY'
+import json, os, sys
+from urllib.parse import parse_qs, urlparse
+SB = os.environ["SB"]
+u = urlparse(sys.argv[1])
+ns = u.path.split("/")[3]
+q = parse_qs(u.query)
+offset, limit = int(q["offset"][0]), int(q["limit"][0])
+with open(os.path.join(SB, "get-log"), "a") as log:
+    log.write("%s %d %d\n" % (ns, offset, limit))
+def read(name):
+    try:
+        return open(os.path.join(SB, name)).read().strip()
+    except OSError:
+        return None
+if read("get-fails-at") == str(offset):
+    sys.exit(22)
+path = os.path.join(SB, "members", ns)
+if not os.path.exists(path):
+    sys.exit(22)
+rows = json.load(open(path))["members"]
+clamp = read("clamp")
+if clamp:
+    limit = min(limit, int(clamp))
+print(json.dumps({"members": rows[offset:offset + limit]}))
+if read("mutate-after") == str(offset):
+    json.dump({"members": rows[1:]}, open(path, "w"))
+PY
+fi
 [[ -f "${SB}/post-fails" ]] && exit 22
 printf '%s\t%s\t%s\n' "${url}" "${token}" "${body}" >> "${SB}/post-log"
 echo '{}'
@@ -132,6 +169,13 @@ source "${SB}/functions.sh"
 MEROCTL="meroctl"
 # shellcheck disable=SC2034
 FLEET_TOKEN="f1.peer1.sig"
+# Small pages, so paging is exercised by lists a test can write out: 3 rows a
+# page, at most 4 pages -- the whole list is readable up to 9 members (each page
+# after the first re-reads the previous page's last row).
+# shellcheck disable=SC2034
+VERIFICATION_PAGE_SIZE=3
+# shellcheck disable=SC2034
+VERIFICATION_MAX_PAGES=4
 : > "${SB}/post-log"
 : > "${SB}/meroctl-log"
 
@@ -172,15 +216,18 @@ if sys.argv[2]:
     data["founding"] = {"founderAccountId": sys.argv[2].upper(), "salt": "00" * 32}
 print(json.dumps({"data": data}))' "$1" "${2:-}" > "${SB}/ns/$1"
 }
-# member fixture: "<account>=<role>" args, padded with $PAD filler members.
+# member fixture: "<account>=<role>" args, padded with $PAD filler members,
+# sorted by account the way core serves them.
 members() {
   local ns="$1"; shift
   PAD="${PAD:-0}" python3 -c '
 import json, os, sys
 rows = [{"identity": a, "role": r} for a, r in (arg.split("=") for arg in sys.argv[1:])]
 rows += [{"identity": "%064x" % (i + 1), "role": "Member"} for i in range(int(os.environ["PAD"]))]
+rows.sort(key=lambda r: r["identity"])
 print(json.dumps({"members": rows}))' "$@" > "${SB}/members/${ns}"
 }
+gets() { awk -v ns="$1" '$1 == ns {n++} END{print n+0}' "${SB}/get-log"; }
 
 # 1. Founder matches and the account is an Admin: one post, to the namespace's
 #    verification route, with the fleet token, carrying exactly the verdict.
@@ -234,29 +281,82 @@ expect_posts 4 "a non-member is a verdict when the list is complete"
 [[ "$(field account_role)" == "null" ]] || fail "a non-member must be null: $(last_body)"
 [[ "$(field founder_matches)" == "true" ]] || fail "founder_matches: $(last_body)"
 
-# 5. A member list at the page limit WITHOUT the account: nothing posted,
-#    nothing recorded, one warning (not one per cycle).
+# 5. Paging. The fixture is sorted and filler accounts are 00..01, 00..02, ...,
+#    so an all-`e` account sorts after every filler row: last in the list.
+LATE="$(hex e)"
 namespace "${NS4}" "${FOUNDER}"
-PAD=100 members "${NS4}"
+
+# 5a. The account on page TWO is found. It is the 5th row of 5: page one is
+#     rows 0-2, page two starts on row 2 and carries rows 3-4.
+PAD=4 members "${NS4}" "${LATE}=Admin"
+: > "${SB}/get-log"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${LATE}")" "$(confirmed "${NS4}")"
+expect_posts 5 "an account on page two must be found"
+[[ "$(field account_role)" == '"Admin"' ]] || fail "role on page two: $(last_body)"
+[[ "$(gets "${NS4}")" == 2 ]] || fail "page two must be read, and paging stop once found: $(cat "${SB}/get-log")"
+grep -q "^${NS4} 2 3$" "${SB}/get-log" || fail "page two must start on page one's last row: $(cat "${SB}/get-log")"
+grep -q "members list" "${SB}/meroctl-log" && fail "the verification read must not use one-page meroctl"
+
+# 5b. Absent after every page is read: null, a verdict. 7 members = pages at
+#     offsets 0, 2, 4 and 6 (the last bringing nothing past its anchor).
+PAD=7 members "${NS4}"
+: > "${SB}/get-log"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${STRANGER}")" "$(confirmed "${NS4}")"
+expect_posts 6 "an account absent from the whole list is a verdict"
+[[ "$(field account_role)" == "null" ]] || fail "absent after all pages must be null: $(last_body)"
+[[ "$(gets "${NS4}")" == 4 ]] || fail "every page must be read before 'not a member': $(cat "${SB}/get-log")"
+
+# 5c. The page cap reached before the list ends: nothing posted, nothing
+#     recorded, one warning (not one per cycle). 10 members need a 5th page.
+PAD=10 members "${NS4}"
 warned_before="$(grep -c 'cannot verify' "${SB}/fleet.log" || true)"
-reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS4}")"
-reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS4}")"
-expect_posts 4 "a truncated member list must never report 'not a member'"
+: > "${SB}/get-log"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${OTHER}")" "$(confirmed "${NS4}")"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${OTHER}")" "$(confirmed "${NS4}")"
+expect_posts 6 "hitting the page cap must never report 'not a member'"
+[[ "$(gets "${NS4}")" == 8 ]] || fail "the cap must bound the pages read per cycle: $(cat "${SB}/get-log")"
 grep -q "${NS4}" "${SB}/fleet-verifications.json" && fail "an unanswered question must not be recorded"
 warned_after="$(grep -c 'cannot verify' "${SB}/fleet.log" || true)"
 (( warned_after - warned_before == 1 )) \
   || fail "a persistently unanswerable question must warn once, got $(( warned_after - warned_before ))"
 
-# ...but the account FOUND on a truncated page is a certain answer.
-PAD=99 members "${NS4}" "${ADMIN}=Member"
-reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS4}")"
-expect_posts 5 "a member found on a full page is a certain answer"
-[[ "$(field account_role)" == '"Member"' ]] || fail "role on a full page: $(last_body)"
+# 5d. A page failing mid-paging: nothing posted, even though page one read fine.
+PAD=5 members "${NS4}"
+echo 2 > "${SB}/get-fails-at"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${OTHER}")" "$(confirmed "${NS4}")"
+rm -f "${SB}/get-fails-at"
+expect_posts 6 "a failed page must not be read as the end of the list"
+grep -q "${NS4}" "${SB}/fleet-verifications.json" && fail "a failed page must not be recorded"
+
+# 5e. The list shifting between pages (a member removed before the offset):
+#     nothing posted. ${LATE} is row 3 of 4; once row 0 goes, page two (offset
+#     2) starts ON ${LATE}, so without the anchor check it would be skipped as
+#     the anchor and reported "not a member".
+PAD=3 members "${NS4}" "${LATE}=Admin"
+echo 0 > "${SB}/mutate-after"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${LATE}")" "$(confirmed "${NS4}")"
+rm -f "${SB}/mutate-after"
+expect_posts 6 "a list that changed while paging must not be reported"
+
+# 5f. A node that clamps the page below what was asked: still read to the end,
+#     not mistaken for the last page. 5 members at 2 a page: offsets 0,1,2,3,4.
+PAD=5 members "${NS4}"
+echo 2 > "${SB}/clamp"
+: > "${SB}/get-log"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${OTHER}")" "$(confirmed "${NS4}")"
+rm -f "${SB}/clamp"
+expect_posts 6 "5 members at a clamped 2 a page run past the 4-page cap: unknown"
+PAD=3 members "${NS4}"
+echo 2 > "${SB}/clamp"
+reconcile_verification peer1 "$(response "${NS4}:${FOUNDER}:${OTHER}")" "$(confirmed "${NS4}")"
+rm -f "${SB}/clamp"
+expect_posts 7 "a clamped page must be paged past, and the full list answer null"
+[[ "$(field account_role)" == "null" ]] || fail "clamped, fully read: $(last_body)"
 
 # 6. An unreadable namespace (merod not answering, not yet synced): no post.
 members "${NS5}" "${ADMIN}=Admin"
 reconcile_verification peer1 "$(response "${NS5}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS5}")"
-expect_posts 5 "an unreadable founding must not be reported as false"
+expect_posts 7 "an unreadable founding must not be reported as false"
 
 # 7. A failed POST is not recorded, and is retried on the next cycle.
 namespace "${NS5}" "${FOUNDER}"
@@ -265,15 +365,15 @@ reconcile_verification peer1 "$(response "${NS5}:${FOUNDER}:${ADMIN}")" "$(confi
 rm -f "${SB}/post-fails"
 grep -q "${NS5}" "${SB}/fleet-verifications.json" && fail "a failed POST must not be recorded"
 reconcile_verification peer1 "$(response "${NS5}:${FOUNDER}:${ADMIN}")" "$(confirmed "${NS5}")"
-expect_posts 6 "a failed POST must be retried next cycle"
+expect_posts 8 "a failed POST must be retried next cycle"
 grep -q "${NS5}" "${SB}/fleet-verifications.json" || fail "a delivered verdict must be recorded"
 
 # 8. No verify, or not confirmed yet: no call at all, merod not even asked.
 : > "${SB}/meroctl-log"
 reconcile_verification peer1 "$(response "${NS1}" "${NS3}")" "$(confirmed "${NS1}" "${NS3}")"
-expect_posts 6 "an assignment without verify must not be verified"
+expect_posts 8 "an assignment without verify must not be verified"
 reconcile_verification peer1 "$(response "${NS2}:${FOUNDER}:${STRANGER}")" "$(confirmed)"
-expect_posts 6 "a namespace not yet confirmed has nothing to answer from"
+expect_posts 8 "a namespace not yet confirmed has nothing to answer from"
 [[ ! -s "${SB}/meroctl-log" ]] || fail "no verify / unconfirmed must not touch merod: $(cat "${SB}/meroctl-log")"
 
 # 9. Forgotten once mdma stops asking, so a later identical question is
@@ -282,18 +382,18 @@ expect_posts 6 "a namespace not yet confirmed has nothing to answer from"
 q1="$(response "${NS1}:${FOUNDER}:${ADMIN}")"
 reconcile_verification peer1 "${q1}" "$(confirmed "${NS1}")"
 reconcile_verification peer1 "${q1}" "$(confirmed "${NS1}")"
-expect_posts 7 "re-establishing NS1's verdict posts once"
+expect_posts 9 "re-establishing NS1's verdict posts once"
 grep -q "${NS1}" "${SB}/fleet-verifications.json" || fail "NS1's verdict must be recorded"
 reconcile_verification peer1 "$(response "${NS1}")" "$(confirmed "${NS1}")"
 grep -q "${NS1}" "${SB}/fleet-verifications.json" && fail "a question mdma stopped asking must be forgotten"
 reconcile_verification peer1 "${q1}" "$(confirmed "${NS1}")"
-expect_posts 8 "a question asked again after being dropped must be answered again"
+expect_posts 10 "a question asked again after being dropped must be answered again"
 
 # 10. A malformed verify is ignored and never fatal: it must
 #     never reach merod or mdma.
 bad='{"assignments":[{"group_id":"'"${NS3}"'","verify":{"founder_account_id":"nothex","account_id":7}},{"group_id":"'"${NS3}"'","verify":"yes"}]}'
 reconcile_verification peer1 "${bad}" "$(confirmed "${NS3}")" || fail "a malformed verify must not fail the loop"
-expect_posts 8 "a malformed verify must be ignored"
+expect_posts 10 "a malformed verify must be ignored"
 reconcile_verification peer1 "not json" "$(confirmed)" || fail "an unparseable response must not fail the loop"
 
 # 11. The answer improves: re-posted once per CHANGE. A just-joined replica
