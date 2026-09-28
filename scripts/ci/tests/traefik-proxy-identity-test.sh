@@ -114,7 +114,7 @@ def parse(version):
     return (int(major), int(minor), int(patch), int(rc) if rc is not None else float("inf"))
 
 merod = json.load(open(versions_path, encoding="utf-8")).get("merodVersion", "")
-floor = "0.11.0-rc.58"
+floor = "0.11.0-rc.60"
 parsed = parse(merod)
 if parsed is None:
     failures.append(f"merodVersion {merod!r} is not a version this check can compare")
