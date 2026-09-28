@@ -28,7 +28,7 @@ python3 - "$TEMPLATE" <<'PY'
 import re
 import sys
 
-EXPECTED_ROUTERS = 10
+EXPECTED_ROUTERS = 9
 
 # The tight tier, for routes reachable with no credential at all. All three
 # make the node do cryptographic work before they can refuse: the intents and

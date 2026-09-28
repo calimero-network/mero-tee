@@ -31,7 +31,7 @@ http:
     #
     # This router exists only when the image is built as a relay
     # (`fleet_delegated_access`), and it is paired with merod's own
-    # `server.admin.public_intents` — set from the same variable in
+    # `server.admin.delegated_access` — set from the same variable in
     # calimero-init. Both edges move together or the posture is decided in one
     # place and documented in another.
     node-api-intents:
@@ -136,7 +136,7 @@ http:
     # in merod's protected router, but these nodes run merod in its default
     # proxy auth mode, so that router carries no guard and traefik is the only
     # gate. A deployment running merod with `--auth-mode embedded` would need a
-    # core-side opener as `public_intents` is for intents.
+    # core-side opener as `delegated_access` is for intents.
     node-api-admit:
       rule: "PathRegexp(`^/admin-api/namespaces/[0-9a-f]{64}/admit$`) && (Method(`POST`) || Method(`OPTIONS`))"
       entryPoints:
@@ -234,19 +234,11 @@ http:
         - rate-limit
         - cors
 
-    metrics:
-      rule: "Path(`/metrics`)"
-      entryPoints:
-        - web
-        - websecure
-      service: node-core
-      # Limited as well as authenticated: basicAuth verifies a hash per request,
-      # so an unlimited route with a credential on it is still work an anonymous
-      # caller can command. The scraper polls on a schedule and never approaches
-      # this.
-      middlewares:
-        - rate-limit
-        - metrics-auth
+    # No public `/metrics` router. It was gated on a basicAuth users file
+    # nothing ever wrote, so traefik logged `open /etc/traefik/metrics-users: no
+    # such file` on every boot and the route served no one. Metrics leave the
+    # node the other way: vmagent scrapes merod on 127.0.0.1 and remote-writes
+    # with the instance's observability token (roles/vmagent).
 
   services:
     node-core:
@@ -335,9 +327,6 @@ http:
           - X-Auth-User
           - X-Auth-Permissions
 
-    metrics-auth:
-      basicAuth:
-        usersFile: "/etc/traefik/metrics-users"
 
 # The certificate served on `websecure`, for every hostname.
 #

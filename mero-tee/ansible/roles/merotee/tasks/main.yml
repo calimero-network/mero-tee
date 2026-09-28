@@ -7,6 +7,28 @@
     name: cryptsetup
     state: present
 
+# GCE's disk naming: udev links each attached disk as
+# /dev/disk/by-id/google-<deviceName>, which is how calimero-init finds the
+# `data` disk mdma attaches. Vendored (files/gce-udev/README.md) rather than
+# installed as `google-compute-engine`, which also pulls in the guest agent and
+# OS Login the image locks out. `google_nvme_id` reads the name with
+# `nvme id-ns`, hence nvme-cli.
+- name: Install nvme-cli for GCE disk naming
+  apt:
+    name: nvme-cli
+    state: present
+
+- name: Install the GCE disk-naming udev rule and helper
+  copy:
+    src: "gce-udev/{{ item.name }}"
+    dest: "{{ item.dest }}/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
+    - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }
+
 # Ensure tdx_guest module for RTMR3 extend (TDX Confidential VMs)
 - name: Install linux-modules-extra for tdx_guest (RTMR3 extend)
   apt:
@@ -458,7 +480,7 @@
 # --- Delegated-execution conformance -----------------------------------------
 #
 # A relay image has one cross-repo dependency the build cannot infer: the baked
-# merod must actually implement `server.admin.public_intents` and the
+# merod must actually implement `server.admin.delegated_access` and the
 # `GET .../intents` descriptor. Pin `merodVersion` at a core release that
 # predates them and the image still builds, still boots, and still reports
 # itself to MDMA — it simply never serves a client, because the config key is
@@ -470,20 +492,14 @@
 # a CLI can be asked about without a node, a network or a config file — which
 # makes it a clean capability probe for the baked binary.
 #
-# EITHER SPELLING SATISFIES IT, and that is required rather than lenient. Core
-# renamed `--public-intents` to `--delegated-access` when the flag grew to
-# govern reads as well, keeping the old name as a clap alias — and a clap alias
-# is HIDDEN from `--help`. So the probe sees exactly one of the two names, and
-# which one depends on the release pinned:
-#
-#   merod before the rename   help lists --public-intents
-#   merod after the rename    help lists --delegated-access
-#
-# Asserting either name alone therefore fails against half the releases that
-# implement the feature perfectly well. Accepting both keeps what this assert is
-# actually for — catching a `merodVersion` pinned at a release with no delegated
-# execution at all, which lists neither. Tighten to `--delegated-access` once
-# `merodVersion` is past the rename and the alias has been dropped upstream.
+# `--delegated-access` ONLY. Core renamed `--public-intents` to it in
+# 0.11.0-rc.43, and `calimero-init` now writes the config key under its new
+# name, `server.admin.delegated_access`: writing the old name beside the
+# `delegated_access = false` that `merod init` emits is a duplicate field, and
+# merod then refuses the whole config.toml. A merod from before the rename does
+# not know the new key, silently ignores it, and never relays. So the probe
+# accepts exactly the releases the script is written for. (The old flag survives
+# only as a clap alias, which `--help` hides.)
 - name: Probe whether the baked merod supports delegated execution
   command: /usr/local/bin/merod --node conformance init --help
   register: merod_init_help
@@ -495,16 +511,14 @@
   assert:
     that:
       - merod_init_help.rc == 0
-      - >-
-        '--delegated-access' in merod_init_help.stdout
-        or '--public-intents' in merod_init_help.stdout
+      - "'--delegated-access' in merod_init_help.stdout"
     fail_msg: >-
       This image enables delegated execution (fleet_delegated_access), but the
-      baked merod ({{ merod_version | default('unknown') }}) lists neither
-      --delegated-access nor --public-intents, so it implements neither the
-      config key nor GET /admin-api/contexts/<ctx>/intents.
-      Bump merodVersion in mero-tee/versions.json to a core release carrying
-      them, or build with -e fleet_delegated_access=false.
+      baked merod ({{ merod_version | default('unknown') }}) does not list
+      --delegated-access, so it does not know the server.admin.delegated_access
+      key calimero-init writes (core 0.11.0-rc.43 or later is needed).
+      Bump merodVersion in mero-tee/versions.json, or build with
+      -e fleet_delegated_access=false.
   when: fleet_delegated_access | default(false) | bool
 
 # The other half of the posture. Traefik is the only gate on these nodes (merod
@@ -567,7 +581,7 @@
 # nothing to recover from — the one moment no retroactive fix exists.
 #
 # `account --help` is the part a CLI answers without a node, a network or a
-# config file, so it probes the baked binary the same way `--public-intents`
+# config file, so it probes the baked binary the same way `--delegated-access`
 # probes merod. Gated on `merod_mode` because that is what gates the sidecar
 # itself.
 - name: Probe whether the baked meroctl can seal to an account root

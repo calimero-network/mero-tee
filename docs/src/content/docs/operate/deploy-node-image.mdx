@@ -33,7 +33,7 @@ exactly that when it reached EOL. Component versions are pinned in
 
 | Component | Version key | Value at time of writing |
 | --- | --- | --- |
-| Node image | `imageVersion` | `2.3.86` |
+| Node image | `imageVersion` | `2.3.87` |
 | merod / meroctl / mero-auth (core tag) | `merodVersion` | `0.11.0-rc.55` |
 | Traefik | `traefikVersion` | `3.5.0` |
 | node-exporter | `nodeExporterVersion` | `1.9.1` |
@@ -261,14 +261,21 @@ the boot disk. The script
    below.
 
 5. **Unlock the data disk.** Swap must be off (it is refused on
-   `locked-read-only`). Then, for `/dev/disk/by-id/google-data`:
+   `locked-read-only`). Then, for `/dev/disk/by-id/google-data`, the link
+   GCE's disk-naming udev rule makes for the disk attached as `data` (the image
+   ships the rule and its `google_nvme_id` helper, vendored from
+   GoogleCloudPlatform/guest-configs; if the link is still missing after 10 s,
+   the one whole disk with nothing on it is used, and the journal says so):
    - **blank** (`blkid -p` finds no signature): fetch a key with
      `merod kms disk-key --create-identity` into a dedicated tmpfs, `cryptsetup
      luksFormat` LUKS2 (`aes-xts-plain64`, `--integrity hmac-sha256`), store the
      disk-unlock identity in a `calimero-kms-identity` LUKS2 token, open it as
      `/dev/mapper/calimero-data`, create ext4 on the mapper and mount it at
      `/mnt/data`. The integrity wipe covers the whole disk, so **the first boot
-     is slow**. No fstab entry is written.
+     is slow** (about 17 minutes for 200 GB `pd-balanced`); the journal logs
+     `Integrity wipe: N% (… of … GB, …m…s left)` every 30 s while it runs, and
+     mdma's `MDMA_TEE_POST_BOOT_VERIFY_TIMEOUT_SECONDS` must outlast it. No
+     fstab entry is written.
    - **LUKS**: read the identity from the token, fetch its key, open, mount.
    - **plain ext4** (a node from before disk encryption, or a debug node with no
      KMS): mounted as before, with a loud warning. Never reformatted.
