@@ -55,11 +55,10 @@ public-key↔peer-ID check, the latter is the attested-quote↔peer-ID binding.
 
 <Aside type="note">
 Rate limiting: `429 rate_limited` is returned by `/get-key` when a replica's
-replay set already holds `MAX_CONSUMED_CHALLENGES` used, unexpired challenges.
+replay set already holds `MAX_CONSUMED_CHALLENGES` used, unexpired challenges
+(each one that released a key).
 The cap is per replica, not per peer, and its `details` is a fixed message
 (`"too many recently used challenges; retry shortly"`), not `null`.
-`POST /cluster/nonce` also answers `429` when too many join nonces are
-outstanding.
 </Aside>
 
 ## Failure modes by endpoint
