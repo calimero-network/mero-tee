@@ -37,21 +37,34 @@ function validateNodeUrl(url) {
   }
 }
 
-function verifyNonceInAttestation(attestation, nonceBytes) {
-  const reportDataHex = attestation.reportDataHex ?? attestation.report_data_hex;
-  if (!reportDataHex || typeof reportDataHex !== 'string') {
-    throw new Error('Attestation missing reportDataHex (cannot verify nonce)');
+// TDX quote layout (Intel TDX DCAP): a 48-byte header, then the TD report body.
+// A v5 quote adds a 6-byte body descriptor (type + size) before the body.
+// report_data sits 384 bytes after MRTD (MRCONFIGID, MROWNER, MROWNERCONFIG
+// and RTMR0-3 lie between them).
+const MRTD_OFFSET = { 4: 184, 5: 190 };
+const REPORT_DATA_FROM_MRTD = 384;
+
+/**
+ * report_data as the quote itself carries it: the bytes Intel Trust Authority
+ * checks the signature over, not any field a node or a paste reports beside it.
+ */
+function quoteReportData(quoteB64) {
+  const bytes = Buffer.from(quoteB64, 'base64');
+  const version = bytes.length >= 2 ? bytes.readUInt16LE(0) : null;
+  const mrtdOffset = MRTD_OFFSET[version];
+  if (mrtdOffset == null) {
+    throw new Error(`Unsupported TDX quote version ${version}`);
   }
-  const hex = reportDataHex.replace(/\s/g, '');
-  if (hex.length < 64) {
-    throw new Error('reportDataHex too short for nonce verification');
+  const start = mrtdOffset + REPORT_DATA_FROM_MRTD;
+  if (bytes.length < start + 64) {
+    throw new Error('Quote too short to carry report_data');
   }
-  const reportDataNonce = Buffer.from(hex.slice(0, 64), 'hex');
-  if (reportDataNonce.length !== 32) {
-    throw new Error('Invalid reportDataHex format');
-  }
-  if (!reportDataNonce.equals(nonceBytes)) {
-    throw new Error('Nonce mismatch: attestation not bound to this request (possible replay)');
+  return bytes.subarray(start, start + 64);
+}
+
+function verifyNonceInQuote(quoteB64, nonceBytes) {
+  if (!quoteReportData(quoteB64).subarray(0, 32).equals(nonceBytes)) {
+    throw new Error('Nonce mismatch: quote not bound to this request (possible replay)');
   }
 }
 
@@ -155,16 +168,14 @@ export default async function handler(req, res) {
       const raw = await attestRes.json();
       const data = raw?.data ?? raw;
       const quoteB64 = data?.quote_b64 ?? data?.quoteB64;
-      const quote = data?.quote;
-      const reportDataHex = quote?.body?.reportdata ?? quote?.body?.reportData ?? data?.reportDataHex ?? data?.report_data_hex;
-      if (!quoteB64) {
+      if (typeof quoteB64 !== 'string' || !quoteB64.trim()) {
         return res.status(400).json({ error: 'Node attest response missing quote_b64' });
       }
-      const quoteBody = quote?.body && typeof quote.body === 'object' ? quote.body : null;
-      attestation = { quoteB64, reportDataHex, ...(quoteBody ? { quoteBody } : {}) };
-      if (reportDataHex) {
-        verifyNonceInAttestation(attestation, nonceBytes);
-      }
+      // Only the quote is kept. Everything else the node returns beside it is
+      // its own description of the quote, and is not what Intel verifies.
+      attestation = { quoteB64: quoteB64.trim() };
+      verifyNonceInQuote(attestation.quoteB64, nonceBytes);
+      nonceVerified = true;
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
@@ -176,7 +187,7 @@ export default async function handler(req, res) {
         if (nonceBytes.length !== 32) {
           throw new Error('nonce_b64 must be 32 bytes, base64-encoded');
         }
-        verifyNonceInAttestation(attestation, nonceBytes);
+        verifyNonceInQuote(extractQuote(attestation), nonceBytes);
         nonceVerified = true;
       }
     }

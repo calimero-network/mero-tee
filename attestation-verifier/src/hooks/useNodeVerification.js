@@ -24,7 +24,7 @@ export function useNodeVerification() {
     setState({ status: 'loading', error: null, result: null });
     try {
       const data = await verifyNodeAttestation(nodeUrl);
-      const { attestation, ita_claims, ita_token_verified } = data;
+      const { attestation, ita_claims, ita_token_verified, nonce_verified } = data;
       if (!attestation) throw new Error('No attestation in response');
 
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
@@ -50,6 +50,7 @@ export function useNodeVerification() {
           attestation,
           ita_claims: ita_claims || null,
           ita_token_verified,
+          nonce_verified,
           quoteRtmrs,
           itaRtmrs,
           measurementSources,

@@ -36,7 +36,7 @@ export function KmsVerifierForm({ initialReleaseTag, initialProfile, status, onV
           id="attest_json"
           name="attest_json"
           rows={6}
-          placeholder='{"quoteB64":"…","reportDataHex":"…"}'
+          placeholder='{"quoteB64":"…"}'
           disabled={status === 'loading'}
         />
       </div>

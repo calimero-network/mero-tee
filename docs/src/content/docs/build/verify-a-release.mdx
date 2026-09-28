@@ -165,8 +165,7 @@ curl -s -X POST https://<verifier-host>/api/verify \
   -H 'content-type: application/json' \
   -d '{
     "attestation": {
-      "quoteB64":      "<base64 raw TDX quote>",
-      "reportDataHex": "<hex of the 64-byte report_data>"
+      "quoteB64": "<base64 raw TDX quote>"
     },
     "nonce_b64": "<the nonce you sent to /attest>"
   }'
@@ -175,7 +174,7 @@ curl -s -X POST https://<verifier-host>/api/verify \
 The function extracts the quote (top-level `quoteB64` / `quote_b64` for a KMS
 attestation, or `data.quoteB64` for a merod node response), sends it to Intel
 Trust Authority, and returns the appraisal — `ita_token`, `ita_token_verified`,
-and `ita_claims`. With `nonce_b64` the quote's `report_data` must start with that
+and `ita_claims`. With `nonce_b64` the `report_data` inside the quote must start with that
 nonce; without it the verifier cannot vouch that the quote is fresh. The
 authenticity and measurement checks run either way.
 

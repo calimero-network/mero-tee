@@ -26,10 +26,12 @@ all four hold.
 
 1. **Freshness (nonce binding).** When the verifier fetches a node's attestation
    itself, it generates a fresh 32-byte nonce, sends it, and then confirms the first 32
-   bytes of the returned `reportDataHex` equal that nonce. For a pasted KMS attestation
+   bytes of the quote's own `report_data` equal that nonce. For a pasted KMS attestation
    it does the same with the nonce the operator sent to `/attest`, when given
    (`nonce_b64`). A mismatch means the attestation was not produced for this request —
-   a possible replay — and is rejected.
+   a possible replay — and is rejected. `report_data`, MRTD and RTMR0–3 are always read
+   from the quote bytes Intel Trust Authority appraises, never from fields returned
+   beside them (a node's `quote.body`, a pasted `reportDataHex`).
 
 2. **Quote authenticity (signature chain).** The verifier submits the quote to **Intel
    Trust Authority (ITA)** (`https://api.trustauthority.intel.com/appraisal/v2/attest`
@@ -56,9 +58,9 @@ all four hold.
 ```text
 verifier ── nonce (32 random bytes) ──▶ node /admin-api/tee/attest
           (or: operator ── nonce ──▶ KMS /attest inside the VPC, pastes the response)
-verifier ◀── { quoteB64, reportDataHex } ──
+verifier ◀── { quoteB64 } ──
 
-1. reportDataHex[0..32] == nonce ?                 -> freshness / anti-replay
+1. quote report_data[0..32] == nonce ?            -> freshness / anti-replay
 2. quote ──▶ Intel Trust Authority ──▶ signed JWT
    verify JWT signature vs Intel JWKS              -> quote authenticity
 3. read MRTD / RTMR0-3 / tcb_status                -> measurements
@@ -76,7 +78,7 @@ verifier ◀── { quoteB64, reportDataHex } ──
   steps={[
     { from: 0, to: 1, label: 'verify request (node_url, or pasted KMS attestation + nonce)', color: '#a5ff11' },
     { from: 1, to: 1, label: 'fresh 32-byte nonce, fetch node attest → quote' },
-    { from: 1, to: 1, label: 'reportDataHex[0..32] == nonce ? (freshness / anti-replay)' },
+    { from: 1, to: 1, label: 'quote report_data[0..32] == nonce ? (freshness / anti-replay)' },
     { from: 1, to: 2, label: 'submit quote for appraisal', color: '#f0883e' },
     { from: 2, to: 1, label: 'signed JWT', color: '#f0883e', dashed: true },
     { from: 1, to: 1, label: 'verify JWT signature vs Intel JWKS (authenticity)' },
