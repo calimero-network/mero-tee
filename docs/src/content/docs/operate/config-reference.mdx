@@ -243,7 +243,7 @@ value), and overridable at build time with `-e`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `fleet_delegated_access` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives every edge of the posture: the Traefik routers exempting `/admin-api/contexts/<ctx>/intents` and the sealed-transport envelope (`/sealed/v2`) from `auth-node`, and merod's `server.admin.delegated_access`. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
+| `fleet_delegated_access` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives every edge of the posture: the Traefik routers exempting `/admin-api/contexts/<ctx>/intents`, `/admin-api/groups/<group>/context-intents` and the sealed-transport envelope (`/sealed/v2`) from `auth-node`, and merod's `server.admin.delegated_access`. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
 | `fleet_mdma_url` | `https://manager.cloud.calimero.network` | Where the fleet sidecar polls for assignments. Baked (and so measured); the sidecar exits if unset. |
 | `fleet_auth_token` | `""` | Sent as `X-Fleet-Token` on sidecar requests when set. Supplied by the release workflow from the `FLEET_AUTH_TOKEN` repository secret (`PKR_VAR_fleet_auth_token`). Baked and so measured — rotating it is an image release, not a restart — and nodes must roll before the manager gets its matching `MDMA_FLEET_AUTH_TOKEN`. See [Supplying the fleet token](/understand/fleet-sidecar/#supplying-the-fleet-token). |
 
@@ -267,9 +267,9 @@ trusted with those headers, and the entrypoints configure no
 `forwardedHeaders` for the same reason. `scripts/ci/tests/traefik-forward-auth-test.sh`
 and the `locked-read-only` conformance role both pin this setting.
 
-#### The two paths exempt from `auth-node`
+#### The paths exempt from `auth-node`
 
-Every `/admin-api/` path goes through the `auth-node` forwardAuth except two,
+Every `/admin-api/` path goes through the `auth-node` forwardAuth except three,
 and they are exempt for the same reason: the request carries its own authority
 rather than borrowing the node's. They differ in **who serves them**.
 
@@ -277,6 +277,7 @@ rather than borrowing the node's. They differ in **who serves them**.
 | --- | --- | --- |
 | `POST /admin-api/namespaces/<ns>/admit` | **every** node image | The join op arrives already signed by the joiner's device key, and merod refuses it unless this node's account is on the invitation's `admitters` list — which the inviter signed. |
 | `GET`/`POST /admin-api/contexts/<ctx>/intents` | relays only (`fleet_delegated_access`) | The body holds a warrant signed by the author's device key, committing to this context, method and arguments. |
+| `GET`/`POST /admin-api/groups/<group>/context-intents` | relays only (`fleet_delegated_access`) | Delegated context creation. The body holds a creation warrant signed by the author's device key, committing to this group, the application, the `init` arguments and this relay as executor; merod refuses it unless the **author** may create contexts in the group. `GET` (optionally `?author=<hex>`) is the descriptor a client reads first. |
 
 Admission is **not** gated on `fleet_delegated_access`, and that asymmetry is
 deliberate. Delegated execution is a *hosted* capability — the node authors on
@@ -295,11 +296,18 @@ The cost of the wider exposure is that any node will verify signatures for an
 unauthenticated caller, so this is a request-rate surface like any other public
 route.
 
-Both exemptions are anchored regexes (a 64-hex id and a literal final segment),
-never prefixes: a `PathPrefix` on `/admin-api/namespaces/` would have exempted
-namespace creation and deletion along with admission. The rendered file is
-asserted at build time — admission on every image, delegated execution only
-where the image was built to relay — so a template regression cannot reach a
+All three exemptions are anchored regexes (a lowercase 64-hex id and a literal
+final segment), never prefixes: a `PathPrefix` on `/admin-api/namespaces/` would
+have exempted namespace creation and deletion along with admission, and one on
+`/admin-api/groups/` would have exempted `/admin-api/groups/<group>/contexts` and
+every membership route with creation. Traefik matches them against the path
+only, so the descriptor's `?author=` query needs no room in the pattern.
+`scripts/ci/tests/traefik-delegated-route-test.sh` routes the allowed paths and
+their near misses (uppercase hex, 63 or 65 hex characters, a trailing slash, an
+extra segment) through every router and requires each near miss to land on
+`auth-node`. The rendered file is
+asserted at build time — admission on every image, delegated execution and
+creation only where the image was built to relay — so a template regression cannot reach a
 release.
 
 #### Device-key login, and who merod thinks the caller is

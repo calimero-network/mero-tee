@@ -3,8 +3,8 @@
 # Every router on the node ingress must carry a request-rate limit, and carry it
 # FIRST.
 #
-# Two of these routes verify signatures for callers holding no credential, by
-# design. That makes an unlimited ingress a way to spend a node's CPU from
+# Several of these routes verify signatures for callers holding no credential,
+# by design. That makes an unlimited ingress a way to spend a node's CPU from
 # anywhere, and the routing template's own comments called it a surface "worth
 # watching" while nothing watched it.
 #
@@ -28,13 +28,13 @@ python3 - "$TEMPLATE" <<'PY'
 import re
 import sys
 
-EXPECTED_ROUTERS = 9
+EXPECTED_ROUTERS = 10
 
-# The tight tier, for routes reachable with no credential at all. All three
-# make the node do cryptographic work before they can refuse: the intents and
-# admit routes verify signatures, and a sealed handshake is a Diffie-Hellman
-# per call.
-TIGHT = {"node-api-intents", "node-api-admit", "node-sealed"}
+# The tight tier, for routes reachable with no credential at all. All four
+# make the node do cryptographic work before they can refuse: the intents,
+# context-intents and admit routes verify signatures, and a sealed handshake is
+# a Diffie-Hellman per call.
+TIGHT = {"node-api-intents", "node-api-context-intents", "node-api-admit", "node-sealed"}
 
 text = open(sys.argv[1], encoding="utf-8").read()
 # Jinja controls which routers render; the invariant applies to every branch, so

@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Added
+
+- **Relays route delegated context creation.** Core adds `GET`/`POST /admin-api/groups/<group>/context-intents`, on the same router as `/admin-api/contexts/<ctx>/intents`: an account with no node signs a creation warrant and a relay creates the context for it, with `init` run as the author, provided the author may create contexts in the group. A new `node-api-context-intents` router (relay images only, `fleet_delegated_access`) serves exactly `PathRegexp(^/admin-api/groups/[0-9a-f]{64}/context-intents$)`, `GET`/`POST`/`OPTIONS`, without `auth-node`, at the intents router's priority and on the tight rate-limit tier; the descriptor's `?author=` query is not part of what Traefik matches. Everything else under `/admin-api/groups/`, `/contexts` included, stays behind `auth-node`. The build asserts the rendered router on relays, and the new `scripts/ci/tests/traefik-delegated-route-test.sh` routes both delegated paths and their near misses (uppercase hex, 63/65 hex characters, a trailing slash, an extra segment, `/admin-api/groups/<id>/contexts`) through every router the way Traefik does. The sealed envelope needed no change: which inner paths an opened request may reach is merod's decision. Changes `/etc/traefik/routing.yml`, so the image's measurements change. Relaying creations needs a `merodVersion` that serves the route; an older merod answers it 404.
+
 ### Removed
 
 - **Fleet nodes no longer answer mdma's namespace-admin questions.** mdma dropped enabling HA as a namespace admin, so `should-join` never carries `verify` and nothing reads `POST /api/fleet/namespaces/<ns>/verification`. The sidecar's `reconcile_verification`, its member-page reader, `fleet-verifications.json` and `fleet-sidecar-verification-test.sh` are removed.
