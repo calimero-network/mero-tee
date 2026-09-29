@@ -2408,7 +2408,7 @@ dependencies = [
  "hkdf 0.13.0",
  "multihash",
  "prost",
- "rand 0.10.2",
+ "rand 0.10.3",
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "tracing",
@@ -2587,7 +2587,7 @@ dependencies = [
  "eyre",
  "hex",
  "libp2p-identity 0.3.0",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest",
  "ring",
  "serde",
@@ -3180,7 +3180,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.2",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -3257,9 +3257,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
