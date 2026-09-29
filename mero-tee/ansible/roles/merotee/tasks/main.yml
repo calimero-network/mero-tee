@@ -598,11 +598,13 @@
       - "'/admin-api/contexts/[0-9a-f]{64}/intents' in (traefik_routing.content | b64decode)"
       - "'node-api-context-intents' in (traefik_routing.content | b64decode)"
       - "'^/admin-api/groups/[0-9a-f]{64}/context-intents$' in (traefik_routing.content | b64decode)"
+      - "'node-api-governance-intents' in (traefik_routing.content | b64decode)"
+      - "'^/admin-api/groups/[0-9a-f]{64}/governance-intents$' in (traefik_routing.content | b64decode)"
       - "'auth-node' in (traefik_routing.content | b64decode)"
     fail_msg: >-
       This image enables delegated execution but /etc/traefik/routing.yml does
-      not carry the anchored node-api-intents and node-api-context-intents
-      exemptions (or has lost the auth-node guard on the catch-all).
+      not carry the anchored node-api-intents, node-api-context-intents and
+      node-api-governance-intents exemptions (or has lost the auth-node guard on the catch-all).
   when: fleet_delegated_access | default(false) | bool
 
 # --- Recovery-envelope conformance -------------------------------------------

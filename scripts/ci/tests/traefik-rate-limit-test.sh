@@ -28,13 +28,19 @@ python3 - "$TEMPLATE" <<'PY'
 import re
 import sys
 
-EXPECTED_ROUTERS = 10
+EXPECTED_ROUTERS = 11
 
-# The tight tier, for routes reachable with no credential at all. All four
+# The tight tier, for routes reachable with no credential at all. All five
 # make the node do cryptographic work before they can refuse: the intents,
-# context-intents and admit routes verify signatures, and a sealed handshake is
-# a Diffie-Hellman per call.
-TIGHT = {"node-api-intents", "node-api-context-intents", "node-api-admit", "node-sealed"}
+# context-intents, governance-intents and admit routes verify signatures, and a
+# sealed handshake is a Diffie-Hellman per call.
+TIGHT = {
+    "node-api-intents",
+    "node-api-context-intents",
+    "node-api-governance-intents",
+    "node-api-admit",
+    "node-sealed",
+}
 
 text = open(sys.argv[1], encoding="utf-8").read()
 # Jinja controls which routers render; the invariant applies to every branch, so

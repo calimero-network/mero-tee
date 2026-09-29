@@ -24,8 +24,9 @@
     # Defined here, at play level, rather than in either role's defaults,
     # because the posture has two edges that must move together:
     #
-    #   * traefik exempts `/admin-api/contexts/<ctx>/intents` and
-    #     `/admin-api/groups/<group>/context-intents` from `auth-node`
+    #   * traefik exempts `/admin-api/contexts/<ctx>/intents`,
+    #     `/admin-api/groups/<group>/context-intents` and
+    #     `/admin-api/groups/<group>/governance-intents` from `auth-node`
     #     (ansible/roles/mero-traefik/templates/traefik-routing.yml.j2), and
     #   * merod serves those routes on its public router
     #     (`server.admin.delegated_access`, set in calimero-init).

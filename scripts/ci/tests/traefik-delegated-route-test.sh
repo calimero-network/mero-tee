@@ -3,11 +3,12 @@
 # The delegated routes exempt from `auth-node` match exactly their own paths,
 # and nothing next to them.
 #
-# On a relay (`fleet_delegated_access`), two routers let a caller holding no
+# On a relay (`fleet_delegated_access`), three routers let a caller holding no
 # node credential reach merod, because the request carries its own:
 #
-#   * `node-api-intents`          GET/POST/OPTIONS /admin-api/contexts/<64 hex>/intents
-#   * `node-api-context-intents`  GET/POST/OPTIONS /admin-api/groups/<64 hex>/context-intents
+#   * `node-api-intents`             GET/POST/OPTIONS /admin-api/contexts/<64 hex>/intents
+#   * `node-api-context-intents`     GET/POST/OPTIONS /admin-api/groups/<64 hex>/context-intents
+#   * `node-api-governance-intents`  GET/POST/OPTIONS /admin-api/groups/<64 hex>/governance-intents
 #
 # These nodes run merod in proxy auth mode, so Traefik is the only guard on
 # everything else. A pattern one character looser -- uppercase hex, any id
@@ -207,7 +208,7 @@ GRP = "0123456789abcdef" * 4
 AUTHOR = "cd" * 32
 assert len(CTX) == len(GRP) == 64
 
-EXEMPT = {"node-api-intents", "node-api-context-intents"}
+EXEMPT = {"node-api-intents", "node-api-context-intents", "node-api-governance-intents"}
 GUARDED = "node-api"
 
 # (method, target, router on a relay)
@@ -243,9 +244,29 @@ RELAY_CASES = [
     ("POST", f"/admin-api/groups/x/{GRP}/context-intents", GUARDED),
     ("POST", f"/prefix/admin-api/groups/{GRP}/context-intents", None),
     ("DELETE", f"/admin-api/groups/{GRP}", GUARDED),
+    # delegated governance
+    ("GET", f"/admin-api/groups/{GRP}/governance-intents", "node-api-governance-intents"),
+    ("GET", f"/admin-api/groups/{GRP}/governance-intents?author={AUTHOR}", "node-api-governance-intents"),
+    ("POST", f"/admin-api/groups/{GRP}/governance-intents", "node-api-governance-intents"),
+    ("OPTIONS", f"/admin-api/groups/{GRP}/governance-intents", "node-api-governance-intents"),
+    ("DELETE", f"/admin-api/groups/{GRP}/governance-intents", GUARDED),
+    ("PUT", f"/admin-api/groups/{GRP}/governance-intents", GUARDED),
+    ("GET", f"/admin-api/groups/{GRP.upper()}/governance-intents", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP[:63]}/governance-intents", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}0/governance-intents", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}/governance-intents/", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}/governance-intents/x", GUARDED),
+    ("GET", f"/admin-api/groups/{GRP}/governance-intents/x?author={AUTHOR}", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}/governance-intentsx", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}/members", GUARDED),
+    ("GET", f"/admin-api/groups/{GRP}/members", GUARDED),
+    ("DELETE", f"/admin-api/groups/{GRP}/members", GUARDED),
+    ("POST", f"/admin-api/groups/x/{GRP}/governance-intents", GUARDED),
+    ("POST", f"/prefix/admin-api/groups/{GRP}/governance-intents", None),
     # an id in the path must not swap the two shapes
     ("POST", f"/admin-api/contexts/{CTX}/context-intents", GUARDED),
     ("POST", f"/admin-api/groups/{GRP}/intents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/governance-intents", GUARDED),
 ]
 
 
@@ -296,7 +317,7 @@ for name in sorted(EXEMPT):
         fail(f"relay: {name} must sit above {GUARDED} by explicit priority")
 check("relay", relay, RELAY_CASES)
 
-# Not a relay: both shapes exist only behind auth-node.
+# Not a relay: every shape exists only behind auth-node.
 plain = routers_of(render(False))
 for name in sorted(EXEMPT):
     if name in plain:

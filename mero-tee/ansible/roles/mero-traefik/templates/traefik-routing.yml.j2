@@ -8,10 +8,10 @@
 http:
   routers:
 {% if fleet_delegated_access | default(false) | bool %}
-    # Delegated execution. One of the two write paths on this node that a
-    # caller with no account here may reach (the other, delegated context
-    # creation, is the next router), and the reason it is exempt from
-    # `auth-node` is that it carries its own credential:
+    # Delegated execution. One of the three write paths on this node that a
+    # caller with no account here may reach (the others, delegated context
+    # creation and delegated governance, are the next routers), and the reason
+    # it is exempt from `auth-node` is that it carries its own credential:
     #
     #   * the body holds a WARRANT signed by the author's device key, which
     #     commits to this context, this method and these exact arguments;
@@ -90,6 +90,36 @@ http:
         - cors
       priority: 98
 
+    # Delegated GOVERNANCE: the same posture as the two routers above, for a
+    # group governance change a member signs and a relay submits for them.
+    # Exempt from `auth-node` for the same reason: the body holds a GOVERNANCE
+    # WARRANT signed by the member's device key, and merod verifies it (the
+    # signer's membership and rights in the group, expiry, nonce, and that this
+    # node may act for members there) before anything is applied. A node token
+    # would prove none of that.
+    #
+    # `GET` is the descriptor a client reads first. As above, Traefik matches
+    # `PathRegexp` against the path only, so a query string needs no room in
+    # the pattern.
+    #
+    # `PathRegexp` pins the shape: a 64-hex group id and the literal
+    # `governance-intents`, anchored at both ends. Every other group route
+    # (`/admin-api/groups/<id>/members`, `/contexts`, capabilities, deletion)
+    # stays behind `auth-node` on `node-api`.
+    #
+    # Relay-only, and paired with merod's `server.admin.delegated_access`, which
+    # serves this route on the same router as `/intents`.
+    node-api-governance-intents:
+      rule: "PathRegexp(`^/admin-api/groups/[0-9a-f]{64}/governance-intents$`) && (Method(`GET`) || Method(`POST`) || Method(`OPTIONS`))"
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit-public
+        - cors
+      priority: 98
+
     # Sealed transport: a client (a browser, above all) attests this node's
     # transport key and seals its requests to it, so the warrant and the
     # method's arguments of an intent are readable only inside the TD, not here
@@ -100,8 +130,8 @@ http:
     # request names is inside the envelope, where forwardAuth cannot look. That
     # is safe ONLY because merod enforces the same boundary itself. In proxy
     # auth mode (these nodes), merod lets an opened request reach nothing but
-    # what it serves without a credential: the intents and context-intents
-    # routes above, and the probes and public TEE routes. Which inner paths
+    # what it serves without a credential: the intents, context-intents and
+    # governance-intents routes above, and the probes and public TEE routes. Which inner paths
     # count is merod's decision, not this file's: there is no allowlist here
     # to keep in step, and a route merod serves on its delegated router is
     # reachable sealed exactly when it is reachable unsealed. Anything `auth-node` would have guarded is
@@ -113,7 +143,8 @@ http:
     #
     # Exact paths, and POST only: the handshake and the exchange are the whole
     # envelope surface. Paired with the intents routers because delegated
-    # intents and creations are the only writes a sealed request can do here.
+    # intents, creations and governance changes are the only writes a sealed
+    # request can do here.
     node-sealed:
       rule: "(Path(`/sealed/v2/handshake`) || Path(`/sealed/v2`)) && (Method(`POST`) || Method(`OPTIONS`))"
       entryPoints:
@@ -297,9 +328,9 @@ http:
   middlewares:
     # Request-rate limits.
     #
-    # Three routes on this ingress verify signatures for callers holding no
-    # credential at all — `node-api-intents`, `node-api-context-intents` and
-    # `node-api-admit` — and that is deliberate: the request carries its own
+    # Four routes on this ingress verify signatures for callers holding no
+    # credential at all — `node-api-intents`, `node-api-context-intents`,
+    # `node-api-governance-intents` and `node-api-admit` — and that is deliberate: the request carries its own
     # authority, so requiring a node credential would make these features
     # unreachable for exactly the callers they exist for. The cost is that anyone can make a node do Ed25519 work,
     # which the comments on those routers already name as a request-rate surface
@@ -382,7 +413,7 @@ http:
     # config.yml, not to routers, so a router added later cannot forget it.
     #
     # Needed because some routes skip `auth-node` — intents, context-intents,
-    # admission, the sealed envelope, the auth service itself — and on those
+    # governance-intents, admission, the sealed envelope, the auth service itself — and on those
     # nothing else would overwrite a client's `X-Auth-Account`. merod
     # (`server.proxy_identity`) would then read it as the caller and scope the
     # request as that account.

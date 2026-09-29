@@ -12,8 +12,8 @@
 #
 # So, while the router exists:
 #   * it sits inside the relay-only `fleet_delegated_access` block, since the
-#     delegated routes (`/intents`, `/context-intents`) are the only writes a
-#     sealed request can do on these nodes;
+#     delegated routes (`/intents`, `/context-intents`, `/governance-intents`)
+#     are the only writes a sealed request can do on these nodes;
 #   * it matches the two envelope paths exactly, POST and OPTIONS only, never a
 #     prefix;
 #   * it is rate limited and never behind `auth-node` (which would make it

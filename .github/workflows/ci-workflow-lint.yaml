@@ -412,7 +412,8 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-sealed-route-test.sh
 
-      # The delegated routers (`/intents`, `/context-intents`) skip auth-node
+      # The delegated routers (`/intents`, `/context-intents`,
+      # `/governance-intents`) skip auth-node
       # on relays. Routes requests through every router the way Traefik does,
       # so a looser pattern (uppercase hex, any id length, a trailing slash, one
       # more segment) fails here instead of opening a protected route.
