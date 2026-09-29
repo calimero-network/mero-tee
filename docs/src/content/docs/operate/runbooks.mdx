@@ -195,8 +195,9 @@ rollover, triggered early:
    cluster](#deploy-a-releases-kms-cluster)). It generates a fresh root, so it
    has a new URL and derives keys no old disk opens with.
 2. **Start new nodes against it** (`kms-url` set to the new URL). They join their
-   groups and sync from peers: TEE nodes are `ReadOnlyTee` replicas, and even
-   TEE-authored writes replicate to every peer.
+   groups and sync from peers: TEE nodes are replicas (`ReadOnlyTee`, or
+   `RelayTee`, which also relays members' writes), and even TEE-authored writes
+   replicate to every peer.
 3. **Delete the old nodes and destroy their data disks** once the new ones have
    synced. Their disks are sealed to a root that no longer exists.
 

@@ -5,11 +5,15 @@
 # with no other safety net: it decides when this node tells MDMA that it can
 # serve delegated execution for a namespace. Getting it wrong is silent in both
 # directions — report too eagerly and clients are sent to mint warrants the node
-# would refuse; report too rarely and a namespace whose admin granted the
-# capability never becomes writable at all.
+# would refuse; report too rarely and a namespace whose admin switched it to
+# relay mode never becomes writable at all.
+#
+# The answer is the node's TEE role: only a `RelayTee` relays (core answers a
+# `ReadOnlyTee` with a 403), while both roles are admitted TEE members and are
+# reported as such in `tee_role`.
 #
 # It cannot be covered by the release probes: those need a live TDX node, an
-# MDMA, and a namespace admin publishing a governance op. So this renders the
+# MDMA, and a namespace admin changing the TEE admission policy. So this renders the
 # template, sources the function half, and drives it against stubbed `meroctl`
 # and `curl`.
 #
@@ -78,18 +82,18 @@ if leaked="$(grep -nE '^[A-Za-z_]+_FILE="[^"]*"' "${SB}/functions.sh" | grep -v 
 fi
 
 # --- stubs -----------------------------------------------------------------
-mkdir -p "${SB}/bin"
+mkdir -p "${SB}/bin" "${SB}/roles"
 
-# `meroctl`: answers `group members get-capabilities` from ${SB}/caps
-# ("<group>=<mask>" lines, default 0 — the closed-by-default state core has),
-# and `account show` with a fixed account.
+# `meroctl`: `account show` with a fixed account. Every call is logged to
+# ${SB}/meroctl-log, so a test can assert that no capability read decides
+# authorship any more.
 cat > "${SB}/bin/meroctl" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${SB}/meroctl-log"
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [[ "${args[i]}" == "get-capabilities" ]]; then
-    mask="$(grep -E "^${args[i + 1]}=" "${SB}/caps" 2>/dev/null | tail -1 | cut -d= -f2)"
-    printf '{"data":{"capabilities":%s}}\n' "${mask:-0}"
+    echo '{"data":{"capabilities":512}}'
     exit 0
   fi
   if [[ "${args[i]}" == "account" && "${args[i + 1]:-}" == "show" ]]; then
@@ -100,16 +104,39 @@ done
 exit 1
 STUB
 
-# `curl`: appends each POST body to ${SB}/confirm-log, or fails while
-# ${SB}/confirm-fails exists so the retry path can be driven.
+# `curl`, two roles:
+#   * merod's `GET http://127.0.0.1:<port>/admin-api/groups/<ns>/members
+#     ?offset=&limit=`: the namespace's members are this node (account 4d4d4d)
+#     with the role in ${SB}/roles/<ns>, plus an admin; a missing file is an
+#     HTTP error, and an empty one leaves this node out of the list.
+#   * mdma: appends each POST body to ${SB}/confirm-log, or fails while
+#     ${SB}/confirm-fails exists so the retry path can be driven.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
-body=""
-prev=""
+body="" url="" prev=""
 for a in "$@"; do
   [[ "${prev}" == "-d" ]] && body="${a}"
+  [[ "${a}" == http* ]] && url="${a}"
   prev="${a}"
 done
+if [[ "${url}" == http://127.0.0.1:*/admin-api/groups/*/members\?* ]]; then
+  exec python3 - "${url}" <<'PY'
+import json, os, sys
+from urllib.parse import parse_qs, urlparse
+u = urlparse(sys.argv[1])
+ns = u.path.split("/")[3]
+q = parse_qs(u.query)
+offset, limit = int(q["offset"][0]), int(q["limit"][0])
+path = os.path.join(os.environ["SB"], "roles", ns)
+if not os.path.exists(path):
+    sys.exit(22)
+role = open(path).read().strip()
+rows = [{"identity": "00" * 32, "role": "Admin"}]
+if role:
+    rows.append({"identity": "4d4d4d", "role": role})
+print(json.dumps({"members": rows[offset:offset + limit]}))
+PY
+fi
 [[ -f "${SB}/confirm-fails" ]] && exit 22
 printf '%s\n' "${body}" >> "${SB}/confirm-log"
 echo '{"status":"confirmed"}'
@@ -122,12 +149,12 @@ export PATH
 # shellcheck source=/dev/null
 source "${SB}/functions.sh"
 
-# Read by `check_authorship` in the sourced sidecar, which shellcheck cannot
-# see across the `source` of a generated file.
+# Read by `read_tee_role` in the sourced sidecar, which shellcheck cannot see
+# across the `source` of a generated file.
 # shellcheck disable=SC2034
 EXECUTOR_ACCOUNT="4d4d4d"
-: > "${SB}/caps"
 : > "${SB}/confirm-log"
+: > "${SB}/meroctl-log"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 confirms() { awk 'NF{n++} END{print n+0}' "${SB}/confirm-log"; }
@@ -136,23 +163,37 @@ expect_confirms() {
   got="$(confirms)"
   [[ "${got}" == "${want}" ]] || fail "${why} (expected ${want} confirms, got ${got})"
 }
+role() { printf '%s\n' "$2" > "${SB}/roles/$1"; }
+# The last confirm body's `authorship_ready` and `tee_role`, as JSON.
+last_confirm() {
+  tail -1 "${SB}/confirm-log" | python3 -c '
+import json, sys
+b = json.load(sys.stdin)
+print(json.dumps(b["authorship_ready"]), json.dumps(b["tee_role"]))'
+}
+expect_last() {
+  local want="$1" why="$2" got
+  got="$(last_confirm)"
+  [[ "${got}" == "${want}" ]] || fail "${why} (expected '${want}', got '${got}'): $(tail -1 "${SB}/confirm-log")"
+}
 
-# 1. No grant, and join-time already recorded that. Nothing to say.
+# 1. A replica, and join-time already recorded that. Nothing to say.
 #    The loop runs once a second and /confirm is a write, so "no change" has to
 #    be silent or the sidecar writes to MDMA 86400 times a day per namespace.
-save_authorship '{"aa":false}'
+role aa ReadOnlyTee
+save_authorship '{"aa":"ReadOnlyTee"}'
 reconcile_authorship peer1 '["aa"]'
-expect_confirms 0 "an unchanged answer must not be re-POSTed"
+expect_confirms 0 "an unchanged role must not be re-POSTed"
 
-# 2. An admin grants the capability. Exactly one POST, carrying true.
-#    This is the case the whole function exists for: the grant lands long after
-#    admission, so a join-time answer alone would be frozen at false forever and
-#    the cloud would never advertise this relay.
-echo "aa=512" > "${SB}/caps"
+# 2. An admin switches the namespace to relay mode, converting this node to a
+#    RelayTee. Exactly one POST: authorship ready, and the role that makes it so.
+#    This is the case the whole function exists for: the conversion lands long
+#    after admission, so a join-time answer alone would be frozen at false
+#    forever and the cloud would never advertise this relay.
+role aa RelayTee
 reconcile_authorship peer1 '["aa"]'
-expect_confirms 1 "a granted capability must be reported"
-grep -q '"authorship_ready":true' "${SB}/confirm-log" \
-  || fail "the confirm body must carry authorship_ready:true: $(cat "${SB}/confirm-log")"
+expect_confirms 1 "a conversion to RelayTee must be reported"
+expect_last 'true "RelayTee"' "a RelayTee is authorship-ready"
 grep -q '"group_id":"aa"' "${SB}/confirm-log" \
   || fail "the confirm body must name the group"
 
@@ -161,23 +202,28 @@ reconcile_authorship peer1 '["aa"]'
 reconcile_authorship peer1 '["aa"]'
 expect_confirms 1 "steady state must not re-POST"
 
-# 4. Revocation travels back, so the cloud stops advertising the relay.
-echo "aa=0" > "${SB}/caps"
+# 4. Back to replica mode: no longer ready, and still reported as an admitted
+#    TEE member rather than as nothing. The capability read that used to decide
+#    this must not come back: the stub grants CAN_AUTHOR_ON_BEHALF to anyone
+#    asking, which core ignores for a ReadOnlyTee.
+role aa ReadOnlyTee
 reconcile_authorship peer1 '["aa"]'
-expect_confirms 2 "a revoked capability must be reported"
-tail -1 "${SB}/confirm-log" | grep -q '"authorship_ready":false' \
-  || fail "a revocation must report false"
+expect_confirms 2 "a conversion back to ReadOnlyTee must be reported"
+expect_last 'false "ReadOnlyTee"' "a ReadOnlyTee is a TEE member but not authorship-ready"
+grep -q 'get-capabilities' "${SB}/meroctl-log" \
+  && fail "authorship must come from the role, not a capability read: $(cat "${SB}/meroctl-log")"
 
 # 5. A failed POST must not advance the recorded state, or the change is lost
 #    forever — the next cycle would see "no change" and stay silent.
-echo "aa=512" > "${SB}/caps"
+role aa RelayTee
 touch "${SB}/confirm-fails"
 reconcile_authorship peer1 '["aa"]'
 rm -f "${SB}/confirm-fails"
-grep -q '"aa": false' "${SB}/fleet-authorship.json" \
+grep -q '"aa": "ReadOnlyTee"' "${SB}/fleet-authorship.json" \
   || fail "a failed POST must leave the state unadvanced: $(cat "${SB}/fleet-authorship.json")"
 reconcile_authorship peer1 '["aa"]'
 expect_confirms 3 "the retry after a failed POST must happen"
+expect_last 'true "RelayTee"' "the retry must carry the new role"
 
 # 6. A namespace MDMA no longer assigns is pruned, so a later re-join is treated
 #    as new rather than inheriting a stale "already reported" verdict.
@@ -185,20 +231,38 @@ reconcile_authorship peer1 '[]'
 [[ "$(cat "${SB}/fleet-authorship.json")" == "{}" ]] \
   || fail "a dropped namespace must be pruned: $(cat "${SB}/fleet-authorship.json")"
 
-# 7. An unreadable capability is false, never a crash and never true. This is
-#    the safe direction: MDMA does not advertise the node, so clients are not
-#    sent to mint warrants it would refuse.
-mv "${SB}/bin/meroctl" "${SB}/bin/meroctl.off"
-save_authorship '{"bb":true}'
+# 7. An unreadable member list is not ready and no role, never a crash and never
+#    true. This is the safe direction: MDMA does not advertise the node, so
+#    clients are not sent to mint warrants it would refuse.
+save_authorship '{"bb":"RelayTee"}'
 reconcile_authorship peer1 '["bb"]'
-mv "${SB}/bin/meroctl.off" "${SB}/bin/meroctl"
-tail -1 "${SB}/confirm-log" | grep -q '"authorship_ready":false' \
-  || fail "an unreadable capability must report false"
+expect_last 'false null' "an unreadable role must report not ready"
 
-# 8. The executor account is parsed out of meroctl's JSON and lower-cased — it
-#    is what a warrant's `executor` must name, so a mis-parse makes every write
-#    to this relay unspendable.
+# 8. A record written by an older sidecar holds the boolean it derived from a
+#    capability, which matches no role: it is re-reported once, so mdma learns
+#    the role, and then goes quiet.
+role cc RelayTee
+save_authorship '{"cc":true}'
+reconcile_authorship peer1 '["cc"]'
+reconcile_authorship peer1 '["cc"]'
+expect_confirms 5 "a legacy boolean record must be re-reported exactly once"
+expect_last 'true "RelayTee"' "the re-report must carry the role"
+
+# 9. Roles that are not TEE roles -- a plain member, or one a newer core adds --
+#    are neither a relay nor reported as a TEE role, and parsing them must not
+#    fail.
+for other in ReadOnly Admin SomeFutureTee; do
+  role dd "${other}"
+  save_authorship '{"dd":"RelayTee"}'
+  reconcile_authorship peer1 '["dd"]'
+  expect_last 'false null' "role ${other} must not be authorship-ready"
+done
+
+# 10. The executor account is parsed out of meroctl's JSON and lower-cased — it
+#     is what a warrant's `executor` must name, and what this node's own member
+#     row is found by, so a mis-parse makes every write to this relay
+#     unspendable.
 account="$(get_executor_account)"
 [[ "${account}" == "4d4d4d" ]] || fail "executor account parse returned '${account}'"
 
-echo "OK: fleet sidecar authorship reporting — 8 checks, $(confirms) confirms posted"
+echo "OK: fleet sidecar authorship reporting — 10 checks, $(confirms) confirms posted"

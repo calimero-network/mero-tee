@@ -27,7 +27,7 @@ Those are two **different, unrelated key mechanisms**:
 
 - The **storage key** decrypts a node's on-disk state. The node fetches it once
   from the **KMS** via a TDX challenge–response. The KMS never sees group keys.
-- The **per-group encryption keys** a `ReadOnlyTee` replica receives are
+- The **per-group encryption keys** an admitted TEE (`ReadOnlyTee` or `RelayTee`) receives are
   delivered by **Core on admission**, driven by this sidecar. Core's fleet
   admission never touches the storage key.
 
@@ -403,7 +403,7 @@ the difference between the two is load-bearing. **The leave diff is taken agains
 confirm also succeeds, so a join that lands while its confirm is raced by the
 disable itself left this node a P2P member of a namespace in *neither* set —
 `confirmed − desired` was empty for it, so it was never left, and the node kept
-the namespace's key and its `ReadOnlyTee` membership indefinitely. `admitted`
+the namespace's key and its TEE membership indefinitely. `admitted`
 answers the question the leave actually asks: *what is this node a member of, if
 it stops being entitled?* — which is about P2P state, not about MDMA's record of
 it. `confirmed` keeps its own job, driving the confirm retry for a namespace MDMA
@@ -422,7 +422,7 @@ admitted set comes up with a *populated* confirmed file and an *empty* admitted
 one — and every namespace it joined under the previous build is skipped, so
 nothing ever records it. `admitted − desired` stays empty for those namespaces
 forever, a later HA disable never makes the node leave them, and it keeps their
-keys and its `ReadOnlyTee` membership: the very state the admitted set exists to
+keys and its TEE membership: the very state the admitted set exists to
 prevent, on every node that was already in the fleet.
 
 `seed_admitted_from_confirmed` runs once, before the first poll, and copies
@@ -443,7 +443,7 @@ had since left. Once the file exists the seed never runs again, and the ordinary
 prune (`admitted = admitted ∩ desired`) keeps it honest from there.
 
 Two more files alongside them record what MDMA has already been
-told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the grant
+told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the TEE role
 and `fleet-inventory.json` for the context inventory. Each is advanced **only
 after** the POST it describes succeeded, so a transient MDMA blip is retried
 rather than lost. Activity is logged to `/run/calimero/fleet-sidecar.log`.
@@ -578,56 +578,101 @@ second job:
 | --- | --- | --- |
 | **Executor account** | It is derived from an account root minted inside the TEE. MDMA never sees inside; the client has no way to compute it. A warrant naming the wrong executor is refused — after the author has spent a nonce on it. | `executor_account` on every should-join poll |
 | **Relay URL** | `merod` sits behind Traefik on a host it was never told about, so it cannot derive its own external address — and whoever provisioned the DNS is the only party that knows the name. MDMA holds the raw `public_ip`, which no certificate matches. | `relay_url` on every should-join poll, read from the `relay-url` instance metadata key |
-| **Authorship grant** | `CAN_AUTHOR_ON_BEHALF` is a governance capability, granted by an **admin of the namespace** and readable only by a node holding that group's key. MDMA does not grant it and cannot observe it. | `authorship_ready` on `/api/fleet/confirm` |
+| **Relay role** | Whether this node is a `RelayTee` (relays members' writes) or a `ReadOnlyTee` (replica only) is governance state — set by the namespace's TEE admission policy `mode`, which an **admin of the namespace** controls — readable only by a node holding that group's key. MDMA does not set it and cannot observe it. | `authorship_ready` and `tee_role` on `/api/fleet/confirm`; `tee_role` and per-group `authorship_ready` on `/api/fleet/inventory` |
 | **Context inventory** | Which contexts exist inside a namespace, and which *group* each one hangs off, is governance state readable only by a member holding that group's key. MDMA stores an assignment per **namespace**, which is one level too coarse to route a write. | `namespaces[].groups[]` on `/api/fleet/inventory` |
 
-### Why the grant is re-reported, not reported once
+### Only a `RelayTee` is authorship-ready
 
-Core implies `CAN_AUTHOR_ON_BEHALF` from **nothing** — not membership, not
-admin, and it is deliberately not propagated by the subgroup-admit cascade. So
-every namespace is authorship-closed until an admin publishes the op, which
-typically happens minutes, hours or days *after* this node was admitted.
+Core admits an attested node as one of two TEE roles, chosen by the namespace's
+TEE admission policy (`mode`, set by a namespace admin):
+
+| Role | Admitted when | Replicates, anchors sync | Relays members' writes |
+| --- | --- | --- | --- |
+| `ReadOnlyTee` | `mode: replica`, or no `mode` (the default) | yes | **no** — core answers a relay request with `403` |
+| `RelayTee` | `mode: relay` | yes | **yes**, by its role — no `CAN_AUTHOR_ON_BEHALF` bit is needed or consulted |
+
+Both are admitted TEE members, and the sidecar treats them alike everywhere
+that asks *"is this node an admitted TEE here?"* — the join (`fleet-join`'s
+`admitted: true` is role-agnostic), the confirm, the admitted/confirmed sets,
+the leave on HA disable, and the recovery-envelope walk. Only the question
+*"can this node execute delegated writes for users here?"* separates them, and
+there **only `RelayTee` answers yes**: `authorship_ready` is `true` exactly when
+the node's role in the namespace is `RelayTee`. A `ReadOnlyTee` holding a
+`CAN_AUTHOR_ON_BEHALF` bit (from a default mask or an explicit grant) is still
+not ready — core refuses it regardless, so advertising it would send clients to
+mint warrants it cannot spend.
+
+The role itself is reported alongside, as `tee_role`: `"RelayTee"`,
+`"ReadOnlyTee"`, or `null` when this node holds no TEE role there (or a role
+this sidecar does not recognise, so a role a newer core adds is never mistaken
+for a relay). It is additive and optional — an MDMA that predates it ignores
+it.
+
+### Why the role is re-reported, not reported once
+
+The role is not fixed at admission. Setting a namespace's admission policy
+**converts** every TEE already admitted to the policy's role, so switching an
+existing namespace to relay mode — typically minutes, hours or days *after* this
+node was admitted — turns this `ReadOnlyTee` into a `RelayTee` (and switching
+back reverses it).
 
 A join-time answer alone would therefore be frozen at `false` forever, and the
 cloud would never advertise this relay to anyone. `reconcile_authorship` closes
-that: each cycle it re-reads the grant for every confirmed namespace with
+that: each cycle it re-reads this node's own row in the namespace root's member
+list, paged over loopback exactly as the [verification read](#answering-mdmas-namespace-admin-questions)
+pages it:
 
 ```bash
-meroctl --home /mnt/data/calimero --node default --output-format json \
-  group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>
+curl -sf "http://127.0.0.1:<SERVER_PORT>/admin-api/groups/<NAMESPACE>/members?offset=<N>&limit=1000"
 ```
 
-and tests bit 9 (`512`) of the returned `capabilities` bitmask. It re-`POST`s
-`/api/fleet/confirm` **only when the answer changed** — the loop runs once a
-second and `/confirm` is a write — and records the new state only after that
-POST succeeded, so a transient MDMA blip is retried rather than lost. A revoked
-grant travels back the same way, so the cloud stops advertising the relay.
+It re-`POST`s `/api/fleet/confirm` **only when the role changed** — the loop
+runs once a second and `/confirm` is a write — and records the new role in
+`fleet-authorship.json` only after that POST succeeded, so a transient MDMA blip
+is retried rather than lost. A conversion back to `ReadOnlyTee` travels back the
+same way, so the cloud stops advertising the relay. A record written by an older
+sidecar holds a boolean rather than a role, so it is re-reported once with the
+role attached. A member list that cannot be read reports `authorship_ready:
+false` and `tee_role: null` — the safe direction.
 
 For this reason MDMA's `/api/fleet/confirm` accepts an **already-active**
 assignment rather than 404'ing it: a node makes its one `assigned → active`
-transition at admission, and requiring that state would mean a grant made five
-minutes later could never be reported without evicting and rejoining the node.
+transition at admission, and requiring that state would mean a conversion to
+`RelayTee` five minutes later could never be reported without evicting and
+rejoining the node.
 
 ### The context inventory, and why it is per group
 
 `fleet_assignments` records which **namespaces** this node replicates. That is
 not enough to answer the only question a client actually asks — *can this node
-execute for context X?* — because core scopes `CAN_AUTHOR_ON_BEHALF` per
-**group**, and contexts belong to groups. A node can hold the namespace root's
-key and grant while being no member at all of a restricted subgroup beneath it.
+execute for context X?* — because a `RelayTee` relays in a group by its
+**effective** role there: its row at the namespace root, which reaches a
+subgroup only where membership does, and contexts belong to groups. A node can
+be a relay of the namespace root while being no member at all of a restricted
+subgroup beneath it.
 Advertising it for that subgroup's context makes the client discover the truth
 by minting a warrant, which spends a nonce it cannot get back.
 
 So `reconcile_inventory` walks the namespace's group tree — breadth-first from
 the root, since the namespace is itself a group and holds contexts of its own —
-and reports each context under **its own group id**, with the authorship grant
-re-asked for that group rather than inherited from the namespace:
+and reports each context under **its own group id**, with `authorship_ready`
+re-asked for that group rather than inherited from the namespace: `true` only
+when this node is a `RelayTee` in the namespace **and** an effective member of
+the group. Membership is probed with `get-capabilities`, which core answers only
+for an effective member; the capability bits themselves decide nothing for a
+TEE:
 
 ```bash
 meroctl ... group subgroups        <GROUP_ID>   # the walk
 meroctl ... group contexts list    <GROUP_ID>   # what hangs off it
+meroctl ... group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>  # membership, for a RelayTee
 meroctl ... group members list     <NAMESPACE>  # a COUNT, never a roster
 ```
+
+Each namespace also carries `tee_role` (`"RelayTee"`, `"ReadOnlyTee"` or
+`null`), read once per walk from the namespace root. It is **omitted** when the
+role could not be read, the same rule as `member_count`: absent means "did not
+look", and MDMA keeps what it last recorded.
 
 MDMA writes the result to `relay_contexts`, which is what
 `GET /api/cloud/contexts/{id}/relays` reads. Without this report that table is
@@ -675,7 +720,7 @@ complete are posted with the requested `full`; the rest are posted additively in
 a second request, and MDMA keeps what it already has for them.
 
 The distinction is deliberately narrow: only a read that could hide a *context*
-counts. A failed capability or member-count read is a worse answer about
+counts. A failed role, membership or member-count read is a worse answer about
 contexts that are still being reported, so it degrades to `false`/absent without
 blocking the prune — otherwise a namespace whose member list merely exceeds one
 page could never be pruned at all.
@@ -885,9 +930,10 @@ and posts `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` with
   `true` only when that founder equals the one MDMA named. A replica of a forged
   or legacy V1 genesis has no `founding` and answers `false` — and so does a
   merod that predates derived ids.
-- **`account_role`** — `Admin`, `Member`, `ReadOnly` or `ReadOnlyTee` as merod
-  emits it for the named account in the namespace root group, or `null` if it is
-  not a member.
+- **`account_role`** — `Admin`, `Member`, `ReadOnly`, `ReadOnlyTee` or
+  `RelayTee` as merod emits it for the named account in the namespace root
+  group, or `null` if it is not a member. Passed through verbatim, so a role a
+  newer core adds is reported rather than rejected.
 
 **No roster crosses the wire.** This is the same property `member_count` keeps:
 the member list is read inside the TEE, and only a verdict about the one account
@@ -934,7 +980,7 @@ fail the join, leave or inventory loop. Covered by
 
 None of these reads is fatal, and they degrade in the same safe direction.
 A node that cannot read its account, has no `relay-url` metadata, fails the
-capability read, or cannot walk its group tree reports the missing value as
+role or membership read, or cannot walk its group tree reports the missing value as
 empty/`false`/absent. MDMA then does not
 offer it as a writable relay, so clients are never sent to mint warrants it
 would refuse — they see "no relay available" rather than a refusal after
@@ -950,8 +996,8 @@ Being a relay means accepting a write from a caller with no account on this
 node, so the image has to open exactly one path — and it is a path that carries
 its own credential. `merod` refuses an intent, before executing anything, unless
 the warrant is genuinely the member's, commits to this exact context, method and
-arguments, has not expired, has an unspent nonce, and this node holds the
-authorship grant on the owning group. A node token would prove none of that, and
+arguments, has not expired, has an unspent nonce, and this node is a `RelayTee`
+in the owning group. A node token would prove none of that, and
 requiring one would make the feature unreachable for exactly the callers it
 exists for.
 
@@ -1239,17 +1285,18 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Item | Value |
 | --- | --- |
 | Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` |
-| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready"}` |
+| Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready", "tee_role"}`; `tee_role` is `"RelayTee"`, `"ReadOnlyTee"` or `null`, and `authorship_ready` is `true` only for `RelayTee` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID> [--admitter-addr <MULTIADDR>]…` (positional group id) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
-| Authorship probe | `meroctl … group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>` → bit 9 (`512`) |
+| TEE role probe | `GET http://127.0.0.1:{server-port}/admin-api/groups/<NS>/members?offset=&limit=1000` (loopback, paged) → this node's `members[].role` |
+| Group membership probe (inventory, `RelayTee` only) | `meroctl … group members get-capabilities <GROUP_ID> <EXECUTOR_ACCOUNT>` succeeds |
 | Readiness probe | `meroctl --output-format json peers` |
 | PeerId source | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` |
 | MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
 | Executor account source | `meroctl --output-format json account show` → `accountId` |
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/mnt/data/fleet/fleet-confirmed.json` |
-| Reported authorship state | `/mnt/data/fleet/fleet-authorship.json` |
+| Reported TEE role state | `/mnt/data/fleet/fleet-authorship.json` — `{<namespace>: "RelayTee" \| "ReadOnlyTee" \| null}` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
 | Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}`; returns `{"fleet_token"}` |
 | Quote source | `POST http://127.0.0.1:{server-port}/admin-api/tee/registration-attest` (on 404, `/admin-api/tee/attest`) — body `{"nonce"}`, loopback; `server-port` must be 1–65535, else 2428 |

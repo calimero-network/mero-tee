@@ -1,6 +1,7 @@
 #!/bin/bash
 # Fleet HA sidecar: polls MDMA for group assignments and drives merod via meroctl.
-# Runs as a systemd service alongside merod on ReadOnly TEE fleet nodes.
+# Runs as a systemd service alongside merod on TEE fleet nodes (`ReadOnlyTee`
+# replicas and `RelayTee` relays).
 #
 # MDMA_URL is baked at image build time via Ansible (measured into MRTD).
 # NO CREDENTIAL IS BAKED: the fleet token is issued by mdma when this node's
@@ -30,9 +31,10 @@ CONFIRMED_FILE="/mnt/data/fleet/fleet-confirmed.json"
 # CONFIRMED_FILE -- and the leave diff used to be computed from that file, so
 # such a namespace could never be left (calimero-network/mdma#155).
 ADMITTED_FILE="/mnt/data/fleet/fleet-admitted.json"
-# Per-namespace record of the authorship grant we last told mdma about, so a
-# grant made (or revoked) AFTER admission gets re-reported exactly once per
-# change rather than on every one-second cycle. See `reconcile_authorship`.
+# Per-namespace record of the TEE role we last told mdma about (the source of
+# `authorship_ready`), so a role converted AFTER admission gets re-reported
+# exactly once per change rather than on every one-second cycle. See
+# `reconcile_authorship`.
 AUTHORSHIP_FILE="/mnt/data/fleet/fleet-authorship.json"
 # The context inventory we last successfully POSTed, per namespace, plus when
 # the last authoritative (`full`) post landed. Change detection compares against
@@ -112,8 +114,9 @@ RECOVERY_FULL_INTERVAL=86400
 # INCOMPLETE read rather than as a complete one, which is what keeps a `full`
 # post from pruning rows for contexts that merely fell off page one.
 MEROCTL_PAGE_LIMIT=100
-# The verification read pages a namespace's members itself, over loopback HTTP
-# (see `read_verification`), so one role question costs at most
+# The role reads page a namespace's members themselves, over loopback HTTP
+# (see `read_member_role`: mdma's verification questions, and this node's own
+# TEE role), so one role question costs at most
 # VERIFICATION_MAX_PAGES requests of VERIFICATION_PAGE_SIZE rows and
 # VERIFICATION_READ_BUDGET seconds. 1000 is core's `MAX_LIST_LIMIT`; a node that
 # clamps lower only means more pages. Running out of pages or time answers
@@ -135,11 +138,6 @@ MAX_GROUP_WALK=512
 # safe answer as any other partial read.
 INVENTORY_WALK_BUDGET=20
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
-# `MemberCapabilities::CAN_AUTHOR_ON_BEHALF` — bit 9 of the per-member u32
-# bitmask in core (crates/context/config/src/lib.rs). The grant delegated
-# execution runs on, and implied by nothing else: not membership, not admin,
-# and not the subgroup-admit cascade.
-CAN_AUTHOR_ON_BEHALF=512
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
@@ -673,39 +671,49 @@ install_certificate() {
   fi
 }
 
-# Whether this node holds CAN_AUTHOR_ON_BEHALF on a namespace — i.e. whether it
-# can actually serve delegated execution there.
+# This node's TEE role in a namespace: `RelayTee`, `ReadOnlyTee`, or none.
 #
-# Read from core rather than assumed, because it is not ours to decide: the
-# capability is a governance op signed by an admin of the namespace, arriving
-# over gossip at some arbitrary time after admission. Prints `true` or `false`;
-# any failure prints `false`, which is the safe direction — mdma then does not
-# advertise this node as a writable relay and clients are not sent to mint
-# warrants it would refuse.
-check_authorship() {
-  local group_id="$1"
-  if [[ -z "${EXECUTOR_ACCOUNT:-}" ]]; then
-    echo "false"
-    return 0
-  fi
-  local out rc
-  rc=0
-  out=$($MEROCTL --output-format json group members get-capabilities "$group_id" "$EXECUTOR_ACCOUNT" 2>>"$LOG") || rc=$?
-  if [[ $rc -ne 0 ]]; then
-    echo "false"
-    return 0
-  fi
-  echo "$out" | python3 -c "
-import sys, json
+# Both roles are attested TEE members -- core mints either only through
+# attestation admission, and both replicate and anchor sync -- so anything
+# asking "am I an admitted TEE here" must accept both. Only a `RelayTee`
+# executes members' delegated writes: core answers a `ReadOnlyTee` asked to
+# relay with a 403, whatever capabilities its row holds, and grants a
+# `RelayTee` the right by its role alone, with no CAN_AUTHOR_ON_BEHALF bit.
+#
+# Which of the two a node is comes from the namespace's TEE admission policy
+# (`mode: relay` admits `RelayTee`, `replica` or no mode `ReadOnlyTee`), and
+# setting the policy converts TEEs already admitted. So it is read from
+# governance every time it is needed, never remembered from the join.
+#
+# Prints `RelayTee` or `ReadOnlyTee` and returns 0 once the namespace's member
+# list was read far enough to find this node's row or its end; nothing printed
+# with 0 means this node holds no TEE role there (no row, or a role no TEE has
+# -- including one a newer core may add, which is not a relay this sidecar
+# knows about). Returns 1, printing nothing, when the list could not be read or
+# the executor account is not known yet.
+read_tee_role() {
+  local namespace_id="$1"
+  [[ -n "${EXECUTOR_ACCOUNT:-}" ]] || return 1
+  local answer
+  answer=$(read_member_role "$namespace_id" "$EXECUTOR_ACCOUNT")
+  python3 -c '
+import json, sys
 try:
-  obj = json.loads(sys.stdin.read())
-  data = obj.get('data') if isinstance(obj.get('data'), dict) else obj
-  caps = int((data or {}).get('capabilities') or 0)
-except Exception as exc:
-  print(f'sidecar: failed to parse get-capabilities JSON: {exc}', file=sys.stderr)
-  caps = 0
-print('true' if caps & int(sys.argv[1]) else 'false')
-" "$CAN_AUTHOR_ON_BEHALF" 2>>"$LOG" || echo "false"
+    answer = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(1)
+if not isinstance(answer, dict) or "role" not in answer:
+    sys.exit(1)
+if answer["role"] in ("ReadOnlyTee", "RelayTee"):
+    print(answer["role"])' "$answer" 2>>"$LOG"
+}
+
+# Whether a TEE role can serve delegated execution: `true` for `RelayTee` only.
+# An unreadable role arrives here as none, so it answers `false` -- the safe
+# direction: mdma then does not advertise this node as a writable relay and
+# clients are not sent to mint warrants it would refuse.
+authorship_for_role() {
+  if [[ "$1" == "RelayTee" ]]; then echo "true"; else echo "false"; fi
 }
 
 poll_mdma() {
@@ -824,10 +832,13 @@ print(value if isinstance(value, str) else '')
 confirm_assignment() {
   local peer_id="$1"
   local group_id="$2"
-  # Whether we can serve delegated execution here. Passed in rather than read
-  # inside, because the caller already knows: the join path has just checked it,
-  # and `reconcile_authorship` calls this precisely BECAUSE the answer changed.
+  # Whether we can serve delegated execution here, and the TEE role that
+  # answer comes from (`RelayTee`, `ReadOnlyTee`, or empty for none/unread,
+  # sent as null). Passed in rather than read inside, because the caller
+  # already knows: the join path has just read the role, and
+  # `reconcile_authorship` calls this precisely BECAUSE it changed.
   local authorship_ready="${3:-false}"
+  local tee_role="${4:-}"
 
   local headers=(-H "Content-Type: application/json")
   [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
@@ -847,7 +858,8 @@ print(json.dumps({
   "peer_id": sys.argv[1],
   "group_id": sys.argv[2],
   "authorship_ready": sys.argv[3] == "true",
-}, separators=(",", ":")))' "$peer_id" "$group_id" "$authorship_ready" 2>>"$LOG") || return 1
+  "tee_role": sys.argv[4] or None,
+}, separators=(",", ":")))' "$peer_id" "$group_id" "$authorship_ready" "$tee_role" 2>>"$LOG") || return 1
   if curl -sf --max-time 10 "${headers[@]}" \
       -d "$body" \
       "${MDMA_URL}/api/fleet/confirm" 2>>"$LOG"; then
@@ -866,15 +878,20 @@ save_authorship() {
   echo "$1" > "$AUTHORSHIP_FILE"
 }
 
-# Re-report the authorship grant for already-confirmed namespaces when it
-# changes.
+# Re-report authorship for already-confirmed namespaces when this node's TEE
+# role there changes.
 #
-# The grant almost never exists at admission time: core implies
-# CAN_AUTHOR_ON_BEHALF from nothing, so a namespace is authorship-closed until
-# an admin publishes a governance op — minutes, hours or days after this node
-# joined. Without this the join-time answer would be frozen forever and a
-# namespace that was granted the capability would still show `authorship_ready:
-# false` in the cloud, so no client would ever be sent to this relay.
+# The role is not fixed at admission: an admin who switches the namespace's
+# TEE admission policy to `mode: relay` converts every admitted `ReadOnlyTee` to
+# `RelayTee` (and back), minutes, hours or days after this node joined. Without
+# this the join-time answer would be frozen forever and a namespace switched to
+# relay mode would still show `authorship_ready: false` in the cloud, so no
+# client would ever be sent to this relay.
+#
+# The recorded state is the ROLE last reported per namespace (null for none),
+# not the boolean derived from it, so mdma's copy of `tee_role` stays current
+# too. An entry from an older sidecar holds a boolean, which matches no role,
+# so it is re-reported once with the role attached.
 #
 # Only re-POSTs on a CHANGE, not every cycle: the loop runs once a second and
 # mdma's /confirm is a write. The recorded state is updated only when the POST
@@ -889,27 +906,28 @@ reconcile_authorship() {
   changed=0
 
   for group_id in $(echo "$confirmed" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
-    local now was
-    now=$(check_authorship "$group_id")
-    was=$(echo "$recorded" | python3 -c "
+    local role same now
+    role=$(read_tee_role "$group_id") || role=""
+    same=$(echo "$recorded" | python3 -c "
 import sys, json
 try:
-  print('true' if json.load(sys.stdin).get(sys.argv[1]) else 'false')
+  print('1' if json.load(sys.stdin).get(sys.argv[1]) == (sys.argv[2] or None) else '0')
 except Exception:
-  print('false')
-" "$group_id" 2>/dev/null || echo "false")
-    [[ "$now" == "$was" ]] && continue
-    if confirm_assignment "$peer_id" "$group_id" "$now"; then
-      log "Authorship grant for $group_id is now $now; reported to mdma"
+  print('0')
+" "$group_id" "$role" 2>/dev/null || echo "0")
+    [[ "$same" == "1" ]] && continue
+    now=$(authorship_for_role "$role")
+    if confirm_assignment "$peer_id" "$group_id" "$now" "$role"; then
+      log "TEE role for $group_id is now ${role:-none} (authorship_ready=$now); reported to mdma"
       updated=$(echo "$updated" | python3 -c "
 import sys, json
 try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-state[sys.argv[1]] = sys.argv[2] == 'true'
+state[sys.argv[1]] = sys.argv[2] or None
 print(json.dumps(state, sort_keys=True))
-" "$group_id" "$now" 2>>"$LOG" || echo "$updated")
+" "$group_id" "$role" 2>>"$LOG" || echo "$updated")
       changed=1
     fi
   done
@@ -947,7 +965,8 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 #                    keeps that pair. A replica of a forged or legacy V1 genesis
 #                    has none, which answers false.
 #   account_role     the named account's role in the namespace root group
-#                    (`Admin`, `Member`, `ReadOnly`, `ReadOnlyTee`), or null if
+#                    (`Admin`, `Member`, `ReadOnly`, `ReadOnlyTee`, `RelayTee`,
+#                    or any role a newer core names), or null if
 #                    it is not a member.
 #
 # PRIVACY: the same property `member_count` keeps in the inventory. The member
@@ -977,27 +996,18 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 # log them edge-triggered instead of once a second.
 read_verification() {
   local namespace_id="$1" founder="$2" account="$3"
-  MEROCTL_CMD="$MEROCTL" \
-  SERVER_PORT="${SERVER_PORT:-2428}" \
-  PAGE_SIZE="$VERIFICATION_PAGE_SIZE" \
-  MAX_PAGES="$VERIFICATION_MAX_PAGES" \
-  BUDGET="$VERIFICATION_READ_BUDGET" \
-  python3 - "$namespace_id" "$founder" "$account" <<'PY' 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
+  local founding role
+  founding=$(MEROCTL_CMD="$MEROCTL" \
+    python3 - "$namespace_id" "$founder" <<'PY' 2>>"$LOG"
 import json
 import os
 import shlex
 import subprocess
 import sys
-import time
 
 MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
-SERVER_PORT = str(int(os.environ["SERVER_PORT"]))
-PAGE_SIZE = int(os.environ["PAGE_SIZE"])
-MAX_PAGES = int(os.environ["MAX_PAGES"])
-BUDGET = int(os.environ["BUDGET"])
 NAMESPACE_ID = sys.argv[1].strip()
 FOUNDER = sys.argv[2].strip().lower()
-ACCOUNT = sys.argv[3].strip().lower()
 
 
 def done(obj):
@@ -1042,7 +1052,70 @@ if isinstance(founding, dict):
     founder = founding.get("founderAccountId") or founding.get("founder_account_id")
 founder_matches = isinstance(founder, str) and founder.strip().lower() == FOUNDER
 
-# role: the namespace IS its root group, so its members are the namespace's.
+done({"founder_matches": founder_matches})
+PY
+) || founding='{"incomplete": "verification helper failed"}'
+  # Founding first: a namespace whose founding cannot be read is not worth
+  # paging its members for.
+  if [[ "$founding" == *'"incomplete"'* ]]; then
+    echo "$founding"
+    return 0
+  fi
+  role=$(read_member_role "$namespace_id" "$account")
+  python3 -c '
+import json, sys
+founding, role = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+if "incomplete" in role:
+    print(json.dumps(role, sort_keys=True))
+else:
+    print(json.dumps({"verdict": {"founder_matches": founding["founder_matches"], "account_role": role["role"]}}, sort_keys=True))' \
+    "$founding" "$role" 2>>"$LOG" || echo '{"incomplete": "verification helper failed"}'
+}
+
+# One account's role in a group, from its row in the group's member list.
+#
+# Prints ONE JSON object and returns 0:
+#   {"role": "<role>"}  -- the account's row, with the role exactly as merod
+#                          names it (any string; a role this sidecar does not
+#                          know is passed on, never an error)
+#   {"role": null}      -- every page was read and the account has no row
+#   {"incomplete": "<why>"}  -- nothing trustworthy to say this cycle
+#
+# Shared by the verification read (any account mdma asks about) and
+# `read_tee_role` (this node's own account), so both page the list the same way
+# and neither can mistake part of it for all of it.
+read_member_role() {
+  local group_id="$1" account="$2"
+  SERVER_PORT="${SERVER_PORT:-2428}" \
+  PAGE_SIZE="$VERIFICATION_PAGE_SIZE" \
+  MAX_PAGES="$VERIFICATION_MAX_PAGES" \
+  BUDGET="$VERIFICATION_READ_BUDGET" \
+  python3 - "$group_id" "$account" <<'PY' 2>>"$LOG" || echo '{"incomplete": "member role helper failed"}'
+import json
+import os
+import subprocess
+import sys
+import time
+
+SERVER_PORT = str(int(os.environ["SERVER_PORT"]))
+PAGE_SIZE = int(os.environ["PAGE_SIZE"])
+MAX_PAGES = int(os.environ["MAX_PAGES"])
+BUDGET = int(os.environ["BUDGET"])
+GROUP_ID = sys.argv[1].strip()
+ACCOUNT = sys.argv[2].strip().lower()
+
+
+def done(obj):
+    print(json.dumps(obj, sort_keys=True))
+    sys.exit(0)
+
+
+def incomplete(why):
+    done({"incomplete": why})
+
+
+# Asked about a namespace, this reads its root group: the namespace IS that
+# group, so its members are the namespace's.
 #
 # Paged over loopback HTTP, not `meroctl group members list`: that command
 # sends no offset/limit (see MEROCTL_PAGE_LIMIT), so it can only ever see page
@@ -1064,14 +1137,14 @@ def members_page(offset):
     remaining = DEADLINE - time.monotonic()
     if remaining <= 0:
         incomplete(
-            "group members of " + NAMESPACE_ID + " not read within "
+            "group members of " + GROUP_ID + " not read within "
             + str(BUDGET) + "s (stopped at offset " + str(offset) + ")"
         )
     url = (
-        "http://127.0.0.1:" + SERVER_PORT + "/admin-api/groups/" + NAMESPACE_ID
+        "http://127.0.0.1:" + SERVER_PORT + "/admin-api/groups/" + GROUP_ID
         + "/members?offset=" + str(offset) + "&limit=" + str(PAGE_SIZE)
     )
-    what = "GET /admin-api/groups/" + NAMESPACE_ID + "/members at offset " + str(offset)
+    what = "GET /admin-api/groups/" + GROUP_ID + "/members at offset " + str(offset)
     try:
         proc = subprocess.run(
             ["curl", "-sf", "--max-time", str(max(1, min(10, int(remaining)))), url],
@@ -1113,7 +1186,7 @@ for _ in range(MAX_PAGES):
     next_offset, next_anchor = offset + len(ids) - 1, ids[-1] if ids else None
     if anchor is not None:
         if not ids or ids[0] != anchor:
-            incomplete("group members of " + NAMESPACE_ID + " changed while paging; re-reading next cycle")
+            incomplete("group members of " + GROUP_ID + " changed while paging; re-reading next cycle")
         rows, ids = rows[1:], ids[1:]
     if not ids:
         exhausted = True
@@ -1129,13 +1202,13 @@ for _ in range(MAX_PAGES):
 
 if not found and not exhausted:
     incomplete(
-        "group members of " + NAMESPACE_ID + " run past " + str(MAX_PAGES)
+        "group members of " + GROUP_ID + " run past " + str(MAX_PAGES)
         + " pages of " + str(PAGE_SIZE) + " without the account"
     )
 if found and (not isinstance(role, str) or not role.strip()):
     incomplete("the member entry for the account carries no role")
 
-done({"verdict": {"founder_matches": founder_matches, "account_role": role.strip() if found else None}})
+done({"role": role.strip() if found else None})
 PY
 }
 
@@ -1308,12 +1381,12 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 # --- context inventory ------------------------------------------------------
 #
 # `FleetAssignment` records which NAMESPACES this node replicates, which is one
-# level too coarse to route a delegated write: core scopes
-# `CAN_AUTHOR_ON_BEHALF` per group, implies it from nothing, and deliberately
-# does not propagate it through the subgroup-admit cascade — so this node can
-# hold the namespace root's key and grant while being no member at all of a
-# restricted subgroup beneath it. Contexts hang off groups, so only a
-# per-GROUP report can answer "can this node execute for context X".
+# level too coarse to route a delegated write: a `RelayTee` relays in a group by
+# its EFFECTIVE role there -- its row at the namespace root, inherited only
+# where membership is -- so this node can be a relay of the namespace root
+# while being no member at all of a restricted subgroup beneath it. Contexts
+# hang off groups, so only a per-GROUP report can answer "can this node execute
+# for context X".
 #
 # Without this reporter `GET /api/cloud/contexts/{id}/relays` reads an empty
 # table and answers `servable: false` for every context that exists (mdma#222).
@@ -1331,10 +1404,15 @@ print(json.dumps({k: v for k, v in state.items() if k in keep}, sort_keys=True))
 # and the caller then posts that namespace incrementally instead.
 collect_namespace_inventory() {
   local namespace_id="$1"
+  # Read once for the whole namespace: a fleet node holds its TEE role at the
+  # namespace root, and every group below inherits it (or holds no membership).
+  local tee_role tee_role_read=true
+  tee_role=$(read_tee_role "$namespace_id") || tee_role_read=false
   MEROCTL_CMD="$MEROCTL" \
   NAMESPACE_ID="$namespace_id" \
   EXECUTOR_ACCOUNT="${EXECUTOR_ACCOUNT:-}" \
-  AUTHOR_BIT="$CAN_AUTHOR_ON_BEHALF" \
+  TEE_ROLE="$tee_role" \
+  TEE_ROLE_READ="$tee_role_read" \
   PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
   MAX_GROUPS="$MAX_GROUP_WALK" \
   WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
@@ -1349,7 +1427,8 @@ import time
 MEROCTL = shlex.split(os.environ["MEROCTL_CMD"])
 NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip()
 ACCOUNT = os.environ.get("EXECUTOR_ACCOUNT", "").strip()
-AUTHOR_BIT = int(os.environ["AUTHOR_BIT"])
+TEE_ROLE = os.environ.get("TEE_ROLE", "")
+TEE_ROLE_READ = os.environ.get("TEE_ROLE_READ") == "true"
 PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
 MAX_GROUPS = int(os.environ["MAX_GROUPS"])
 DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
@@ -1371,7 +1450,7 @@ def meroctl(*args, critical=True):
     broken command all have to leave the sidecar running.
 
     `critical` says whether a failure could make the report UNDERSTATE which
-    contexts this node holds. Only those clear `complete`. A failed capabilities
+    contexts this node holds. Only those clear `complete`. A failed membership
     or member-count read is a worse answer about a context that is still being
     reported, not a missing context — and treating it as one would mean a
     namespace whose member list simply exceeds one page could never be pruned
@@ -1458,26 +1537,27 @@ def group_contexts(group_id):
 def authorship_ready(group_id):
     """Whether this node may write on members' behalf in THIS group.
 
-    Re-asked per group rather than inherited from the namespace: core does not
-    propagate the grant down the subgroup cascade, and inheriting it is exactly
-    the lie this endpoint exists to prevent — a client would learn the truth by
-    minting a warrant, which spends a nonce it cannot get back.
+    Only a `RelayTee` relays, by its role; a `ReadOnlyTee` is refused by core
+    whatever its capabilities say. The role is the namespace's, and reaches a
+    group only where this node's membership does, so it is re-asked per group
+    rather than inherited from the namespace: advertising a relay for a
+    restricted subgroup it is no member of is exactly the lie this endpoint
+    exists to prevent -- a client would learn the truth by minting a warrant,
+    which spends a nonce it cannot get back.
 
-    Unreadable is `false`, matching `check_authorship`: mdma then does not
+    Membership is probed with `get-capabilities`, which core answers only for
+    an effective member (a direct row, or one inherited through an open
+    ancestor) and refuses otherwise; the capability bits themselves decide
+    nothing for a TEE.
+
+    Unreadable is `false`, matching the confirm path: mdma then does not
     advertise the node for that group, which is the safe direction. It does NOT
     clear `complete` — false is a real answer about a context that is still
     being reported, not a gap that could cause a wrongful prune."""
-    if not ACCOUNT:
+    if not ACCOUNT or TEE_ROLE != "RelayTee":
         return False
     response = meroctl("group", "members", "get-capabilities", group_id, ACCOUNT, critical=False)
-    if response is None:
-        return False
-    data = response.get("data") if isinstance(response.get("data"), dict) else response
-    try:
-        return bool(int((data or {}).get("capabilities") or 0) & AUTHOR_BIT)
-    except Exception as exc:
-        print("sidecar: could not read capabilities for " + group_id + ": " + str(exc), file=sys.stderr)
-        return False
+    return response is not None
 
 
 def member_count():
@@ -1534,7 +1614,7 @@ for group_id in group_ids:
         # mdma already holds for it survive.
         continue
     if not context_ids:
-        # Nothing to advertise, and no reason to spend a capabilities read.
+        # Nothing to advertise, and no reason to spend a membership read.
         continue
     distinct_contexts.update(context_ids)
     groups.append(
@@ -1555,6 +1635,11 @@ namespace = {"namespace_id": NAMESPACE_ID, "groups": groups}
 members = member_count()
 if members is not None:
     namespace["member_count"] = members
+if TEE_ROLE_READ:
+    # Absent when the role could not be read, the same rule as `member_count`:
+    # mdma keeps whatever it last recorded. Null is a read that found no TEE
+    # role.
+    namespace["tee_role"] = TEE_ROLE or None
 if complete:
     # Only meaningful when every group was read; otherwise it is an undercount
     # wearing the clothes of a real number.
@@ -3101,14 +3186,16 @@ except:
       # leave the group out of CONFIRMED_FILE so the next cycle's
       # join_group returns admitted=true immediately (idempotent in
       # core) and we re-try /confirm — eventually consistent.
-      # Report the authorship grant with the very first confirm, so a namespace
-      # that ALREADY holds the grant (a re-joining node, a namespace whose admin
-      # granted it before this replica existed) is advertised as writable
-      # immediately instead of waiting for `reconcile_authorship` to spot a
-      # change that never comes.
-      authorship=$(check_authorship "$group_id")
-      if confirm_assignment "$PEER_ID" "$group_id" "$authorship"; then
-        log "Confirmed group $group_id with mdma (authorship_ready=$authorship)"
+      # Report the TEE role with the very first confirm, so a namespace that
+      # admits relays (`mode: relay`, which makes this node a `RelayTee`) is
+      # advertised as writable immediately instead of waiting for
+      # `reconcile_authorship` to spot a change that never comes. Admission
+      # itself is role-agnostic: a `ReadOnlyTee` is just as admitted, and is
+      # confirmed the same way with `authorship_ready: false`.
+      tee_role=$(read_tee_role "$group_id") || tee_role=""
+      authorship=$(authorship_for_role "$tee_role")
+      if confirm_assignment "$PEER_ID" "$group_id" "$authorship" "$tee_role"; then
+        log "Confirmed group $group_id with mdma (tee_role=${tee_role:-none}, authorship_ready=$authorship)"
         confirmed=$(echo "$confirmed" | python3 -c "
 import sys, json
 c = json.load(sys.stdin)
@@ -3123,9 +3210,9 @@ try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-state[sys.argv[1]] = sys.argv[2] == 'true'
+state[sys.argv[1]] = sys.argv[2] or None
 print(json.dumps(state, sort_keys=True))
-" "$group_id" "$authorship" 2>>"$LOG" || load_authorship)"
+" "$group_id" "$tee_role" 2>>"$LOG" || load_authorship)"
       fi
     fi
     # No `break`: keep iterating to give other assignments a fair shot

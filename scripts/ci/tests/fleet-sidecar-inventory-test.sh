@@ -82,7 +82,9 @@ mkdir -p "${SB}/bin"
 #   ${SB}/contexts   "<group>=<ctx>,<ctx>"        (value ERR => the read fails;
 #                                                  value PAGE => a full page)
 #   ${SB}/members    "<group>=<count>"            (absent => the read fails)
-#   ${SB}/caps       "<group>=<mask>"             (absent => 0, core's default)
+#   ${SB}/caps       "<group>=<mask>"             (absent => 0, core's default;
+#                                                  value ERR => not a member,
+#                                                  which core refuses)
 cat > "${SB}/bin/meroctl" <<'STUB'
 #!/usr/bin/env bash
 lookup() { grep -E "^${2}=" "${SB}/${1}" 2>/dev/null | tail -1 | cut -d= -f2-; }
@@ -120,6 +122,7 @@ for ((i = 0; i < ${#args[@]}; i++)); do
       exit 0 ;;
     get-capabilities)
       mask="$(lookup caps "${args[i + 1]}")"
+      [[ "${mask}" == "ERR" ]] && exit 1
       printf '{"data":{"capabilities":%s}}\n' "${mask:-0}"
       exit 0 ;;
     list)
@@ -143,9 +146,10 @@ exit 1
 STUB
 
 # `curl`: answers merod's `GET /admin-api/usage` from ${SB}/usage (absent =>
-# the endpoint is unreachable); otherwise appends each POST body to
-# ${SB}/inventory-log, or fails while ${SB}/post-fails exists so the retry path
-# can be driven.
+# the endpoint is unreachable) and its paged `GET /admin-api/groups/<ns>/members`
+# with this node's own row, role from ${SB}/tee-role (absent => the read
+# fails); otherwise appends each POST body to ${SB}/inventory-log, or fails
+# while ${SB}/post-fails exists so the retry path can be driven.
 cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body=""
@@ -154,6 +158,12 @@ for a in "$@"; do
   if [[ "${a}" == */admin-api/usage ]]; then
     [[ -f "${SB}/usage" ]] || exit 7
     cat "${SB}/usage"
+    exit 0
+  fi
+  if [[ "${a}" == */admin-api/groups/*/members\?* ]]; then
+    [[ -f "${SB}/tee-role" ]] || exit 22
+    # One row: page one finds it, so the read never pages further.
+    printf '{"members":[{"identity":"4d4d4d","role":"%s"}]}\n' "$(cat "${SB}/tee-role")"
     exit 0
   fi
   [[ "${prev}" == "-d" ]] && body="${a}"
@@ -193,6 +203,8 @@ last_post() { tail -1 "${SB}/inventory-log"; }
 echo "aa=bb" > "${SB}/subgroups"
 printf 'aa=ctx1\nbb=ctx2\n' > "${SB}/contexts"
 echo "aa=4" > "${SB}/members"
+# Admitted as a replica, the default mode of a TEE admission policy.
+echo "ReadOnlyTee" > "${SB}/tee-role"
 
 # 1. A subgroup's context is reported under the SUBGROUP.
 #    `FleetAssignment.group_id` and `ConfirmRequest.group_id` both carry
@@ -228,22 +240,39 @@ ns = json.load(sys.stdin)['namespaces'][0]
 assert ns['member_count'] == 4, ns
 assert ns['context_count'] == 2, ns
 " || fail "member_count/context_count must be reported: $(last_post)"
+
+# 3b. A replica is reported as the admitted TEE member it is, and relays
+#     nowhere -- core refuses a ReadOnlyTee's relay whatever its capabilities,
+#     so a CAN_AUTHOR_ON_BEHALF bit on its row must not make it ready.
+echo "aa=512" > "${SB}/caps"
+reconcile_inventory peer1 '["aa"]'
+expect_posts 1 "capabilities alone must not change a replica's report"
+last_post | python3 -c "
+import json, sys
+ns = json.load(sys.stdin)['namespaces'][0]
+assert ns['tee_role'] == 'ReadOnlyTee', ns
+assert not any(g['authorship_ready'] for g in ns['groups']), ns
+" || fail "a ReadOnlyTee must be reported as a TEE member and never ready: $(last_post)"
 grep -q 'member000' "${SB}/inventory-log" \
   && fail "an account id reached the wire: $(last_post)"
 
-# 4. Authorship is asked PER GROUP. Core does not propagate
-#    CAN_AUTHOR_ON_BEHALF through the subgroup-admit cascade, so a node holding
-#    the grant on the root and nothing on the subgroup must say so — inheriting
-#    it is the exact lie this endpoint exists to prevent.
-echo "aa=512" > "${SB}/caps"
+# 4. The namespace is switched to relay mode, converting this node to a
+#    RelayTee: ready, but asked PER GROUP. The role reaches a subgroup only
+#    where membership does, so a relay of the root that is no member of a
+#    restricted subgroup must say so — inheriting readiness is the exact lie
+#    this endpoint exists to prevent.
+echo "RelayTee" > "${SB}/tee-role"
+printf 'aa=0\nbb=ERR\n' > "${SB}/caps"
 reconcile_inventory peer1 '["aa"]'
-expect_posts 2 "a changed capability must be reported"
+expect_posts 2 "a changed role must be reported"
 last_post | python3 -c "
 import json, sys
-g = {x['group_id']: x for x in json.load(sys.stdin)['namespaces'][0]['groups']}
+ns = json.load(sys.stdin)['namespaces'][0]
+assert ns['tee_role'] == 'RelayTee', ns
+g = {x['group_id']: x for x in ns['groups']}
 assert g['aa']['authorship_ready'] is True, g['aa']
 assert g['bb']['authorship_ready'] is False, g['bb']
-" || fail "authorship must be per-group: $(last_post)"
+" || fail "a RelayTee must be ready, per group: $(last_post)"
 
 # 5. Steady state is silent. The main loop runs once a second and /inventory is
 #    a write; a report that has not changed must cost nothing.
@@ -407,4 +436,18 @@ assert 'bytes' not in json.load(sys.stdin)['namespaces'][0]
 " || fail "a partial byte breakdown must be omitted: $(last_post)"
 rm -f "${SB}/usage"
 
-echo "OK: fleet sidecar context inventory — 17 checks, $(posts) posts sent"
+# 18. An unreadable TEE role is absent, never null, and readiness is false: null
+#     would tell mdma this node is no TEE member here, when the truth is "did
+#     not look". It must not downgrade the post either.
+rm -f "${SB}/tee-role"
+reconcile_inventory peer1 '["aa"]' true
+last_post | python3 -c "
+import json, sys
+body = json.load(sys.stdin)
+ns = body['namespaces'][0]
+assert 'tee_role' not in ns, ns
+assert not any(g['authorship_ready'] for g in ns['groups']), ns
+assert body['full'] is True, body
+" || fail "an unreadable role must be omitted and not ready: $(last_post)"
+
+echo "OK: fleet sidecar context inventory — 19 checks, $(posts) posts sent"
