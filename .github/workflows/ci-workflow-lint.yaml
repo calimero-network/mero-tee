@@ -412,6 +412,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-sealed-route-test.sh
 
+      # The delegated routers (`/intents`, `/context-intents`,
+      # `/governance-intents`) skip auth-node
+      # on relays. Routes requests through every router the way Traefik does,
+      # so a looser pattern (uppercase hex, any id length, a trailing slash, one
+      # more segment) fails here instead of opening a protected route.
+      - name: Check the delegated routes serve exactly their own paths
+        id: traefik_delegated_route_test
+        shell: bash
+        run: scripts/ci/tests/traefik-delegated-route-test.sh
+
       # The staging probe's log-auth check only runs on real GCP; this pins the
       # two parts that could make it lie without any cloud: the receiver's
       # token classification and the verdict read from it.
@@ -458,6 +468,7 @@ jobs:
             --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
             --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
             --checks-line "- sealed router cannot bypass auth-node: ${{ steps.traefik_sealed_route_test.outcome }}" \
+            --checks-line "- delegated routes serve exactly their own paths: ${{ steps.traefik_delegated_route_test.outcome }}" \
             --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
