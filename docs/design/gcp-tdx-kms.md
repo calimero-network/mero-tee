@@ -177,8 +177,9 @@ modified KMS that still attests as genuine would be handed the root:
 
 - **Losing every replica loses the root.** Running nodes keep their keys in
   memory, but a node of that release that restarts cannot reopen its disk. This
-  costs node replacements, not data: TEE nodes are `ReadOnlyTee` replicas, and
-  even TEE-authored `TeeOnly` writes replicate to every peer.
+  costs node replacements, not data: TEE nodes are replicas (`ReadOnlyTee`, or
+  `RelayTee`, which also relays members' writes), and even TEE-authored
+  `TeeOnly` writes replicate to every peer.
   - *Unlikely:* 5 replicas in 2 regions, automatic replacement, replacements
     started on maintenance notices, the TCB join rule, a dedicated GCP project
     with deletion protection and alerts on replica count, billing and IAM.

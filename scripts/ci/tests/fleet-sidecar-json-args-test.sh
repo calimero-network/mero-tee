@@ -140,18 +140,18 @@ python3 -c 'import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sys.arg
   "${ODD}" "${SB}/fleet-admitted.json" \
   || fail "note_admitted did not record the value verbatim: $(cat "${SB}/fleet-admitted.json")"
 
-confirm_assignment peer1 "${ODD}" true
+confirm_assignment peer1 "${ODD}" true RelayTee
 python3 -c 'import json,sys
 b = json.loads(open(sys.argv[1]).read().splitlines()[-1])
-sys.exit(0 if b == {"peer_id": "peer1", "group_id": sys.argv[2], "authorship_ready": True} else 1)' \
+sys.exit(0 if b == {"peer_id": "peer1", "group_id": sys.argv[2], "authorship_ready": True, "tee_role": "RelayTee"} else 1)' \
   "${SB}/post-log" "${ODD}" \
   || fail "confirm_assignment did not send a well-formed body: $(tail -1 "${SB}/post-log")"
 
-# Recorded as granted while meroctl reports no grant, so the reconcile sees a
-# change, reports it, and rewrites the entry.
-python3 -c 'import json,sys; print(json.dumps({sys.argv[1]: True}))' "${ODD}" > "${SB}/fleet-authorship.json"
+# Recorded as a relay while no role can be read (no executor account is known
+# here), so the reconcile sees a change, reports it, and rewrites the entry.
+python3 -c 'import json,sys; print(json.dumps({sys.argv[1]: "RelayTee"}))' "${ODD}" > "${SB}/fleet-authorship.json"
 reconcile_authorship peer1 "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${ODD}")"
-python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[2])) == {sys.argv[1]: False} else 1)' \
+python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[2])) == {sys.argv[1]: None} else 1)' \
   "${ODD}" "${SB}/fleet-authorship.json" \
   || fail "reconcile_authorship did not update the entry: $(cat "${SB}/fleet-authorship.json")"
 

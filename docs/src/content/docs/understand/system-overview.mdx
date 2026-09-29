@@ -64,7 +64,9 @@ merod (TDX VM)                         mero-kms (GCP TDX cluster, one URL)
 ### 2. Fleet admission (node ⇄ namespace, via Core)
 
 Separately, a node can join a Calimero **namespace** as a hardware-attested
-read-only replica (`ReadOnlyTee`) with no human invite. That admission handshake
+TEE member with no human invite: a read-only replica (`ReadOnlyTee`), or — when
+the namespace's TEE admission policy has `mode: relay` — a relay (`RelayTee`)
+that also executes members' delegated writes. That admission handshake
 lives in Calimero **Core**, not in this repo; the Mero TEE side is the **fleet HA
 sidecar** baked into the node image
 (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`). The sidecar
@@ -74,7 +76,8 @@ assignment is withdrawn.
 
 :::note
 The storage key a node fetches from the KMS and the per-group encryption keys a
-`ReadOnlyTee` replica receives on admission are **unrelated** key mechanisms. The
+TEE member (`ReadOnlyTee` or `RelayTee`) receives on admission are **unrelated**
+key mechanisms. The
 KMS never sees group keys; Core's fleet admission never touches the storage key.
 Keep the two flows separate. The full admission protocol is documented in
 [Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).

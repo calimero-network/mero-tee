@@ -1035,10 +1035,11 @@ fi
 # disk -- nowhere else. Anything else is state the HOST could have written, and
 # that is not just a confidentiality leak: a plain disk the operator prepared can
 # carry a node identity (config.toml's libp2p key) the operator also holds. A
-# genuine TD would attest under that key, be admitted as a ReadOnlyTee, and be
-# handed group keys wrapped to an identity the operator can unwrap. An encrypted
-# disk cannot be prepared that way: its contents are sealed under a key only a
-# genuine TD obtains, so nothing on it was written by anyone else.
+# genuine TD would attest under that key, be admitted as a TEE member
+# (`ReadOnlyTee` or `RelayTee`), and be handed group keys wrapped to an identity
+# the operator can unwrap. An encrypted disk cannot be prepared that way: its
+# contents are sealed under a key only a genuine TD obtains, so nothing on it
+# was written by anyone else.
 #
 # Existing nodes are not affected: the image is their boot disk, so a node on an
 # older image keeps it. Only a NEW VM boots this image, and mdma gives it a blank
@@ -1093,7 +1094,7 @@ fi
 # fail differently: a node created before disk encryption, or a debug node with
 # a plain disk, still gets an encrypted store, and an encrypted store never
 # depends on the disk-unlock path being right. merod's store holds
-# the node's signing identity (the key it was ADMITTED under as a ReadOnlyTee),
+# the node's signing identity (the key it was ADMITTED under as a TEE member),
 # its account root, and every context's replicated state. A copied disk is
 # therefore a copy of an admitted fleet member: it can pull every group key the
 # node was given, and, since admitted TEEs may vouch for new ones, admit more.
@@ -1214,8 +1215,8 @@ fi
 # the same `fleet_delegated_access` variable so the two edges cannot drift.
 # Only those two routes are opened, and both are self-authenticating: merod
 # refuses an intent unless the warrant is the member's, commits to this exact
-# method and arguments, is unexpired, has an unspent nonce, and this node holds
-# `CAN_AUTHOR_ON_BEHALF` on the owning group.
+# method and arguments, is unexpired, has an unspent nonce, and this node is a
+# `RelayTee` in the owning group (a `ReadOnlyTee` is refused with a 403).
 #
 # Non-fatal on failure, deliberately: a node that cannot apply this is a node
 # that replicates but does not relay, which is a degraded fleet member rather

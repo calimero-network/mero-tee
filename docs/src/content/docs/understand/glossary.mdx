@@ -6,8 +6,8 @@ sidebar:
 ---
 
 The vocabulary used across the Mero TEE docs. Only terms this system actually
-uses are listed; the protocol-level concepts (namespaces, `ReadOnlyTee`, fleet
-admission) are defined in
+uses are listed; the protocol-level concepts (namespaces, the `ReadOnlyTee` and
+`RelayTee` roles, fleet admission) are defined in
 [Calimero Core → TEE Attestation & Fleet Admission](https://calimero-network.github.io/core/protocol/tee-attestation/).
 
 ## A
@@ -203,7 +203,8 @@ Its HTTP mapping: `invalid_request` / `invalid_peer_id` (400), `invalid_challeng
 **Storage encryption key** — the key that decrypts a node's on-disk state, derived
 from the cluster root and released by the KMS, sealed, after a successful
 attestation. It is unrelated
-to the per-group keys a `ReadOnlyTee` replica receives in Core.
+to the per-group keys a TEE member (`ReadOnlyTee` or `RelayTee`) receives in
+Core.
 
 ## T
 
