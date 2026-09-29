@@ -201,18 +201,6 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-tls-test.sh
 
-      # Namespace-admin verification. mdma lets any current admin of a
-      # namespace enable HA and cannot check who that is, so it asks the node.
-      # Wrong quietly in each direction: "not a member" read off a truncated
-      # member page is a false verdict about a real admin, posted once and never
-      # corrected; a verdict recorded before mdma acknowledged it is lost; and a
-      # body carrying more than the verdict leaks the roster the inventory is
-      # careful never to send.
-      - name: Run fleet-sidecar verification test
-        id: sidecar_verification_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-verification-test.sh
-
       # Direct admission. The sidecar reports where its swarm can be dialed and
       # asks the peers MDMA names for admission, instead of only broadcasting
       # its attestation and hoping an owner's relayed laptop hears it. Wrong
@@ -451,7 +439,6 @@ jobs:
             --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
-            --checks-line "- fleet-sidecar verification test: ${{ steps.sidecar_verification_test.outcome }}" \
             --checks-line "- fleet-sidecar login node key test: ${{ steps.sidecar_login_key_test.outcome }}" \
             --checks-line "- mero-auth device-key login test: ${{ steps.mero_auth_device_login_test.outcome }}" \
             --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \

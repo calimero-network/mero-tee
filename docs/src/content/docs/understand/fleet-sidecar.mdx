@@ -384,13 +384,10 @@ the sidecar enters an infinite loop with a **one-second poll interval**
 6. **Prune both sets.** Set `confirmed = confirmed ∩ desired` and
    `admitted = admitted ∩ desired`, and persist them — so a future re-add is
    recognized as new, and a namespace just left is not left again every second.
-7. **Answer namespace-admin questions** carried by an assignment's `verify`,
-   for confirmed namespaces, again whenever the answer changes. See
-   [Answering mdma's namespace-admin questions](#answering-mdmas-namespace-admin-questions).
-8. **Report the context inventory**, over the pruned set — but on its own much
+7. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
-9. **Sleep** one second and repeat.
+8. **Sleep** one second and repeat.
 
 The confirmed set is persisted at `/mnt/data/fleet/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
@@ -846,90 +843,6 @@ four values (`accountRootEpoch`, `ephemeralPublicKey`, `nonce`, `ciphertext`) an
 a recovering holder needs all four. The whole envelope is JSON-encoded into that
 string; MDMA stores it without looking, as it does everything else here.
 
-### Answering mdma's namespace-admin questions
-
-MDMA lets any **current admin** of a namespace enable HA, not only whoever
-claimed it first. It cannot check who that is: admin-ness is governance state,
-readable only by a member holding the group's key. This node is an attested TEE
-that has joined the namespace, so MDMA asks it.
-
-The question rides a `should-join` assignment, and only the ones that need it —
-an older MDMA never sends it, and the node joins a namespace carrying it exactly
-as it joins any other (admission is core's decision, not the sidecar's):
-
-```json
-{ "group_id": "<64 hex>", "verify": { "founder_account_id": "<64 hex>", "account_id": "<64 hex>" } }
-```
-
-Once the namespace is confirmed, `reconcile_verification` answers it from the
-local merod:
-
-```bash
-meroctl ... namespace get <NAMESPACE>                        # data.founding.founderAccountId
-curl http://127.0.0.1:{server-port}/admin-api/groups/<NAMESPACE>/members?offset=N&limit=1000
-                                                             # members[].role, paged until the account or the end
-```
-
-The member list is read over loopback rather than with
-`meroctl group members list`, because meroctl sends no `offset`/`limit` and so
-only ever sees core's first page of 100. The route is the same handler, on
-core's admin router, which has no guard in merod's default proxy auth mode (the
-same reason `/admin-api/usage` and the registration quote are read this way).
-
-and posts `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` with
-`{"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}`.
-
-- **`founder_matches`** — core derives a namespace id from its founder,
-  `domain_hash("calimero.namespace.id.v1", [founder, salt])`, and every replica
-  that applied the namespace's V2 genesis keeps that pair as `founding`. It is
-  `true` only when that founder equals the one MDMA named. A replica of a forged
-  or legacy V1 genesis has no `founding` and answers `false` — and so does a
-  merod that predates derived ids.
-- **`account_role`** — `Admin`, `Member`, `ReadOnly` or `ReadOnlyTee` as merod
-  emits it for the named account in the namespace root group, or `null` if it is
-  not a member.
-
-**No roster crosses the wire.** This is the same property `member_count` keeps:
-the member list is read inside the TEE, and only a verdict about the one account
-MDMA already supplied leaves. The body carries exactly those five fields.
-
-**A partial read is never an answer.** The sidecar pages through the member list
-until it finds the account, which is certain and ends the read, or reaches the
-end of the list. `null` ("not a member") is reported only once every page has
-been read. Anything short of that posts nothing and is retried next cycle,
-because "not a member" read off part of the list is a false verdict about a real
-admin. That covers a failed or unparseable page (first or later), a list that
-changed between two pages, and running out of pages or time:
-
-- **Pages overlap by one row.** Each page after the first starts on the previous
-  page's last account, and that account must come back first. If it does not,
-  a member was added or removed before the offset and later rows shifted, which
-  could have stepped over the account.
-- **The end is an empty page, not a short one.** The list is exhausted only when
-  a page brings nothing past that overlap row. A node that clamps `limit` below
-  what was asked then costs extra pages instead of a false `null`.
-- **Bounded work per cycle.** At most `VERIFICATION_MAX_PAGES` (10) pages of
-  `VERIFICATION_PAGE_SIZE` (1000, core's `MAX_LIST_LIMIT`) rows in
-  `VERIFICATION_READ_BUDGET` (20 s). A namespace too large to read in that budget
-  is answered only if the account is found. Absence there stays "unknown", and
-  nothing is posted.
-
-**Once per answer, not once per question.** A just-joined node may answer from
-governance that has not synced yet (the account not listed, or not yet an
-admin), and a merod that predates derived ids reports no `founding` at all.
-MDMA lets only a positive verdict decide and keeps a request pending on a
-negative one, so a node whose answer later *improves* has to say so. The answer
-is therefore re-read each cycle while MDMA keeps asking, and posted only when it
-differs from the verdict MDMA last acknowledged, which is recorded per
-`(namespace, founder, account)` in `/mnt/data/fleet/fleet-verifications.json`.
-The dedupe is on the question *and* its answer (`founder_matches`,
-`account_role`): an unchanged answer is never re-sent. A failed POST is not
-recorded, so it is retried. A question MDMA stops asking is forgotten, so asking
-it again later is answered afresh. Warnings are edge-triggered — one line
-when a question becomes unanswerable, not one a second. None of it can block or
-fail the join, leave or inventory loop. Covered by
-`scripts/ci/tests/fleet-sidecar-verification-test.sh`.
-
 ### Every failure lands on "replicates but does not relay"
 
 None of these reads is fatal, and they degrade in the same safe direction.
@@ -1257,9 +1170,6 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Recovery membership walk | `meroctl … group members list \| group subgroups \| group contexts list \| group member-devices <GROUP_ID>` |
 | Recovery envelope | `PUT {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id", "ciphertext", "version"}` |
 | Recovery envelope removal | `DELETE {MDMA_URL}/api/fleet/recovery-envelope` — body `{"peer_id", "account_id", "namespace_id"}` |
-| Admin verification | `POST {MDMA_URL}/api/fleet/namespaces/<ns>/verification` — body `{"peer_id", "founder_account_id", "account_id", "founder_matches", "account_role"}`; asked by `assignments[].verify` |
-| Verification probes | `meroctl … namespace get <NS>` → `data.founding.founderAccountId`; `GET http://127.0.0.1:{server-port}/admin-api/groups/<NS>/members?offset=&limit=1000` (loopback, paged, pages overlap by one row) → `members[].role` |
-| Verification state | `/mnt/data/fleet/fleet-verifications.json` |
 | Seal command | `meroctl … account seal-to <GROUP_ID> <ACCOUNT>` (plaintext on stdin) |
 | Recovery envelope state | `/mnt/data/fleet/fleet-recovery.json` |
 | TLS key and certificate | `/mnt/data/tls/key.pem`, `/mnt/data/tls/cert.pem` — key generated by `calimero-init` before Traefik starts; never leaves the node |
