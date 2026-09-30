@@ -15,6 +15,12 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    ignore:
+      # cosign v3 (installer v4) stops writing the detached .sig/.pem the release
+      # jobs publish and merod/mero-kms verify. Stay on installer v3 until the
+      # release pipeline moves to the new bundle format.
+      - dependency-name: "sigstore/cosign-installer"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/attestation-verifier"
