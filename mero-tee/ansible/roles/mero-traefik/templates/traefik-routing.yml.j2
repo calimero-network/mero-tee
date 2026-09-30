@@ -284,6 +284,23 @@ http:
         - cors
         - auth-node
 
+    # Server-sent events, the other half of the event stream next to `/ws`:
+    # the same credential and the same gate. A browser client subscribes here
+    # (its session token rides in an `Authorization` header, which a fetch-based
+    # SSE client can send and a browser WebSocket cannot), so without this router every
+    # `/sse` request, its CORS preflight included, fell through to Traefik's
+    # bare 404, which a browser reports as a CORS failure.
+    node-sse:
+      rule: "PathPrefix(`/sse`)"
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit
+        - cors
+        - auth-node
+
     node-dashboard:
       rule: "PathPrefix(`/admin-dashboard`)"
       entryPoints:
