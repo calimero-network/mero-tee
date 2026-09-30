@@ -33,7 +33,7 @@ exactly that when it reached EOL. Component versions are pinned in
 
 | Component | Version key | Value at time of writing |
 | --- | --- | --- |
-| Node image | `imageVersion` | `2.3.100` |
+| Node image | `imageVersion` | `2.3.101` |
 | merod / meroctl / mero-auth (core tag) | `merodVersion` | `0.11.0-rc.66` |
 | Traefik | `traefikVersion` | `3.5.0` |
 | node-exporter | `nodeExporterVersion` | `1.9.1` |
@@ -294,7 +294,10 @@ the boot disk. The script
 7. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
    `server.jsonrpc.enabled=false`, `server.sse.enabled=false`, and
    `server.websocket.enabled=false` — the client-facing write/subscribe
-   surfaces are turned off, leaving only the read/admin path. In `full`
+   surfaces are turned off, leaving only the read/admin path. A relay (a
+   read-only profile built with `fleet_delegated_access`, the default for both
+   read-only profiles) keeps `server.sse.enabled=true`: delegated clients
+   subscribe there, behind `auth-node`, scoped to their own contexts. In `full`
    (`debug`) mode these remain enabled.
 
 8. **Start services.** It `daemon-reload`s, enables and non-blocking-starts

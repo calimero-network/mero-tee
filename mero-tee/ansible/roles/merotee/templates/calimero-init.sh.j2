@@ -1198,12 +1198,27 @@ Recreate this node to move it onto an encrypted store."
 fi
 
 if [[ "$MEROD_MODE" == "read-only" ]]; then
+{% if fleet_delegated_access | default(false) | bool %}
+  # A relay keeps SSE: it is how a delegated client, which reads and writes
+  # through the intents routes below, learns of other members' writes. The
+  # stream sits behind traefik's `auth-node` (the `node-sse` router) and each
+  # subscription is authorized per context against the caller's own account,
+  # so it reaches only contexts that caller is a member of. JSON-RPC and
+  # WebSocket stay off, as on every read-only node.
+  log "Applying read-only merod config (jsonrpc/websocket disabled, sse kept for delegated clients)..."
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    'server.jsonrpc.enabled=false' \
+    'server.sse.enabled=true' \
+    'server.websocket.enabled=false' \
+    || log "WARN: failed to apply read-only merod config"
+{% else %}
   log "Applying read-only merod config (jsonrpc/sse/websocket disabled)..."
   "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
     'server.jsonrpc.enabled=false' \
     'server.sse.enabled=false' \
     'server.websocket.enabled=false' \
     || log "WARN: failed to apply read-only merod config"
+{% endif %}
 fi
 
 {% if fleet_delegated_access | default(false) | bool %}
