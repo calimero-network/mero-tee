@@ -25,6 +25,7 @@
     # because the posture has two edges that must move together:
     #
     #   * traefik exempts `/admin-api/contexts/<ctx>/intents`,
+    #     `/admin-api/contexts/<ctx>/presence-intents`,
     #     `/admin-api/groups/<group>/context-intents` and
     #     `/admin-api/groups/<group>/governance-intents` from `auth-node`
     #     (ansible/roles/mero-traefik/templates/traefik-routing.yml.j2), and
