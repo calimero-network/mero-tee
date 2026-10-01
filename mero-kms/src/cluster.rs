@@ -838,7 +838,10 @@ mod tests {
             let addr = serve(Arc::new(test_tdx_backend(Some(Root::generate())))).await;
             let client = reqwest::Client::new();
             let post = |path: &str, body: serde_json::Value| {
-                client.post(format!("http://{addr}{path}")).json(&body).send()
+                client
+                    .post(format!("http://{addr}{path}"))
+                    .json(&body)
+                    .send()
             };
 
             let nonce: JoinNonceResponse = post("/cluster/nonce", serde_json::json!({}))

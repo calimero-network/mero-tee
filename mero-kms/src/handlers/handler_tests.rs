@@ -512,7 +512,11 @@ async fn attest_never_signs_the_callers_binding_verbatim() {
         let payload = read_json_body(response).await;
         let report_data = hex::decode(payload["reportDataHex"].as_str().unwrap()).unwrap();
         assert_eq!(&report_data[..32], &[7u8; 32]);
-        assert_ne!(&report_data[32..], &binding, "transportKey: {transport_key}");
+        assert_ne!(
+            &report_data[32..],
+            &binding,
+            "transportKey: {transport_key}"
+        );
     }
 }
 
