@@ -488,6 +488,38 @@ async fn the_attest_event_log_is_opt_in() {
     assert_eq!(payload["error"], "attestation_verification_failed");
 }
 
+/// Whatever binding a caller names, `/attest` never signs it verbatim, with or
+/// without a transport key: every other quote this TD signs carries a hash a
+/// caller can compute, so a verbatim binding would let a caller pick one.
+#[cfg(feature = "mock-attestation")]
+#[tokio::test]
+async fn attest_never_signs_the_callers_binding_verbatim() {
+    let nonce_b64 = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    let binding = [0x5a; 32];
+    for transport_key in [false, true] {
+        let response = create_router(Config::default(), replica(7))
+            .oneshot(post_json_request(
+                "/attest",
+                &serde_json::json!({
+                    "nonceB64": nonce_b64,
+                    "bindingB64": base64::engine::general_purpose::STANDARD.encode(binding),
+                    "transportKey": transport_key,
+                }),
+            ))
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = read_json_body(response).await;
+        let report_data = hex::decode(payload["reportDataHex"].as_str().unwrap()).unwrap();
+        assert_eq!(&report_data[..32], &[7u8; 32]);
+        assert_ne!(
+            &report_data[32..],
+            &binding,
+            "transportKey: {transport_key}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_policy_not_ready_error_maps_to_service_unavailable() {
     let response =

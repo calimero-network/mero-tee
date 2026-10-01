@@ -43,13 +43,22 @@ binding contains depends on which surface generated the quote:
 
 | Surface | `report_data[0..32]` | `report_data[32..64]` |
 | --- | --- | --- |
-| KMS `/attest` | caller nonce (`nonceB64`) | caller `bindingB64`, or the default `SHA-256("mero-kms-attest-v1")`; with `transportKey: true`, a binding that also commits to the KMS's transport key |
+| KMS `/attest` | caller nonce (`nonceB64`) | `SHA-256("mero-kms/attest-plain/v1" ‖ b)`, where `b` is the caller's `bindingB64` or the default `SHA-256("mero-kms-attest-v1")`; with `transportKey: true`, `SHA-256("mero-kms/attest-transport-key/v1" ‖ b ‖ transport_public)` instead |
 | KMS key-release quote (from a node) | challenge nonce issued by the KMS | `SHA-256(peer_id)` |
 
 :::note
 The default KMS binding is a fixed domain separator, `SHA-256("mero-kms-attest-v1")`,
 so the second half is never all-zeros even when the caller supplies no binding. It is
 **not** a hash of the KMS version.
+:::
+
+:::caution
+`/attest` never signs the caller's `bindingB64` as given: it always hashes it under a
+domain of its own. The same TD signs the quotes of a cluster join and the
+transport-key commitment, and their bindings are hashes anyone can compute, so an
+unauthenticated endpoint that signed a caller's bytes verbatim would let a caller
+obtain exactly those quotes. A verifier checks the nonce half, and recomputes the
+second half only when it needs the transport key.
 :::
 
 ## KMS self-attestation — `POST /attest`
@@ -72,9 +81,10 @@ runs the expected measurement.
    be 32 bytes when present. `transportKey` (optional) asks for the KMS's X25519
    transport key, which merod uses for sealed key release.
 
-2. **KMS builds report_data.** It sets `report_data = nonce || binding`, where
-   `binding` is the supplied value or the default domain-separated constant — and,
-   when the transport key was asked for, a binding that commits to it too.
+2. **KMS builds report_data.** It sets `report_data = nonce || H`, where `H` hashes
+   the supplied binding (or the default domain-separated constant) under the
+   `/attest` domain — and, when the transport key was asked for, commits to that key
+   too.
 
 3. **KMS takes a quote** over that `report_data` from configfs-tsm.
 
@@ -137,7 +147,7 @@ verifier has checked the quote it produced:
   ]}
   steps={[
     { from: 0, to: 1, label: 'POST /attest { nonceB64, bindingB64?, transportKey? }', color: '#a5ff11' },
-    { from: 1, to: 1, label: 'report_data = nonce || binding (or default domain sep)' },
+    { from: 1, to: 1, label: 'report_data = nonce || H(attest domain, binding)' },
     { from: 1, to: 2, label: 'quote(report_data)', color: '#a371f7' },
     { from: 2, to: 1, label: 'raw TDX quote', color: '#a371f7', dashed: true },
     { from: 1, to: 0, label: '{ quoteB64, reportDataHex, transportPublicKeyB64? }', color: '#3fb950' },
