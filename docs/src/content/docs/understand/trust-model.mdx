@@ -23,14 +23,14 @@ admission** trust flow lives in Calimero Core — see
 A node should confirm it is talking to a genuine KMS of **its own release**
 before sending a key request. The KMS provides `POST /attest` for exactly this:
 the caller sends a fresh 32-byte nonce, and the KMS returns a TDX quote (from
-configfs-tsm) whose `report_data` is `nonce ‖ binding`
+configfs-tsm) whose `report_data` is `nonce ‖ H(binding)`
 (`mero-kms/src/handlers/attest.rs`). The caller then checks the quote's
 signature, the nonce binding, and the KMS's own measurements against known-good
 values.
 
 ```
 report_data[0..32]  = client nonce            (freshness)
-report_data[32..64] = binding                 (defaults to SHA-256("mero-kms-attest-v1"))
+report_data[32..64] = SHA-256(attest domain ‖ binding)   (binding defaults to SHA-256("mero-kms-attest-v1"))
 ```
 
 The same endpoint powers the [attestation verifier](/flows/verification/).

@@ -830,6 +830,52 @@ mod tests {
             assert!(refusal.contains("measurements differ"), "{refusal}");
         }
 
+        /// `/attest` is unauthenticated and signs with this replica's own
+        /// measurements, so a quote it returns must never pass as a joiner's:
+        /// otherwise anyone who can reach the port is handed the root.
+        #[tokio::test]
+        async fn a_quote_from_attest_is_not_a_join_quote() {
+            let addr = serve(Arc::new(test_tdx_backend(Some(Root::generate())))).await;
+            let client = reqwest::Client::new();
+            let post = |path: &str, body: serde_json::Value| {
+                client.post(format!("http://{addr}{path}")).json(&body).send()
+            };
+
+            let nonce: JoinNonceResponse = post("/cluster/nonce", serde_json::json!({}))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let joiner_public = MontgomeryPoint::mul_base_clamped([0x33; 32]).0;
+            let attest: serde_json::Value = post(
+                "/attest",
+                serde_json::json!({
+                    "nonceB64": nonce.nonce_b64,
+                    "bindingB64": BASE64.encode(join_binding(&joiner_public)),
+                }),
+            )
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+            let quote_b64 = attest["quoteB64"].as_str().expect("a quote").to_owned();
+
+            let join = post(
+                "/cluster/join",
+                serde_json::to_value(JoinRequest {
+                    nonce_b64: nonce.nonce_b64,
+                    joiner_public_b64: BASE64.encode(joiner_public),
+                    quote_b64,
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert!(!join.status().is_success(), "{:?}", join.text().await);
+        }
+
         #[tokio::test]
         async fn a_replica_without_a_root_gives_nothing() {
             let addr = serve(Arc::new(test_tdx_backend(None))).await;
