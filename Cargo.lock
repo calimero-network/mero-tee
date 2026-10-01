@@ -2577,7 +2577,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mero-kms"
-version = "2.3.103"
+version = "2.3.104"
 dependencies = [
  "axum",
  "base64 0.23.1",
