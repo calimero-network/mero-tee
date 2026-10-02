@@ -62,7 +62,7 @@ pub(crate) async fn attest_kms_handler(
         let public = *transport.public();
         (sealed::attest_binding(&binding, &public), Some(public))
     } else {
-        (binding, None)
+        (plain_attest_binding(&binding), None)
     };
     let report_data = build_attestation_report_data(&nonce, &binding);
     let quote = state.backend.quote(report_data).await?.quote_bytes;
@@ -96,6 +96,28 @@ const ATTEST_DOMAIN_SEPARATOR: &[u8] = b"mero-kms-attest-v1";
 /// Ensures the second half of report_data is never all-zeros.
 fn default_attestation_binding() -> [u8; 32] {
     Sha256::digest(ATTEST_DOMAIN_SEPARATOR).into()
+}
+
+/// Domain of the 32 bytes `/attest` puts after the nonce when it reports no
+/// transport key.
+const PLAIN_ATTEST_DOMAIN: &[u8] = b"mero-kms/attest-plain/v1";
+
+/// The 32 bytes `/attest` puts after the nonce when it reports no transport key.
+///
+/// Never the caller's bytes as given. This TD signs `/cluster/join` quotes
+/// (`nonce ‖ join_binding`), `/cluster/join` responses (`nonce ‖ give_binding`)
+/// and transport-key commitments (`nonce ‖ sealed::attest_binding`), and all of
+/// those bindings are hashes anyone can compute. If this unauthenticated
+/// endpoint signed a caller's 32 bytes verbatim, a caller could ask for exactly
+/// one of those quotes, with the measurements of this replica, without holding
+/// a TD: join the cluster and be handed its root, or vouch for a transport key
+/// of its own. Hashed under a domain of its own, the output collides with none
+/// of them.
+fn plain_attest_binding(binding: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PLAIN_ATTEST_DOMAIN);
+    hasher.update(binding);
+    hasher.finalize().into()
 }
 
 pub(crate) fn resolve_attestation_binding(
