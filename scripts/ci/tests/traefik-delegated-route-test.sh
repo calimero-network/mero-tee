@@ -3,10 +3,11 @@
 # The delegated routes exempt from `auth-node` match exactly their own paths,
 # and nothing next to them.
 #
-# On a relay (`fleet_delegated_access`), three routers let a caller holding no
+# On a relay (`fleet_delegated_access`), four routers let a caller holding no
 # node credential reach merod, because the request carries its own:
 #
 #   * `node-api-intents`             GET/POST/OPTIONS /admin-api/contexts/<64 hex>/intents
+#   * `node-api-presence-intents`    POST/OPTIONS     /admin-api/contexts/<64 hex>/presence-intents
 #   * `node-api-context-intents`     GET/POST/OPTIONS /admin-api/groups/<64 hex>/context-intents
 #   * `node-api-governance-intents`  GET/POST/OPTIONS /admin-api/groups/<64 hex>/governance-intents
 #
@@ -208,7 +209,12 @@ GRP = "0123456789abcdef" * 4
 AUTHOR = "cd" * 32
 assert len(CTX) == len(GRP) == 64
 
-EXEMPT = {"node-api-intents", "node-api-context-intents", "node-api-governance-intents"}
+EXEMPT = {
+    "node-api-intents",
+    "node-api-presence-intents",
+    "node-api-context-intents",
+    "node-api-governance-intents",
+}
 GUARDED = "node-api"
 
 # (method, target, router on a relay)
@@ -225,6 +231,21 @@ RELAY_CASES = [
     ("GET", f"/admin-api/contexts/{CTX}/intents/", GUARDED),
     ("GET", f"/admin-api/contexts/{CTX}/intents/x", GUARDED),
     ("DELETE", f"/admin-api/contexts/{CTX}", GUARDED),
+    # delegated presence: POST only, there is no descriptor
+    ("POST", f"/admin-api/contexts/{CTX}/presence-intents", "node-api-presence-intents"),
+    ("OPTIONS", f"/admin-api/contexts/{CTX}/presence-intents", "node-api-presence-intents"),
+    ("GET", f"/admin-api/contexts/{CTX}/presence-intents", GUARDED),
+    ("DELETE", f"/admin-api/contexts/{CTX}/presence-intents", GUARDED),
+    ("PUT", f"/admin-api/contexts/{CTX}/presence-intents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX.upper()}/presence-intents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX[:63]}/presence-intents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}a/presence-intents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence-intents/", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence-intents/x", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence-intentsx", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence", GUARDED),
+    ("POST", f"/admin-api/contexts/x/{CTX}/presence-intents", GUARDED),
+    ("POST", f"/prefix/admin-api/contexts/{CTX}/presence-intents", None),
     # delegated creation
     ("GET", f"/admin-api/groups/{GRP}/context-intents", "node-api-context-intents"),
     ("GET", f"/admin-api/groups/{GRP}/context-intents?author={AUTHOR}", "node-api-context-intents"),
@@ -267,6 +288,10 @@ RELAY_CASES = [
     ("POST", f"/admin-api/contexts/{CTX}/context-intents", GUARDED),
     ("POST", f"/admin-api/groups/{GRP}/intents", GUARDED),
     ("POST", f"/admin-api/contexts/{CTX}/governance-intents", GUARDED),
+    ("POST", f"/admin-api/groups/{GRP}/presence-intents", GUARDED),
+    # `/intents` and `/presence-intents` must not match each other's path
+    ("POST", f"/admin-api/contexts/{CTX}/presenceintents", GUARDED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence/intents", GUARDED),
 ]
 
 

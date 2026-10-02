@@ -11,9 +11,9 @@
 #   * `auth-node` lists both in `authResponseHeaders`, so on a guarded route
 #     Traefik replaces them with mero-auth's answer;
 #   * `strip-proxy-identity` deletes both, and is attached to EVERY entrypoint,
-#     so a route that skips `auth-node` (intents, context-intents,
-#     governance-intents, admission, the sealed envelope, the auth service)
-#     never carries a client's value;
+#     so a route that skips `auth-node` (intents, presence-intents,
+#     context-intents, governance-intents, admission, the sealed envelope, the
+#     auth service) never carries a client's value;
 #   * the middleware is defined outside any `{% if %}`, since the entrypoints
 #     reference it on every image and a missing one fails every router;
 #   * `mero-tee/versions.json` pins a merod that knows `server.proxy_identity`.
