@@ -28,14 +28,15 @@ python3 - "$TEMPLATE" <<'PY'
 import re
 import sys
 
-EXPECTED_ROUTERS = 12
+EXPECTED_ROUTERS = 13
 
-# The tight tier, for routes reachable with no credential at all. All five
+# The tight tier, for routes reachable with no credential at all. All six
 # make the node do cryptographic work before they can refuse: the intents,
-# context-intents, governance-intents and admit routes verify signatures, and a
-# sealed handshake is a Diffie-Hellman per call.
+# presence-intents, context-intents, governance-intents and admit routes verify
+# signatures, and a sealed handshake is a Diffie-Hellman per call.
 TIGHT = {
     "node-api-intents",
+    "node-api-presence-intents",
     "node-api-context-intents",
     "node-api-governance-intents",
     "node-api-admit",

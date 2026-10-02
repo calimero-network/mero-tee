@@ -8,9 +8,9 @@
 http:
   routers:
 {% if fleet_delegated_access | default(false) | bool %}
-    # Delegated execution. One of the three write paths on this node that a
-    # caller with no account here may reach (the others, delegated context
-    # creation and delegated governance, are the next routers), and the reason
+    # Delegated execution. One of the delegated paths on this node that a
+    # caller with no account here may reach (the others, delegated presence,
+    # context creation and governance, are the next routers), and the reason
     # it is exempt from `auth-node` is that it carries its own credential:
     #
     #   * the body holds a WARRANT signed by the author's device key, which
@@ -46,6 +46,34 @@ http:
       # after `auth-node` would pay for a forwardAuth subrequest per flooded
       # request — turning a flood of this node into a flood of its auth service
       # too.
+      middlewares:
+        - rate-limit-public
+        - cors
+      priority: 98
+
+    # Delegated PRESENCE: an account's ephemeral presence, published through
+    # this relay. Exempt from `auth-node` for the same reason as
+    # `node-api-intents`: the body holds a presence statement signed by the
+    # device key, plus the account proof tying that device to its account, and
+    # the signature is the credential, as a warrant is for `/intents`. merod
+    # checks both, refuses a statement outside a short freshness window, and
+    # forwards the update; receivers keep only the highest seq per device. It
+    # runs nothing, spends no warrant nonce and changes no state.
+    #
+    # POST only (and OPTIONS for the CORS preflight): there is no descriptor,
+    # so a `GET` falls to `node-api` and its `auth-node`. `PathRegexp` pins the
+    # shape: a 64-hex context id and the literal `presence-intents`, anchored
+    # at both ends, so neither this pattern nor the `/intents` one can match
+    # the other's path.
+    #
+    # Relay-only, and paired with merod's `server.admin.delegated_access`, which
+    # serves this route on the same router as `/intents`.
+    node-api-presence-intents:
+      rule: "PathRegexp(`^/admin-api/contexts/[0-9a-f]{64}/presence-intents$`) && (Method(`POST`) || Method(`OPTIONS`))"
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
       middlewares:
         - rate-limit-public
         - cors
@@ -130,8 +158,8 @@ http:
     # request names is inside the envelope, where forwardAuth cannot look. That
     # is safe ONLY because merod enforces the same boundary itself. In proxy
     # auth mode (these nodes), merod lets an opened request reach nothing but
-    # what it serves without a credential: the intents, context-intents and
-    # governance-intents routes above, and the probes and public TEE routes. Which inner paths
+    # what it serves without a credential: the intents, presence-intents,
+    # context-intents and governance-intents routes above, and the probes and public TEE routes. Which inner paths
     # count is merod's decision, not this file's: there is no allowlist here
     # to keep in step, and a route merod serves on its delegated router is
     # reachable sealed exactly when it is reachable unsealed. Anything `auth-node` would have guarded is
@@ -345,9 +373,10 @@ http:
   middlewares:
     # Request-rate limits.
     #
-    # Four routes on this ingress verify signatures for callers holding no
-    # credential at all — `node-api-intents`, `node-api-context-intents`,
-    # `node-api-governance-intents` and `node-api-admit` — and that is deliberate: the request carries its own
+    # Five routes on this ingress verify signatures for callers holding no
+    # credential at all — `node-api-intents`, `node-api-presence-intents`,
+    # `node-api-context-intents`, `node-api-governance-intents` and
+    # `node-api-admit` — and that is deliberate: the request carries its own
     # authority, so requiring a node credential would make these features
     # unreachable for exactly the callers they exist for. The cost is that anyone can make a node do Ed25519 work,
     # which the comments on those routers already name as a request-rate surface
@@ -429,8 +458,8 @@ http:
     # request, before any router runs: attached to both entrypoints in
     # config.yml, not to routers, so a router added later cannot forget it.
     #
-    # Needed because some routes skip `auth-node` — intents, context-intents,
-    # governance-intents, admission, the sealed envelope, the auth service itself — and on those
+    # Needed because some routes skip `auth-node` — intents, presence-intents,
+    # context-intents, governance-intents, admission, the sealed envelope, the auth service itself — and on those
     # nothing else would overwrite a client's `X-Auth-Account`. merod
     # (`server.proxy_identity`) would then read it as the caller and scope the
     # request as that account.

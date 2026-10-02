@@ -85,9 +85,10 @@ third rides `/confirm` and is re-reported whenever it changes, because the
 capability is granted by a namespace admin long after admission. Any failure
 degrades to "replicates but does not relay" — MDMA then never advertises the
 node, so clients are not sent to mint warrants it would refuse. The image opens
-exactly three paths for this, driven by the single Ansible variable
+exactly four paths for this, driven by the single Ansible variable
 `fleet_delegated_access`: Traefik routers exempting
 `/admin-api/contexts/<ctx>/intents` (delegated execution),
+`/admin-api/contexts/<ctx>/presence-intents` (delegated presence),
 `/admin-api/groups/<group>/context-intents` (delegated context creation) and
 `/admin-api/groups/<group>/governance-intents` (delegated governance) from
 forwardAuth, and merod's
