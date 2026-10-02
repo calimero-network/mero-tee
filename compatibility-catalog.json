@@ -539,6 +539,13 @@
       "node_image_tag": "mero-tee-v2.3.104",
       "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.104/kms-attestation-policy.json",
       "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.104/published-mrtds.json"
+    },
+    {
+      "version": "2.3.105",
+      "kms_tag": "mero-kms-v2.3.105",
+      "node_image_tag": "mero-tee-v2.3.105",
+      "kms_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-kms-v2.3.105/kms-attestation-policy.json",
+      "node_policy_url": "https://github.com/calimero-network/mero-tee/releases/download/mero-tee-v2.3.105/published-mrtds.json"
     }
   ]
 }
