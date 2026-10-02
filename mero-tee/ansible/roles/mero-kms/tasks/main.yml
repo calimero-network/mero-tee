@@ -26,6 +26,27 @@
     - allowed_rtmr2
     - allowed_rtmr3
 
+# Each value is written verbatim into the measured kms.env as `KEY=a,b,c`. A
+# newline in one would add a line of its own (`ENFORCE_MEASUREMENT_POLICY=false`)
+# and a comma an entry nobody measured, so only the exact shapes the KMS policy
+# reads get through, whichever path built the allowlist file.
+# scripts/release/kms/extract-node-allowlist.sh checks the same at release time.
+# `\Z`, not `$`: Python's `$` also matches before a trailing newline.
+- name: Refuse a node allowlist value kms.env could not carry intact
+  assert:
+    that:
+      - kms_node_policy[item.field] is sequence and kms_node_policy[item.field] is not string
+      - kms_node_policy[item.field] | length <= 32
+      - kms_node_policy[item.field] | reject('match', item.pattern) | list | length == 0
+    fail_msg: "The node allowlist's {{ item.field }} holds a value that is not {{ item.shape }}."
+  loop:
+    - { field: allowed_tcb_statuses, pattern: '[A-Za-z]{1,64}\Z', shape: 'a TCB status name' }
+    - { field: allowed_mrtd, pattern: '[0-9A-Fa-f]{96}\Z', shape: '96 hex characters' }
+    - { field: allowed_rtmr0, pattern: '[0-9A-Fa-f]{96}\Z', shape: '96 hex characters' }
+    - { field: allowed_rtmr1, pattern: '[0-9A-Fa-f]{96}\Z', shape: '96 hex characters' }
+    - { field: allowed_rtmr2, pattern: '[0-9A-Fa-f]{96}\Z', shape: '96 hex characters' }
+    - { field: allowed_rtmr3, pattern: '[0-9A-Fa-f]{96}\Z', shape: '96 hex characters' }
+
 # tdx_guest provides both the RTMR3 extend interface and configfs-tsm quotes.
 - name: Install linux-modules-extra for tdx_guest
   apt:

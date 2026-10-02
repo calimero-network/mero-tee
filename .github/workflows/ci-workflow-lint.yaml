@@ -238,6 +238,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tdx-event-log-test.sh
 
+      # A KMS image bakes its node allowlist into the measured kms.env and the
+      # release signs that image, so only the node release's own signed policy,
+      # in shapes kms.env carries intact, may become one.
+      - name: Check the KMS node allowlist is verified and well-formed
+        id: kms_node_allowlist_test
+        shell: bash
+        run: scripts/ci/tests/kms-node-allowlist-test.sh
+
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
         shell: bash
@@ -455,6 +463,7 @@ jobs:
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
+            --checks-line "- KMS node allowlist verified and well-formed: ${{ steps.kms_node_allowlist_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
