@@ -257,6 +257,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
 
+      # Leaving purges the namespace's keys and data, so mdma no longer listing
+      # one only starts a clock: the leave waits out a grace period that survives
+      # restarts, is refused when most namespaces vanish at once, and is rate
+      # limited. Runs the whole sidecar loop against stubs.
+      - name: Check one should-join answer cannot purge a fleet node
+        id: leave_grace_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-leave-grace-test.sh
+
       # The sidecar's python helpers take their inputs as argv, so a value with
       # a quote in it cannot break them, and poll_mdma checks the shape of every
       # group id before the loop acts on it.
@@ -460,6 +469,7 @@ jobs:
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
+            --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
             --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \

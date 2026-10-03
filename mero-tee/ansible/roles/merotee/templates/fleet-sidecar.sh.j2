@@ -31,6 +31,39 @@ CONFIRMED_FILE="/mnt/data/fleet/fleet-confirmed.json"
 # CONFIRMED_FILE -- and the leave diff used to be computed from that file, so
 # such a namespace could never be left (calimero-network/mdma#155).
 ADMITTED_FILE="/mnt/data/fleet/fleet-admitted.json"
+# Leaving a namespace is irreversible: `meroctl namespace leave` publishes
+# MemberLeft and core purges this node's keys and data for it. mdma's answer is
+# therefore never acted on the moment it stops listing a namespace, because one
+# wrong answer -- a compromised mdma, a policy that omits this image, a plan or
+# profile edit, an `{"assignments": []}` from anything that can answer 200 --
+# would otherwise purge every namespace on every replica within one poll. See
+# `plan_leaves`. What it remembers lives here, on the encrypted data disk, so a
+# restart neither resets a grace period nor skips one:
+#   absent_since   {namespace: epoch seconds it was first seen missing}
+#   recent_leaves  [epoch seconds of each leave inside the rate window]
+#   suspicious     whether the mass-drop guard is engaged (edge-triggered log)
+#   deferred       namespaces past their grace but held back by the rate limit
+LEAVE_STATE_FILE="/mnt/data/fleet/fleet-leave-pending.json"
+# How long a namespace must stay out of every successful should-join answer,
+# continuously, before it is left. A namespace that reappears (in `assignments`
+# or in `retain`) clears its timer. Long enough for a human to notice and undo a
+# bad policy publish or a mistaken edit before any replica purges anything.
+# Baked into the image, so it is part of the measurement: a host cannot shorten
+# it, and changing it is an image release.
+LEAVE_GRACE_SECONDS=86400
+# At most this many leaves in any rolling LEAVE_RATE_WINDOW, whatever mdma says,
+# so even a drop that outlasts the grace period drains slowly enough to stop.
+LEAVE_MAX_PER_WINDOW=4
+LEAVE_RATE_WINDOW=3600
+# The mass-drop guard: when at least LEAVE_MASS_DROP_MIN admitted namespaces are
+# missing at once AND they are more than LEAVE_MASS_DROP_PERCENT of everything
+# admitted, the answer is treated as suspect -- logged loudly, and nothing is
+# left at all while it lasts. An owner disabling HA moves one or two namespaces;
+# losing most of them at once is what an outage, a bad policy or a hostile mdma
+# looks like. Leaving a namespace then needs mdma's answer to stop looking like
+# that, not just the grace period to pass.
+LEAVE_MASS_DROP_MIN=3
+LEAVE_MASS_DROP_PERCENT=50
 # Per-namespace record of the TEE role we last told mdma about (the source of
 # `authorship_ready`), so a role converted AFTER admission gets re-reported
 # exactly once per change rather than on every one-second cycle. See
@@ -780,6 +813,15 @@ for a in assignments:
     gid = a.get('group_id') if isinstance(a, dict) else None
     if not isinstance(gid, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', gid):
         print('sidecar: malformed group_id in should-join response', file=sys.stderr)
+        sys.exit(1)
+retain = data.get('retain', [])
+if retain is None:
+    retain = []
+if not isinstance(retain, list):
+    sys.exit(1)
+for gid in retain:
+    if not isinstance(gid, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', gid):
+        print('sidecar: malformed retain entry in should-join response', file=sys.stderr)
         sys.exit(1)
 " 2>>"$LOG"; then
     log "WARN: /api/fleet/should-join returned an unparseable/unexpected body; skipping reconcile this cycle (state preserved)"
@@ -2707,6 +2749,159 @@ print(json.dumps(sorted(set(a))))
 " "$group_id" 2>>"$LOG" || echo "$admitted")"
 }
 
+# The namespaces mdma says this node should keep but not newly join: a
+# placement gate (plan, image profile, measurement policy) refused it for a
+# namespace it already holds. Absent from an older mdma, which reads as none.
+# poll_mdma has already checked the shape.
+parse_retain() {
+  echo "$1" | python3 -c '
+import json, sys
+print(json.dumps(sorted(set(json.load(sys.stdin).get("retain") or []))))' 2>>"$LOG" || echo '[]'
+}
+
+# Decide which admitted namespaces to leave NOW, and remember the rest.
+#
+# Args: desired, retain, admitted (JSON lists). Prints the JSON list to leave.
+#
+# mdma no longer listing a namespace is a reason to START a clock, not to purge.
+# A namespace is left only when all of these hold:
+#   * it has been absent from `assignments` and `retain` on every successful
+#     poll for LEAVE_GRACE_SECONDS (a reappearance clears the timer);
+#   * the current answer does not trip the mass-drop guard (see the constants);
+#   * fewer than LEAVE_MAX_PER_WINDOW leaves happened in the last
+#     LEAVE_RATE_WINDOW seconds -- the oldest absences go first.
+#
+# Fail-safe in the direction that keeps data: an unreadable state file restarts
+# every timer, and a state file that cannot be written leaves nothing, because a
+# leave that is not recorded is a leave the rate limit cannot count. The state
+# is written BEFORE the caller leaves, so a crash between the two restarts that
+# namespace's grace rather than skipping it.
+#
+# Log lines go to stderr (and $LOG): stdout is the list the caller acts on.
+plan_leaves() {
+  local plan line
+  plan=$(python3 -c '
+import json, os, sys
+
+# Hex case carries no meaning; ids are compared lowercased, and an admitted id
+# keeps its own spelling because that is the one the caller removes.
+desired = {g.lower() for g in json.loads(sys.argv[1])}
+retain = {g.lower() for g in json.loads(sys.argv[2])}
+admitted = set(json.loads(sys.argv[3]))
+path = sys.argv[4]
+now, grace, max_per_window, window, mass_min, mass_pct = (int(v) for v in sys.argv[5:11])
+
+def stamp(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+msgs = []
+try:
+    with open(path) as f:
+        state = json.load(f)
+    if not isinstance(state, dict):
+        raise ValueError("not a JSON object")
+except FileNotFoundError:
+    state = {}
+except Exception as exc:
+    state = {}
+    msgs.append(f"WARN: leave state unreadable ({exc}); every pending leave restarts its grace period")
+
+since = state.get("absent_since")
+since = {g: t for g, t in since.items() if stamp(t)} if isinstance(since, dict) else {}
+recent = state.get("recent_leaves")
+# A stamp in the future (the clock went back) still counts against the limit.
+recent = [t for t in recent if stamp(t) and t > now - window] if isinstance(recent, list) else []
+was_suspicious = state.get("suspicious") is True
+was_deferred = state.get("deferred") if isinstance(state.get("deferred"), list) else []
+
+absent = {g for g in admitted if g.lower() not in desired and g.lower() not in retain}
+for g in sorted(set(since) - absent):
+    if g in admitted:
+        msgs.append(f"Namespace {g} is listed by mdma again; its pending leave is cancelled")
+    del since[g]
+for g in sorted(absent - set(since)):
+    since[g] = now
+    msgs.append(
+        f"Namespace {g} is no longer assigned by mdma; it will be left once it has been "
+        f"absent for {grace}s (no earlier than epoch {now + grace}) unless it reappears"
+    )
+
+suspicious = len(absent) >= mass_min and len(absent) * 100 > len(admitted) * mass_pct
+to_leave, deferred = [], []
+if suspicious:
+    if not was_suspicious:
+        msgs.append(
+            f"ALERT: should-join dropped {len(absent)} of {len(admitted)} admitted namespaces at "
+            f"once; refusing to leave ANY namespace while that lasts. This is what an mdma outage, "
+            f"a policy omitting this image, or a hostile mdma looks like. Absent: {sorted(absent)}"
+        )
+else:
+    if was_suspicious:
+        msgs.append(f"Mass-drop guard released: {len(absent)} of {len(admitted)} admitted namespaces absent")
+    due = sorted((g for g in absent if now - since[g] >= grace), key=lambda g: (since[g], g))
+    budget = max(0, max_per_window - len(recent))
+    to_leave, deferred = due[:budget], due[budget:]
+    if deferred and deferred != was_deferred:
+        msgs.append(
+            f"Leave rate limit ({max_per_window} per {window}s) reached; deferring {deferred}"
+        )
+    for g in to_leave:
+        del since[g]
+        recent.append(now)
+
+new_state = {
+    "absent_since": since,
+    "recent_leaves": recent,
+    "suspicious": suspicious,
+    "deferred": deferred,
+}
+# Written only when something changed, since this runs once a second.
+try:
+    if new_state != state:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(new_state, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+except Exception as exc:
+    if to_leave:
+        msgs.append(f"WARN: leave state not saved ({exc}); leaving nothing this cycle")
+    to_leave = []
+
+print(json.dumps({"leave": to_leave, "log": msgs}))
+' "$1" "$2" "$3" "$LEAVE_STATE_FILE" "$(date +%s)" "$LEAVE_GRACE_SECONDS" \
+    "$LEAVE_MAX_PER_WINDOW" "$LEAVE_RATE_WINDOW" "$LEAVE_MASS_DROP_MIN" \
+    "$LEAVE_MASS_DROP_PERCENT" 2>>"$LOG") || plan=""
+
+  if [[ -z "$plan" ]]; then
+    log "WARN: could not plan leaves this cycle; leaving nothing" >&2
+    echo '[]'
+    return 0
+  fi
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then log "$line" >&2; fi
+  done < <(echo "$plan" | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["log"]:
+    print(m)' 2>>"$LOG" || true)
+  echo "$plan" | python3 -c '
+import json, sys
+print(json.dumps(json.load(sys.stdin)["leave"]))' 2>>"$LOG" || echo '[]'
+}
+
+# Drop namespaces just left from the admitted set. Only those: a namespace that
+# is absent but still inside its grace period stays admitted, or its pending
+# leave would be forgotten and the node would keep it forever.
+forget_admitted() {
+  local left="$1" admitted
+  admitted=$(load_admitted)
+  save_admitted "$(python3 -c '
+import json, sys
+print(json.dumps(sorted(set(json.loads(sys.argv[2])) - set(json.loads(sys.argv[1])))))' \
+    "$left" "$admitted" 2>>"$LOG" || echo "$admitted")"
+}
+
 # --- Main loop ---
 
 # Non-fatal by design -- see the note on the function. A node that cannot talk
@@ -2918,11 +3113,18 @@ print(json.dumps(state, sort_keys=True))
     # in this same poll cycle. fleet-join's 30s window is per-group.
   done
 
-  # Leave dropped namespaces: to_leave = ADMITTED − desired. These are
-  # namespaces this node is a p2p MEMBER of but which mdma no longer assigns
-  # — HA disabled, slot reclaimed, or MRTD distrust. All mean "no longer
-  # entitled", so we self-leave to make core evict us from the namespace + all
-  # subgroups and purge our data + keys.
+  # Leave dropped namespaces -- eventually. The candidates are ADMITTED minus
+  # desired minus retain: namespaces this node is a p2p MEMBER of that mdma
+  # neither assigns nor asks it to keep (HA disabled, slot reclaimed). Leaving
+  # publishes MemberLeft and purges this node's keys and data, so `plan_leaves`
+  # only starts a timer here; a namespace is left after it has stayed absent
+  # for LEAVE_GRACE_SECONDS, never while the answer looks like a mass drop, and
+  # at most LEAVE_MAX_PER_WINDOW at a time. Treating absence as an immediate
+  # order let any single 200 from mdma purge every replica at once.
+  #
+  # `retain` is what a newer mdma sends for a namespace this node holds but a
+  # placement gate (plan, image profile, measurement policy) now refuses: keep
+  # it, do not count as serving it. Such a namespace is never a candidate.
   #
   # ADMITTED, not `confirmed`. A namespace enters `confirmed` only when the
   # local join AND mdma's `/confirm` BOTH succeed, so a join that lands while
@@ -2939,14 +3141,9 @@ print(json.dumps(state, sort_keys=True))
   # acknowledged yet.
   #
   # This runs ONLY after a successful poll (gated at the top of the loop), and
-  # BEFORE the prunes below — the diff needs the dropped entries still there.
-  # leave_group is idempotent / non-fatal.
-  to_leave=$(python3 -c "
-import json, sys
-des = set(json.loads(sys.argv[1]))
-adm = set(json.loads(sys.argv[2]))
-print(json.dumps(sorted(adm - des)))
-" "$desired" "$(load_admitted)" 2>>"$LOG" || echo '[]')
+  # BEFORE the prunes below. leave_group is idempotent / non-fatal.
+  retain=$(parse_retain "$response")
+  to_leave=$(plan_leaves "$desired" "$retain" "$(load_admitted)")
 
   for group_id in $(echo "$to_leave" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
     leave_group "$group_id"
@@ -2955,7 +3152,8 @@ print(json.dumps(sorted(adm - des)))
   # Prune confirmed: if mdma no longer assigns us to a group (HA
   # disabled, namespace deleted, slot reclaimed), drop it from the
   # confirmed set so a future re-add is recognised as new on the
-  # next cycle.
+  # next cycle -- including one that comes back inside its grace period,
+  # which then re-runs the (idempotent) join and the `/confirm`.
   confirmed=$(python3 -c "
 import json, sys
 des = set(json.loads(sys.argv[1]))
@@ -2965,15 +3163,10 @@ print(json.dumps(sorted(con & des)))
 
   save_confirmed "$confirmed"
 
-  # Same prune for the admitted set: everything outside `desired` has just
-  # been left above, so keeping it would re-issue a leave every poll forever.
-  # After the leave, for the same reason the confirmed prune is.
-  save_admitted "$(python3 -c "
-import json, sys
-des = set(json.loads(sys.argv[1]))
-adm = set(json.loads(sys.argv[2]))
-print(json.dumps(sorted(adm & des)))
-" "$desired" "$(load_admitted)" 2>/dev/null || echo '[]')"
+  # The admitted set loses exactly what was just left. NOT `admitted ∩
+  # desired`: a namespace still inside its grace period must stay admitted, or
+  # its pending leave would be forgotten and the node would keep it forever.
+  forget_admitted "$to_leave"
 
   # Last, and over the pruned `confirmed` set: the authorship grant arrives
   # long after admission, so it has to be re-read for namespaces we already

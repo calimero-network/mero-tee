@@ -106,6 +106,13 @@ namespace and all subgroups and purges its local data and keys. `namespace leave
 and non-fatal: leaving a namespace the node already left (or was never a direct member of) is
 treated as benign and never aborts the loop.
 
+**Leaving waits, and never happens en masse.** Leaving is irreversible, so MDMA dropping a
+namespace only starts a timer: the node leaves once it has been absent from every successful
+poll for `LEAVE_GRACE_SECONDS` (24 h; a reappearance cancels it), at most `LEAVE_MAX_PER_WINDOW`
+(4) per hour, and not at all while most of its namespaces (3 or more, over 50 %) are missing at
+once. A namespace MDMA lists under `retain` (a placement gate refused it, the node keeps it) is
+never left. Timers persist in `/mnt/data/fleet/fleet-leave-pending.json`.
+
 **Poll-success safety gate.** The entire reconcile — join, leave, and prune — runs **only** after
 a successful poll: HTTP 200 with a body that parses as an `{"assignments": [...]}` object. Any
 curl error, non-2xx, timeout, or unparseable/wrong-shape 200 body causes the cycle to skip
