@@ -378,12 +378,17 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
    A namespace is added to `fleet-confirmed.json` **only when both** local
    admission **and** the MDMA confirm succeed.
-5. **Leave dropped namespaces.** Compute `to_leave = admitted − desired` and
-   `leave_group` each one (see below). This runs *before* the prunes, so the diff
-   is taken while `admitted` still holds the dropped entries.
-6. **Prune both sets.** Set `confirmed = confirmed ∩ desired` and
-   `admitted = admitted ∩ desired`, and persist them — so a future re-add is
-   recognized as new, and a namespace just left is not left again every second.
+5. **Leave dropped namespaces, eventually.** The candidates are
+   `admitted − desired − retain`; `plan_leaves` starts a timer for each and
+   returns only those that have waited out the grace period, within the rate
+   limit, and never while the answer looks like a mass drop (see
+   [Leaving is slow on purpose](#leaving-is-slow-on-purpose)). `leave_group` runs
+   each one. This runs *before* the prunes, so the diff is taken while `admitted`
+   still holds the dropped entries.
+6. **Prune both sets.** Set `confirmed = confirmed ∩ desired`, and remove from
+   `admitted` exactly the namespaces just left, and persist them — so a future
+   re-add is recognized as new, a namespace just left is not left again every
+   second, and one still inside its grace period is not forgotten.
 7. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
@@ -437,7 +442,7 @@ The guard is on the file's absence rather than its contents, because a node
 that has never been assigned anything has a legitimately empty admitted set;
 testing for emptiness would re-seed it on every boot and resurrect namespaces it
 had since left. Once the file exists the seed never runs again, and the ordinary
-prune (`admitted = admitted ∩ desired`) keeps it honest from there.
+prune (each namespace actually left is removed) keeps it honest from there.
 
 Two more files alongside them record what MDMA has already been
 told, so nothing is re-POSTed unchanged: `fleet-authorship.json` for the TEE role
@@ -463,7 +468,7 @@ rather than lost. Activity is logged to `/run/calimero/fleet-sidecar.log`.
     { from: 2, to: 0, label: '{ admitted: true }', color: '#a371f7', dashed: true },
     { from: 0, to: 1, label: 'POST /api/fleet/confirm { peer_id, group_id }', color: '#a5ff11' },
     { from: 0, to: 0, label: 'add to fleet-confirmed.json (admitted AND confirmed)' },
-    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (admitted − desired)', dashed: true },
+    { from: 0, to: 2, label: 'meroctl namespace leave <ID> (absent past its grace)', dashed: true },
     { from: 2, to: 2, label: 'MemberLeft → evict + purge keys' },
     { type: 'divider', label: 'confirmed/admitted ∩= desired; persist, sleep 1s, repeat' },
   ]}
@@ -526,8 +531,8 @@ broadcast-only join it replaces. Covered by
 
 ### Leaving a namespace (disable path)
 
-When a namespace the node previously confirmed is no longer in `desired` — HA
-disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar
+When a namespace the node was admitted to has stayed out of `desired` (and out of
+`retain`) for the grace period — HA disabled, or the slot reclaimed — the sidecar
 self-leaves it:
 
 ```bash
@@ -551,6 +556,36 @@ the CHANGELOG tracks the exact rc). On older merod the sidecar still issues the
 leave, but keys may not be purged. This is where mero-tee's responsibility ends
 and Core's begins.
 :::
+
+### Leaving is slow on purpose
+
+A leave purges the namespace's keys and data on this node, and every replica
+polls the same MDMA. So the sidecar never treats one answer as an order: when a
+namespace it holds stops being listed, `plan_leaves` records when, in
+`/mnt/data/fleet/fleet-leave-pending.json`, and acts only when all of these hold:
+
+| Rule | Constant | Default |
+| --- | --- | --- |
+| Absent from every successful poll for this long (a reappearance clears the timer) | `LEAVE_GRACE_SECONDS` | 86400 (24 h) |
+| No more than this many leaves per window, oldest absence first | `LEAVE_MAX_PER_WINDOW` / `LEAVE_RATE_WINDOW` | 4 per 3600 s |
+| Not while this many or more admitted namespaces are missing at once **and** they are over this share of all admitted (logged as `ALERT`, nothing is left) | `LEAVE_MASS_DROP_MIN` / `LEAVE_MASS_DROP_PERCENT` | 3 / 50 % |
+
+The constants are baked into the image, so they are part of its measurements and
+a host cannot change them. The state file is on the encrypted data disk, so a
+restart neither resets nor skips a grace period; an unreadable file restarts
+every timer, and a file that cannot be written means nothing is left that cycle.
+A failed poll changes nothing, as before.
+
+`should-join` may also carry `retain`: namespaces MDMA no longer places on this
+node because a placement gate refused it (plan, image profile, measurement
+policy), but which the node should keep rather than purge. A retained namespace
+is never a leave candidate; it is not joined either, and since it is out of
+`desired` it drops out of `confirmed` and of the inventory, so MDMA does not
+advertise it. An MDMA that sends no `retain` is covered by the grace period
+alone.
+
+Covered by `scripts/ci/tests/fleet-sidecar-leave-grace-test.sh`, which runs the
+whole loop against stubs.
 
 ## Delegated execution: the node as a relay
 
@@ -1182,13 +1217,15 @@ issue a new one).
 The step-2 gate is safety-critical, not a nicety. Because a **missing assignment
 now triggers an irreversible `namespace leave` + key purge**, a transient MDMA
 outage must never be mistaken for "all namespaces disabled" — that would shred
-keys on every healthy replica at once.
+keys on every healthy replica at once. (A leave also waits out a grace period —
+see [Leaving is slow on purpose](#leaving-is-slow-on-purpose) — but that covers a
+valid answer that is wrong; this gate covers no valid answer at all.)
 
 So `poll_mdma` captures curl's body and exit status separately and returns:
 
 - **`0` + a validated body** only on HTTP 200 whose body parses as an
   `{"assignments": [...]}` object in which every `group_id` is a 32-byte hex
-  namespace id; or
+  namespace id, and `retain`, when present, is a list of such ids; or
 - **`1` with no stdout** on any curl error, non-2xx, timeout, or
   unparseable/wrong-shape body, including a single malformed `group_id`.
 
@@ -1210,7 +1247,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 
 | Item | Value |
 | --- | --- |
-| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` and `retain` (namespaces to keep, not join) |
 | Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready", "tee_role"}`; `tee_role` is `"RelayTee"`, `"ReadOnlyTee"` or `null`, and `authorship_ready` is `true` only for `RelayTee` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID> [--admitter-addr <MULTIADDR>]…` (positional group id) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
@@ -1222,6 +1259,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Executor account source | `meroctl --output-format json account show` → `accountId` |
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/mnt/data/fleet/fleet-confirmed.json` |
+| Pending leaves | `/mnt/data/fleet/fleet-leave-pending.json` — `{"absent_since": {<namespace>: <epoch>}, "recent_leaves": [<epoch>], "suspicious", "deferred"}` |
 | Reported TEE role state | `/mnt/data/fleet/fleet-authorship.json` — `{<namespace>: "RelayTee" \| "ReadOnlyTee" \| null}` |
 | Node challenge | `GET {MDMA_URL}/api/fleet/nodes/challenge` → `{"challenge", "expires_at_ms"}` |
 | Node registration | `POST {MDMA_URL}/api/fleet/nodes/register` — body `{"peer_id", "executor_account", "relay_url", "challenge", "quote", "csr"}`; returns `{"fleet_token"}` |
