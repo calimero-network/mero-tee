@@ -286,6 +286,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-join-worker-test.sh
 
+      # should-join reports the namespaces merod holds, so mdma can confirm an
+      # adopted founding relay holds the namespace it was adopted for. A list
+      # (even `[]`) is "holds exactly these" and no field is "no report", so a
+      # failed, hung or partial `meroctl namespace ls` must omit the field --
+      # and must never delay the poll. Runs the whole sidecar against stubs.
+      - name: Check should-join reports held namespaces, or nothing
+        id: held_namespaces_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-held-namespaces-test.sh
+
       # The sidecar's python helpers take their inputs as argv, so a value with
       # a quote in it cannot break them, and poll_mdma checks the shape of every
       # group id before the loop acts on it.
@@ -501,6 +511,7 @@ jobs:
             --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
             --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \
             --checks-line "- fleet-join worker handshake: ${{ steps.join_worker_test.outcome }}" \
+            --checks-line "- should-join reports held namespaces: ${{ steps.held_namespaces_test.outcome }}" \
             --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \

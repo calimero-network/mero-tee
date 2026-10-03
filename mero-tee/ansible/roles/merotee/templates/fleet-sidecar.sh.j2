@@ -192,7 +192,9 @@ MEROCTL="meroctl --home /mnt/data/calimero --node default"
 #   leave        60s  publishes MemberLeft and cascades through every subgroup,
 #                     purging data and keys, so it scales with the namespace.
 #   seal-to      30s  local crypto over a small payload; no network.
-#   reads        15s  `account show`, `network status`: local state reads.
+#   reads        15s  `account show`, `network status`, `namespace ls`: local
+#                     state reads (`namespace ls` runs in the background, see
+#                     `refresh_held_namespaces`).
 #   probes       10s  `peers` (readiness, retried each second until merod
 #                     answers) and `fleet-join --help` (no merod at all).
 MEROCTL_KILL_GRACE=5
@@ -704,6 +706,135 @@ print(json.dumps(out[:16]))
 '
 }
 
+# The namespaces this node's merod is a member of, reported on every poll as
+# `held_namespaces`, so mdma can check that a node it adopted for a namespace
+# (a founding relay) really holds it. Only mdma's record says the node SHOULD
+# hold it; this says merod DOES.
+#
+# Read with `meroctl namespace ls` (GET /admin-api/namespaces as the node owner:
+# every namespace merod holds a signing identity in, minus the node's account
+# namespace) by a BACKGROUND refresher, at most once per
+# HELD_NAMESPACES_INTERVAL. The poll never runs meroctl for it: it sends what
+# the last refresh left in HELD_NAMESPACES_FILE.
+#
+# The field has two meanings mdma relies on, so the file does too:
+#   file holds a list  -> the node holds exactly these (`[]`: holds nothing)
+#   no file            -> no report this cycle; the field is OMITTED
+# A refresh that fails, times out, reads something unparseable, or may have
+# seen only part of the list removes the file rather than leaving an older
+# list or writing `[]`: "I could not tell" must never read as "I hold nothing".
+# Removed at startup too, so a list from a previous process is never sent.
+#
+# Ids are lowercase 64-hex, deduplicated and sorted, at most
+# HELD_NAMESPACES_MAX of them (the first ones in sorted order, logged when cut).
+HELD_NAMESPACES_FILE="/mnt/data/fleet/fleet-held-namespaces.json"
+HELD_NAMESPACES_INTERVAL=60
+HELD_NAMESPACES_MAX=512
+# The refresher bounds itself (MEROCTL_READ_TIMEOUT on meroctl); this only fires
+# if something else in it wedges, and stays well under the interval.
+HELD_NAMESPACES_WATCHDOG=$(( MEROCTL_READ_TIMEOUT + 2 * MEROCTL_KILL_GRACE + 10 ))
+HELD_PID=""
+HELD_STARTED=0
+# 0, so the first pass of the loop starts a refresh straight away.
+HELD_LAST_START=0
+
+# Print the held namespaces as a JSON list on the first line, then any notes to
+# log one per line; return 1 (nothing printed) when there is no trustworthy list.
+read_held_namespaces() {
+  local out rc=0
+  out=$(meroctl_timed "$MEROCTL_READ_TIMEOUT" --output-format json namespace ls 2>>"$LOG") || rc=$?
+  if (( rc != 0 )); then
+    log "WARN: meroctl namespace ls $(meroctl_failure "$rc" "$MEROCTL_READ_TIMEOUT"); not reporting held namespaces until the next refresh"
+    return 1
+  fi
+  # `meroctl namespace ls` sends no offset/limit, so merod answers with its
+  # default page (MEROCTL_PAGE_LIMIT rows). A page exactly that long may be
+  # cut short and there is no way to tell from here, so it is no report: a
+  # partial list would say this node does not hold namespaces it does.
+  printf '%s' "$out" | PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" MAX="$HELD_NAMESPACES_MAX" python3 -c '
+import json, os, re, sys
+page_limit = int(os.environ["PAGE_LIMIT"])
+cap = int(os.environ["MAX"])
+try:
+    obj = json.loads(sys.stdin.read())
+except Exception as exc:
+    print(f"sidecar: unparseable meroctl namespace ls JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+rows = obj.get("data") if isinstance(obj, dict) else None
+if not isinstance(rows, list):
+    print("sidecar: meroctl namespace ls had no data array", file=sys.stderr)
+    sys.exit(1)
+if len(rows) == page_limit:
+    print(f"sidecar: meroctl namespace ls returned exactly {page_limit} rows, a full page that may be cut short", file=sys.stderr)
+    sys.exit(1)
+ids, bad = set(), 0
+for row in rows:
+    nid = None
+    if isinstance(row, dict):
+        nid = row.get("namespaceId", row.get("namespace_id"))
+    if isinstance(nid, str) and re.fullmatch(r"[0-9a-fA-F]{64}", nid):
+        ids.add(nid.lower())
+    else:
+        bad += 1
+if rows and not ids:
+    print(f"sidecar: none of the {len(rows)} meroctl namespace ls rows has a 64-hex namespaceId", file=sys.stderr)
+    sys.exit(1)
+held = sorted(ids)
+notes = []
+if bad:
+    notes.append(f"dropped {bad} namespace row(s) with no 64-hex namespaceId from held_namespaces")
+if len(held) > cap:
+    notes.append(f"this node holds {len(held)} namespaces; held_namespaces reports the first {cap} in sorted order")
+    held = held[:cap]
+print(json.dumps(held))
+for note in notes:
+    print(note)
+' 2>>"$LOG"
+}
+
+# Whether the background job PID is still running, by bash's job table (see
+# `join_worker_running`): a reaped job's pid reused by another process is not it.
+background_job_running() {
+  local pid
+  for pid in $(jobs -rp); do
+    [[ "$pid" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+# Called once per loop pass, before the poll, in the loop's own shell (the job
+# table is per shell). Never waits: reaps a refresher that has finished, kills
+# one past its watchdog, and starts the next once the interval has passed.
+refresh_held_namespaces() {
+  local now
+  now=$(date +%s)
+  if [[ -n "$HELD_PID" ]]; then
+    if background_job_running "$HELD_PID"; then
+      (( now - HELD_STARTED >= HELD_NAMESPACES_WATCHDOG )) || return 0
+      log "ERROR: held-namespaces refresher still running after ${HELD_NAMESPACES_WATCHDOG}s; killing it, not reporting until the next refresh"
+      kill_tree "$HELD_PID"
+      rm -f "$HELD_NAMESPACES_FILE"
+    fi
+    wait "$HELD_PID" 2>/dev/null || true
+    HELD_PID=""
+  fi
+  (( now - HELD_LAST_START >= HELD_NAMESPACES_INTERVAL )) || return 0
+  HELD_LAST_START="$now"
+  HELD_STARTED="$now"
+  (
+    tmp="${HELD_NAMESPACES_FILE}.tmp"
+    if parsed=$(read_held_namespaces) && [[ -n "$parsed" ]]; then
+      head -n 1 <<<"$parsed" > "$tmp" && mv -f "$tmp" "$HELD_NAMESPACES_FILE"
+      while IFS= read -r note; do
+        if [[ -n "$note" ]]; then log "$note"; fi
+      done < <(tail -n +2 <<<"$parsed")
+    else
+      rm -f "$tmp" "$HELD_NAMESPACES_FILE"
+    fi
+  ) &
+  HELD_PID=$!
+}
+
 # Whether the bundled meroctl can pass `--admitter-addr` to fleet-join. Probed
 # once: an image baking a merod that predates direct admission would otherwise
 # fail EVERY fleet-join on an unknown flag, which is strictly worse than the
@@ -857,18 +988,29 @@ poll_mdma() {
   # renews one whose expiry is close. Empty covers both "never issued" and "the
   # self-signed placeholder", so a fresh node asks for a certificate simply by
   # polling, and renewal needs no separate request from here at all.
+  # `held_namespaces` is whatever the last background refresh left (see
+  # `refresh_held_namespaces`), checked again here, and omitted -- never sent
+  # as `[]` -- when there is none: absent is "no report", empty is "holds
+  # nothing". The fallback body below omits it for the same reason.
   local body rc response
   body=$(python3 -c '
-import json, sys
-print(json.dumps({
-  "peer_id": sys.argv[1],
-  "mrtd": sys.argv[2],
-  "executor_account": sys.argv[3],
-  "relay_url": sys.argv[4],
-  "tls_cert_not_after": sys.argv[5],
-  "logs_token_fp": sys.argv[6],
-  "swarm_addrs": json.loads(sys.argv[7] or "[]"),
-}))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+import json, re, sys
+body = dict(
+  peer_id=sys.argv[1],
+  mrtd=sys.argv[2],
+  executor_account=sys.argv[3],
+  relay_url=sys.argv[4],
+  tls_cert_not_after=sys.argv[5],
+  logs_token_fp=sys.argv[6],
+  swarm_addrs=json.loads(sys.argv[7] or "[]"),
+)
+try:
+  held = json.loads(sys.argv[8]) if sys.argv[8].strip() else None
+except Exception:
+  held = None
+if isinstance(held, list) and all(isinstance(n, str) and re.fullmatch(r"[0-9a-f]{64}", n) for n in held):
+  body["held_namespaces"] = sorted(set(held))[:int(sys.argv[9])]
+print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   response=$(curl -sf --max-time 10 "${headers[@]}" \
     -d "$body" \
@@ -3129,11 +3271,7 @@ start_join() {
 # the running list once bash has reaped it, so a pid the kernel has since
 # handed to another process is never mistaken for the worker.
 join_worker_running() {
-  local pid
-  for pid in $(jobs -rp); do
-    [[ "$pid" == "$JOIN_PID" ]] && return 0
-  done
-  return 1
+  background_job_running "$JOIN_PID"
 }
 
 # Stop a process and everything under it. Frozen first, so it cannot start a
@@ -3286,6 +3424,10 @@ LOGIN_NODE_KEY_ACTIVE=""
 # knows about everything this node joined under the previous build.
 seed_admitted_from_confirmed
 
+# Never report a list read by an earlier process: until this one's first
+# refresh lands, the poll omits `held_namespaces`.
+rm -f "$HELD_NAMESPACES_FILE" "${HELD_NAMESPACES_FILE}.tmp"
+
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
   # poll_mdma returns 0 + a valid assignments body on HTTP 200, or 1 on any
@@ -3319,6 +3461,9 @@ while true; do
   # Also before the poll: device-key login depends on merod alone, not on
   # mdma, so an mdma outage must not keep it off.
   reconcile_login_node_key
+  # Starts or reaps the background `namespace ls`; never waits on it, so the
+  # poll below keeps its cadence whatever meroctl does.
+  refresh_held_namespaces
 
   if ! response=$(poll_mdma "$PEER_ID" "$MRTD"); then
     # Edge-triggered, because this runs at 1 Hz. Says WHICH of the two shapes

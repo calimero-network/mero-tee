@@ -502,7 +502,7 @@ item to retry on a later cycle, never as fatal to the loop:
 | `tee fleet-join` | 90s | Core waits up to ~30s for admission, after a TDX quote and direct dials. Runs in the background worker, so it never delays the poll. |
 | `namespace leave` | 60s | Publishes `MemberLeft` and cascades through every subgroup, purging data and keys. A timeout means the outcome is unknown, so the leave is retried. |
 | `account seal-to` | 30s | Local crypto, no network. |
-| `account show`, `network status` | 15s | Local state reads. |
+| `account show`, `network status`, `namespace ls` | 15s | Local state reads. `namespace ls` runs in a background refresher (see below), so it never delays the poll either. |
 | `peers`, `tee fleet-join --help` | 10s | Readiness probe (retried every second) and a flag probe. Only a `--help` that answered is cached; a timed-out or failed one is not taken as "no `--admitter-addr`". |
 
 The tree walks (`reconcile_inventory`, `reconcile_recovery`) already bound each
@@ -540,6 +540,38 @@ member either way; it is not confirmed, and it becomes a leave candidate on its
 grace timer like any other.
 
 Covered by `scripts/ci/tests/fleet-sidecar-join-worker-test.sh`.
+
+### The namespaces merod holds
+
+Every poll can carry `held_namespaces`: the namespaces this node's merod is a
+member of, so MDMA can check that a node it adopted for a namespace (a founding
+relay) really holds it. MDMA's own records only say the node *should*.
+
+- **Source.** `meroctl --output-format json namespace ls` (`GET
+  /admin-api/namespaces` as the node owner: every namespace merod holds a
+  signing identity in, minus the node's account namespace), field
+  `data[].namespaceId`.
+- **Shape.** Lowercase 64-hex ids, deduplicated, sorted, at most 512. Past 512
+  the first 512 in sorted order are sent and the cut is logged. A row without a
+  64-hex id is dropped and logged.
+- **Absent is not empty.** `[]` means the node holds nothing. When no list can
+  be had — `namespace ls` failed, timed out, returned something unparseable or
+  no usable id at all, or returned exactly 100 rows (merod's default page, which
+  `meroctl` cannot page past, so the list may be cut) — the field is
+  **omitted**, never sent as `[]` and never as an older list. MDMA treats a
+  missing field as "not reporting".
+- **Never in the poll's way.** A background refresher runs `namespace ls`
+  (`MEROCTL_READ_TIMEOUT`, 15s) at most once every 60s
+  (`HELD_NAMESPACES_INTERVAL`) and leaves the list in
+  `/mnt/data/fleet/fleet-held-namespaces.json`, or removes the file when the
+  read failed; each poll sends what is there. The loop starts and reaps the
+  refresher and never waits on it; one still running after
+  `HELD_NAMESPACES_WATCHDOG` (35s) is killed and the field omitted. The file is
+  removed at startup, so a list read by an earlier process is never sent.
+
+Covered by `scripts/ci/tests/fleet-sidecar-held-namespaces-test.sh`, which runs
+the whole sidecar against stubbed `meroctl` and `curl` and reads the bodies it
+POSTs.
 
 ### Joining a namespace
 
@@ -1337,7 +1369,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 
 | Item | Value |
 | --- | --- |
-| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after"}`; response may carry `tls_certificate` and `retain` (namespaces to keep, not join) |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after", "held_namespaces"?}`; `held_namespaces` is optional (see [The namespaces merod holds](#the-namespaces-merod-holds)); response may carry `tls_certificate` and `retain` (namespaces to keep, not join) |
 | Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready", "tee_role"}`; `tee_role` is `"RelayTee"`, `"ReadOnlyTee"` or `null`, and `authorship_ready` is `true` only for `RelayTee` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID> [--admitter-addr <MULTIADDR>]…` (positional group id) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |
@@ -1346,6 +1378,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 | Readiness probe | `meroctl --output-format json peers` |
 | PeerId source | `/mnt/data/calimero/default/config.toml` → `[identity].peer_id` |
 | MRTD source | `/sys/class/misc/tdx_guest/measurements/mrtd:sha384` |
+| Held namespaces source | `meroctl --output-format json namespace ls` → `data[].namespaceId`, refreshed in the background at most every 60s; last good list in `/mnt/data/fleet/fleet-held-namespaces.json` (absent = no report) |
 | Executor account source | `meroctl --output-format json account show` → `accountId` |
 | Relay URL source | Instance metadata `relay-url` (written by MDMA's dispatcher from `MDMA_TEE_RELAY_URL_TEMPLATE`) |
 | Confirmed state | `/mnt/data/fleet/fleet-confirmed.json` |
