@@ -20,7 +20,11 @@
 #   * a drop of most namespaces at once leaves nothing, even past the grace;
 #   * at most LEAVE_MAX_PER_WINDOW leaves per LEAVE_RATE_WINDOW;
 #   * the admitted set loses only what was actually left;
-#   * an unreadable state file restarts the grace rather than skipping it.
+#   * an unreadable state file restarts the grace rather than skipping it;
+#   * a leave that times out (outcome unknown) stays admitted with its timer
+#     untouched, is retried every cycle and across restarts without a fresh
+#     grace, takes NO rate-limit stamp until a leave for it returns, and only
+#     then is counted and forgotten.
 #
 # Usage: scripts/ci/tests/fleet-sidecar-leave-grace-test.sh
 set -euo pipefail
@@ -67,12 +71,16 @@ for a in "$@"; do
 done
 exit 22
 STUB
-# `meroctl`: merod is up; every leave is recorded; everything else fails.
+# `meroctl`: merod is up; every leave is recorded; everything else fails. A
+# namespace listed in ${SB}/hang has its leave "time out": exit 124, which is
+# what `timeout` reports when it kills a call that ran out of budget.
 cat > "${SB}/bin/meroctl" <<'STUB'
 #!/usr/bin/env bash
 args=" $* "
 if [[ "${args}" == *" peers "* ]]; then echo '{}'; exit 0; fi
 if [[ "${args}" == *" namespace leave "* ]]; then
+  echo "${*: -1}" >> "${SB}/attempts"
+  if grep -qx -- "${*: -1}" "${SB}/hang" 2>/dev/null; then exit 124; fi
   echo "${*: -1}" >> "${SB}/left"
   echo '{}'
   exit 0
@@ -135,7 +143,7 @@ holds() { [[ " $(admitted) " == *" $1 "* ]]; }
 hold() {
   python3 -c 'import json,sys; print(json.dumps(sorted(sys.argv[1:])))' "$@" > "${SB}/fleet-admitted.json"
   cp "${SB}/fleet-admitted.json" "${SB}/fleet-confirmed.json"
-  rm -f "${SB}/left" "${SB}/fleet-leave-pending.json"
+  rm -f "${SB}/left" "${SB}/attempts" "${SB}/hang" "${SB}/fleet-leave-pending.json"
   : > "${SB}/fleet.log"
 }
 
@@ -239,4 +247,74 @@ grep -q 'leave state unreadable' "${SB}/fleet.log" || fail "a corrupt state file
 run 2 $(( NOW + 2 * GRACE ))
 [[ "$(left)" == "${A}" ]] || fail "after a corrupt state file the leave never completed: '$(left)'"
 
-echo "PASS: fleet-sidecar leaves only after a grace period, never en masse, and at a bounded rate"
+# --- 7. a leave that times out is retried, not restarted or counted -------
+# meroctl_timed reports a call that ran out of budget as 124, leave_group turns
+# that into "outcome unknown", and the namespace must stay admitted and be
+# issued again -- with its timer untouched (its grace already ran out; a fresh
+# 24h would be wrong) and no rate-limit stamp (it has not been left; counting
+# every retry would let one slow namespace use up the window and hold every
+# other leave back). Once a leave for it returns it is counted, once, and
+# forgotten.
+attempts() { grep -c -- "$1" "${SB}/attempts" 2>/dev/null || echo 0; }
+stamps() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("recent_leaves", [])))' "${SB}/fleet-leave-pending.json"; }
+since_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("absent_since", {}).get(sys.argv[2], "none"))' "${SB}/fleet-leave-pending.json" "$1"; }
+hold "${A}" "${B}" "${C}" "${D}"
+answer "${B}" "${C}" "${D}"
+run 2 "${NOW}"
+[[ "$(since_of "${A}")" == "${NOW}" ]] || fail "the grace timer did not start at ${NOW}: $(since_of "${A}")"
+echo "${A}" > "${SB}/hang"
+: > "${SB}/fleet.log"
+run 3 $(( NOW + GRACE ))
+(( $(attempts "${A}") >= 2 )) || fail "a timed-out leave was not retried in the next cycle ($(attempts "${A}") attempts)"
+grep -q "namespace leave for ${A} timed out" "${SB}/fleet.log" || fail "the timed-out leave is not logged as one"
+[[ -z "$(left)" ]] || fail "a timed-out leave was recorded as left: $(left)"
+holds "${A}" || fail "a timed-out leave was dropped from the admitted set, so it is never retried"
+grep -q "Namespace ${A} is no longer assigned by mdma" "${SB}/fleet.log" \
+  && fail "a timed-out leave started a fresh grace period instead of being retried"
+[[ "$(since_of "${A}")" == "${NOW}" ]] || fail "a timed-out leave changed its grace timer: $(since_of "${A}")"
+[[ "$(stamps)" -eq 0 ]] || fail "$(attempts "${A}") timed-out attempts at a leave took $(stamps) rate-limit stamps, not 0"
+# Across a restart, still hanging: issued again at once, still not counted.
+before="$(attempts "${A}")"
+run 3 $(( NOW + GRACE + 60 ))
+(( $(attempts "${A}") > before )) || fail "a timed-out leave was not resumed after a restart"
+[[ "$(stamps)" -eq 0 ]] || fail "timed-out retries across a restart took $(stamps) rate-limit stamps"
+[[ "$(since_of "${A}")" == "${NOW}" ]] || fail "a restart changed a timed-out leave's timer: $(since_of "${A}")"
+holds "${A}" || fail "a timed-out leave was dropped from the admitted set after a restart"
+# merod answers again: the leave completes, is counted once, and only now is
+# it forgotten -- from the admitted set and from the pending timers.
+rm -f "${SB}/hang"
+run 3 $(( NOW + GRACE + 120 ))
+[[ "$(left)" == "${A}" ]] || fail "the retried leave never completed: '$(left)'"
+holds "${A}" && fail "a namespace whose retried leave completed is still admitted"
+[[ "$(stamps)" -eq 1 ]] || fail "a completed leave took $(stamps) rate-limit stamps, not 1"
+[[ "$(since_of "${A}")" == "none" ]] || fail "a completed leave kept its grace timer: $(since_of "${A}")"
+before="$(attempts "${A}")"
+run 2 $(( NOW + GRACE + 180 ))
+[[ "$(attempts "${A}")" -eq "${before}" ]] || fail "a completed leave was issued again"
+
+# A timed-out leave does not hold the others back: with a slow namespace
+# hanging all window long, the other three due leaves still go through.
+hold "${A}" "${B}" "${C}" "${D}" "${kept[@]}"
+answer "${kept[@]}"
+run 2 "${NOW}"
+echo "${A}" > "${SB}/hang"
+run 4 $(( NOW + GRACE ))
+[[ "$(left)" == "${B} ${C} ${D}" ]] || fail "a hanging leave held the others back: left '$(left)'"
+[[ "$(stamps)" -eq 3 ]] || fail "expected 3 stamps (the leaves that returned), got $(stamps)"
+holds "${A}" || fail "the hanging leave was dropped from the admitted set"
+
+# A timed-out leave whose namespace mdma lists again is not retried.
+hold "${A}" "${B}" "${C}" "${D}"
+answer "${B}" "${C}" "${D}"
+run 2 "${NOW}"
+echo "${A}" > "${SB}/hang"
+run 2 $(( NOW + GRACE ))
+answer "${A}" "${B}" "${C}" "${D}"
+before="$(attempts "${A}")"
+run 2 $(( NOW + GRACE + 60 ))
+[[ "$(attempts "${A}")" -eq "${before}" ]] || fail "a namespace mdma lists again still had its timed-out leave retried"
+grep -q "Namespace ${A} is listed by mdma again; its pending leave is cancelled" "${SB}/fleet.log" \
+  || fail "cancelling a timed-out leave on reappearance was not logged"
+holds "${A}" || fail "a namespace mdma lists again was dropped from the admitted set"
+
+echo "PASS: fleet-sidecar leaves only after a grace period, never en masse, at a bounded rate, and retries a timed-out leave"
