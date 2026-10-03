@@ -1281,6 +1281,32 @@ log "Taking device-key callers' identity from the proxy..."
 "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
   'server.proxy_identity=true' \
   || fatal "failed to set server.proxy_identity; refusing to serve device-key sessions node-wide"
+
+# The origin this relay's own pages are served under. merod in proxy auth mode
+# serves a browser only pages whose host it recognises: a loopback name, an IP
+# address, or the host of an `allowed_origins` entry. A browser's `Host` is
+# whatever name it resolved, so under DNS rebinding a page on another site sends
+# its own name as both `Origin` and `Host`; comparing the two proves nothing.
+# This relay's dashboard (`/admin-dashboard`) is served under its relay host
+# name, which merod cannot know, so it is listed here.
+#
+# Only the origin of `relay-url` is taken, and only when it is `https://` and a
+# plain DNS name: metadata is untrusted, and anything else is not a name this
+# node is served under. A node with no relay URL is reached by address, which
+# merod recognises without being told.
+relay_origin() {
+  sed -nE 's#^(https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:[0-9]{1,5})?(/.*)?$#\1\5#p' <<< "${1,,}"
+}
+RELAY_URL=$(get_meta "relay-url" | tr -d '\r\n')
+RELAY_ORIGIN=$(relay_origin "$RELAY_URL")
+if [[ -n "$RELAY_ORIGIN" ]]; then
+  log "Serving browser pages under this relay's origin ${RELAY_ORIGIN}..."
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    "server.cors.allowed_origins=[\"${RELAY_ORIGIN}\"]" \
+    || log "WARN: failed to list ${RELAY_ORIGIN} in server.cors.allowed_origins; this relay's dashboard will be refused"
+elif [[ -n "$RELAY_URL" ]]; then
+  log "WARN: relay-url ${RELAY_URL} is not an https:// URL on a DNS name; not listing it as this relay's origin"
+fi
 {% endif %}
 
 # TLS material for traefik.
