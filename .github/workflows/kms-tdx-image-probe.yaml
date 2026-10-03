@@ -18,9 +18,9 @@ on:
           - locked-read-only
           - debug
       node_release_tag:
-        description: "Node release whose allowlist the KMS serves (mero-tee-v<version>)"
+        description: "Node release whose allowlist the KMS serves (mero-tee-v<version>, one that publishes published-mrtds.json.bundle.json)"
         required: true
-        default: "mero-tee-v2.3.72"
+        default: "mero-tee-v2.3.104"
       wait_timeout_minutes:
         description: "How long to wait for each replica to hold the root"
         required: true
@@ -67,6 +67,9 @@ jobs:
           cp target/release/mero-kms probe/mero-kms
           sha256sum probe/mero-kms | tee probe/mero-kms.sha256
 
+      - name: Install cosign to verify the node policy
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
       - name: Fetch the node allowlist the KMS serves
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,13 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-            --pattern "published-mrtds.json" --dir probe
-          jq --arg p "${PROFILE}" '.profiles[$p] | {
-              allowed_tcb_statuses, allowed_mrtd,
-              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
-            }' probe/published-mrtds.json > probe/node-allowlist.json
-          jq -e 'all(.[]; type == "array" and length > 0)' probe/node-allowlist.json >/dev/null \
-            || { echo "::error::${NODE_TAG} has no complete ${PROFILE} node allowlist"; exit 1; }
+            --pattern "published-mrtds.json" --pattern "published-mrtds.json.bundle.json" \
+            --dir probe
+          bash scripts/release/kms/verify-node-policy.sh probe
+          bash scripts/release/kms/extract-node-allowlist.sh \
+            probe/published-mrtds.json "${PROFILE}" probe/node-allowlist.json
           cat probe/node-allowlist.json
 
       - name: Authenticate to GCP via service account key

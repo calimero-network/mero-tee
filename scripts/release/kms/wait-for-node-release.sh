@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Wait for the same-version node release (Release mero-tee) and fetch its
-# published-mrtds.json into node-policy/. The KMS image bakes that node
+# Wait for the same-version node release (Release mero-tee), fetch its
+# published-mrtds.json into node-policy/ and verify its Sigstore signature. The KMS image bakes that node
 # allowlist and the KMS policy republishes it, so Release mero-kms cannot run
 # ahead of it. Fails fast when no same-commit node release is running.
 # Inputs: GH_TOKEN, VERSION, NODE_TAG, EVENT_NAME, GITHUB_SHA,
@@ -56,7 +56,8 @@ ci_group_start "Node release polling"
 for attempt in $(seq 1 60); do
   if gh release view "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
     if gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-      --pattern "published-mrtds.json" --dir node-policy 2>/dev/null; then
+      --pattern "published-mrtds.json" --pattern "published-mrtds.json.bundle.json" \
+      --dir node-policy --clobber 2>/dev/null; then
       ci_ok "Fetched node policy from ${NODE_TAG}"
       ci_result "release-kms-node-release-wait" "success" "NODE_POLICY_READY" "attempt=${attempt}" "node_tag=${NODE_TAG}"
       break
@@ -100,3 +101,8 @@ for attempt in $(seq 1 60); do
   sleep 30
 done
 ci_group_end
+
+# Only a policy the node release workflow itself signed may become a KMS's
+# allowlist; see verify-node-policy.sh.
+bash scripts/release/kms/verify-node-policy.sh node-policy
+ci_ok "Verified ${NODE_TAG}/published-mrtds.json against the node release workflow's signature"
