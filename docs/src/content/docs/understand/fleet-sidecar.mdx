@@ -371,10 +371,14 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    safety gate below).
 3. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
    namespace MDMA currently assigns this node to.
-4. **Join toward `desired`.** For each assigned namespace **not already in the
-   local confirmed set**, run `join_group` (see below). The moment local
-   admission succeeds the namespace is recorded in `fleet-admitted.json` — before
-   the confirm is attempted, and regardless of whether it succeeds. Then `POST`
+4. **Join toward `desired`, in the background.** `join_group` (see below) runs
+   in a background worker, one namespace at a time, so the loop never waits on
+   it. Each cycle the loop collects a join that has finished, if any, and
+   starts the next assigned namespace **not already in the local confirmed
+   set** (rotating, so one namespace that keeps timing out cannot starve the
+   rest). The moment a collected join reports admission the namespace is
+   recorded in `fleet-admitted.json` — before the confirm is attempted, and
+   regardless of whether it succeeds. Then, if MDMA still assigns it, `POST`
    `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
    A namespace is added to `fleet-confirmed.json` **only when both** local
    admission **and** the MDMA confirm succeed.
@@ -384,11 +388,16 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    limit, and never while the answer looks like a mass drop (see
    [Leaving is slow on purpose](#leaving-is-slow-on-purpose)). `leave_group` runs
    each one. This runs *before* the prunes, so the diff is taken while `admitted`
-   still holds the dropped entries.
+   still holds the dropped entries. No new leave starts once
+   `LEAVE_CYCLE_BUDGET` (60s) is spent in a cycle, and a leave that was not
+   started or timed out stays in `admitted`, so it is issued again next cycle
+   (after the other due leaves, so it cannot starve them). See
+   [A leave that times out](#a-leave-that-times-out).
 6. **Prune both sets.** Set `confirmed = confirmed ∩ desired`, and remove from
    `admitted` exactly the namespaces just left, and persist them — so a future
    re-add is recognized as new, a namespace just left is not left again every
-   second, and one still inside its grace period is not forgotten.
+   second, and one still inside its grace period (or whose leave did not finish)
+   is not forgotten.
 7. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
@@ -473,6 +482,64 @@ rather than lost. Activity is logged to `/run/calimero/fleet-sidecar.log`.
     { type: 'divider', label: 'confirmed/admitted ∩= desired; persist, sleep 1s, repeat' },
   ]}
 />
+
+### Every `meroctl` call has a budget
+
+The should-join poll is this node's **only** heartbeat to MDMA, and it shares
+one loop with every `meroctl` call the sidecar makes. A call that never returns
+used to stop the loop for good: on 2.3.106 a `meroctl tee fleet-join` on one
+node never returned, the node stopped polling, every namespace on it went stale
+in MDMA for 40+ minutes, and systemd's `Restart=always` did nothing because the
+process never exited.
+
+So every `meroctl` the script runs itself goes through `meroctl_timed`, which
+wraps it in coreutils `timeout -k 5 <budget>`. Running out of budget exits `124`
+(or `137` if `meroctl` ignored the TERM), and the caller treats that as a failed
+item to retry on a later cycle, never as fatal to the loop:
+
+| Call | Budget | Why |
+| --- | --- | --- |
+| `tee fleet-join` | 90s | Core waits up to ~30s for admission, after a TDX quote and direct dials. Runs in the background worker, so it never delays the poll. |
+| `namespace leave` | 60s | Publishes `MemberLeft` and cascades through every subgroup, purging data and keys. A timeout means the outcome is unknown, so the leave is retried. |
+| `account seal-to` | 30s | Local crypto, no network. |
+| `account show`, `network status` | 15s | Local state reads. |
+| `peers`, `tee fleet-join --help` | 10s | Readiness probe (retried every second) and a flag probe. Only a `--help` that answered is cached; a timed-out or failed one is not taken as "no `--admitter-addr`". |
+
+The tree walks (`reconcile_inventory`, `reconcile_recovery`) already bound each
+`meroctl` they run and their whole walk from Python. With joins in the
+background and every other call bounded, a hung `meroctl` costs one item one
+budget, and the poll keeps its cadence. The build asserts `timeout` is present.
+`scripts/ci/tests/fleet-sidecar-meroctl-timeout-test.sh` runs the real loop
+against a `meroctl` that never returns, and against one that hangs, fails and
+prints garbage by turns.
+
+### The join worker
+
+At most one `fleet-join` runs at a time, in a background worker that runs only
+`join_group` and logs. It writes no state: `fleet-admitted.json`, the confirmed
+set, `/confirm`, authorship and the leave state are all written by the loop when
+it collects the result, so every state file has one writer and a worker killed
+half way cannot leave one torn.
+
+The result is handed over in `/mnt/data/fleet/fleet-join.result`, one line:
+`<launch id> <exit status> <namespace>`. The worker writes it to a private
+temporary file and renames it into place, so the file is either absent or one
+complete line. Each launch gets its own id, and the loop takes a result only if
+it carries the id of the launch it is waiting for and that launch's namespace.
+A line from another launch (an older worker, or one that outlived a previous
+sidecar process) is ignored; a line that is ours but does not parse is a failed
+join, retried. The file, not the pid, says the join finished: the pid is used
+only to notice a worker that is gone without a result (from bash's job table,
+not `kill -0`, which a reused pid would satisfy), and a worker still running
+after `JOIN_WATCHDOG` (140s) is killed with everything under it. Every outcome
+other than "admitted" means the namespace gets another turn later.
+
+A join can finish after MDMA stopped assigning its namespace, since the loop
+kept polling meanwhile. The admission is still recorded, because the node is a
+member either way; it is not confirmed, and it becomes a leave candidate on its
+grace timer like any other.
+
+Covered by `scripts/ci/tests/fleet-sidecar-join-worker-test.sh`.
 
 ### Joining a namespace
 
@@ -584,8 +651,31 @@ is never a leave candidate; it is not joined either, and since it is out of
 advertise it. An MDMA that sends no `retain` is covered by the grace period
 alone.
 
+#### A leave that times out
+
+`plan_leaves` decides which namespaces may be left; `leave_group` runs each one
+under its 60s budget. Killing `meroctl` only stops the sidecar waiting, so a
+leave that runs out of budget has an unknown outcome, and is handled as not
+done:
+
+- the namespace stays in `fleet-admitted.json`, so it is issued again next
+  cycle (a repeat leave of a namespace already gone returns at once);
+- its grace timer is left as it was, so the retry is immediate rather than after
+  a fresh 24 h;
+- it takes no stamp in the rate window. Only a leave that returned is recorded
+  (`record_leaves`: timer cleared, one stamp) and dropped from the admitted set.
+  It still holds its slot in every cycle's plan, oldest absence first, so the
+  limit on how many namespaces merod has been told to purge is unchanged;
+- within a cycle it is tried after the other due leaves, so one namespace that
+  merod keeps stalling on cannot spend `LEAVE_CYCLE_BUDGET` ahead of them every
+  time.
+
+A crash between a leave and its record leaves the namespace admitted and past
+its grace, so the leave is issued again and recorded then.
+
 Covered by `scripts/ci/tests/fleet-sidecar-leave-grace-test.sh`, which runs the
-whole loop against stubs.
+whole loop against stubs, and by the leave checks in
+`scripts/ci/tests/fleet-sidecar-meroctl-timeout-test.sh`.
 
 ## Delegated execution: the node as a relay
 

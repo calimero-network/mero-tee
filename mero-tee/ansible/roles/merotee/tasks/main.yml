@@ -270,6 +270,28 @@
     comment_end_string: "#@}"
   when: merod_mode == "read-only"
 
+# The sidecar runs every meroctl call under coreutils `timeout` (a hung
+# fleet-join once stopped a node's heartbeats for 40+ minutes). coreutils is
+# Essential on Ubuntu, so this should never fire; checked at build time anyway,
+# because on a node without it every meroctl call would fail with 127.
+- name: Probe coreutils timeout for the fleet sidecar
+  command:
+    argv: [timeout, -k, "1", "5", "true"]
+  register: sidecar_timeout_probe
+  changed_when: false
+  failed_when: false
+  when: merod_mode == "read-only"
+
+- name: Require coreutils timeout for the fleet sidecar
+  assert:
+    that:
+      - sidecar_timeout_probe.rc == 0
+    fail_msg: >-
+      coreutils timeout is missing or broken on this image (rc
+      {{ sidecar_timeout_probe.rc | default('none') }}); the fleet sidecar
+      bounds every meroctl call with it and cannot run without it.
+  when: merod_mode == "read-only"
+
 - name: Create fleet sidecar systemd service
   copy:
     content: |

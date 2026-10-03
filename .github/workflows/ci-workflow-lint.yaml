@@ -266,6 +266,26 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-leave-grace-test.sh
 
+      # The should-join poll is a node's only heartbeat to mdma, and it shares a
+      # loop with every `meroctl` the sidecar runs. One fleet-join that never
+      # returned (2.3.106, prod) stopped a node's heartbeats for 40+ minutes
+      # while systemd saw a healthy process. Runs the real loop against a
+      # meroctl that never returns: the poll must keep its cadence, and each
+      # call must be killed at its budget and retried.
+      - name: Check a hung meroctl never stops the heartbeat
+        id: meroctl_timeout_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-meroctl-timeout-test.sh
+
+      # fleet-join runs in one background worker so the poll never waits on it.
+      # The loop alone writes state and takes only the result of the launch it
+      # is waiting for: a stale, garbled or missing result is a failed join,
+      # and a wedged worker is killed by the watchdog.
+      - name: Check the fleet-join worker hands over only its own result
+        id: join_worker_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-join-worker-test.sh
+
       # The sidecar's python helpers take their inputs as argv, so a value with
       # a quote in it cannot break them, and poll_mdma checks the shape of every
       # group id before the loop acts on it.
@@ -470,6 +490,8 @@ jobs:
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
+            --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \
+            --checks-line "- fleet-join worker handshake: ${{ steps.join_worker_test.outcome }}" \
             --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
