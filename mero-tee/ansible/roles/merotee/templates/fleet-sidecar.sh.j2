@@ -31,6 +31,41 @@ CONFIRMED_FILE="/mnt/data/fleet/fleet-confirmed.json"
 # CONFIRMED_FILE -- and the leave diff used to be computed from that file, so
 # such a namespace could never be left (calimero-network/mdma#155).
 ADMITTED_FILE="/mnt/data/fleet/fleet-admitted.json"
+# Leaving a namespace is irreversible: `meroctl namespace leave` publishes
+# MemberLeft and core purges this node's keys and data for it. mdma's answer is
+# therefore never acted on the moment it stops listing a namespace, because one
+# wrong answer -- a compromised mdma, a policy that omits this image, a plan or
+# profile edit, an `{"assignments": []}` from anything that can answer 200 --
+# would otherwise purge every namespace on every replica within one poll. See
+# `plan_leaves`. What it remembers lives here, on the encrypted data disk, so a
+# restart neither resets a grace period nor skips one:
+#   absent_since   {namespace: epoch seconds it was first seen missing}
+#   recent_leaves  [epoch seconds of each leave inside the rate window] --
+#                  recorded by `record_leaves` once a leave has RETURNED, never
+#                  for one that timed out or did not start
+#   suspicious     whether the mass-drop guard is engaged (edge-triggered log)
+#   deferred       namespaces past their grace but held back by the rate limit
+LEAVE_STATE_FILE="/mnt/data/fleet/fleet-leave-pending.json"
+# How long a namespace must stay out of every successful should-join answer,
+# continuously, before it is left. A namespace that reappears (in `assignments`
+# or in `retain`) clears its timer. Long enough for a human to notice and undo a
+# bad policy publish or a mistaken edit before any replica purges anything.
+# Baked into the image, so it is part of the measurement: a host cannot shorten
+# it, and changing it is an image release.
+LEAVE_GRACE_SECONDS=86400
+# At most this many leaves in any rolling LEAVE_RATE_WINDOW, whatever mdma says,
+# so even a drop that outlasts the grace period drains slowly enough to stop.
+LEAVE_MAX_PER_WINDOW=4
+LEAVE_RATE_WINDOW=3600
+# The mass-drop guard: when at least LEAVE_MASS_DROP_MIN admitted namespaces are
+# missing at once AND they are more than LEAVE_MASS_DROP_PERCENT of everything
+# admitted, the answer is treated as suspect -- logged loudly, and nothing is
+# left at all while it lasts. An owner disabling HA moves one or two namespaces;
+# losing most of them at once is what an outage, a bad policy or a hostile mdma
+# looks like. Leaving a namespace then needs mdma's answer to stop looking like
+# that, not just the grace period to pass.
+LEAVE_MASS_DROP_MIN=3
+LEAVE_MASS_DROP_PERCENT=50
 # Per-namespace record of the TEE role we last told mdma about (the source of
 # `authorship_ready`), so a role converted AFTER admission gets re-reported
 # exactly once per change rather than on every one-second cycle. See
@@ -132,7 +167,79 @@ MAX_GROUP_WALK=512
 INVENTORY_WALK_BUDGET=20
 MEROCTL="meroctl --home /mnt/data/calimero --node default"
 
+# --- meroctl budgets ---------------------------------------------------------
+#
+# Every `meroctl` this script runs itself goes through `meroctl_timed` with one
+# of these budgets. Without one, a single call that never returns stops the
+# whole sidecar: it is one loop, and the should-join poll in it is this node's
+# ONLY heartbeat to mdma. That happened in prod on 2.3.106 -- a `tee fleet-join`
+# on node-mus85dls never returned, the loop never polled again, every namespace
+# on the node went stale in mdma for 40+ minutes, and systemd's
+# `Restart=always` did nothing because the process never exited.
+#
+# A call that runs out of budget exits 124 (or 137 if it ignored the TERM and
+# was killed MEROCTL_KILL_GRACE seconds later). Callers treat that as a failure
+# of that one item, retried on a later cycle, never as fatal to the loop.
+# Killing `meroctl` only stops this script WAITING: merod finishes or abandons
+# the request on its own, which is why a timed-out leave is retried (see
+# `leave_group`) rather than assumed done.
+#
+# Budgets are per call, sized to the work merod does behind it:
+#   fleet-join   90s  core waits up to ~30s for admission (MAX_ADMISSION_WAIT in
+#                     fleet_join.rs), after a TDX quote and direct dials to the
+#                     admitters. 3x headroom; runs in the background (see the
+#                     join worker), so it never delays the poll however long.
+#   leave        60s  publishes MemberLeft and cascades through every subgroup,
+#                     purging data and keys, so it scales with the namespace.
+#   seal-to      30s  local crypto over a small payload; no network.
+#   reads        15s  `account show`, `network status`: local state reads.
+#   probes       10s  `peers` (readiness, retried each second until merod
+#                     answers) and `fleet-join --help` (no merod at all).
+MEROCTL_KILL_GRACE=5
+MEROCTL_FLEET_JOIN_TIMEOUT=90
+MEROCTL_LEAVE_TIMEOUT=60
+MEROCTL_SEAL_TIMEOUT=30
+MEROCTL_READ_TIMEOUT=15
+MEROCTL_PROBE_TIMEOUT=10
+# Wall-clock budget for starting leaves in one cycle. Leaves run inline (they are
+# the safety-critical revocation path, and running them in-loop keeps their
+# ordering against the admitted-set prune trivially correct), so this is what
+# bounds how long a burst of slow leaves can hold up the next poll: no new leave
+# starts past it, and the rest stay in the admitted set for the next cycle.
+# Worst case between polls is this plus one leave's budget, far inside mdma's
+# 900s assignment-freshness window.
+LEAVE_CYCLE_BUDGET=60
+# Namespaces whose last leave timed out, space-delimited (" a b "): tried after
+# the other due leaves of a cycle, so they cannot spend this budget ahead of
+# them every time. See the leave step in the loop.
+LEAVE_SLOW=" "
+
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
+
+# Run `$MEROCTL "$@"` under a wall-clock budget (seconds). Exit status is
+# meroctl's own, or 124/137 when the budget ran out (see `meroctl_timed_out`).
+# `$MEROCTL` is deliberately unquoted: it is a command line, split into words.
+meroctl_timed() {
+  local budget="$1"
+  shift
+  # shellcheck disable=SC2086
+  timeout -k "$MEROCTL_KILL_GRACE" "$budget" $MEROCTL "$@"
+}
+
+# Whether an exit status from `meroctl_timed` means the budget ran out.
+meroctl_timed_out() {
+  [[ "$1" -eq 124 || "$1" -eq 137 ]]
+}
+
+# "rc=N", or "timed out after Ns" -- for log lines about a failed meroctl call.
+meroctl_failure() {
+  local rc="$1" budget="$2"
+  if meroctl_timed_out "$rc"; then
+    echo "timed out after ${budget}s"
+  else
+    echo "rc=$rc"
+  fi
+}
 
 mkdir -p "$(dirname "$CONFIRMED_FILE")"
 [[ -f "$CONFIRMED_FILE" ]] || echo '[]' > "$CONFIRMED_FILE"
@@ -195,21 +302,25 @@ log "Fleet sidecar starting (mdma=$MDMA_URL poll=${POLL_INTERVAL}s)"
 MEROD_WAIT_TIMEOUT=600
 MEROD_WAIT_LOG_EVERY=30
 wait_for_merod() {
-  local waited=0 err
+  local waited=0 err started next_log="$MEROD_WAIT_LOG_EVERY"
   log "Waiting for merod..."
+  # Wall clock, not attempts: one attempt can now take up to its budget.
+  started=$(date +%s)
   while true; do
-    err=$($MEROCTL --output-format json peers 2>&1 >/dev/null) && break
+    err=$(meroctl_timed "$MEROCTL_PROBE_TIMEOUT" --output-format json peers 2>&1 >/dev/null) && break
+    waited=$(( $(date +%s) - started ))
     if (( waited >= MEROD_WAIT_TIMEOUT )); then
       log "ERROR: merod did not answer 'meroctl peers' within ${MEROD_WAIT_TIMEOUT}s; \
 continuing anyway so this node is at least visible to mdma. Last error: ${err:-<none>}"
       return 1
     fi
-    if (( waited > 0 && waited % MEROD_WAIT_LOG_EVERY == 0 )); then
+    if (( waited >= next_log )); then
       log "Still waiting for merod after ${waited}s: ${err:-<no stderr>}"
+      next_log=$(( waited + MEROD_WAIT_LOG_EVERY ))
     fi
     sleep 1
-    waited=$(( waited + 1 ))
   done
+  waited=$(( $(date +%s) - started ))
   log "merod is ready (after ${waited}s)"
   return 0
 }
@@ -247,7 +358,7 @@ get_mrtd() {
 # Stable for the life of the node, hence read once at startup like the MRTD.
 get_executor_account() {
   local out
-  out=$($MEROCTL --output-format json account show 2>>"$LOG") || return 1
+  out=$(meroctl_timed "$MEROCTL_READ_TIMEOUT" --output-format json account show 2>>"$LOG") || return 1
   echo "$out" | python3 -c '
 import sys, json
 try:
@@ -568,7 +679,7 @@ cached_swarm_addrs() {
 
 read_swarm_addrs() {
   local out
-  out=$($MEROCTL --output-format json network status 2>>"$LOG") || { echo "[]"; return 0; }
+  out=$(meroctl_timed "$MEROCTL_READ_TIMEOUT" --output-format json network status 2>>"$LOG") || { echo "[]"; return 0; }
   echo "$out" | python3 -c '
 import json, sys
 try:
@@ -600,7 +711,16 @@ print(json.dumps(out[:16]))
 FLEET_JOIN_TAKES_ADMITTERS=""
 fleet_join_takes_admitters() {
   if [[ -z "$FLEET_JOIN_TAKES_ADMITTERS" ]]; then
-    if $MEROCTL tee fleet-join --help 2>/dev/null | grep -q -- "--admitter-addr"; then
+    # Captured, then searched, and cached only from a probe that ANSWERED: a
+    # timed-out or failed one must not be cached as "no", which would make
+    # every join on this node broadcast-only for its life.
+    local help rc=0
+    help=$(meroctl_timed "$MEROCTL_PROBE_TIMEOUT" tee fleet-join --help 2>/dev/null) || rc=$?
+    if (( rc != 0 )); then
+      log "meroctl tee fleet-join --help $(meroctl_failure "$rc" "$MEROCTL_PROBE_TIMEOUT"); joining broadcast-only this time and probing again next join"
+      return 1
+    fi
+    if grep -q -- "--admitter-addr" <<<"$help"; then
       FLEET_JOIN_TAKES_ADMITTERS="yes"
     else
       FLEET_JOIN_TAKES_ADMITTERS="no"
@@ -780,6 +900,15 @@ for a in assignments:
     gid = a.get('group_id') if isinstance(a, dict) else None
     if not isinstance(gid, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', gid):
         print('sidecar: malformed group_id in should-join response', file=sys.stderr)
+        sys.exit(1)
+retain = data.get('retain', [])
+if retain is None:
+    retain = []
+if not isinstance(retain, list):
+    sys.exit(1)
+for gid in retain:
+    if not isinstance(gid, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', gid):
+        print('sidecar: malformed retain entry in should-join response', file=sys.stderr)
         sys.exit(1)
 " 2>>"$LOG"; then
     log "WARN: /api/fleet/should-join returned an unparseable/unexpected body; skipping reconcile this cycle (state preserved)"
@@ -1856,8 +1985,10 @@ seal_for_account() {
   local plaintext="$3"
 
   local sealed
-  sealed=$(printf '%s' "$plaintext" | $MEROCTL --output-format json account seal-to "$group_id" "$account" 2>>"$LOG") || {
-    log "WARN: sealing for $account in $group_id failed; leaving mdma's copy untouched"
+  local rc=0
+  sealed=$(printf '%s' "$plaintext" | meroctl_timed "$MEROCTL_SEAL_TIMEOUT" --output-format json account seal-to "$group_id" "$account" 2>>"$LOG") || rc=$?
+  (( rc == 0 )) || {
+    log "WARN: sealing for $account in $group_id failed ($(meroctl_failure "$rc" "$MEROCTL_SEAL_TIMEOUT")); leaving mdma's copy untouched" >&2
     return 1
   }
   echo "$sealed" | python3 -c "
@@ -1868,7 +1999,7 @@ if not all(k in env for k in need):
     sys.exit(1)
 print(json.dumps({k: env[k] for k in need}, sort_keys=True))
 " 2>>"$LOG" || {
-    log "WARN: meroctl account seal-to returned an unexpected envelope for $account; skipping"
+    log "WARN: meroctl account seal-to returned an unexpected envelope for $account; skipping" >&2
     return 1
   }
 }
@@ -2568,11 +2699,16 @@ for entry in data.get("assignments", []) if isinstance(data, dict) else []:
   # `result=$(...)` assignment aborts the shell on a non-zero exit BEFORE
   # the next-line `rc=$?` can run. fleet-join is documented to exit 0, but
   # capture rc via `|| rc=$?` so a future non-zero exit can't kill the loop.
+  #
+  # Bounded: a fleet-join that never returns (seen in prod on 2.3.106) is
+  # killed after MEROCTL_FLEET_JOIN_TIMEOUT and retried on a later cycle. merod
+  # may still admit us after we stop waiting; the retry then returns
+  # admitted=true at once, since fleet-join is idempotent.
   rc=0
-  result=$($MEROCTL --output-format json "${join_args[@]}" 2>>"$LOG") || rc=$?
+  result=$(meroctl_timed "$MEROCTL_FLEET_JOIN_TIMEOUT" --output-format json "${join_args[@]}" 2>>"$LOG") || rc=$?
 
   if [[ $rc -ne 0 ]]; then
-    log "ERROR: fleet-join command failed for $group_id (rc=$rc): $result"
+    log "ERROR: fleet-join command failed for $group_id ($(meroctl_failure "$rc" "$MEROCTL_FLEET_JOIN_TIMEOUT")); will retry: $result"
     return 1
   fi
 
@@ -2622,12 +2758,20 @@ leave_group() {
   # the FIRST disable that hits an already-left namespace (the common case).
   # `|| rc=$?` captures the non-zero exit into rc so the benign-error branch
   # below stays reachable and leave remains non-fatal.
+  #
+  # A TIMEOUT is the one failure that is not benign: killing meroctl only stops
+  # us waiting, so whether merod left is unknown. Returns 2 for it, and the loop
+  # keeps the namespace in the admitted set so the leave is issued again next
+  # cycle (a repeat leave is idempotent; a missed one keeps the keys forever).
   local result rc
   rc=0
-  result=$($MEROCTL --output-format json namespace leave "$group_id" 2>>"$LOG") || rc=$?
+  result=$(meroctl_timed "$MEROCTL_LEAVE_TIMEOUT" --output-format json namespace leave "$group_id" 2>>"$LOG") || rc=$?
 
   if [[ $rc -eq 0 ]]; then
     log "Left namespace $group_id (HA disabled/dropped)"
+  elif meroctl_timed_out "$rc"; then
+    log "ERROR: namespace leave for $group_id timed out after ${MEROCTL_LEAVE_TIMEOUT}s; outcome unknown, retrying next cycle"
+    return 2
   else
     # Benign on a node that already left; log and move on (do not fail the loop).
     log "namespace leave for $group_id returned rc=$rc (likely already left / not a member): $result"
@@ -2705,6 +2849,363 @@ except Exception:
 a.append(sys.argv[1])
 print(json.dumps(sorted(set(a))))
 " "$group_id" 2>>"$LOG" || echo "$admitted")"
+}
+
+# The namespaces mdma says this node should keep but not newly join: a
+# placement gate (plan, image profile, measurement policy) refused it for a
+# namespace it already holds. Absent from an older mdma, which reads as none.
+# poll_mdma has already checked the shape.
+parse_retain() {
+  echo "$1" | python3 -c '
+import json, sys
+print(json.dumps(sorted(set(json.load(sys.stdin).get("retain") or []))))' 2>>"$LOG" || echo '[]'
+}
+
+# Decide which admitted namespaces to leave NOW, and remember the rest.
+#
+# Args: desired, retain, admitted (JSON lists). Prints the JSON list to leave.
+#
+# mdma no longer listing a namespace is a reason to START a clock, not to purge.
+# A namespace is left only when all of these hold:
+#   * it has been absent from `assignments` and `retain` on every successful
+#     poll for LEAVE_GRACE_SECONDS (a reappearance clears the timer);
+#   * the current answer does not trip the mass-drop guard (see the constants);
+#   * fewer than LEAVE_MAX_PER_WINDOW leaves happened in the last
+#     LEAVE_RATE_WINDOW seconds -- the oldest absences go first.
+#
+# Planning a leave changes nothing on disk about it: its timer stays, and no
+# rate-limit stamp is taken. Only `record_leaves`, after a leave has RETURNED,
+# clears the timer and takes the stamp. So a leave that timed out
+# (`leave_group` returns 2: killing meroctl does not stop merod, the outcome is
+# unknown) or that LEAVE_CYCLE_BUDGET kept from starting:
+#   * stays admitted, and comes back here next cycle still past its grace, so
+#     it is issued again at once -- not after a fresh 24h grace;
+#   * is not counted as a leave in the rate window, so a slow merod cannot use
+#     up the window and hold every other leave back for an hour.
+# That does not loosen the rate limit: due leaves go oldest-absence-first, so
+# while a leave keeps timing out it keeps its slot in every cycle's plan (the
+# loop re-issues it after the others) instead of making room for a new one;
+# the set of namespaces merod has been told to purge stays within the budget,
+# and each is counted the moment one of its leaves returns (a repeat leave of a
+# namespace already gone returns at once).
+#
+# Fail-safe in the direction that keeps data: an unreadable state file restarts
+# every timer, and a state file that cannot be written leaves nothing. A crash
+# after a leave and before `record_leaves` leaves the namespace admitted and
+# past its grace, so its (idempotent) leave is issued again and recorded then.
+#
+# Log lines go to stderr (and $LOG): stdout is the list the caller acts on.
+plan_leaves() {
+  local plan line
+  plan=$(python3 -c '
+import json, os, sys
+
+# Hex case carries no meaning; ids are compared lowercased, and an admitted id
+# keeps its own spelling because that is the one the caller removes.
+desired = {g.lower() for g in json.loads(sys.argv[1])}
+retain = {g.lower() for g in json.loads(sys.argv[2])}
+admitted = set(json.loads(sys.argv[3]))
+path = sys.argv[4]
+now, grace, max_per_window, window, mass_min, mass_pct = (int(v) for v in sys.argv[5:11])
+
+def stamp(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+msgs = []
+try:
+    with open(path) as f:
+        state = json.load(f)
+    if not isinstance(state, dict):
+        raise ValueError("not a JSON object")
+except FileNotFoundError:
+    state = {}
+except Exception as exc:
+    state = {}
+    msgs.append(f"WARN: leave state unreadable ({exc}); every pending leave restarts its grace period")
+
+since = state.get("absent_since")
+since = {g: t for g, t in since.items() if stamp(t)} if isinstance(since, dict) else {}
+recent = state.get("recent_leaves")
+# A stamp in the future (the clock went back) still counts against the limit.
+recent = [t for t in recent if stamp(t) and t > now - window] if isinstance(recent, list) else []
+was_suspicious = state.get("suspicious") is True
+was_deferred = state.get("deferred") if isinstance(state.get("deferred"), list) else []
+
+absent = {g for g in admitted if g.lower() not in desired and g.lower() not in retain}
+for g in sorted(set(since) - absent):
+    if g in admitted:
+        msgs.append(f"Namespace {g} is listed by mdma again; its pending leave is cancelled")
+    del since[g]
+for g in sorted(absent - set(since)):
+    since[g] = now
+    msgs.append(
+        f"Namespace {g} is no longer assigned by mdma; it will be left once it has been "
+        f"absent for {grace}s (no earlier than epoch {now + grace}) unless it reappears"
+    )
+
+suspicious = len(absent) >= mass_min and len(absent) * 100 > len(admitted) * mass_pct
+to_leave, deferred = [], []
+if suspicious:
+    if not was_suspicious:
+        msgs.append(
+            f"ALERT: should-join dropped {len(absent)} of {len(admitted)} admitted namespaces at "
+            f"once; refusing to leave ANY namespace while that lasts. This is what an mdma outage, "
+            f"a policy omitting this image, or a hostile mdma looks like. Absent: {sorted(absent)}"
+        )
+else:
+    if was_suspicious:
+        msgs.append(f"Mass-drop guard released: {len(absent)} of {len(admitted)} admitted namespaces absent")
+    due = sorted((g for g in absent if now - since[g] >= grace), key=lambda g: (since[g], g))
+    budget = max(0, max_per_window - len(recent))
+    to_leave, deferred = due[:budget], due[budget:]
+    if deferred and deferred != was_deferred:
+        msgs.append(
+            f"Leave rate limit ({max_per_window} per {window}s) reached; deferring {deferred}"
+        )
+
+new_state = {
+    "absent_since": since,
+    "recent_leaves": recent,
+    "suspicious": suspicious,
+    "deferred": deferred,
+}
+# Written only when something changed, since this runs once a second.
+try:
+    if new_state != state:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(new_state, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+except Exception as exc:
+    if to_leave:
+        msgs.append(f"WARN: leave state not saved ({exc}); leaving nothing this cycle")
+    to_leave = []
+
+print(json.dumps({"leave": to_leave, "log": msgs}))
+' "$1" "$2" "$3" "$LEAVE_STATE_FILE" "$(date +%s)" "$LEAVE_GRACE_SECONDS" \
+    "$LEAVE_MAX_PER_WINDOW" "$LEAVE_RATE_WINDOW" "$LEAVE_MASS_DROP_MIN" \
+    "$LEAVE_MASS_DROP_PERCENT" 2>>"$LOG") || plan=""
+
+  if [[ -z "$plan" ]]; then
+    log "WARN: could not plan leaves this cycle; leaving nothing" >&2
+    echo '[]'
+    return 0
+  fi
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then log "$line" >&2; fi
+  done < <(echo "$plan" | python3 -c '
+import json, sys
+for m in json.load(sys.stdin)["log"]:
+    print(m)' 2>>"$LOG" || true)
+  echo "$plan" | python3 -c '
+import json, sys
+print(json.dumps(json.load(sys.stdin)["leave"]))' 2>>"$LOG" || echo '[]'
+}
+
+# Record leaves that RETURNED (JSON list): each clears its timer and takes one
+# stamp in the rate window. Prints the list it recorded -- the caller forgets
+# exactly those from the admitted set. When the state cannot be written it
+# prints `[]`: a leave the rate limit has not counted stays admitted, so it is
+# issued again next cycle (a repeat leave returns at once) and recorded then.
+record_leaves() {
+  python3 -c '
+import json, os, sys
+left = json.loads(sys.argv[1])
+path, now = sys.argv[2], int(sys.argv[3])
+try:
+    with open(path) as f:
+        state = json.load(f)
+    if not isinstance(state, dict):
+        raise ValueError("not a JSON object")
+except FileNotFoundError:
+    state = {}
+since = state.get("absent_since") if isinstance(state.get("absent_since"), dict) else {}
+recent = state.get("recent_leaves") if isinstance(state.get("recent_leaves"), list) else []
+for g in left:
+    since.pop(g, None)
+    recent.append(now)
+state["absent_since"], state["recent_leaves"] = since, recent
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(state, f, sort_keys=True)
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp, path)
+print(json.dumps(left))
+' "$1" "$LEAVE_STATE_FILE" "$(date +%s)" 2>>"$LOG" || {
+    log "WARN: could not record leaves $1; they stay admitted and are issued again next cycle" >&2
+    echo '[]'
+  }
+}
+
+# Drop namespaces just left from the admitted set. Only those: a namespace that
+# is absent but still inside its grace period stays admitted, or its pending
+# leave would be forgotten and the node would keep it forever.
+forget_admitted() {
+  local left="$1" admitted
+  admitted=$(load_admitted)
+  save_admitted "$(python3 -c '
+import json, sys
+print(json.dumps(sorted(set(json.loads(sys.argv[2])) - set(json.loads(sys.argv[1])))))' \
+    "$left" "$admitted" 2>>"$LOG" || echo "$admitted")"
+}
+
+# --- Join worker ---
+#
+# `fleet-join` runs in the BACKGROUND, one at a time, and the loop only starts
+# one and later collects its result. The loop is what polls should-join, and
+# that poll is this node's only heartbeat to mdma, so nothing the join does may
+# delay it:
+#
+#   * a healthy join already took up to ~30s per namespace (core's admission
+#     wait), and the loop ran them back to back, so a node with a few pending
+#     namespaces stopped heartbeating for minutes at a time;
+#   * a join that never returned stopped it for good (prod, 2.3.106).
+#
+# Background rather than an inline per-cycle deadline: a deadline still holds
+# the poll for one join's full budget every cycle a join hangs. One worker
+# rather than one per namespace: joins are rare, merod serialises the quote
+# anyway, and a single slot keeps the bookkeeping to a handful of variables. The
+# rotation in `next_join_group` keeps one namespace that always times out from
+# starving the others.
+#
+# Only the slow, side-effect-free part runs in the worker: `join_group`, which
+# reports admitted or not through its exit status, and logs. Everything that
+# writes state -- note_admitted, /confirm, the confirmed, admitted and pending
+# sets, authorship -- stays in the loop, so there is exactly one writer of every
+# state file, and a worker that is killed half way cannot leave one torn.
+#
+# The handshake. Each launch gets an id (this process, a counter, a random
+# number). The worker's last act is to write "<launch id> <rc> <namespace>" to a
+# private temporary file and rename it over JOIN_RESULT_FILE, so the file is
+# either absent or one complete line, never half of one. The loop takes a result
+# only when it carries the id of the launch it is waiting for AND the namespace
+# that launch was for; anything else in the file -- a result from an earlier
+# launch, or from a worker of a previous sidecar process that outlived it -- is
+# not this join's, and a result line that is ours but does not parse is a
+# failed join, retried. The FILE is what says "finished": the pid is consulted
+# only to notice a worker that is gone without having written one (bash's own
+# job table, not `kill -0`, which a reused pid would satisfy).
+JOIN_PID=""
+JOIN_ID=""
+JOIN_GROUP=""
+JOIN_STARTED=0
+JOIN_SEQ=0
+JOIN_DONE_GROUP=""
+LAST_JOIN_GROUP=""
+# Beside the other sidecar state so every test sandboxes it; rewritten per join.
+JOIN_RESULT_FILE="/mnt/data/fleet/fleet-join.result"
+# The worker bounds itself (MEROCTL_FLEET_JOIN_TIMEOUT on the join, a probe
+# budget on `--help`), so this only fires if something else in it wedges. It is
+# checked when the loop collects, i.e. after a successful poll; during an mdma
+# outage the worker is simply left alone, which costs the heartbeat nothing.
+JOIN_WATCHDOG=$(( MEROCTL_FLEET_JOIN_TIMEOUT + MEROCTL_PROBE_TIMEOUT + 2 * MEROCTL_KILL_GRACE + 30 ))
+
+start_join() {
+  local group_id="$1" response="${2:-}" launch
+  # Probed HERE, in the loop's own shell, so the answer is cached for every
+  # later join; a probe inside the worker would be forgotten when it exits.
+  fleet_join_takes_admitters || true
+  JOIN_SEQ=$(( JOIN_SEQ + 1 ))
+  launch="$$-${JOIN_SEQ}-${RANDOM}"
+  # Whatever an earlier worker left; a straggler that still writes later is
+  # told apart by its launch id.
+  rm -f "$JOIN_RESULT_FILE" "$JOIN_RESULT_FILE".*.tmp
+  (
+    rc=0
+    join_group "$group_id" "$response" || rc=$?
+    tmp="${JOIN_RESULT_FILE}.${launch}.tmp"
+    printf '%s %s %s\n' "$launch" "$rc" "$group_id" > "$tmp" && mv -f "$tmp" "$JOIN_RESULT_FILE"
+  ) &
+  JOIN_PID=$!
+  JOIN_ID="$launch"
+  JOIN_GROUP="$group_id"
+  JOIN_STARTED=$(date +%s)
+}
+
+# Whether the join worker is still running, by bash's job table: a job leaves
+# the running list once bash has reaped it, so a pid the kernel has since
+# handed to another process is never mistaken for the worker.
+join_worker_running() {
+  local pid
+  for pid in $(jobs -rp); do
+    [[ "$pid" == "$JOIN_PID" ]] && return 0
+  done
+  return 1
+}
+
+# Stop a process and everything under it. Frozen first, so it cannot start a
+# child while its children are being listed.
+kill_tree() {
+  local pid="$1" child
+  kill -STOP "$pid" 2>/dev/null || true
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+# Collect the background join, if it has finished. Returns 0 only when it
+# finished AND admitted us, with the namespace in JOIN_DONE_GROUP; 1 when none
+# is running, it is still running, or it ended without admission (a failed or
+# timed-out join, a worker that died or was killed, a garbled result -- all of
+# which mean "nothing to record; the namespace is tried again in turn"). Never
+# waits on a running join.
+join_finished() {
+  JOIN_DONE_GROUP=""
+  [[ -n "$JOIN_PID" ]] || return 1
+  local running="no" got_id="" got_rc="" got_group="" extra="" rc=1
+  # Liveness BEFORE the file. A worker seen gone had already renamed its result
+  # into place (or never will), so the read below is final; the other order
+  # could read "no file" just before the rename and then see the worker gone,
+  # and drop an admission on the floor.
+  if join_worker_running; then
+    running="yes"
+  fi
+  if [[ -f "$JOIN_RESULT_FILE" ]]; then
+    read -r got_id got_rc got_group extra < "$JOIN_RESULT_FILE" 2>/dev/null || true
+  fi
+  if [[ -n "$got_id" && "$got_id" == "$JOIN_ID" ]]; then
+    if [[ "$got_group" == "$JOIN_GROUP" && -z "$extra" && "$got_rc" =~ ^[0-9]+$ ]]; then
+      rc="$got_rc"
+    else
+      log "WARN: unreadable fleet-join result for $JOIN_GROUP; counting it as a failed join, will retry"
+    fi
+  elif [[ "$running" == "yes" ]]; then
+    if (( $(date +%s) - JOIN_STARTED < JOIN_WATCHDOG )); then
+      return 1
+    fi
+    log "ERROR: fleet-join worker for $JOIN_GROUP still running after ${JOIN_WATCHDOG}s; killing it, will retry"
+    kill_tree "$JOIN_PID"
+  else
+    log "WARN: fleet-join worker for $JOIN_GROUP ended without a result${got_id:+ (ignored a result from launch $got_id)}; will retry"
+  fi
+  # Reaps the worker; it has exited, been killed, or is a rename away from it.
+  wait "$JOIN_PID" 2>/dev/null || true
+  JOIN_DONE_GROUP="$JOIN_GROUP"
+  JOIN_PID=""
+  JOIN_ID=""
+  JOIN_GROUP=""
+  rm -f "$JOIN_RESULT_FILE"
+  [[ "$rc" == "0" ]]
+}
+
+# The next namespace to join: assigned, not yet confirmed, and the first one
+# after the last attempt in sorted order (wrapping), so a namespace whose join
+# keeps timing out is not retried ahead of the others every time.
+next_join_group() {
+  python3 -c '
+import json, sys
+desired = json.loads(sys.argv[1])
+confirmed = set(json.loads(sys.argv[2]))
+last = sys.argv[3]
+pending = sorted(g for g in desired if g not in confirmed)
+if pending:
+    later = [g for g in pending if g > last]
+    print((later or pending)[0])
+' "$1" "$2" "$3" 2>>"$LOG" || true
 }
 
 # --- Main loop ---
@@ -2869,20 +3370,25 @@ except:
   # node stayed forever an `assigned` non-member. fleet-join is idempotent
   # in core (returns admitted=true immediately for an already-admitted
   # group), so re-running is cheap.
-  for group_id in $(echo "$desired" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
-    # Skip groups we've already confirmed. Membership is stable until
-    # mdma drops the assignment (handled by the prune below).
-    if echo "$confirmed" | python3 -c "import sys,json; sys.exit(0 if sys.argv[1] in json.load(sys.stdin) else 1)" "$group_id" 2>/dev/null; then
-      continue
-    fi
-    if join_group "$group_id" "$response"; then
-      # Admitted locally. Recorded FIRST and unconditionally: from here on
-      # this node is a p2p member of the namespace whether or not mdma ever
-      # acknowledges it, and it is that membership a later disable revokes.
-      note_admitted "$group_id"
+  #
+  # The join itself runs in the background worker (see "Join worker"), so this
+  # cycle never waits on it: collect the one that finished, if any, then start
+  # the next. A hung join therefore costs one namespace one join budget, and
+  # costs the heartbeat nothing.
+  if join_finished; then
+    group_id="$JOIN_DONE_GROUP"
+    # Admitted locally. Recorded FIRST and unconditionally: from here on this
+    # node is a p2p member of the namespace whether or not mdma ever
+    # acknowledges it -- or still assigns it, since the join ran while this
+    # loop carried on polling -- and it is that membership a later disable
+    # revokes. A namespace dropped while its join was running is therefore a
+    # leave candidate below from this very cycle, and is left once its grace
+    # period runs out (see `plan_leaves`).
+    note_admitted "$group_id"
+    if python3 -c "import sys,json; sys.exit(0 if sys.argv[1] in json.loads(sys.argv[2]) else 1)" "$group_id" "$desired" 2>/dev/null; then
       # Only mark confirmed-locally when BOTH local admission AND mdma's
       # /confirm POST succeed. If /confirm fails (transient mdma blip),
-      # leave the group out of CONFIRMED_FILE so the next cycle's
+      # leave the group out of CONFIRMED_FILE so a later cycle's
       # join_group returns admitted=true immediately (idempotent in
       # core) and we re-try /confirm — eventually consistent.
       # Report the TEE role with the very first confirm, so a namespace that
@@ -2913,16 +3419,31 @@ state[sys.argv[1]] = sys.argv[2] or None
 print(json.dumps(state, sort_keys=True))
 " "$group_id" "$tee_role" 2>>"$LOG" || load_authorship)"
       fi
+    else
+      log "Admitted into $group_id after mdma stopped assigning it; recorded as admitted, so it is left once its grace period runs out unless mdma lists or retains it again"
     fi
-    # No `break`: keep iterating to give other assignments a fair shot
-    # in this same poll cycle. fleet-join's 30s window is per-group.
-  done
+  fi
+  # Start the next join only once the last one is collected: one at a time.
+  if [[ -z "$JOIN_PID" ]]; then
+    group_id=$(next_join_group "$desired" "$confirmed" "$LAST_JOIN_GROUP")
+    if [[ -n "$group_id" ]]; then
+      LAST_JOIN_GROUP="$group_id"
+      start_join "$group_id" "$response"
+    fi
+  fi
 
-  # Leave dropped namespaces: to_leave = ADMITTED − desired. These are
-  # namespaces this node is a p2p MEMBER of but which mdma no longer assigns
-  # — HA disabled, slot reclaimed, or MRTD distrust. All mean "no longer
-  # entitled", so we self-leave to make core evict us from the namespace + all
-  # subgroups and purge our data + keys.
+  # Leave dropped namespaces -- eventually. The candidates are ADMITTED minus
+  # desired minus retain: namespaces this node is a p2p MEMBER of that mdma
+  # neither assigns nor asks it to keep (HA disabled, slot reclaimed). Leaving
+  # publishes MemberLeft and purges this node's keys and data, so `plan_leaves`
+  # only starts a timer here; a namespace is left after it has stayed absent
+  # for LEAVE_GRACE_SECONDS, never while the answer looks like a mass drop, and
+  # at most LEAVE_MAX_PER_WINDOW at a time. Treating absence as an immediate
+  # order let any single 200 from mdma purge every replica at once.
+  #
+  # `retain` is what a newer mdma sends for a namespace this node holds but a
+  # placement gate (plan, image profile, measurement policy) now refuses: keep
+  # it, do not count as serving it. Such a namespace is never a candidate.
   #
   # ADMITTED, not `confirmed`. A namespace enters `confirmed` only when the
   # local join AND mdma's `/confirm` BOTH succeed, so a join that lands while
@@ -2939,23 +3460,69 @@ print(json.dumps(state, sort_keys=True))
   # acknowledged yet.
   #
   # This runs ONLY after a successful poll (gated at the top of the loop), and
-  # BEFORE the prunes below — the diff needs the dropped entries still there.
-  # leave_group is idempotent / non-fatal.
-  to_leave=$(python3 -c "
-import json, sys
-des = set(json.loads(sys.argv[1]))
-adm = set(json.loads(sys.argv[2]))
-print(json.dumps(sorted(adm - des)))
-" "$desired" "$(load_admitted)" 2>>"$LOG" || echo '[]')
+  # BEFORE the prunes below. leave_group is idempotent / non-fatal.
+  retain=$(parse_retain "$response")
+  to_leave=$(plan_leaves "$desired" "$retain" "$(load_admitted)")
 
+  # Bounded per cycle (LEAVE_CYCLE_BUDGET): no new leave starts once the budget
+  # is spent, so the next poll is never more than the budget plus one leave's
+  # own budget away. Only a leave that RETURNED goes in `leave_done`; it is
+  # recorded (`record_leaves`: timer cleared, one rate-limit stamp) and then
+  # forgotten from the admitted set below. One not started, or one that timed
+  # out (outcome unknown), is neither: it stays admitted with its timer as it
+  # was, so the next cycle plans it again straight away -- no fresh grace
+  # period, and no stamp until a leave for it returns.
+  #
+  # Order within the cycle: a namespace whose last leave timed out goes LAST.
+  # `plan_leaves` hands them over oldest-absence-first, and a timed-out leave
+  # keeps its (oldest) timer, so without this one namespace merod keeps
+  # stalling on would spend the whole budget at the head of every cycle and no
+  # other due leave -- another owner's revocation -- would ever start. Only the
+  # order changes: which namespaces may be left is still `plan_leaves`' call.
+  # In memory: after a restart they all get one more turn in plan order.
+  leave_first=""
+  leave_last=""
   for group_id in $(echo "$to_leave" | python3 -c "import sys,json; [print(g) for g in json.loads(sys.stdin.read())]" 2>/dev/null); do
-    leave_group "$group_id"
+    if [[ "$LEAVE_SLOW" == *" $group_id "* ]]; then
+      leave_last="$leave_last $group_id"
+    else
+      leave_first="$leave_first $group_id"
+    fi
   done
+  leave_done=""
+  leave_slow_next=" "
+  leave_started=$(date +%s)
+  for group_id in $leave_first $leave_last; do
+    if (( $(date +%s) - leave_started >= LEAVE_CYCLE_BUDGET )); then
+      log "Leave budget (${LEAVE_CYCLE_BUDGET}s) spent this cycle; leaving $group_id next cycle"
+      # Not tried, so it keeps its place: still last if it was slow.
+      if [[ "$LEAVE_SLOW" == *" $group_id "* ]]; then
+        leave_slow_next="${leave_slow_next}${group_id} "
+      fi
+      continue
+    fi
+    leave_rc=0
+    leave_group "$group_id" || leave_rc=$?
+    if (( leave_rc == 0 )); then
+      leave_done="$leave_done $group_id"
+    elif (( leave_rc == 2 )); then
+      leave_slow_next="${leave_slow_next}${group_id} "
+    fi
+  done
+  LEAVE_SLOW="$leave_slow_next"
+  if [[ -n "$leave_done" ]]; then
+    # shellcheck disable=SC2086  # a word list, split on purpose
+    leave_done=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' $leave_done 2>>"$LOG" || echo '[]')
+    leave_done=$(record_leaves "$leave_done")
+  else
+    leave_done="[]"
+  fi
 
   # Prune confirmed: if mdma no longer assigns us to a group (HA
   # disabled, namespace deleted, slot reclaimed), drop it from the
   # confirmed set so a future re-add is recognised as new on the
-  # next cycle.
+  # next cycle -- including one that comes back inside its grace period,
+  # which then re-runs the (idempotent) join and the `/confirm`.
   confirmed=$(python3 -c "
 import json, sys
 des = set(json.loads(sys.argv[1]))
@@ -2965,15 +3532,13 @@ print(json.dumps(sorted(con & des)))
 
   save_confirmed "$confirmed"
 
-  # Same prune for the admitted set: everything outside `desired` has just
-  # been left above, so keeping it would re-issue a leave every poll forever.
-  # After the leave, for the same reason the confirmed prune is.
-  save_admitted "$(python3 -c "
-import json, sys
-des = set(json.loads(sys.argv[1]))
-adm = set(json.loads(sys.argv[2]))
-print(json.dumps(sorted(adm & des)))
-" "$desired" "$(load_admitted)" 2>/dev/null || echo '[]')"
+  # The admitted set loses exactly the namespaces that were left. NOT
+  # `admitted ∩ desired`: a namespace still inside its grace period must stay
+  # admitted, or its pending leave would be forgotten and the node would keep
+  # it forever. Likewise a leave that did not start or did not finish: still a
+  # member as far as we know, so it stays, and is issued again next cycle.
+  # Nothing left (the common case, once a second): nothing to rewrite.
+  [[ "$leave_done" == "[]" ]] || forget_admitted "$leave_done"
 
   # Last, and over the pruned `confirmed` set: the authorship grant arrives
   # long after admission, so it has to be re-read for namespaces we already

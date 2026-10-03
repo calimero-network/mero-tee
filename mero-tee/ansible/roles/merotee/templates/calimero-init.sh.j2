@@ -1223,18 +1223,20 @@ fi
 
 {% if fleet_delegated_access | default(false) | bool %}
 # Delegated execution: serve `GET`/`POST /admin-api/contexts/<ctx>/intents`
-# (and, on a merod that has them, `GET`/`POST
+# (and, on a merod that has them, `POST
+# /admin-api/contexts/<ctx>/presence-intents` for delegated presence, `GET`/`POST
 # /admin-api/groups/<group>/context-intents` for delegated context creation and
 # `GET`/`POST /admin-api/groups/<group>/governance-intents` for delegated
 # governance) without a node credential, so a keyholder that has no account
 # here can still have this node write on their behalf.
 #
-# The pair to the `node-api-intents`, `node-api-context-intents` and
-# `node-api-governance-intents` routers in traefik's routing.yml, set from the
+# The pair to the `node-api-intents`, `node-api-presence-intents`,
+# `node-api-context-intents` and `node-api-governance-intents` routers in traefik's routing.yml, set from the
 # same `fleet_delegated_access` variable so the edges cannot drift. Only those
 # routes are opened, and all are self-authenticating (a creation warrant is
 # checked against the AUTHOR's `CAN_CREATE_CONTEXT`, a governance warrant is
-# the member's own signed governance change, the rest as below): merod
+# the member's own signed governance change, a presence statement is signed by
+# the device and changes no state, the rest as below): merod
 # refuses an intent unless the warrant is the member's, commits to this exact
 # method and arguments, is unexpired, has an unspent nonce, and this node is a
 # `RelayTee` in the owning group (a `ReadOnlyTee` is refused with a 403).
