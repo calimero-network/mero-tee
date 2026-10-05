@@ -1282,30 +1282,34 @@ log "Taking device-key callers' identity from the proxy..."
   'server.proxy_identity=true' \
   || fatal "failed to set server.proxy_identity; refusing to serve device-key sessions node-wide"
 
-# The origin this relay's own pages are served under. merod in proxy auth mode
-# serves a browser only pages whose host it recognises: a loopback name, an IP
-# address, or the host of an `allowed_origins` entry. A browser's `Host` is
-# whatever name it resolved, so under DNS rebinding a page on another site sends
-# its own name as both `Origin` and `Host`; comparing the two proves nothing.
-# This relay's dashboard (`/admin-dashboard`) is served under its relay host
-# name, which merod cannot know, so it is listed here.
+# No `server.cors.allowed_origins` is set. merod admits browser pages from any
+# origin on a node that takes callers' identity from the proxy (the key above):
+# the proxy, not the page's origin, says who the caller is, so the origin guard
+# does not apply here and CORS stays at merod's permissive default. Listing this
+# relay's own origin, as image 2.3.109 did, made that list the CORS allow-list
+# too, and every hosted app (the cloud, the wallet, any app on its own domain)
+# was then refused by the browser. Needs a merod that trusts proxy identity in
+# its origin guard; on an older one, this relay's own dashboard is refused.
 #
-# Only the origin of `relay-url` is taken, and only when it is `https://` and a
-# plain DNS name: metadata is untrusted, and anything else is not a name this
-# node is served under. A node with no relay URL is reached by address, which
-# merod recognises without being told.
-relay_origin() {
-  sed -nE 's#^(https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:[0-9]{1,5})?(/.*)?$#\1\5#p' <<< "${1,,}"
+# config.toml lives on the data disk and `merod config` only sets keys, so a
+# node that first booted on 2.3.109 still carries the list. It is dropped here:
+# the one `allowed_origins` line under `[server.cors]`, nothing else, and the
+# file is replaced atomically with its mode kept (it holds the node's key).
+# `[]` would not do: merod reads an empty list as "refuse every origin".
+drop_allowed_origins() {
+  local config="$1" tmp
+  grep -q '^allowed_origins[[:space:]]*=' "$config" || return 0
+  tmp="$(mktemp "${config}.XXXXXX")" || return 1
+  # `cp -p` first so the rewritten file keeps config.toml's mode and owner.
+  cp -p "$config" "$tmp" \
+    && sed -E '/^\[server\.cors\][[:space:]]*$/,/^\[/{/^allowed_origins[[:space:]]*=/d;}' "$config" > "$tmp" \
+    && mv -f "$tmp" "$config" \
+    || { rm -f "$tmp"; return 1; }
 }
-RELAY_URL=$(get_meta "relay-url" | tr -d '\r\n')
-RELAY_ORIGIN=$(relay_origin "$RELAY_URL")
-if [[ -n "$RELAY_ORIGIN" ]]; then
-  log "Serving browser pages under this relay's origin ${RELAY_ORIGIN}..."
-  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-    "server.cors.allowed_origins=[\"${RELAY_ORIGIN}\"]" \
-    || log "WARN: failed to list ${RELAY_ORIGIN} in server.cors.allowed_origins; this relay's dashboard will be refused"
-elif [[ -n "$RELAY_URL" ]]; then
-  log "WARN: relay-url ${RELAY_URL} is not an https:// URL on a DNS name; not listing it as this relay's origin"
+if grep -q '^allowed_origins[[:space:]]*=' "$NODE_CONFIG"; then
+  log "Dropping server.cors.allowed_origins so browser pages from any origin are admitted..."
+  drop_allowed_origins "$NODE_CONFIG" \
+    || log "WARN: failed to drop server.cors.allowed_origins; browsers will reach this relay only from the listed origin"
 fi
 {% endif %}
 
