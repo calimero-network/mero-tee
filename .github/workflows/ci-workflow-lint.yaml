@@ -213,6 +213,17 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-direct-admission-test.sh
 
+      # Join status. The sidecar forwards how each fleet-join went -- the
+      # directly-asked admitters' refusals and reasons, as core returns them --
+      # to MDMA's `/api/fleet/join-status`, so a namespace owner sees why a node
+      # is not joining. Wrong quietly if refusals are read only from a flat
+      # answer (meroctl wraps it), if the worker writes the state (only the loop
+      # may), or if a failed POST is remembered as delivered.
+      - name: Run fleet-sidecar join status test
+        id: sidecar_join_status_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-join-status-test.sh
+
       # Device-key login needs the node's own key, which only merod knows. The
       # sidecar records it and restarts mero-auth, only when it changes.
       - name: Test fleet-sidecar records the device-key login node key
@@ -497,6 +508,7 @@ jobs:
             --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
             --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
             --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
+            --checks-line "- fleet-sidecar join status test: ${{ steps.sidecar_join_status_test.outcome }}" \
             --checks-line "- fleet-sidecar login node key test: ${{ steps.sidecar_login_key_test.outcome }}" \
             --checks-line "- mero-auth device-key login test: ${{ steps.mero_auth_device_login_test.outcome }}" \
             --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \

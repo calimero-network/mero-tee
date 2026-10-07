@@ -75,6 +75,13 @@ AUTHORSHIP_FILE="/mnt/data/fleet/fleet-authorship.json"
 # the last authoritative (`full`) post landed. Change detection compares against
 # this, so a steady-state node posts nothing at all. See `reconcile_inventory`.
 INVENTORY_FILE="/mnt/data/fleet/fleet-inventory.json"
+# Per-namespace outcome of the latest fleet-join (state, refusals, attempts) and
+# what was last told to mdma's `/api/fleet/join-status`, so the namespace owner
+# can see WHY this node is not joining. See `report_join_status`.
+JOIN_STATUS_FILE="/mnt/data/fleet/fleet-join-status.json"
+# Re-report an unchanged outcome every this many attempts, so the attempt count
+# the owner sees does not freeze at the first one while a join keeps failing.
+JOIN_STATUS_REPORT_EVERY=10
 POLL_INTERVAL=1
 # How often the group tree is WALKED. Not the post interval — a walk that finds
 # nothing changed posts nothing. Core exposes no "contexts changed" signal, so
@@ -2794,6 +2801,9 @@ print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "rela
 
 join_group() {
   local group_id="$1"
+  # How this attempt went, for the loop to report (see `join_outcome`). Set on
+  # every path that ran fleet-join; empty if it never got that far.
+  JOIN_OUTCOME=""
   # The should-join response this join is acting on; optional, so a caller
   # without one still joins by broadcast.
   local response="${2:-}"
@@ -2851,6 +2861,7 @@ for entry in data.get("assignments", []) if isinstance(data, dict) else []:
 
   if [[ $rc -ne 0 ]]; then
     log "ERROR: fleet-join command failed for $group_id ($(meroctl_failure "$rc" "$MEROCTL_FLEET_JOIN_TIMEOUT")); will retry: $result"
+    JOIN_OUTCOME=$(join_outcome "" "fleet-join failed: $(meroctl_failure "$rc" "$MEROCTL_FLEET_JOIN_TIMEOUT")")
     return 1
   fi
 
@@ -2870,6 +2881,8 @@ except Exception as exc:
   print(False)
 ' 2>>"$LOG" || echo 'False')
 
+  JOIN_OUTCOME=$(join_outcome "$result" "")
+
   if [[ "$admitted" == "True" ]]; then
     log "Admitted into group $group_id"
     return 0
@@ -2877,6 +2890,118 @@ except Exception as exc:
     log "fleet-join completed but not yet admitted for $group_id; will retry next cycle"
     return 1
   fi
+}
+
+# How one fleet-join went, as one line of JSON: `state`, `refusals`, `error`,
+# `admitted`. Pure, so the join worker can run it (the worker writes no state).
+#
+# A refusal is negotiated peer to peer, a hop mdma is not on. Core's fleet-join
+# answer names each directly-asked admitter that declined and why (`refusals`),
+# or the one that said yes (`admitted_by`) -- the only place this node ever
+# learns it, because a broadcast is refused silently on the admitter's side.
+#   admitted -- admitted, or an admitter said yes and the key is on its way
+#   refused  -- every directly-asked admitter declined (`refusals` says why)
+#   waiting  -- nobody answered directly; the broadcast is still out (also what
+#               a core predating `refusals` always reads as)
+#   error    -- the fleet-join itself failed (`$2`)
+join_outcome() {
+  local result="${1:-}" error="${2:-}"
+  printf '%s' "$result" | python3 -c '
+import json, sys
+error = sys.argv[1]
+try:
+  obj = json.loads(sys.stdin.read() or "{}")
+  if not isinstance(obj, dict):
+    obj = {}
+  if isinstance(obj.get("data"), dict):
+    obj = obj["data"]
+except Exception:
+  obj = {}
+refusals = []
+for r in obj.get("refusals") or []:
+  if isinstance(r, dict):
+    refusals.append({"peer": str(r.get("peer", ""))[:128], "reason": str(r.get("reason", ""))[:512]})
+refusals = refusals[:8]
+if error:
+  state = "error"
+elif obj.get("admitted") or obj.get("admitted_by"):
+  state = "admitted"
+elif refusals:
+  state = "refused"
+else:
+  state = "waiting"
+print(json.dumps({"state": state, "refusals": refusals, "error": error[:512] or None,
+                  "admitted": bool(obj.get("admitted"))}, separators=(",", ":")))
+' "$error" 2>>"$LOG" || true
+}
+
+# Tell mdma how a fleet-join went (`join_outcome`'s line), so the namespace
+# owner sees why this node is not joining: `POST /api/fleet/join-status`.
+#
+# Runs in the loop, which owns every state file, once per collected join. POSTs
+# only when the outcome differs from what mdma last accepted, or every
+# JOIN_STATUS_REPORT_EVERY attempts so the attempt count stays current. A failed
+# POST (an mdma predating the endpoint answers 404) is not remembered as
+# delivered, so the next attempt tries again. An admitted namespace's record is
+# dropped, so a later reassignment counts from one.
+report_join_status() {
+  local group_id="$1" outcome="${2:-}" plan body fingerprint
+  [[ -n "$outcome" ]] || return 0
+  plan=$(printf '%s' "$outcome" | python3 -c '
+import json, sys
+group, path, peer, every = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+try:
+  with open(path) as f:
+    records = json.load(f)
+  if not isinstance(records, dict):
+    records = {}
+except Exception:
+  records = {}
+prev = records.get(group) if isinstance(records.get(group), dict) else {}
+outcome = json.loads(sys.stdin.read())
+admitted = outcome.pop("admitted", False)
+attempts = int(prev.get("attempts") or 0) + 1
+fingerprint = json.dumps(outcome, sort_keys=True)
+due = fingerprint != prev.get("reported") or attempts % every == 0
+body = json.dumps(dict(outcome, peer_id=peer, group_id=group, attempts=attempts), separators=(",", ":")) if due else ""
+if admitted:
+  records.pop(group, None)
+else:
+  records[group] = {"attempts": attempts, "reported": prev.get("reported")}
+with open(path + ".tmp", "w") as f:
+  json.dump(records, f, sort_keys=True)
+print(body)
+print(fingerprint)
+' "$group_id" "$JOIN_STATUS_FILE" "${PEER_ID:-}" "$JOIN_STATUS_REPORT_EVERY" 2>>"$LOG") || return 1
+  mv -f "${JOIN_STATUS_FILE}.tmp" "$JOIN_STATUS_FILE" 2>>"$LOG" || return 1
+  body=$(sed -n 1p <<<"$plan")
+  fingerprint=$(sed -n 2p <<<"$plan")
+  [[ -n "$body" ]] || return 0
+
+  local headers=(-H "Content-Type: application/json")
+  [[ -n "${FLEET_TOKEN:-}" ]] && headers+=(-H "X-Fleet-Token: ${FLEET_TOKEN}")
+  if ! curl -sf --max-time 10 "${headers[@]}" -d "$body" \
+      "${MDMA_URL}/api/fleet/join-status" >/dev/null 2>>"$LOG"; then
+    log "WARN: POST /api/fleet/join-status failed for $group_id; will report again after the next attempt"
+    return 1
+  fi
+  # Accepted: remember what mdma now holds. Nothing to stamp for an admitted
+  # namespace, whose record was dropped above.
+  python3 -c '
+import json, sys
+path, group, fingerprint = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+  with open(path) as f:
+    records = json.load(f)
+except Exception:
+  sys.exit(0)
+if isinstance(records, dict) and isinstance(records.get(group), dict):
+  records[group]["reported"] = fingerprint
+  with open(path + ".tmp", "w") as f:
+    json.dump(records, f, sort_keys=True)
+' "$JOIN_STATUS_FILE" "$group_id" "$fingerprint" 2>>"$LOG" || return 0
+  [[ ! -f "${JOIN_STATUS_FILE}.tmp" ]] || mv -f "${JOIN_STATUS_FILE}.tmp" "$JOIN_STATUS_FILE" 2>>"$LOG"
+  return 0
 }
 
 leave_group() {
@@ -3236,6 +3361,8 @@ JOIN_GROUP=""
 JOIN_STARTED=0
 JOIN_SEQ=0
 JOIN_DONE_GROUP=""
+JOIN_DONE_OUTCOME=""
+JOIN_OUTCOME=""
 LAST_JOIN_GROUP=""
 # Beside the other sidecar state so every test sandboxes it; rewritten per join.
 JOIN_RESULT_FILE="/mnt/data/fleet/fleet-join.result"
@@ -3259,7 +3386,12 @@ start_join() {
     rc=0
     join_group "$group_id" "$response" || rc=$?
     tmp="${JOIN_RESULT_FILE}.${launch}.tmp"
-    printf '%s %s %s\n' "$launch" "$rc" "$group_id" > "$tmp" && mv -f "$tmp" "$JOIN_RESULT_FILE"
+    # The attempt's outcome rides along as one base64 token ("-" for none), so
+    # the result stays one line of space-free fields and the loop -- not this
+    # worker -- is what records and reports it.
+    outcome="-"
+    [[ -z "${JOIN_OUTCOME:-}" ]] || outcome=$(printf '%s' "$JOIN_OUTCOME" | base64 -w0)
+    printf '%s %s %s %s\n' "$launch" "$rc" "$group_id" "$outcome" > "$tmp" && mv -f "$tmp" "$JOIN_RESULT_FILE"
   ) &
   JOIN_PID=$!
   JOIN_ID="$launch"
@@ -3293,8 +3425,9 @@ kill_tree() {
 # waits on a running join.
 join_finished() {
   JOIN_DONE_GROUP=""
+  JOIN_DONE_OUTCOME=""
   [[ -n "$JOIN_PID" ]] || return 1
-  local running="no" got_id="" got_rc="" got_group="" extra="" rc=1
+  local running="no" got_id="" got_rc="" got_group="" got_outcome="" extra="" rc=1
   # Liveness BEFORE the file. A worker seen gone had already renamed its result
   # into place (or never will), so the read below is final; the other order
   # could read "no file" just before the rename and then see the worker gone,
@@ -3303,12 +3436,21 @@ join_finished() {
     running="yes"
   fi
   if [[ -f "$JOIN_RESULT_FILE" ]]; then
-    read -r got_id got_rc got_group extra < "$JOIN_RESULT_FILE" 2>/dev/null || true
+    read -r got_id got_rc got_group got_outcome extra < "$JOIN_RESULT_FILE" 2>/dev/null || true
   fi
   if [[ -n "$got_id" && "$got_id" == "$JOIN_ID" ]]; then
+    # The outcome field is "-" or base64 of the worker's `join_outcome` line; a
+    # line written by a sidecar predating it has none. Anything else in that
+    # place is a garbled result, like any other stray field.
+    if [[ -n "$got_outcome" && "$got_outcome" != "-" ]]; then
+      JOIN_DONE_OUTCOME=$(printf '%s' "$got_outcome" | base64 -d 2>/dev/null \
+        | python3 -c 'import json, sys; o = json.load(sys.stdin); assert isinstance(o, dict) and "state" in o; print(json.dumps(o, separators=(",", ":")))' 2>/dev/null) \
+        || { JOIN_DONE_OUTCOME=""; extra="${extra:-$got_outcome}"; }
+    fi
     if [[ "$got_group" == "$JOIN_GROUP" && -z "$extra" && "$got_rc" =~ ^[0-9]+$ ]]; then
       rc="$got_rc"
     else
+      JOIN_DONE_OUTCOME=""
       log "WARN: unreadable fleet-join result for $JOIN_GROUP; counting it as a failed join, will retry"
     fi
   elif [[ "$running" == "yes" ]]; then
@@ -3521,6 +3663,10 @@ except:
   # the next. A hung join therefore costs one namespace one join budget, and
   # costs the heartbeat nothing.
   if join_finished; then
+    # How the collected attempt went, for the namespace owner; reported for a
+    # failed attempt in the `elif` below. Best effort: an mdma that cannot take
+    # it changes nothing about the join.
+    report_join_status "$JOIN_DONE_GROUP" "$JOIN_DONE_OUTCOME" || true
     group_id="$JOIN_DONE_GROUP"
     # Admitted locally. Recorded FIRST and unconditionally: from here on this
     # node is a p2p member of the namespace whether or not mdma ever
@@ -3567,6 +3713,8 @@ print(json.dumps(state, sort_keys=True))
     else
       log "Admitted into $group_id after mdma stopped assigning it; recorded as admitted, so it is left once its grace period runs out unless mdma lists or retains it again"
     fi
+  elif [[ -n "$JOIN_DONE_OUTCOME" ]]; then
+    report_join_status "$JOIN_DONE_GROUP" "$JOIN_DONE_OUTCOME" || true
   fi
   # Start the next join only once the last one is collected: one at a time.
   if [[ -z "$JOIN_PID" ]]; then
