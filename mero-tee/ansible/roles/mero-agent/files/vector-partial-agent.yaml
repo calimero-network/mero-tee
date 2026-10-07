@@ -1,0 +1,30 @@
+# Partial Vector config for the agent image. configure_vector.sh appends the
+# sink when agent-init finds `logs-endpoint` in instance metadata.
+#
+# These lines LEAVE THE TEE. The endpoint is instance metadata, which whoever
+# runs the VM can set, so treat every line below as readable by an operator.
+# The agent's own unit is NOT shipped: what an agent logs is its business, and
+# it may log what it was asked. The gate logs secret names, never values.
+sources:
+  agent_journal:
+    type: journald
+    include_units:
+      [
+        "mero-agent-init.service",
+        "mero-agent-gate.service",
+        "vector.service",
+        "vmagent.service",
+      ]
+    data_dir: "/etc/vector/data"
+
+transforms:
+  add_labels:
+    type: remap
+    inputs: [agent_journal]
+    source: |
+      .unit = ._SYSTEMD_UNIT
+      .hostname = .host
+      .instance_name = "mero-agent"
+      .instance_type = "gcp"
+      # Substituted by configure_vector.sh from /etc/mero-agent/image-profile.
+      .instance_profile = "__IMAGE_PROFILE__"

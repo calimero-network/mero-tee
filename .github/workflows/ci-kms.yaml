@@ -9,6 +9,7 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
+      - "mero-agent-gate/**"
       - ".github/workflows/ci-kms.yaml"
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - "mero-kms/Cargo.toml"
       - Cargo.lock
       - "mero-kms/src/**"
+      - "mero-agent-gate/**"
       - ".github/workflows/ci-kms.yaml"
 
 permissions:
@@ -65,11 +67,27 @@ jobs:
         id: clippy_mock
         run: cargo clippy -p mero-kms --all-targets --features mock-attestation -- -D warnings
 
+      # mero-agent-gate: attestation and sealed secret provisioning in the
+      # agent image (docs/design/private-agents.md). Same quote code and the
+      # same mock gating as mero-kms; the provisioning round trip over HTTP
+      # runs in the mock build.
+      - name: Clippy (mero-agent-gate)
+        id: gate_clippy
+        run: |
+          cargo clippy -p mero-agent-gate --all-targets -- -D warnings
+          cargo clippy -p mero-agent-gate --all-targets --features mock-attestation -- -D warnings
+
+      - name: Tests (mero-agent-gate)
+        id: gate_tests
+        run: |
+          cargo test -p mero-agent-gate
+          cargo test -p mero-agent-gate --features mock-attestation
+
       - name: Doc warnings
         id: docs
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p mero-kms --no-deps
+        run: cargo doc -p mero-kms -p mero-agent-gate --no-deps
 
       - name: Summarize CI outcomes
         if: ${{ always() }}

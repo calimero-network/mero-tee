@@ -1,0 +1,98 @@
+---
+title: Private Agents
+description: How a private agent image boots, gets its disk key, takes its secrets sealed to the TD, and proves which build holds its signing key.
+sidebar:
+  order: 5
+---
+
+A private agent runs as a third TDX image role, `agent`, beside nodes and the KMS.
+Nobody but the agent can read its secrets, signing key or state, and anyone can check
+which build runs. The rationale, the trust that remains and the open decisions are in
+the [design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md).
+
+The image holds three programs:
+
+- **`agent-init`** (boot): extends RTMR3 with
+  `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, then opens the encrypted data disk
+  with a key from mero-kms. Its role string is what the KMS's agent policy entry
+  matches.
+- **`mero-agent-gate`**: serves `/attest` and `/provision`. It holds the agent's
+  signing key and takes the agent's secrets, so the agent itself can be any program,
+  open or closed.
+- **`mero-agent`**: the agent. It reads its secrets from files and signs warrants with
+  the attested key.
+
+## Boot and the disk key
+
+`agent-init` runs the same `merod kms disk-key` handshake a node does, against the
+release's KMS. The KMS matches the quote against its policy entries. Only the
+**agent** entry matches an agent image, so the key is derived under
+`mero-agent/storage/<profile>/<identity>` (see
+[Key Release](/flows/key-release/)). An agent can never be released a node's key.
+
+The disk is LUKS2 with `hmac-sha256` integrity. A blank disk is formatted; a LUKS disk
+is opened; anything else stops the boot, including a plain ext4 disk. A new release has
+a new KMS root, so a disk from an earlier release does not open. The disk is a cache:
+anything that must outlive a release lives in Calimero or is provisioned again.
+
+Instance metadata carries addresses only:
+
+| Key | Meaning |
+| --- | --- |
+| `kms-url` | The mero-kms the disk key comes from. Required unless `ephemeral-store`. |
+| `tee-release-version` | The mero-kms release merod verifies that KMS against. Never older than the image. |
+| `relay-url` | The relay node the agent sends warrants to. |
+| `ephemeral-store` | `true`: state in TD memory (a tmpfs), no KMS. For the release pipeline's measurement VM. |
+| `logs-endpoint`, `metrics-endpoint`, `observability-token` | As on the KMS. The agent's own unit is not shipped. |
+
+## Attestation
+
+```text
+POST /attest  {"nonceB64": <32 bytes>}
+→ {"quoteB64", "reportDataHex", "provisioningPublicKeyB64", "signingPublicKeyB64"}
+
+report_data = nonce ‖ SHA-256("mero-agent-gate/attest/v1" ‖ provisioning_pub ‖ signing_pub)
+```
+
+The **provisioning key** (X25519) is generated in memory at every start of the gate.
+The **signing key** (Ed25519) is generated on the agent's first boot and kept on the
+encrypted disk. One quote proves both keys belong to a TD running the measured image.
+
+Before authorizing the signing key as the agent's device, an account owner runs
+`mero-agent-provision attest --gate <url> --policy <agent-policy.json>`, or uses the
+**Agent** tab of the attestation verifier. Both verify the quote, the nonce, the key
+binding and the registers against the agent policy, and only then show the key.
+
+## Provisioning secrets
+
+The image is public, so it holds no secrets. They arrive sealed to the TD:
+
+```text
+mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
+                               --key <provisioner.key> --secrets secrets.json
+```
+
+1. The CLI verifies the gate's quote as above. Nothing is sent before it passes.
+2. It seals `{"secrets": {"NAME": "value"}}` with RFC 9180 HPKE
+   (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305) to the provisioning
+   key. It uses **Auth** mode under the provisioner's own X25519 key.
+3. The gate opens it only if that sender key is in the image's baked provisioner list
+   (`/etc/mero-agent/provisioners`, measured). It writes each secret to
+   `/mnt/agent/secrets/<NAME>` (mode 0600).
+
+The HPKE `info` binds the message to the recipient key. A message cannot be replayed to
+another agent or after the gate restarts; a provisioner whose `/attest` predates a
+restart gets `409 stale_provisioning_key` and attests again.
+
+A `locked-read-only` image must list at least one provisioner (the build fails
+otherwise) and never accepts unauthenticated bundles. A debug image built without a
+list accepts Base-mode bundles from anyone who verified its quote.
+
+## Measuring an agent image
+
+No KMS can list an agent image before it is measured. The
+[Agent TDX image probe](https://github.com/calimero-network/mero-tee/actions/workflows/agent-tdx-image-probe.yaml)
+boots the image with `ephemeral-store=true` and has Intel Trust Authority verify its
+quote. It writes `agent-attestation-policy.<profile>.json`, then provisions a throwaway
+secret through `mero-agent-provision` against that policy. That file is what a KMS
+image serving agents is built with (`kms_agent_policy_file`).

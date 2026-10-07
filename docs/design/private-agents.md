@@ -1,6 +1,9 @@
 # Design: private agents on GCP TDX
 
-Status: proposal. Phase 1 (role-aware KMS) is implemented; the rest is not.
+Status: prototype. Phases 1-3 are implemented in this repository, and phase 4
+has a measurement probe. Phase 4's release and phases 5-6 wait on the open
+decisions below. See [How it works](../src/content/docs/flows/private-agents.mdx)
+for the protocol as built.
 
 Run agents next to the Calimero fleet as a third TDX image role, `agent`, so
 nobody but the agent can read its secrets, signing key or state. Anyone can
@@ -199,13 +202,34 @@ should wait for an agent that needs it.
 | Phase | Where | Work | Status |
 | --- | --- | --- | --- |
 | 1 | mero-kms, mero-tee | Role-tagged policy entries, all five registers matched within one entry; per-role key prefix; optional agent policy in the KMS image. | Done |
-| 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`; debug profile only. | |
-| 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | |
-| 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | |
+| 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
+| 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
+| 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Probe done (`agent-tdx-image-probe.yaml`); release waits on the agent binary's source |
 | 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
 | 6 | mdma | Optional: deploy agents and run rollovers. | |
 
-Phase 3 and later need these decisions first:
+## Decisions taken while building the prototype
+
+- **Who may provision.** The image bakes a list of provisioner X25519 keys
+  (`mero_agent_provisioners_file`, measured), and the gate opens only HPKE
+  Auth-mode messages from a listed key. Whoever holds a listed key (an operator
+  CLI or an owner's client) can provision, so the open question below is now
+  about who holds those keys, not about the protocol. `locked-read-only` requires
+  a list; a debug image without one accepts Base mode.
+- **The gate holds the signing key.** It generates the Ed25519 key on the
+  encrypted disk and attests it beside the provisioning key, so the agent needs
+  no attestation code of its own.
+- **`tee-release-version` is required metadata**, as on a node: `merod kms
+  disk-key` verifies the KMS against that release's signed policy, never older
+  than the image.
+- **`ephemeral-store=true`** keeps state in TD memory and needs no KMS. It exists
+  for the measurement VM, which runs before any KMS lists the image.
+- **The agent's own journal is not shipped.** Only agent-init and the gate log
+  off the VM; the gate logs secret names, never values.
+
+## Open decisions
+
+Phase 4's release and later need these decisions first:
 
 - A model inside the TD for the first agent, or is a hosted API acceptable?
 - Where does the agent source live, and is it published?

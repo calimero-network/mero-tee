@@ -253,9 +253,12 @@ sets the build-host defaults.
 | `zone` | `europe-west4-a` | GCP zone. |
 | `subnetwork` | `""` | Optional build subnetwork. |
 | `version` | `""` (supplied at build) | Image version, threaded into the image name/family. |
-| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`. |
+| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` builds the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`, a prefix mdma's dispatcher never resolves. |
 | `mero_kms_binary` | `""` | `kms` only: path of the `mero-kms` binary to bake in, built from the release commit. |
 | `kms_node_policy_file` | `""` | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
+| `mero_agent_binary` | `""` | `agent` only: path of the agent program to bake in as `/usr/local/bin/mero-agent`. Measured (RTMR2 content hash, dm-verity). |
+| `mero_agent_gate_binary` | `""` | `agent` only: path of the `mero-agent-gate` binary, built from this repository. |
+| `mero_agent_provisioners_file` | `""` | `agent` only: base64 X25519 keys of the provisioners allowed to set the agent's secrets, one per line (`mero-agent-provision keygen` prints one). Required on `locked-read-only`; empty on a debug profile accepts unauthenticated provisioning. |
 | `kms_agent_policy_file` | `""` | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Empty bakes no agent entry and leaves `kms.env` unchanged. |
 
 ### Ansible play variables
@@ -393,6 +396,9 @@ Optional CI overrides read by `mero-tee/build-and-release.sh`:
 | `PACKER_GCP_PROJECT_ID` (or `GOOGLE_CLOUD_PROJECT` / `CLOUDSDK_CORE_PROJECT`) | Overrides the Packer `project_id`. |
 | `PACKER_GCP_REGION` / `PACKER_GCP_ZONE` / `PACKER_GCP_SUBNETWORK` | Override the corresponding Packer vars. |
 | `PACKER_FORCE_BUILD` | When `true`, passes `packer build -force` to replace pre-existing image artifacts. |
+| `IMAGE_ROLE` | `kms` or `agent` selects that image role (default `node`). |
+| `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE`, `KMS_AGENT_POLICY_FILE` | `IMAGE_ROLE=kms`: the binary and allowlists to bake (the agent one optional). |
+| `MERO_AGENT_BINARY`, `MERO_AGENT_GATE_BINARY`, `MERO_AGENT_PROVISIONERS_FILE` | `IMAGE_ROLE=agent`: the binaries and provisioner list to bake (the list optional on debug profiles). |
 
 The script builds one profile when its first argument is a profile name,
 otherwise all three (`locked-read-only`, `debug-read-only`, `debug`).

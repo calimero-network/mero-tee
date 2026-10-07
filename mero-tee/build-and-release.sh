@@ -63,6 +63,27 @@ if [[ "${IMAGE_ROLE:-node}" == "kms" ]]; then
     -var "mero_kms_binary=$(realpath "${MERO_KMS_BINARY}")"
     -var "kms_node_policy_file=$(realpath "${KMS_NODE_POLICY_FILE}")"
   )
+  # Optional: a KMS that also serves agent images (docs/design/private-agents.md).
+  if [[ -n "${KMS_AGENT_POLICY_FILE:-}" ]]; then
+    [[ -f "${KMS_AGENT_POLICY_FILE}" ]] || { echo "::error::KMS_AGENT_POLICY_FILE ${KMS_AGENT_POLICY_FILE} does not exist"; exit 1; }
+    packer_args+=(-var "kms_agent_policy_file=$(realpath "${KMS_AGENT_POLICY_FILE}")")
+  fi
+fi
+# IMAGE_ROLE=agent builds the private agent image; it needs the agent binary
+# and mero-agent-gate, and takes an optional provisioner list (required on
+# locked-read-only, which the playbook enforces).
+if [[ "${IMAGE_ROLE:-node}" == "agent" ]]; then
+  [[ -f "${MERO_AGENT_BINARY:-}" ]] || { echo "::error::IMAGE_ROLE=agent needs MERO_AGENT_BINARY (the agent binary)"; exit 1; }
+  [[ -f "${MERO_AGENT_GATE_BINARY:-}" ]] || { echo "::error::IMAGE_ROLE=agent needs MERO_AGENT_GATE_BINARY (a built mero-agent-gate)"; exit 1; }
+  packer_args+=(
+    -var "image_role=agent"
+    -var "mero_agent_binary=$(realpath "${MERO_AGENT_BINARY}")"
+    -var "mero_agent_gate_binary=$(realpath "${MERO_AGENT_GATE_BINARY}")"
+  )
+  if [[ -n "${MERO_AGENT_PROVISIONERS_FILE:-}" ]]; then
+    [[ -f "${MERO_AGENT_PROVISIONERS_FILE}" ]] || { echo "::error::MERO_AGENT_PROVISIONERS_FILE ${MERO_AGENT_PROVISIONERS_FILE} does not exist"; exit 1; }
+    packer_args+=(-var "mero_agent_provisioners_file=$(realpath "${MERO_AGENT_PROVISIONERS_FILE}")")
+  fi
 fi
 # The base image is pinned in ubuntu.pkr.hcl (`source_image_family`), which is the
 # single source of truth -- the value is deliberately not repeated here or in CI,

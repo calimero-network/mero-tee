@@ -6,6 +6,9 @@
  *     mero-kms replicas listen only inside their VPC, so this service cannot fetch from
  *     them: the operator calls `/attest` from inside the VPC and pastes the response. When
  *     `nonce_b64` (the nonce sent to `/attest`) is given, the quote must be bound to it.
+ *   - { attestation, nonce_b64?, agent: true } — a pasted mero-agent-gate `/attest`
+ *     response (docs/design/private-agents.md): additionally, report_data[32..64] must
+ *     commit to the provisioning and signing keys the response names.
  */
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
@@ -117,6 +120,33 @@ function quoteReportData(quoteB64) {
     throw new Error('Quote too short to carry report_data');
   }
   return bytes.subarray(start, start + 64);
+}
+
+// mero-agent-gate's report-data binding (mero-agent-gate/src/protocol.rs).
+const AGENT_ATTEST_DOMAIN = Buffer.from('mero-agent-gate/attest/v1');
+
+function decodeKey32(field, value) {
+  const bytes = typeof value === 'string' ? Buffer.from(value.trim(), 'base64') : Buffer.alloc(0);
+  if (bytes.length !== 32) throw new Error(`${field} must be 32 bytes of base64`);
+  return bytes;
+}
+
+/**
+ * The keys a mero-agent-gate quote commits to: report_data[32..64] must be
+ * SHA-256(domain ‖ provisioning key ‖ signing key). Returns them only if so.
+ */
+function verifyAgentKeys(attestation) {
+  const provisioning = decodeKey32('provisioningPublicKeyB64', attestation.provisioningPublicKeyB64);
+  const signing = decodeKey32('signingPublicKeyB64', attestation.signingPublicKeyB64);
+  const expected = crypto.createHash('sha256')
+    .update(AGENT_ATTEST_DOMAIN).update(provisioning).update(signing).digest();
+  if (!quoteReportData(extractQuote(attestation)).subarray(32, 64).equals(expected)) {
+    throw new Error('Quote does not commit to the keys the gate named');
+  }
+  return {
+    provisioningPublicKeyB64: provisioning.toString('base64'),
+    signingPublicKeyB64: signing.toString('base64'),
+  };
 }
 
 function verifyNonceInQuote(quoteB64, nonceBytes) {
@@ -247,6 +277,7 @@ export default async function handler(req, res) {
   let attestation;
   let nonceVerified = null;
   let transportVerified = null;
+  let agentKeys = null;
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
@@ -307,6 +338,9 @@ export default async function handler(req, res) {
         verifyNonceInQuote(extractQuote(attestation), nonceBytes);
         nonceVerified = true;
       }
+      if (body?.agent === true) {
+        agentKeys = verifyAgentKeys(attestation);
+      }
     }
   } catch (e) {
     return res.status(400).json({ error: 'Invalid request: ' + (e.message || 'parse error') });
@@ -356,5 +390,6 @@ export default async function handler(req, res) {
     ita_claims: itaClaims,
     nonce_verified: nonceVerified,
     transport_verified: transportVerified,
+    ...(agentKeys ? { agent_keys_verified: true, agent_keys: agentKeys } : {}),
   });
 }

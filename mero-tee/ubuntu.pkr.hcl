@@ -79,15 +79,34 @@ variable "image_suffix" {
 
 # "node" builds the merod node image (playbook.yml); "kms" builds the mero-kms
 # TDX cluster image (playbook-kms.yml), which needs mero_kms_binary and
-# kms_node_policy_file, and takes an optional kms_agent_policy_file.
+# kms_node_policy_file, and takes an optional kms_agent_policy_file; "agent"
+# builds the private agent image (playbook-agent.yml), which needs
+# mero_agent_binary and mero_agent_gate_binary (docs/design/private-agents.md).
 variable "image_role" {
   type    = string
   default = "node"
 
   validation {
-    condition     = contains(["node", "kms"], var.image_role)
-    error_message = "The image_role value must be node or kms."
+    condition     = contains(["node", "kms", "agent"], var.image_role)
+    error_message = "The image_role value must be node, kms or agent."
   }
+}
+
+variable "mero_agent_binary" {
+  type    = string
+  default = ""
+}
+
+variable "mero_agent_gate_binary" {
+  type    = string
+  default = ""
+}
+
+# Base64 X25519 keys of the provisioners allowed to set an agent's secrets,
+# one per line. Required for a locked-read-only agent image.
+variable "mero_agent_provisioners_file" {
+  type    = string
+  default = ""
 }
 
 variable "mero_kms_binary" {
@@ -158,9 +177,11 @@ source "googlecompute" "this" {
   # them here alone would leave the dispatcher unable to find any image. They
   # still read "questing-25-10" after the base moved to 26.04 LTS; renaming needs
   # a paired mdma change and a deploy ordering, so it is not done here.
-  image_name           = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}" : "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}"
-  image_family         = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}" : "merotee-ubuntu-questing-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}"
-  image_description    = var.image_role == "kms" ? "MeroTEE mero-kms TDX cluster ${var.lockdown_profile} image based on Ubuntu 26.04 LTS (Resolute Raccoon)." : "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
+  # An agent image is `merotee-agent-*`: mdma's dispatcher resolves node images
+  # by their exact prefix, so it can never pick an agent image up.
+  image_name           = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}" : var.image_role == "agent" ? "merotee-agent-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}" : "merotee-ubuntu-questing-25-10-${var.lockdown_profile}-${replace(var.version, ".", "-")}${var.image_suffix}"
+  image_family         = var.image_role == "kms" ? "merotee-kms-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}" : var.image_role == "agent" ? "merotee-agent-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}" : "merotee-ubuntu-questing-${var.lockdown_profile}${var.image_suffix == "" ? "" : "-dev"}"
+  image_description    = var.image_role == "kms" ? "MeroTEE mero-kms TDX cluster ${var.lockdown_profile} image based on Ubuntu 26.04 LTS (Resolute Raccoon)." : var.image_role == "agent" ? "MeroTEE private agent ${var.lockdown_profile} image based on Ubuntu 26.04 LTS (Resolute Raccoon) with mero-agent-gate." : "MeroTEE ${var.lockdown_profile} profile image based on Ubuntu 26.04 LTS (Resolute Raccoon) with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility."
   machine_type         = var.instance_type
   disk_size            = 20
   disk_type            = "pd-ssd"
@@ -179,7 +200,7 @@ build {
   sources = ["source.googlecompute.this"]
 
   provisioner "ansible" {
-    playbook_file   = var.image_role == "kms" ? "playbook-kms.yml" : "playbook.yml"
+    playbook_file   = var.image_role == "kms" ? "playbook-kms.yml" : var.image_role == "agent" ? "playbook-agent.yml" : "playbook.yml"
     ansible_env_vars = [
       "ANSIBLE_CONFIG=ansible.cfg"
     ]
@@ -198,6 +219,9 @@ build {
       "-e", "mero_kms_binary=${var.mero_kms_binary}",
       "-e", "kms_node_policy_file=${var.kms_node_policy_file}",
       "-e", "kms_agent_policy_file=${var.kms_agent_policy_file}",
+      "-e", "mero_agent_binary=${var.mero_agent_binary}",
+      "-e", "mero_agent_gate_binary=${var.mero_agent_gate_binary}",
+      "-e", "mero_agent_provisioners_file=${var.mero_agent_provisioners_file}",
     ]
   }
 }

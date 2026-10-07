@@ -1,0 +1,558 @@
+#!/bin/bash
+# mero-agent boot (docs/design/private-agents.md). Extends RTMR3 so a quote
+# names this image as an AGENT, opens the encrypted data disk with a key the
+# KMS releases only to an attested agent image, and hands mero-agent-gate and
+# the agent their environment.
+#
+# Instance metadata is written by whoever runs the VM, so it is untrusted, and
+# every key read is validated. It carries ADDRESSES ONLY:
+#   kms-url              mero-kms base URL the data-disk key comes from. Required.
+#   tee-release-version  The mero-kms release whose signed policy merod verifies
+#                        that KMS against. Required, and never older than this image.
+#   relay-url            Relay node the agent sends its warrants to. Required.
+#   ephemeral-store      Optional. "true" keeps the agent's state in TD memory (a
+#                        tmpfs) instead of the KMS-keyed disk, and needs no KMS.
+#                        For the release pipeline's measurement VM, which runs
+#                        before any KMS lists this image. Relaxes nothing: memory
+#                        is as private as the disk, and lost at power-off.
+#   logs-endpoint        Optional. VictoriaLogs ingest URL vector ships the journal to.
+#   metrics-endpoint     Optional. Remote-write URL vmagent ships host metrics to.
+#   observability-token  Optional. Bearer token both present to those endpoints.
+# A wrong value can only fail the boot or send the agent's warrants or logs
+# somewhere else. Prompts, tools, model choice, limits and the provisioners
+# allowed to set secrets are baked into /etc/mero-agent and measured.
+set -euo pipefail
+
+LOG_DIR="/run/mero-agent"
+LOG="${LOG_DIR}/agent-init.log"
+mkdir -p "$LOG_DIR"
+chmod 0755 "$LOG_DIR"
+BIN_DIR="/usr/local/bin"
+IMAGE_PROFILE="{{ lockdown_profile }}"
+IMAGE_ROLE="agent"
+AGENT_USER="{{ mero_agent_user }}"
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+
+log() { echo "[mero-agent-init] $*" | tee -a "$LOG"; }
+fatal() {
+  log "ERROR: $*"
+  exit 1
+}
+
+get_meta() {
+  curl -sf -H "Metadata-Flavor: Google" "${METADATA_URL}/$1" 2>/dev/null || true
+}
+
+# --- RTMR3 --------------------------------------------------------------------
+# The role string is what tells an agent quote from a node quote: the KMS
+# releases agent keys only to a quote matching its agent entry, whose RTMR3 is
+# this extend. Fatal on locked-read-only: an unextended RTMR3 does not name the
+# image, as in kms-init and calimero-init.
+rtmr3_problem() {
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "RTMR3 not extended: $*"
+  fi
+  log "WARN: RTMR3 not extended: $*"
+}
+
+ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
+modprobe tdx_guest 2>/dev/null || true
+rtmr3_sysfs=""
+for candidate in \
+  "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
+  "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
+  if [[ -w "$candidate" ]]; then
+    rtmr3_sysfs="$candidate"
+    break
+  fi
+done
+if [[ -z "$rtmr3_sysfs" ]]; then
+  rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/"
+else
+  extend="$(mktemp)"
+  printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
+    | openssl dgst -sha384 -binary > "$extend"
+  if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
+    rtmr3_problem "extend input is not 48 bytes"
+  elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
+    rtmr3_problem "write failed ($rtmr3_sysfs)"
+  else
+    log "Extended RTMR3 (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+  fi
+  rm -f "$extend"
+fi
+
+# --- Observability ------------------------------------------------------------
+# FIRST after RTMR3, as in calimero-init: a boot that fails on its metadata or
+# its disk is the one whose journal is needed, and a locked image has no shell.
+# Off unless an endpoint is set, as on the KMS. configure_vector.sh and
+# configure_vmagent.sh refuse a URL or token that could inject configuration,
+# so a bad value turns shipping off and never fails the boot.
+logs_endpoint="$(get_meta logs-endpoint | tr -d '\r\n')"
+metrics_endpoint="$(get_meta metrics-endpoint | tr -d '\r\n')"
+obs_token="$(get_meta observability-token | tr -d '\r\n')"
+
+obs_auth="false"
+obs_secret=""
+if [[ -n "$obs_token" && ( -n "$logs_endpoint" || -n "$metrics_endpoint" ) ]]; then
+  mkdir -p /etc/vector
+  ( umask 077; printf '%s' "$obs_token" > /etc/vector/provided_token )
+  obs_auth="true"
+  obs_secret="/etc/vector/provided_token"
+  log "Observability token installed ($(sha256sum /etc/vector/provided_token | awk '{print $1}'))"
+fi
+
+export OBS_PROFILE_FILE=/etc/mero-agent/image-profile
+export OBS_INSTANCE_TYPE=mero-agent
+export VMAGENT_HTTP_LISTEN=127.0.0.1:8429
+metrics="off"
+if [[ -n "$metrics_endpoint" ]]; then
+  systemctl enable --now node_exporter || log "WARN: node_exporter did not start"
+  if /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$metrics_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    metrics="on"
+  else
+    log "WARN: vmagent configure failed"
+  fi
+fi
+logs="off"
+if [[ -n "$logs_endpoint" ]]; then
+  if /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$logs_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    logs="on"
+  else
+    log "WARN: vector configure failed"
+  fi
+fi
+log "Observability: logs=${logs} metrics=${metrics} auth=${obs_auth}"
+
+# --- Metadata -----------------------------------------------------------------
+# A base URL: scheme, host, optional port, optional path. No query, fragment,
+# credentials or whitespace, so it cannot smuggle anything into an env file.
+is_base_url() {
+  [[ "$1" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$ ]]
+}
+
+KMS_URL="$(get_meta kms-url | tr -d '\r\n')"
+TEE_RELEASE_VERSION="$(get_meta tee-release-version | tr -d '\r\n[:space:]')"
+RELAY_URL="$(get_meta relay-url | tr -d '\r\n')"
+EPHEMERAL_STORE="$(get_meta ephemeral-store | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
+case "$EPHEMERAL_STORE" in
+  true) ;;
+  false | "") EPHEMERAL_STORE=false ;;
+  *) fatal "ephemeral-store must be true or false, got '$EPHEMERAL_STORE'" ;;
+esac
+
+if [[ -n "$RELAY_URL" ]]; then
+  is_base_url "$RELAY_URL" || fatal "relay-url '$RELAY_URL' is not a base URL (http[s]://host[:port][/path])"
+fi
+if [[ "$EPHEMERAL_STORE" == true ]]; then
+  # Exclusive, so a VM never half-uses a KMS it was also told not to need.
+  [[ -z "$KMS_URL" ]] || fatal "ephemeral-store=true and kms-url are exclusive"
+  log "WARN: ephemeral-store=true: state, signing key and secrets live in TD memory and are lost at power-off"
+else
+  [[ -n "$KMS_URL" ]] || fatal "no kms-url metadata; the agent keeps state only on a KMS-keyed encrypted disk \
+(or in memory, with ephemeral-store=true)"
+  is_base_url "$KMS_URL" || fatal "kms-url '$KMS_URL' is not a base URL (http[s]://host[:port][/path])"
+  [[ -n "$RELAY_URL" ]] || fatal "no relay-url metadata; the agent has nowhere to send its warrants"
+  [[ -n "$TEE_RELEASE_VERSION" ]] || fatal "kms-url is set but tee-release-version is not. \
+merod verifies the KMS against that release's signed policy; without it, it \
+cannot tell a real KMS from an impostor."
+  [[ "$TEE_RELEASE_VERSION" =~ ^(mero-kms-v)?[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]*)?$ ]] \
+    || fatal "tee-release-version '$TEE_RELEASE_VERSION' is not a release version"
+fi
+
+# --- Release pinning ----------------------------------------------------------
+# The same floor as calimero-init: no release older than this image can have
+# measured it, so an older tee-release-version can only be a downgrade to an
+# older, validly signed policy. MERO_TEE_PROFILE pins merod to this profile's
+# KMS policy (`kms-attestation-policy.<profile>.json`).
+MIN_TEE_RELEASE_FILE="/etc/mero-agent/min-tee-release-version"
+MIN_TEE_RELEASE_VERSION="$(tr -d '[:space:]' < "$MIN_TEE_RELEASE_FILE" 2>/dev/null || true)"
+
+# True when release $1 is OLDER than release $2. Copied from calimero-init:
+# semver-ish, the `mero-kms-v` prefix dropped, a pre-release older than its
+# release, which `sort -V` alone gets backwards.
+release_older_than() {
+  local a="${1#mero-kms-v}" b="${2#mero-kms-v}"
+  a="${a%%+*}"; b="${b%%+*}"
+  local a_core="${a%%-*}" b_core="${b%%-*}"
+  if [[ "$a_core" != "$b_core" ]]; then
+    [[ "$(printf '%s\n%s\n' "$a_core" "$b_core" | sort -V | head -n1)" == "$a_core" ]]
+    return
+  fi
+  local a_pre="" b_pre=""
+  [[ "$a" == *-* ]] && a_pre="${a#*-}"
+  [[ "$b" == *-* ]] && b_pre="${b#*-}"
+  if [[ -z "$a_pre" ]]; then return 1; fi
+  if [[ -z "$b_pre" ]]; then return 0; fi
+  [[ "$a_pre" != "$b_pre" ]] \
+    && [[ "$(printf '%s\n%s\n' "$a_pre" "$b_pre" | sort -V | head -n1)" == "$a_pre" ]]
+}
+
+if [[ "$EPHEMERAL_STORE" != true ]]; then
+  if [[ -n "$MIN_TEE_RELEASE_VERSION" ]] \
+      && release_older_than "$TEE_RELEASE_VERSION" "$MIN_TEE_RELEASE_VERSION"; then
+    fatal "tee-release-version ${TEE_RELEASE_VERSION} is older than this image \
+(${MIN_TEE_RELEASE_VERSION}). Refusing to start; set tee-release-version to \
+${MIN_TEE_RELEASE_VERSION} or later."
+  fi
+  export MERO_TEE_VERSION="$TEE_RELEASE_VERSION"
+  if [[ -n "$MIN_TEE_RELEASE_VERSION" ]]; then
+    export MERO_TEE_MIN_VERSION="$MIN_TEE_RELEASE_VERSION"
+  fi
+  export MERO_TEE_PROFILE="$IMAGE_PROFILE"
+  log "Release: MERO_TEE_VERSION=${TEE_RELEASE_VERSION} (floor=${MIN_TEE_RELEASE_VERSION:-none} profile=${IMAGE_PROFILE})"
+fi
+
+# --- The data disk ------------------------------------------------------------
+#
+# The agent's state, signing key and provisioned secrets live here and nowhere
+# else. Copied from calimero-init's data-disk block, with its reasoning, and
+# narrowed: an agent image is new, so there is no plaintext disk to keep
+# mounting and no state on the root filesystem to step around. A blank disk is
+# encrypted; a LUKS disk is opened; anything else stops the boot.
+#
+# `/dev/disk/by-id/google-data`: the VM is created with the disk attached as
+# deviceName "data", which GCE's udev rule links there. Stable regardless of
+# NVMe enumeration order.
+#
+# THE DISK IS ENCRYPTED (LUKS2, with integrity), keyed from the KMS:
+#
+#   * aes-xts-plain64 for confidentiality, and `--integrity hmac-sha256` so an
+#     offline edit is DETECTED (the read fails) rather than silently decrypted
+#     into garbage the agent might act on. The HMAC is keyed by the volume key,
+#     so the host cannot forge a valid sector.
+#   * The key is released by mero-kms only to a TD whose quote matches the KMS's
+#     AGENT policy entry (`merod kms disk-key`), under the agent key prefix: no
+#     agent can be released a node's key, nor a node an agent's.
+#   * It exists only in a RAM-backed directory, for as long as it takes to format
+#     or open the disk, and is shredded right after.
+#   * The KMS derives the key per IDENTITY: a dedicated libp2p keypair made on
+#     the first boot, stored in the LUKS2 header as a token, in the clear, by
+#     design -- it obtains nothing without a genuine agent TD to answer the KMS's
+#     attestation challenge, and is needed BEFORE the disk is open.
+#   * pbkdf2 at the minimum 1000 iterations: the passphrase is a full-entropy
+#     KMS key, so a slow KDF would buy nothing and cost boot time.
+#   * No /etc/fstab entry and no crypttab: neither can unlock it.
+#
+# A new release has a new KMS root, so a disk from an older release can never be
+# reopened: the agent's disk is a cache (docs/design/private-agents.md, "Release
+# and deployment"). That surfaces here as a failed open, never as a reformat.
+DATA_DEVICE="/dev/disk/by-id/google-data"
+DATA_MOUNT="/mnt/agent"
+DATA_MAPPER_NAME="mero-agent-data"
+DATA_MAPPER="/dev/mapper/${DATA_MAPPER_NAME}"
+# A dedicated tmpfs: `merod kms disk-key` refuses to write the key anywhere that
+# is not tmpfs/ramfs, and a mount of our own makes that true by construction.
+DISK_KEY_DIR="/run/mero-agent-disk"
+DISK_KEY_FILE="${DISK_KEY_DIR}/data-disk.key"
+DISK_IDENTITY_FILE="${DISK_KEY_DIR}/data-disk.identity"
+DISK_TOKEN_TYPE="calimero-kms-identity"
+DISK_KEY_ATTEMPTS="${DISK_KEY_ATTEMPTS:-10}"
+DISK_KEY_RETRY_DELAY="${DISK_KEY_RETRY_DELAY:-6}"
+# mdma or a release script may hot-attach the disk after the VM starts.
+DATA_DEVICE_WAIT_SECS="${DATA_DEVICE_WAIT_SECS:-600}"
+DATA_DEVICE_NAMING_GRACE_SECS=10
+WIPE_PROGRESS_SECS=30
+
+# Shred the key (and drop the identity copy) the moment it is no longer
+# needed, and on ANY exit: a `fatal` halfway through a format must not leave
+# the key sitting in /run for the life of the boot.
+disk_secrets_cleanup() {
+  if [[ -e "$DISK_KEY_FILE" ]]; then
+    shred -u "$DISK_KEY_FILE" 2>/dev/null || rm -f "$DISK_KEY_FILE"
+  fi
+  rm -f "$DISK_IDENTITY_FILE"
+  if mountpoint -q "$DISK_KEY_DIR" 2>/dev/null; then
+    umount "$DISK_KEY_DIR" 2>/dev/null || true
+  fi
+}
+trap disk_secrets_cleanup EXIT
+
+prepare_disk_key_dir() {
+  mkdir -p "$DISK_KEY_DIR"
+  chmod 0700 "$DISK_KEY_DIR"
+  if ! mountpoint -q "$DISK_KEY_DIR" 2>/dev/null; then
+    mount -t tmpfs -o mode=0700,size=1m,nosuid,nodev,noexec tmpfs "$DISK_KEY_DIR" >>"$LOG" 2>&1 \
+      || fatal "could not mount a tmpfs at $DISK_KEY_DIR for the data-disk key"
+  fi
+  local fstype
+  fstype="$(findmnt -n -o FSTYPE --target "$DISK_KEY_DIR" 2>/dev/null || true)"
+  [[ "$fstype" == tmpfs || "$fstype" == ramfs ]] \
+    || fatal "$DISK_KEY_DIR is on '$fstype', not tmpfs; the data-disk key must never reach a disk"
+  rm -f "$DISK_KEY_FILE"
+}
+
+# Ask the KMS for the data-disk key. `create` also mints the identity (first
+# boot only: an existing disk must present the identity it was made with).
+fetch_disk_key() {
+  local args=(kms disk-key --kms-url "$KMS_URL" --identity "$DISK_IDENTITY_FILE" --key-out "$DISK_KEY_FILE")
+  if [[ "${1:-}" == create ]]; then
+    args+=(--create-identity)
+  fi
+  local attempt out why
+  for attempt in $(seq 1 "$DISK_KEY_ATTEMPTS"); do
+    rm -f "$DISK_KEY_FILE"
+    out="$("$BIN_DIR/merod" "${args[@]}" 2>&1)" && [[ -s "$DISK_KEY_FILE" ]] && {
+      printf '%s\n' "$out" >>"$LOG"
+      return 0
+    }
+    printf '%s\n' "$out" >>"$LOG"
+    # merod's error, into the journal; disk-key never prints the key.
+    why="$(sed -e 's/\x1b\[[0-9;]*m//g' <<<"$out" | grep -v '^[[:space:]]*$' | tail -n 6 | tr '\n' ' ' | cut -c1-800 || true)"
+    log "WARN: data-disk key fetch attempt ${attempt}/${DISK_KEY_ATTEMPTS} failed (kms=$KMS_URL release=$TEE_RELEASE_VERSION): ${why:-no output}"
+    if (( attempt < DISK_KEY_ATTEMPTS )); then
+      sleep "$DISK_KEY_RETRY_DELAY"
+    fi
+  done
+  fatal "could not obtain the data-disk key from the KMS after ${DISK_KEY_ATTEMPTS} attempts \
+(kms=$KMS_URL release=$TEE_RELEASE_VERSION). Is this image in the KMS's agent \
+policy? The disk stays locked; see $LOG."
+}
+
+# What is on a block device, WITHOUT trusting a cache. Returns 2 ONLY when blkid
+# positively reports nothing; any other failure means "unknown", never "blank".
+probe_signature() {
+  local out rc=0
+  out="$(blkid -p -o export "$1" 2>>"$LOG")" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    return "$rc"
+  fi
+  local sig_type sig_pttype
+  sig_type="$(sed -n 's/^TYPE=//p' <<<"$out" | head -n1)"
+  sig_pttype="$(sed -n 's/^PTTYPE=//p' <<<"$out" | head -n1)"
+  if [[ -n "$sig_type" ]]; then
+    printf '%s' "$sig_type"
+  elif [[ -n "$sig_pttype" ]]; then
+    printf 'partition-table:%s' "$sig_pttype"
+  else
+    printf 'unrecognised'
+  fi
+}
+
+# The identity stored in this disk's LUKS2 header. Exactly one token of our
+# type, or nothing: two would make "which identity unlocks this disk" a guess.
+read_disk_token_identity() {
+  cryptsetup luksDump --dump-json-metadata "$DATA_DEVICE" 2>>"$LOG" | python3 -c '
+import json, sys
+meta = json.load(sys.stdin)
+tokens = meta.get("tokens") or {}
+ours = [t for t in tokens.values() if isinstance(t, dict) and t.get("type") == sys.argv[1]]
+if len(ours) != 1:
+    sys.exit(1)
+identity = ours[0].get("identity_b64")
+if not isinstance(identity, str) or not identity:
+    sys.exit(1)
+print(identity)
+' "$DISK_TOKEN_TYPE"
+}
+
+open_data_mapper() {
+  if [[ -b "$DATA_MAPPER" ]]; then
+    log "Encrypted data disk is already open at $DATA_MAPPER"
+  else
+    cryptsetup open --type luks2 --key-file "$DISK_KEY_FILE" "$DATA_DEVICE" "$DATA_MAPPER_NAME" >>"$LOG" 2>&1 \
+      || fatal "could not open the encrypted data disk $DATA_DEVICE with the KMS key. \
+A disk from an earlier release cannot be reopened (new release, new KMS root): \
+recreate the agent with a blank disk. Not formatting it -- see $LOG."
+  fi
+  disk_secrets_cleanup
+}
+
+# Turns cryptsetup's `--progress-json` lines into one journal line each.
+log_wipe_progress() {
+  local line done_b size_b eta_ms
+  local re='"device_bytes":"([0-9]+)".*"device_size":"([0-9]+)".*"eta_ms":"([0-9]+)"'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $re ]]; then
+      done_b="${BASH_REMATCH[1]}" size_b="${BASH_REMATCH[2]}" eta_ms="${BASH_REMATCH[3]}"
+      (( size_b > 0 )) || continue
+      log "Integrity wipe: $(( done_b * 100 / size_b ))% ($(( done_b / 1000000000 )) of \
+$(( size_b / 1000000000 )) GB, $(( eta_ms / 60000 ))m$(( eta_ms / 1000 % 60 ))s left)"
+    elif [[ -n "$line" ]]; then
+      echo "$line" >>"$LOG"
+    fi
+  done
+}
+
+# FIRST BOOT: the device is blank. Mint an identity, get its key, and build the
+# encrypted volume. The token is written and read back BEFORE any data goes on
+# the volume, so a disk holding anything is always one this agent can reopen.
+# The integrity wipe covers the whole device (see calimero-init for why
+# `--integrity-no-wipe` is not used).
+format_encrypted_data_disk() {
+  log "Data disk is blank; creating an encrypted LUKS2 volume (aes-xts-plain64, \
+hmac-sha256 integrity) keyed from the KMS."
+  prepare_disk_key_dir
+  rm -f "$DISK_IDENTITY_FILE"
+  fetch_disk_key create
+  [[ -s "$DISK_IDENTITY_FILE" ]] || fatal "merod kms disk-key did not create the disk identity"
+
+  local rc=0
+  probe_signature "$DATA_DEVICE" >/dev/null || rc=$?
+  [[ "$rc" == 2 ]] || fatal "$DATA_DEVICE is no longer blank (blkid rc=$rc); not formatting it"
+
+  modprobe dm_crypt 2>/dev/null || true
+  modprobe dm_integrity 2>/dev/null || true
+  cryptsetup luksFormat --type luks2 \
+      --cipher aes-xts-plain64 --key-size 512 \
+      --integrity hmac-sha256 \
+      --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+      --progress-json --progress-frequency "$WIPE_PROGRESS_SECS" \
+      --batch-mode --key-file "$DISK_KEY_FILE" \
+      "$DATA_DEVICE" 2>>"$LOG" | log_wipe_progress \
+    || fatal "cryptsetup luksFormat failed on $DATA_DEVICE; see $LOG"
+
+  local identity_b64 token_json
+  identity_b64="$(base64 -w0 < "$DISK_IDENTITY_FILE")"
+  token_json="$(python3 -c '
+import json, sys
+print(json.dumps({
+    "type": sys.argv[1],
+    "keyslots": [],
+    "identity_b64": sys.argv[2],
+    "kms_release": sys.argv[3],
+}))
+' "$DISK_TOKEN_TYPE" "$identity_b64" "$TEE_RELEASE_VERSION")"
+  printf '%s' "$token_json" | cryptsetup token import "$DATA_DEVICE" >>"$LOG" 2>&1 \
+    || fatal "could not store the disk identity in the LUKS2 header of $DATA_DEVICE"
+  [[ "$(read_disk_token_identity || true)" == "$identity_b64" ]] \
+    || fatal "the disk identity read back from $DATA_DEVICE does not match what was written"
+  log "Stored the data-disk identity in the LUKS2 header (token type $DISK_TOKEN_TYPE)"
+
+  open_data_mapper
+  mkfs.ext4 -q "$DATA_MAPPER" >>"$LOG" 2>&1 || fatal "mkfs.ext4 failed on $DATA_MAPPER"
+  log "Created ext4 on the encrypted data disk"
+}
+
+# EVERY LATER BOOT: open the volume with the key for the identity in its header.
+unlock_encrypted_data_disk() {
+  log "Data disk is LUKS-encrypted; fetching its key from the KMS"
+  prepare_disk_key_dir
+  local identity_b64
+  identity_b64="$(read_disk_token_identity)" || fatal "$DATA_DEVICE is a LUKS \
+device without exactly one $DISK_TOKEN_TYPE token, so this agent cannot know which \
+identity unlocks it (an interrupted first boot). Refusing to touch it -- recreate the agent."
+  ( umask 077; printf '%s' "$identity_b64" | base64 -d > "$DISK_IDENTITY_FILE" ) \
+    || fatal "the disk identity token on $DATA_DEVICE is not valid base64"
+  fetch_disk_key
+  open_data_mapper
+}
+
+# Mount the opened volume, refusing anything but the filesystem this script
+# created. A blank or foreign mapping is NOT formatted.
+mount_encrypted_data_disk() {
+  local rc=0 sig
+  sig="$(probe_signature "$DATA_MAPPER")" || rc=$?
+  if [[ "$rc" != 0 || "$sig" != ext4 ]]; then
+    fatal "the encrypted data disk opened but holds '${sig:-nothing}' (blkid rc=$rc), \
+not the ext4 this agent creates. Not formatting it: that is an interrupted first \
+boot or tampering. Recreate the agent."
+  fi
+  mount -t ext4 -o nosuid,nodev "$DATA_MAPPER" "$DATA_MOUNT" >>"$LOG" 2>&1 \
+    || fatal "$DATA_MAPPER could not be mounted at $DATA_MOUNT; see $LOG"
+  log "Mounted the encrypted data disk at $DATA_MOUNT"
+}
+
+# The ONE whole disk with nothing on it the kernel knows of, for where udev
+# never names the data disk (calimero-init's fallback, unchanged). Two
+# candidates is a guess, and this never guesses.
+find_unnamed_data_disk() {
+  local disk type ro found="" count=0
+  while read -r disk type ro; do
+    [[ "$type" == "disk" && "$ro" == "0" ]] || continue
+    [[ "$disk" == /dev/loop* || "$disk" == /dev/ram* || "$disk" == /dev/zram* ]] && continue
+    [[ "$(lsblk -nrpo NAME "$disk" 2>/dev/null | wc -l)" == 1 ]] || continue
+    findmnt -rn -S "$disk" >/dev/null 2>&1 && continue
+    found="$disk"
+    count=$((count + 1))
+  done < <(lsblk -dnrpo NAME,TYPE,RO 2>/dev/null)
+  (( count == 1 )) || return 1
+  printf '%s' "$found"
+}
+
+mkdir -p "$DATA_MOUNT"
+
+if [[ "$EPHEMERAL_STORE" == true ]]; then
+  # TD memory, which TDX encrypts: nothing reaches a disk the host can read.
+  if [[ "$(findmnt -n -o FSTYPE "$DATA_MOUNT" 2>/dev/null)" == tmpfs ]]; then
+    log "Ephemeral store: tmpfs already mounted at $DATA_MOUNT"
+  else
+    mount -t tmpfs -o mode=0700,size=50%,nosuid,nodev tmpfs "$DATA_MOUNT" >>"$LOG" 2>&1 \
+      || fatal "ephemeral-store is set but a tmpfs could not be mounted at $DATA_MOUNT"
+    log "Ephemeral store: mounted a tmpfs at $DATA_MOUNT"
+  fi
+elif [[ "$(findmnt -n -o SOURCE "$DATA_MOUNT" 2>/dev/null)" == "$DATA_MAPPER" ]]; then
+  log "Encrypted data disk already mounted at $DATA_MOUNT"
+elif mountpoint -q "$DATA_MOUNT"; then
+  fatal "$DATA_MOUNT is mounted from something other than $DATA_MAPPER; refusing to use it"
+else
+  waited=0
+  while [[ ! -b "$DATA_DEVICE" && "$waited" -lt "$DATA_DEVICE_WAIT_SECS" ]]; do
+    if (( waited >= DATA_DEVICE_NAMING_GRACE_SECS )) && fallback="$(find_unnamed_data_disk)"; then
+      log "WARN: $DATA_DEVICE was never created; using $fallback, the only unused whole disk"
+      DATA_DEVICE="$fallback"
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+    if (( waited % 30 == 0 )); then
+      log "Waiting for the data disk at $DATA_DEVICE (${waited}s of ${DATA_DEVICE_WAIT_SECS}s)"
+    fi
+  done
+  [[ -b "$DATA_DEVICE" ]] || fatal "no data disk at $DATA_DEVICE after ${DATA_DEVICE_WAIT_SECS}s. \
+The agent keeps its state, signing key and secrets only on an encrypted data disk."
+
+  DATA_SIG_RC=0
+  DATA_SIG="$(probe_signature "$DATA_DEVICE")" || DATA_SIG_RC=$?
+  if [[ "$DATA_SIG_RC" == 2 ]]; then
+    command -v cryptsetup >/dev/null 2>&1 || fatal "cryptsetup is not installed"
+    format_encrypted_data_disk
+    mount_encrypted_data_disk
+  elif [[ "$DATA_SIG_RC" != 0 ]]; then
+    fatal "could not probe $DATA_DEVICE (blkid rc=$DATA_SIG_RC). Not formatting \
+or mounting a device whose contents are unknown."
+  elif [[ "$DATA_SIG" == crypto_LUKS ]]; then
+    unlock_encrypted_data_disk
+    mount_encrypted_data_disk
+  else
+    fatal "$DATA_DEVICE holds '$DATA_SIG', which this image never creates. \
+Refusing to format or mount it -- it may be someone's data."
+  fi
+fi
+
+# Boot-time conformance: the mount must really be the LUKS2 mapping with
+# integrity, or a tmpfs in TD memory. Turns a regression above into a refused
+# boot, not a plaintext agent.
+if [[ "$EPHEMERAL_STORE" == true ]]; then
+  [[ "$(findmnt -n -o FSTYPE "$DATA_MOUNT" 2>/dev/null)" == tmpfs ]] \
+    || fatal "$DATA_MOUNT is not a tmpfs"
+  log "Data disk check: $DATA_MOUNT is a tmpfs in TD memory"
+else
+  [[ "$(findmnt -n -o SOURCE "$DATA_MOUNT" 2>/dev/null)" == "$DATA_MAPPER" ]] \
+    || fatal "$DATA_MOUNT is not backed by $DATA_MAPPER"
+  DATA_CRYPT_STATUS="$(cryptsetup status "$DATA_MAPPER_NAME" 2>/dev/null || true)"
+  grep -qE '^[[:space:]]*type:[[:space:]]+LUKS2' <<<"$DATA_CRYPT_STATUS" \
+    || fatal "$DATA_MAPPER_NAME is not a LUKS2 mapping"
+  grep -qE '^[[:space:]]*integrity:[[:space:]]+[a-z]' <<<"$DATA_CRYPT_STATUS" \
+    || fatal "$DATA_MAPPER_NAME has no integrity protection"
+  log "Data disk check: $DATA_MOUNT is a LUKS2 dm-crypt mapping with integrity"
+fi
+
+# --- Agent environment --------------------------------------------------------
+# The disk belongs to the agent user: the gate writes the signing key and
+# secrets there, the agent reads them and keeps its own state beside them.
+chown "$AGENT_USER:$AGENT_USER" "$DATA_MOUNT"
+chmod 0700 "$DATA_MOUNT"
+install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 \
+  "$DATA_MOUNT/state" "$DATA_MOUNT/secrets" "$DATA_MOUNT/keys"
+{
+  echo "MERO_AGENT_RELAY_URL=${RELAY_URL}"
+  echo "MERO_AGENT_STATE_DIR=${DATA_MOUNT}/state"
+  echo "MERO_AGENT_SECRETS_DIR=${DATA_MOUNT}/secrets"
+  echo "MERO_AGENT_SIGNING_KEY=${DATA_MOUNT}/keys/signing.ed25519"
+  echo "MERO_AGENT_PROFILE=${IMAGE_PROFILE}"
+} > "${LOG_DIR}/agent.env"
+chmod 0644 "${LOG_DIR}/agent.env"
+log "Agent environment: relay=${RELAY_URL} state=${DATA_MOUNT}"
