@@ -27,17 +27,28 @@ set -euo pipefail
 #   VM_PROJECT, VM_ZONE, VM_MACHINE_TYPE
 #   ITA_API_KEY
 #   PROVISION_BIN          a built mero-agent-provision
-#   PROVISIONER_KEY        the provisioner secret baked into the image's list
 #   OUT_DIR                where attest responses, ITA evidence and the policy go
 # Optional env:
+#   PROVISION_MODE         key (default): seal with PROVISIONER_KEY, a provisioner
+#                          the image lists; unauthenticated: Base mode, for a
+#                          debug image built without a list; skip: measure only
+#                          (a release, which holds no provisioner's private key)
+#   PROVISIONER_KEY        the provisioner secret, for PROVISION_MODE=key
 #   GATE_PORT (8090), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL,
 #   AGENT_ALLOWED_TCB_STATUSES (uptodate; a declared release input, as for the
 #   KMS, not a reading)
 #
 # Output: ${OUT_DIR}/agent-attestation-policy.${PROFILE}.json
 
-for var in IMAGE IMAGE_PROJECT PROFILE PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE \
-  ITA_API_KEY PROVISION_BIN PROVISIONER_KEY OUT_DIR; do
+PROVISION_MODE="${PROVISION_MODE:-key}"
+case "${PROVISION_MODE}" in
+  key | unauthenticated | skip) ;;
+  *) echo "::error::PROVISION_MODE must be key, unauthenticated or skip"; exit 1 ;;
+esac
+required=(IMAGE IMAGE_PROJECT PROFILE PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE ITA_API_KEY OUT_DIR)
+[[ "${PROVISION_MODE}" == skip ]] || required+=(PROVISION_BIN)
+[[ "${PROVISION_MODE}" == key ]] && required+=(PROVISIONER_KEY)
+for var in "${required[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "::error::${var} is required"
     exit 1
@@ -144,23 +155,27 @@ jq -e '[.allowed_tcb_statuses, .allowed_mrtd, .allowed_rtmr0, .allowed_rtmr1, .a
   || { echo "::error::the agent policy is incomplete: $(cat "${policy}")"; exit 1; }
 
 # --- 2. provision, as a provisioner would ---------------------------------------
-printf '{"secrets":{"PROBE_SECRET":"%s"}}' "probe-${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/probe-secrets.json"
-"${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
-  --key "${PROVISIONER_KEY}" --secrets "${OUT_DIR}/probe-secrets.json" \
-  | tee "${OUT_DIR}/provision.json"
-rm -f "${OUT_DIR}/probe-secrets.json"
-jq -e '.written == ["PROBE_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
-  || { echo "::error::the gate did not write the probe secret"; exit 1; }
+if [[ "${PROVISION_MODE}" != skip ]]; then
+  auth=(--key "${PROVISIONER_KEY:-}")
+  [[ "${PROVISION_MODE}" == unauthenticated ]] && auth=(--unauthenticated)
+  printf '{"secrets":{"PROBE_SECRET":"%s"}}' "probe-${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/probe-secrets.json"
+  "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
+    "${auth[@]}" --secrets "${OUT_DIR}/probe-secrets.json" \
+    | tee "${OUT_DIR}/provision.json"
+  rm -f "${OUT_DIR}/probe-secrets.json"
+  jq -e '.written == ["PROBE_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
+    || { echo "::error::the gate did not write the probe secret"; exit 1; }
 
-# --- 3. the gate says so --------------------------------------------------------
-curl -fsS --max-time 5 "${gate}/health" >"${OUT_DIR}/health-after.json"
-jq -e '.provisioned == true' "${OUT_DIR}/health-after.json" >/dev/null \
-  || { echo "::error::the gate does not report itself provisioned"; exit 1; }
+  # --- 3. the gate says so ------------------------------------------------------
+  curl -fsS --max-time 5 "${gate}/health" >"${OUT_DIR}/health-after.json"
+  jq -e '.provisioned == true' "${OUT_DIR}/health-after.json" >/dev/null \
+    || { echo "::error::the gate does not report itself provisioned"; exit 1; }
+fi
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo "## Agent TDX image (${PROFILE}, image \`${IMAGE}\`)"
-    echo "Quote verified by ITA and by \`mero-agent-provision\`; a sealed secret was provisioned."
+    echo "Quote verified by ITA; provisioning: ${PROVISION_MODE}."
     echo '```json'
     jq . "${policy}"
     echo '```'
