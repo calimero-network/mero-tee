@@ -290,6 +290,7 @@ the boot disk. The script
 6. **Initialize the node** at `/mnt/data/calimero` (node `default`) if not
    already initialized, with `--advertise-address` and the resolved ports. In
    `read-only` mode it passes `--mode read-only`.
+   It passes `--auth-mode proxy` explicitly, since Traefik and mero-auth gate the node and `merod init` no longer defaults to proxy.
 
 7. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
    `server.jsonrpc.enabled=false`, `server.sse.enabled=false`, and

@@ -414,6 +414,7 @@ INIT_ENCRYPTED=false
 init_node() {
   if [[ "$MEROD_MODE" == "read-only" ]]; then
     "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
+      --auth-mode proxy \
       --mode read-only \
       --advertise-address \
       --server-port "$SERVER_PORT" \
@@ -421,6 +422,7 @@ init_node() {
       ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
   else
     "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
+      --auth-mode proxy \
       --advertise-address \
       --server-port "$SERVER_PORT" \
       --swarm-port "$SWARM_PORT" \
