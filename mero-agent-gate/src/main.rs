@@ -12,6 +12,7 @@
 //! | `GATE_REQUIRE_MOUNT` | `true` | Refuse to start unless `GATE_STATE_DIR` is a mount point, so nothing lands on the boot disk |
 //! | `GATE_PROVISIONERS_FILE` | `/etc/mero-agent/provisioners` | Base64 X25519 keys of the provisioners allowed to set secrets, one per line |
 //! | `GATE_ALLOW_UNAUTHENTICATED_PROVISIONING` | `false` | Accept bundles from anyone who verified the quote. Refused on `locked-read-only` |
+//! | `GATE_SHARE_GROUP` | *(none)* | The agent's group: the signing key and secrets are made readable by it (0640, directories 0750), and by nobody else. The gate runs as root, which configfs-tsm quotes need |
 //! | `GATE_IMAGE_PROFILE_FILE` | `/etc/mero-agent/image-profile` | The image's profile |
 //! | `GATE_MOCK_ATTESTATION` | `false` | Serve mock quotes. `mock-attestation` builds only |
 
@@ -24,7 +25,7 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use eyre::{bail, Result as EyreResult, WrapErr};
-use mero_agent_gate::keys::{load_or_create_signing_key, ProvisioningKey};
+use mero_agent_gate::keys::{load_or_create_signing_key, ProvisioningKey, Share};
 use mero_agent_gate::server::{router, Gate, Quoter, TdxQuoter};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -76,9 +77,13 @@ fn read_provisioners(path: &Path) -> EyreResult<Vec<[u8; 32]>> {
         .collect()
 }
 
-fn private_dir(path: &Path) -> EyreResult<()> {
+/// A directory only the gate and the agent's group may enter.
+fn private_dir(path: &Path, share: Share) -> EyreResult<()> {
     std::fs::create_dir_all(path).wrap_err_with(|| format!("{}", path.display()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    share
+        .apply(path)
+        .wrap_err_with(|| format!("{}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(share.dir_mode()))
         .wrap_err_with(|| format!("{}", path.display()))
 }
 
@@ -107,6 +112,10 @@ async fn main() -> EyreResult<()> {
         "/etc/mero-agent/provisioners",
     ))?;
     let allow_unauthenticated = env_bool("GATE_ALLOW_UNAUTHENTICATED_PROVISIONING", false)?;
+    let share = match std::env::var("GATE_SHARE_GROUP") {
+        Ok(group) if !group.trim().is_empty() => Share::group(group.trim())?,
+        _ => Share::default(),
+    };
 
     let require_mount = env_bool("GATE_REQUIRE_MOUNT", true)?;
     if !require_mount && profile == "locked-read-only" {
@@ -140,9 +149,9 @@ async fn main() -> EyreResult<()> {
 
     let keys_dir = state_dir.join("keys");
     let secrets_dir = state_dir.join("secrets");
-    private_dir(&keys_dir)?;
-    private_dir(&secrets_dir)?;
-    let signing = load_or_create_signing_key(&keys_dir.join("signing.ed25519"))?;
+    private_dir(&keys_dir, share)?;
+    private_dir(&secrets_dir, share)?;
+    let signing = load_or_create_signing_key(&keys_dir.join("signing.ed25519"), share)?;
     let signing_public = signing.verifying_key().to_bytes();
     drop(signing);
 
@@ -151,6 +160,7 @@ async fn main() -> EyreResult<()> {
         provisioning: ProvisioningKey::generate(),
         signing_public,
         secrets_dir,
+        share,
         provisioners,
         allow_unauthenticated,
         provisioned: AtomicBool::new(false),

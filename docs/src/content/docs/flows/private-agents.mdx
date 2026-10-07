@@ -78,7 +78,7 @@ mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
    key. It uses **Auth** mode under the provisioner's own X25519 key.
 3. The gate opens it only if that sender key is in the image's baked provisioner list
    (`/etc/mero-agent/provisioners`, measured). It writes each secret to
-   `/mnt/agent/secrets/<NAME>` (mode 0600).
+   `/mnt/agent/secrets/<NAME>`, readable by the gate (root) and the agent's group only.
 
 The HPKE `info` binds the message to the recipient key. A message cannot be replayed to
 another agent or after the gate restarts; a provisioner whose `/attest` predates a

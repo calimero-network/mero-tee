@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use mero_agent_gate::keys::ProvisioningKey;
+use mero_agent_gate::keys::{ProvisioningKey, Share};
 use mero_agent_gate::protocol::{
     keypair_from_secret, AttestRequest, AttestResponse, SecretsBundle,
 };
@@ -34,6 +34,7 @@ async fn serve(secrets_dir: std::path::PathBuf) -> (String, Arc<Gate>) {
         provisioning: ProvisioningKey::generate(),
         signing_public: [0x55; 32],
         secrets_dir,
+        share: Share::default(),
         provisioners: vec![provisioner],
         allow_unauthenticated: false,
         provisioned: AtomicBool::new(false),

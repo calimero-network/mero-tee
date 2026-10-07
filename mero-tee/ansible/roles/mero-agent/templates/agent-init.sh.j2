@@ -541,12 +541,13 @@ else
 fi
 
 # --- Agent environment --------------------------------------------------------
-# The disk belongs to the agent user: the gate writes the signing key and
-# secrets there, the agent reads them and keeps its own state beside them.
-chown "$AGENT_USER:$AGENT_USER" "$DATA_MOUNT"
-chmod 0700 "$DATA_MOUNT"
-install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 \
-  "$DATA_MOUNT/state" "$DATA_MOUNT/secrets" "$DATA_MOUNT/keys"
+# The gate (root) writes the signing key and secrets; the agent reads them
+# through its group and keeps its own state, which only it can write, beside
+# them. Nobody else enters the disk.
+chown "root:$AGENT_USER" "$DATA_MOUNT"
+chmod 0750 "$DATA_MOUNT"
+install -d -o root -g "$AGENT_USER" -m 0750 "$DATA_MOUNT/secrets" "$DATA_MOUNT/keys"
+install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$DATA_MOUNT/state"
 {
   echo "MERO_AGENT_RELAY_URL=${RELAY_URL}"
   echo "MERO_AGENT_STATE_DIR=${DATA_MOUNT}/state"

@@ -12,6 +12,57 @@ use zeroize::Zeroizing;
 
 use crate::protocol::{keypair_from_secret, PrivateKey};
 
+/// Who besides the gate may read what it writes. The gate runs as root, because
+/// a configfs-tsm quote needs root; the agent runs as its own user and reads
+/// the signing key and secrets through its group. Nobody else reads them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Share {
+    /// The agent's group; `None` keeps everything owner-only.
+    pub gid: Option<u32>,
+}
+
+impl Share {
+    /// The group named `name` in /etc/group.
+    pub fn group(name: &str) -> EyreResult<Self> {
+        let groups = std::fs::read_to_string("/etc/group").wrap_err("could not read /etc/group")?;
+        let gid = groups
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split(':');
+                let group = fields.next()?;
+                let gid = fields.nth(1)?.parse::<u32>().ok()?;
+                (group == name).then_some(gid)
+            })
+            .next()
+            .ok_or_else(|| eyre::eyre!("no group '{name}' in /etc/group"))?;
+        Ok(Self { gid: Some(gid) })
+    }
+
+    pub fn file_mode(self) -> u32 {
+        if self.gid.is_some() {
+            0o640
+        } else {
+            0o600
+        }
+    }
+
+    pub fn dir_mode(self) -> u32 {
+        if self.gid.is_some() {
+            0o750
+        } else {
+            0o700
+        }
+    }
+
+    /// Give `path` to the agent's group, if there is one.
+    pub fn apply(self, path: &Path) -> std::io::Result<()> {
+        match self.gid {
+            Some(gid) => std::os::unix::fs::chown(path, None, Some(gid)),
+            None => Ok(()),
+        }
+    }
+}
+
 /// The OS RNG, as the `RngCore` hpke takes. It panics if the OS has no
 /// randomness to give, which inside a TD is not a state to carry on in.
 pub fn os_rng() -> UnwrapErr<OsRng> {
@@ -40,11 +91,12 @@ impl ProvisioningKey {
 }
 
 /// Load the agent's signing key from `path`, or create it there on the first
-/// boot. The file holds the 32-byte Ed25519 seed, mode 0600.
+/// boot. The file holds the 32-byte Ed25519 seed, readable by its owner and,
+/// with a [`Share`] group, by the agent (0640); never by anyone else.
 ///
 /// Created with `create_new`, so two starts racing cannot each write a key and
 /// leave the agent with one the gate never attested.
-pub fn load_or_create_signing_key(path: &Path) -> EyreResult<SigningKey> {
+pub fn load_or_create_signing_key(path: &Path, share: Share) -> EyreResult<SigningKey> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let bytes = Zeroizing::new(bytes);
@@ -53,9 +105,11 @@ pub fn load_or_create_signing_key(path: &Path) -> EyreResult<SigningKey> {
                 .try_into()
                 .map_err(|_| eyre::eyre!("{} is not a 32-byte Ed25519 seed", path.display()))?;
             let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
-            if mode & 0o077 != 0 {
+            // Others nothing; the group at most reads.
+            if mode & 0o037 != 0 {
                 bail!(
-                    "{} is mode {mode:o}; the signing key must be readable by its owner only",
+                    "{} is mode {mode:o}; the signing key must be readable by its owner \
+                     and the agent's group only",
                     path.display()
                 );
             }
@@ -66,9 +120,10 @@ pub fn load_or_create_signing_key(path: &Path) -> EyreResult<SigningKey> {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .mode(0o600)
+                .mode(share.file_mode())
                 .open(path)
                 .wrap_err_with(|| format!("could not create {}", path.display()))?;
+            share.apply(path)?;
             file.write_all(seed.as_ref())?;
             file.sync_all()?;
             Ok(SigningKey::from_bytes(&seed))
@@ -86,21 +141,45 @@ mod tests {
     fn the_signing_key_is_created_once_and_reloaded() {
         let dir = TempDir::new("signing");
         let path = dir.path().join("signing.ed25519");
-        let first = load_or_create_signing_key(&path).unwrap();
+        let first = load_or_create_signing_key(&path, Share::default()).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        let second = load_or_create_signing_key(&path).unwrap();
+        let second = load_or_create_signing_key(&path, Share::default()).unwrap();
         assert_eq!(first.verifying_key(), second.verifying_key());
+    }
+
+    #[test]
+    fn a_shared_signing_key_is_group_readable_by_the_agent_only() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = TempDir::new("signing-share");
+        // A group this process may give files to: the directory's own.
+        let share = Share {
+            gid: Some(std::fs::metadata(dir.path()).unwrap().gid()),
+        };
+        let path = dir.path().join("signing.ed25519");
+        let first = load_or_create_signing_key(&path, share).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert_eq!(Some(meta.gid()), share.gid);
+        let again = load_or_create_signing_key(&path, share).unwrap();
+        assert_eq!(first.verifying_key(), again.verifying_key());
+    }
+
+    #[test]
+    fn a_group_is_found_in_etc_group() {
+        let share = Share::group("root").expect("every system has a root group");
+        assert_eq!(share.gid, Some(0));
+        assert!(Share::group("no-such-group-mero").is_err());
     }
 
     #[test]
     fn a_readable_signing_key_is_refused() {
         let dir = TempDir::new("signing-mode");
         let path = dir.path().join("signing.ed25519");
-        load_or_create_signing_key(&path).unwrap();
+        load_or_create_signing_key(&path, Share::default()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let err = load_or_create_signing_key(&path).unwrap_err();
-        assert!(err.to_string().contains("owner only"), "{err}");
+        let err = load_or_create_signing_key(&path, Share::default()).unwrap_err();
+        assert!(err.to_string().contains("owner"), "{err}");
     }
 
     #[test]

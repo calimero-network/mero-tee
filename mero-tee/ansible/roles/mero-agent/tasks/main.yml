@@ -232,6 +232,10 @@
 
 # Restarts in place: a restart only rotates the provisioning key, which a
 # provisioner learns from a fresh /attest. The signing key is on the disk.
+#
+# As root, like mero-kms: a configfs-tsm quote needs root (an unprivileged gate
+# gets EACCES from /sys/kernel/config/tsm/report). The agent stays unprivileged
+# and reads the key and secrets through its group (GATE_SHARE_GROUP).
 - name: Install mero-agent-gate.service
   copy:
     content: |
@@ -241,8 +245,6 @@
       After=mero-agent-init.service
 
       [Service]
-      User={{ mero_agent_user }}
-      Group={{ mero_agent_user }}
       EnvironmentFile=/etc/mero-agent/gate.env
       ExecStart=/usr/local/bin/mero-agent-gate
       Restart=on-failure

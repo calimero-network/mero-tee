@@ -16,7 +16,7 @@ use base64::Engine;
 use serde_json::json;
 use tracing::{info, warn};
 
-use crate::keys::ProvisioningKey;
+use crate::keys::{ProvisioningKey, Share};
 use crate::protocol::{
     key_binding, open_bundle, report_data, AttestRequest, AttestResponse, OpenError,
     ProvisionRequest, ProvisionResponse, SecretsBundle,
@@ -63,6 +63,8 @@ pub struct Gate {
     pub signing_public: [u8; 32],
     /// Where secrets are written, one file per name. On the encrypted disk.
     pub secrets_dir: PathBuf,
+    /// Who besides the gate reads them: the agent's group.
+    pub share: Share,
     /// X25519 keys of the provisioners baked into the image.
     pub provisioners: Vec<[u8; 32]>,
     /// Accept Base-mode (unauthenticated) bundles. Debug images only.
@@ -199,7 +201,8 @@ async fn provision(
     bundle.validate().map_err(GateError::bad_request)?;
 
     let secrets_dir = gate.secrets_dir.clone();
-    let written = tokio::task::spawn_blocking(move || write_secrets(&secrets_dir, &bundle))
+    let share = gate.share;
+    let written = tokio::task::spawn_blocking(move || write_secrets(&secrets_dir, share, &bundle))
         .await
         .map_err(|e| {
             GateError::new(
@@ -218,10 +221,11 @@ async fn provision(
     Ok(Json(ProvisionResponse { written }))
 }
 
-/// Write each secret to `dir/<name>`, mode 0600, through a temporary file and a
-/// rename, so the agent never reads half a value. Names were validated, so
-/// none is a path, hidden, or one of these temporaries.
-fn write_secrets(dir: &Path, bundle: &SecretsBundle) -> Result<Vec<String>, String> {
+/// Write each secret to `dir/<name>`, readable by the gate and the agent's
+/// group only, through a temporary file and a rename, so the agent never reads
+/// half a value. Names were validated, so none is a path, hidden, or one of
+/// these temporaries.
+fn write_secrets(dir: &Path, share: Share, bundle: &SecretsBundle) -> Result<Vec<String>, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for (name, value) in &bundle.secrets {
         let target = dir.join(name);
@@ -230,8 +234,11 @@ fn write_secrets(dir: &Path, bundle: &SecretsBundle) -> Result<Vec<String>, Stri
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(share.file_mode())
             .open(&temporary)
+            .map_err(|e| format!("{}: {e}", temporary.display()))?;
+        share
+            .apply(&temporary)
             .map_err(|e| format!("{}: {e}", temporary.display()))?;
         file.write_all(value.as_bytes())
             .and_then(|()| file.sync_all())
@@ -274,6 +281,7 @@ mod tests {
             provisioning: ProvisioningKey::generate(),
             signing_public: [0x55; 32],
             secrets_dir: dir.path().join("secrets"),
+            share: Share::default(),
             provisioners: vec![provisioner],
             allow_unauthenticated,
             provisioned: AtomicBool::new(false),

@@ -14,13 +14,13 @@ encrypted disk and signs with the key the gate attested.
 |--------|------|-------------|
 | `GET` | `/health` | `{"status":"ok","provisioned":bool}`: whether any bundle was written since this start |
 | `POST` | `/attest` | `{"nonceB64"}` → a quote whose report data is `nonce ‖ SHA-256("mero-agent-gate/attest/v1" ‖ provisioning_pub ‖ signing_pub)`, and both keys |
-| `POST` | `/provision` | An HPKE message sealed to the provisioning key; writes each secret to `secrets/<NAME>` (0600). `403` if no listed provisioner sealed it, `409` if it was sealed to a key from an earlier start |
+| `POST` | `/provision` | An HPKE message sealed to the provisioning key; writes each secret to `secrets/<NAME>` (0640, root:`GATE_SHARE_GROUP`; 0600 without a group). `403` if no listed provisioner sealed it, `409` if it was sealed to a key from an earlier start |
 
 ## Keys
 
 - **Provisioning key**: X25519, generated in memory at every start, never written.
 - **Signing key**: Ed25519, generated in the TD on the first boot at
-  `$GATE_STATE_DIR/keys/signing.ed25519` (the encrypted disk), mode 0600.
+  `$GATE_STATE_DIR/keys/signing.ed25519` (the encrypted disk), mode 0640 root:`GATE_SHARE_GROUP` (0600 without one). The gate runs as root, which configfs-tsm quotes need; the agent reads through its group.
 
 ## Provisioning protocol
 

@@ -10,6 +10,7 @@ mero_agent_gate_binary: ""
 # one). Baked and measured. Empty bakes none: a debug image then accepts
 # unauthenticated provisioning, and a locked-read-only image accepts none.
 mero_agent_provisioners_file: ""
-# The dedicated non-root user the gate and the agent run as.
+# The dedicated non-root user the agent runs as. The gate runs as root (quotes
+# need it) and shares the signing key and secrets with this user's group.
 mero_agent_user: mero-agent
 mero_agent_gate_port: 8090
