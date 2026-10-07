@@ -16,6 +16,7 @@
 //! | `MERO_KMS_PROFILE` | `String` | `locked-read-only` | KMS profile cohort (overrides `KMS_POLICY_PROFILE`); must match `/etc/mero-kms/image-profile` when that exists |
 //! | `KMS_POLICY_PROFILE` | `String` | *(deprecated)* | Legacy alias for `MERO_KMS_PROFILE` |
 //! | `KEY_NAMESPACE_PREFIX` | `String` | `merod/storage` | Namespace prefix of node key derivation paths |
+//! | `AGENT_KEY_NAMESPACE_PREFIX` | `String` | `mero-agent/storage` | Namespace prefix of agent key derivation paths; must differ from `KEY_NAMESPACE_PREFIX` |
 //! | `CORS_ALLOWED_ORIGINS` | `CSV` | *(none — CORS disabled)* | Comma-separated allowed CORS origins |
 //! | `ENFORCE_MEASUREMENT_POLICY` | `bool` | `true` | Whether node TDX measurement checks are enforced |
 //! | `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE` | `bool` | `true` | Refuse `/get-key` requests that do not ask for a sealed key |
@@ -25,6 +26,11 @@
 //! | `ALLOWED_RTMR1` | `CSV` | *(empty)* | Allowed node RTMR1 hex values; required when enforcing |
 //! | `ALLOWED_RTMR2` | `CSV` | *(empty)* | Allowed node RTMR2 hex values; required when enforcing |
 //! | `ALLOWED_RTMR3` | `CSV` | *(empty)* | Allowed node RTMR3 hex values; required when enforcing |
+//! | `AGENT_ALLOWED_MRTD` | `CSV` | *(empty)* | Allowed agent MRTD hex values. The five `AGENT_ALLOWED_*` are set together or not at all; unset, no agent is served |
+//! | `AGENT_ALLOWED_RTMR0` | `CSV` | *(empty)* | Allowed agent RTMR0 hex values |
+//! | `AGENT_ALLOWED_RTMR1` | `CSV` | *(empty)* | Allowed agent RTMR1 hex values |
+//! | `AGENT_ALLOWED_RTMR2` | `CSV` | *(empty)* | Allowed agent RTMR2 hex values |
+//! | `AGENT_ALLOWED_RTMR3` | `CSV` | *(empty)* | Allowed agent RTMR3 hex values |
 //! | `MERO_KMS_BOOTSTRAP` | `bool` | `false` | Generate the cluster's root instead of joining. Set on exactly one replica, once |
 //! | `MERO_KMS_PEERS` | `CSV` | *(empty)* | Base URLs of replicas to join from. Untrusted: a wrong one only fails a join. Required unless `MERO_KMS_BOOTSTRAP=true` |
 //! | `MERO_KMS_JOIN_RETRY_SECS` | `u64` | `10` | Pause between rounds of join attempts |
@@ -35,7 +41,7 @@ use std::net::SocketAddr;
 
 use eyre::{bail, Result as EyreResult};
 
-use crate::policy::{validate_policy_requirements, AttestationPolicy};
+use crate::policy::{validate_policy_requirements, AttestationPolicy, PolicyEntry, Role};
 
 use self::env::{parse_bool_env, parse_csv_env, parse_measurement_list_env, read_env_utf8};
 
@@ -61,9 +67,12 @@ pub struct Config {
     pub kms_profile: String,
     /// Namespace prefix of node key derivation paths.
     pub key_namespace_prefix: String,
+    /// Namespace prefix of agent key derivation paths. Distinct from
+    /// `key_namespace_prefix`, so no agent can be released a node's key.
+    pub agent_key_namespace_prefix: String,
     /// Comma-separated allowed CORS origins; empty means CORS is disabled.
     pub cors_allowed_origins: Vec<String>,
-    /// The node allowlist baked into the image, with TCB status rules.
+    /// The node and agent allowlists baked into the image, with TCB status rules.
     pub attestation_policy: AttestationPolicy,
     /// Refuse `/get-key` requests that do not ask for a sealed key
     /// (`MERO_KMS_REQUIRE_SEALED_KEY_RELEASE`, default `true`). An unsealed key
@@ -89,6 +98,7 @@ impl Default for Config {
             accept_mock_attestation: false,
             kms_profile: "locked-read-only".to_string(),
             key_namespace_prefix: "merod/storage".to_string(),
+            agent_key_namespace_prefix: "mero-agent/storage".to_string(),
             cors_allowed_origins: Vec::new(),
             attestation_policy: AttestationPolicy::default(),
             require_sealed_key_release: true,
@@ -134,11 +144,17 @@ impl Config {
             env_profile_override.as_deref(),
         )?;
 
-        let key_namespace_prefix = std::env::var("KEY_NAMESPACE_PREFIX")
-            .ok()
-            .map(|v| v.trim_matches('/').to_string())
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "merod/storage".to_string());
+        let key_namespace_prefix = key_prefix_from_env("KEY_NAMESPACE_PREFIX", "merod/storage");
+        let agent_key_namespace_prefix =
+            key_prefix_from_env("AGENT_KEY_NAMESPACE_PREFIX", "mero-agent/storage");
+        // Key paths are `{prefix}/{profile}/{peerId}` with a slash-free peer ID,
+        // so only an equal prefix could give an agent and a node the same path.
+        if agent_key_namespace_prefix == key_namespace_prefix {
+            bail!(
+                "AGENT_KEY_NAMESPACE_PREFIX must differ from KEY_NAMESPACE_PREFIX \
+                 ('{key_namespace_prefix}'), or an agent could be released a node's key"
+            );
+        }
 
         let cors_allowed_origins = parse_csv_env("CORS_ALLOWED_ORIGINS", false).unwrap_or_default();
 
@@ -163,6 +179,7 @@ impl Config {
             accept_mock_attestation,
             kms_profile,
             key_namespace_prefix,
+            agent_key_namespace_prefix,
             cors_allowed_origins,
             attestation_policy,
             require_sealed_key_release,
@@ -191,18 +208,65 @@ fn cluster_from_env() -> EyreResult<(bool, Vec<String>, u64)> {
     Ok((kms_bootstrap, cluster_peers, join_retry_secs))
 }
 
-/// The node allowlist baked into the image.
+/// A key namespace prefix without surrounding slashes, or `default`.
+fn key_prefix_from_env(name: &str, default: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .map(|v| v.trim_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// The allowlists baked into the image: always the node entry from
+/// `ALLOWED_*`, and an agent entry from `AGENT_ALLOWED_*` when those are set.
 fn load_policy_from_env() -> EyreResult<AttestationPolicy> {
+    let mut entries = vec![entry_from_env(Role::Node, "")?];
+    if let Some(agent) = optional_entry_from_env(Role::Agent, "AGENT_")? {
+        entries.push(agent);
+    }
     Ok(AttestationPolicy {
         enforce_measurement_policy: true,
         allowed_tcb_statuses: parse_csv_env("ALLOWED_TCB_STATUSES", true)
             .unwrap_or_else(|| vec!["uptodate".to_string()]),
-        allowed_mrtd: parse_measurement_list_env("ALLOWED_MRTD")?,
-        allowed_rtmr0: parse_measurement_list_env("ALLOWED_RTMR0")?,
-        allowed_rtmr1: parse_measurement_list_env("ALLOWED_RTMR1")?,
-        allowed_rtmr2: parse_measurement_list_env("ALLOWED_RTMR2")?,
-        allowed_rtmr3: parse_measurement_list_env("ALLOWED_RTMR3")?,
+        entries,
     })
+}
+
+fn entry_from_env(role: Role, env_prefix: &str) -> EyreResult<PolicyEntry> {
+    let list =
+        |register: &str| parse_measurement_list_env(&format!("{env_prefix}ALLOWED_{register}"));
+    Ok(PolicyEntry {
+        role,
+        allowed_mrtd: list("MRTD")?,
+        allowed_rtmr0: list("RTMR0")?,
+        allowed_rtmr1: list("RTMR1")?,
+        allowed_rtmr2: list("RTMR2")?,
+        allowed_rtmr3: list("RTMR3")?,
+    })
+}
+
+/// An entry the image may leave out. All five lists or none: a partial entry
+/// is a broken build, not a role to serve with some registers unchecked, and
+/// it is refused even with enforcement off so a debug image cannot hide it.
+fn optional_entry_from_env(role: Role, env_prefix: &str) -> EyreResult<Option<PolicyEntry>> {
+    let entry = entry_from_env(role, env_prefix)?;
+    let fields = entry.register_fields();
+    let set = fields.iter().filter(|(_, list)| !list.is_empty()).count();
+    if set == 0 {
+        return Ok(None);
+    }
+    if set < fields.len() {
+        let missing: Vec<String> = fields
+            .iter()
+            .filter(|(_, list)| list.is_empty())
+            .map(|(label, _)| format!("{env_prefix}ALLOWED_{label}"))
+            .collect();
+        bail!(
+            "The {role} allowlist is incomplete: {} unset. Set all five {env_prefix}ALLOWED_* or none.",
+            missing.join(", ")
+        );
+    }
+    Ok(Some(entry))
 }
 
 /// Read the KMS profile from env, handling the deprecated `KMS_POLICY_PROFILE`
@@ -327,6 +391,10 @@ pub fn log_startup_config(config: &Config) {
     info!("KMS profile cohort: {}", config.kms_profile);
     info!("Key namespace prefix: {}", config.key_namespace_prefix);
     info!(
+        "Agent key namespace prefix: {}",
+        config.agent_key_namespace_prefix
+    );
+    info!(
         "Measurement policy enforced: {}",
         config.attestation_policy.enforce_measurement_policy
     );
@@ -334,14 +402,20 @@ pub fn log_startup_config(config: &Config) {
         warn!("Measurement policy enforcement is disabled; this is not safe for production");
     }
     info!(
-        "Policy entries: tcb_statuses={}, mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
-        config.attestation_policy.allowed_tcb_statuses.len(),
-        config.attestation_policy.allowed_mrtd.len(),
-        config.attestation_policy.allowed_rtmr0.len(),
-        config.attestation_policy.allowed_rtmr1.len(),
-        config.attestation_policy.allowed_rtmr2.len(),
-        config.attestation_policy.allowed_rtmr3.len()
+        "Policy TCB statuses: {}",
+        config.attestation_policy.allowed_tcb_statuses.len()
     );
+    for entry in &config.attestation_policy.entries {
+        info!(
+            "Policy entry {}: mrtd={}, rtmr0={}, rtmr1={}, rtmr2={}, rtmr3={}",
+            entry.role,
+            entry.allowed_mrtd.len(),
+            entry.allowed_rtmr0.len(),
+            entry.allowed_rtmr1.len(),
+            entry.allowed_rtmr2.len(),
+            entry.allowed_rtmr3.len()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -479,8 +553,85 @@ mod tests {
         let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
             .expect("env-policy mode should load");
         assert_eq!(config.kms_profile, "locked-read-only");
-        assert_eq!(config.attestation_policy.allowed_mrtd.len(), 1);
-        assert_eq!(config.attestation_policy.allowed_rtmr3.len(), 1);
+        let node = config
+            .attestation_policy
+            .entry(Role::Node)
+            .expect("node entry");
+        assert_eq!(node.allowed_mrtd.len(), 1);
+        assert_eq!(node.allowed_rtmr3.len(), 1);
+        assert!(
+            config.attestation_policy.entry(Role::Agent).is_none(),
+            "no AGENT_ALLOWED_* means no agent entry"
+        );
+        assert_eq!(config.agent_key_namespace_prefix, "mero-agent/storage");
+    }
+
+    fn agent_env_policy_overrides() -> Vec<(&'static str, String)> {
+        let measurement = "cd".repeat(crate::util::MEASUREMENT_BYTES);
+        vec![
+            ("AGENT_ALLOWED_MRTD", measurement.clone()),
+            ("AGENT_ALLOWED_RTMR0", measurement.clone()),
+            ("AGENT_ALLOWED_RTMR1", measurement.clone()),
+            ("AGENT_ALLOWED_RTMR2", measurement.clone()),
+            ("AGENT_ALLOWED_RTMR3", measurement),
+        ]
+    }
+
+    #[test]
+    fn from_env_builds_an_agent_entry_from_agent_allowlists() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.extend(agent_env_policy_overrides());
+        let _guard = apply_string_overrides(overrides);
+        let config = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .expect("node and agent allowlists should load");
+        assert_eq!(config.attestation_policy.entries.len(), 2);
+        let agent = config
+            .attestation_policy
+            .entry(Role::Agent)
+            .expect("agent entry");
+        assert_eq!(agent.allowed_rtmr3.len(), 1);
+    }
+
+    #[test]
+    fn from_env_rejects_a_partial_agent_allowlist() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.extend(
+            agent_env_policy_overrides()
+                .into_iter()
+                .filter(|(key, _)| *key != "AGENT_ALLOWED_RTMR2"),
+        );
+        let _guard = apply_string_overrides(overrides);
+        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .expect_err("a partial agent allowlist should refuse startup");
+        assert!(err.to_string().contains("AGENT_ALLOWED_RTMR2"), "{err}");
+    }
+
+    #[test]
+    fn from_env_rejects_a_partial_agent_allowlist_without_enforcement() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.push(("ENFORCE_MEASUREMENT_POLICY", "false".to_string()));
+        overrides.push((
+            "AGENT_ALLOWED_MRTD",
+            "cd".repeat(crate::util::MEASUREMENT_BYTES),
+        ));
+        let _guard = apply_string_overrides(overrides);
+        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .expect_err("a partial agent allowlist is a broken build in any profile");
+        assert!(err.to_string().contains("AGENT_ALLOWED_RTMR0"), "{err}");
+    }
+
+    #[test]
+    fn from_env_rejects_an_agent_prefix_equal_to_the_node_prefix() {
+        let _lock = env_lock().lock().expect("env lock");
+        let mut overrides = valid_env_policy_overrides();
+        overrides.push(("AGENT_KEY_NAMESPACE_PREFIX", "/merod/storage/".to_string()));
+        let _guard = apply_string_overrides(overrides);
+        let err = Config::from_env_with_image_profile_path("/tmp/nonexistent-kms-profile")
+            .expect_err("a shared prefix would let an agent derive a node key");
+        assert!(err.to_string().contains("must differ"), "{err}");
     }
 
     #[test]

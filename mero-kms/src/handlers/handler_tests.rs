@@ -7,6 +7,8 @@ use libp2p_identity::Keypair;
 use tower::util::ServiceExt;
 
 use crate::backend::{test_tdx_backend, Root, TdxBackend, KEY_LEN};
+use crate::measurement::HexMeasurement;
+use crate::policy::{PolicyEntry, Role};
 use crate::test_util::read_json_body;
 use crate::AttestationPolicy;
 
@@ -121,8 +123,6 @@ fn test_policy_rejects_tcb_status() {
 
 #[test]
 fn test_policy_rejects_untrusted_mrtd() {
-    use crate::measurement::HexMeasurement;
-
     let mut verification = policy_verification_result(0x22);
     verification.tcb_status = Some("UpToDate".to_owned());
 
@@ -130,8 +130,10 @@ fn test_policy_rejects_untrusted_mrtd() {
         attestation_policy: AttestationPolicy {
             enforce_measurement_policy: true,
             allowed_tcb_statuses: vec!["uptodate".to_owned()],
-            allowed_mrtd: vec![HexMeasurement::parse(&"1".repeat(96)).unwrap()],
-            ..AttestationPolicy::default()
+            entries: vec![PolicyEntry {
+                allowed_mrtd: vec![HexMeasurement::parse(&"1".repeat(96)).unwrap()],
+                ..PolicyEntry::new(Role::Node)
+            }],
         },
         ..Config::default()
     };
@@ -145,8 +147,6 @@ fn test_policy_rejects_untrusted_mrtd() {
 
 #[test]
 fn test_policy_accepts_allowlisted_measurements() {
-    use crate::measurement::HexMeasurement;
-
     let mut verification = policy_verification_result(0x33);
     verification.tcb_status = Some("UpToDate".to_owned());
     let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();
@@ -155,17 +155,13 @@ fn test_policy_accepts_allowlisted_measurements() {
         attestation_policy: AttestationPolicy {
             enforce_measurement_policy: true,
             allowed_tcb_statuses: vec!["uptodate".to_owned()],
-            allowed_mrtd: vec![zero_48b.clone()],
-            allowed_rtmr0: vec![zero_48b.clone()],
-            allowed_rtmr1: vec![zero_48b.clone()],
-            allowed_rtmr2: vec![zero_48b.clone()],
-            allowed_rtmr3: vec![zero_48b],
+            entries: vec![entry_of(Role::Node, &zero_48b, &zero_48b)],
         },
         ..Config::default()
     };
 
     let result = get_key::enforce_attestation_policy(&config, &verification);
-    assert!(result.is_ok());
+    assert!(matches!(result, Ok(Role::Node)));
 }
 
 #[test]
@@ -175,8 +171,129 @@ fn test_key_path_for_peer_includes_namespace_profile_and_peer_id() {
         kms_profile: "locked-read-only".to_string(),
         ..Config::default()
     };
-    let path = get_key::key_path_for_peer(&config, "12D3KooWTestPeer");
+    let path = get_key::key_path_for_peer(&config, Role::Node, "12D3KooWTestPeer");
     assert_eq!(path, "merod/storage/locked-read-only/12D3KooWTestPeer");
+}
+
+/// An entry for `role` whose MRTD..RTMR2 allow `base` and whose RTMR3 allows
+/// `rtmr3`: two images built from one template differ only in RTMR3 (the role
+/// string) and RTMR2 (the role on the kernel command line).
+fn entry_of(role: Role, base: &HexMeasurement, rtmr3: &HexMeasurement) -> PolicyEntry {
+    PolicyEntry {
+        role,
+        allowed_mrtd: vec![base.clone()],
+        allowed_rtmr0: vec![base.clone()],
+        allowed_rtmr1: vec![base.clone()],
+        allowed_rtmr2: vec![base.clone()],
+        allowed_rtmr3: vec![rtmr3.clone()],
+    }
+}
+
+/// A node policy entry and an agent one, as a KMS serving both is built. The
+/// zeroed fixture quote matches the entry whose registers are all zero.
+fn node_and_agent_config(node_rtmr3: &str, agent_rtmr3: &str) -> Config {
+    let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();
+    Config {
+        attestation_policy: AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: vec!["uptodate".to_owned()],
+            entries: vec![
+                entry_of(
+                    Role::Node,
+                    &zero_48b,
+                    &HexMeasurement::parse(node_rtmr3).unwrap(),
+                ),
+                entry_of(
+                    Role::Agent,
+                    &zero_48b,
+                    &HexMeasurement::parse(agent_rtmr3).unwrap(),
+                ),
+            ],
+        },
+        ..Config::default()
+    }
+}
+
+#[test]
+fn a_node_quote_is_released_the_node_key_path() {
+    let mut verification = policy_verification_result(0x41);
+    verification.tcb_status = Some("UpToDate".to_owned());
+    let config = node_and_agent_config(&"0".repeat(96), &"a".repeat(96));
+
+    let role = get_key::enforce_attestation_policy(&config, &verification)
+        .expect("the node entry matches");
+    assert_eq!(role, Role::Node);
+    assert_eq!(
+        get_key::key_path_for_peer(&config, role, "12D3KooWTestPeer"),
+        "merod/storage/locked-read-only/12D3KooWTestPeer"
+    );
+}
+
+#[test]
+fn an_agent_quote_is_released_the_agent_key_path() {
+    let mut verification = policy_verification_result(0x42);
+    verification.tcb_status = Some("UpToDate".to_owned());
+    let config = node_and_agent_config(&"a".repeat(96), &"0".repeat(96));
+
+    let role = get_key::enforce_attestation_policy(&config, &verification)
+        .expect("the agent entry matches");
+    assert_eq!(role, Role::Agent);
+    assert_eq!(
+        get_key::key_path_for_peer(&config, role, "12D3KooWTestPeer"),
+        "mero-agent/storage/locked-read-only/12D3KooWTestPeer"
+    );
+}
+
+/// Before roles, each register was checked against its own pooled list, so a
+/// node's MRTD..RTMR2 with an agent's RTMR3 would pass. No released image
+/// produces that quote; it must match no entry.
+#[test]
+fn a_quote_mixing_node_and_agent_registers_is_rejected() {
+    let zero_48b = HexMeasurement::parse(&"0".repeat(96)).unwrap();
+    let other = HexMeasurement::parse(&"b".repeat(96)).unwrap();
+    let mut verification = policy_verification_result(0x43);
+    verification.tcb_status = Some("UpToDate".to_owned());
+    let config = Config {
+        attestation_policy: AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: vec!["uptodate".to_owned()],
+            entries: vec![
+                // Node: the quote's MRTD..RTMR2, another RTMR3.
+                entry_of(Role::Node, &zero_48b, &other),
+                // Agent: the quote's RTMR3, another MRTD..RTMR2.
+                entry_of(Role::Agent, &other, &zero_48b),
+            ],
+        },
+        ..Config::default()
+    };
+
+    let result = get_key::enforce_attestation_policy(&config, &verification);
+    let Err(ServiceError::MeasurementPolicyRejected(message)) = result else {
+        panic!("a mixed quote must be rejected, got {result:?}");
+    };
+    // The node entry matched four registers, the agent one only RTMR3.
+    assert!(message.contains("RTMR3"), "{message}");
+    assert!(message.contains("closest policy entry: node"), "{message}");
+}
+
+#[test]
+fn a_policy_with_no_entries_rejects_every_quote() {
+    let mut verification = policy_verification_result(0x44);
+    verification.tcb_status = Some("UpToDate".to_owned());
+    let config = Config {
+        attestation_policy: AttestationPolicy {
+            enforce_measurement_policy: true,
+            allowed_tcb_statuses: vec!["uptodate".to_owned()],
+            entries: Vec::new(),
+        },
+        ..Config::default()
+    };
+
+    let result = get_key::enforce_attestation_policy(&config, &verification);
+    assert!(matches!(
+        result,
+        Err(ServiceError::MeasurementPolicyRejected(_))
+    ));
 }
 
 #[test]

@@ -97,7 +97,9 @@ There is exactly one source, fixed at build time:
 2. The **Release mero-kms** workflow reads it and bakes each profile's measurements into
    that profile's KMS image (`kms_node_policy_file` → `/etc/mero-kms/kms.env`).
 3. At startup the KMS reads `ALLOWED_TCB_STATUSES` / `ALLOWED_MRTD` /
-   `ALLOWED_RTMR0..3` from that baked environment and validates them. There is no
+   `ALLOWED_RTMR0..3` (and, on a KMS that serves agents, `AGENT_ALLOWED_MRTD` /
+   `AGENT_ALLOWED_RTMR0..3` from `kms_agent_policy_file`) from that baked environment
+   and validates them. There is no
    runtime fetch, no signature to check, no degraded mode and no override: changing the
    allowlist means building a new KMS image, which the running cluster refuses to join.
 
@@ -121,6 +123,18 @@ rtmr3      ∈ node_allowed_rtmr3         /
 All five registers plus the TCB status must match; any single mismatch is a policy
 violation. RTMR3 is the profile discriminator, so a production policy that only lists
 production RTMR3 values will never admit a debug node.
+
+### Roles
+
+The policy is a list of entries, one per image role: always `node`, and `agent` on a
+KMS built with an agent allowlist. A quote must match all five registers of **one**
+entry; the KMS releases it keys under that entry's role (`merod/storage/…` for a node,
+`mero-agent/storage/…` for an agent). Registers are never pooled across entries, so a
+quote combining a node's MRTD..RTMR2 with an agent's RTMR3 matches nothing. RTMR3 is
+also the role discriminator: the agent image (see the
+[private agents design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md))
+extends it with `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, which no node image
+produces.
 
 merod does the mirror image on the KMS's `/attest` quote before every key fetch: not a
 debug TD, TCB status in `kms_allowed_tcb_statuses`, and MRTD and RTMR0–3 each in its

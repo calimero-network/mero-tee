@@ -79,7 +79,7 @@ variable "image_suffix" {
 
 # "node" builds the merod node image (playbook.yml); "kms" builds the mero-kms
 # TDX cluster image (playbook-kms.yml), which needs mero_kms_binary and
-# kms_node_policy_file.
+# kms_node_policy_file, and takes an optional kms_agent_policy_file.
 variable "image_role" {
   type    = string
   default = "node"
@@ -96,6 +96,13 @@ variable "mero_kms_binary" {
 }
 
 variable "kms_node_policy_file" {
+  type    = string
+  default = ""
+}
+
+# Optional agent allowlist for a KMS image that also serves agent images.
+# Empty builds a KMS that serves nodes only, with the same kms.env as before.
+variable "kms_agent_policy_file" {
   type    = string
   default = ""
 }
@@ -190,6 +197,7 @@ build {
       "-e", "vector_version=${var.vector_version}",
       "-e", "mero_kms_binary=${var.mero_kms_binary}",
       "-e", "kms_node_policy_file=${var.kms_node_policy_file}",
+      "-e", "kms_agent_policy_file=${var.kms_agent_policy_file}",
     ]
   }
 }
