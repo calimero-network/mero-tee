@@ -10,6 +10,13 @@ name: Release mero-kms
 # master, and only when that tag does not exist yet; a manual dispatch builds
 # nothing (see scripts/release/kms/get-version-info.sh).
 #
+# Agents (docs/design/private-agents.md): `agent-image` builds and measures the
+# reference agent image per profile (mero-agent-gate and the stub agent) and,
+# when that succeeds, the profile's KMS image also serves it (its agent
+# allowlist, published as kms-agent-attestation-policy.<profile>.json). It is
+# best effort: an agent build or measurement that fails leaves that KMS image
+# node-only, exactly as before agents, and never blocks the release.
+#
 # The workflow `name:` is the Sigstore identity merod and the verifiers expect;
 # do not rename it.
 
@@ -24,6 +31,11 @@ on:
       - "mero-kms/src/**"
       - "mero-tee/playbook-kms.yml"
       - "mero-tee/ansible/roles/mero-kms/**"
+      - "mero-agent-gate/**"
+      - "mero-tee/playbook-agent.yml"
+      - "mero-tee/ansible/roles/mero-agent/**"
+      - "scripts/agent/**"
+      - "scripts/release/agent/**"
       - ".github/workflows/release-kms.yaml"
       - "scripts/attestation/**"
       - "scripts/release/kms/**"
@@ -145,10 +157,171 @@ jobs:
           path: artifacts/*.tar.gz
           retention-days: 2
 
+  agent-image:
+    name: Build and measure agent image (${{ matrix.profile }})
+    needs: prepare
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Best effort: see the header. kms-image does not depend on this job's result.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROFILE: ${{ matrix.profile }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      # Base64 X25519 keys, one per line, of the provisioners a released agent
+      # image accepts secrets from. Required for locked-read-only, whose agent
+      # image is skipped without it.
+      AGENT_PROVISIONERS: ${{ vars.MERO_AGENT_PROVISIONERS }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Decide whether this profile ships an agent image
+        id: plan
+        run: |
+          set -euo pipefail
+          if [[ "${PROFILE}" == "locked-read-only" && -z "${AGENT_PROVISIONERS//[[:space:]]/}" ]]; then
+            echo "::notice::No MERO_AGENT_PROVISIONERS variable: no locked-read-only agent image this release"
+            echo "build=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "build=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Setup rust cache
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-mero-agent-gate
+
+      - name: Build mero-agent-gate and stage the reference agent
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p mero-agent-gate
+          mkdir -p agent probe
+          cp target/release/mero-agent-gate target/release/mero-agent-provision agent/
+          cp scripts/agent/stub-mero-agent.py agent/mero-agent
+          printf '%s\n' "${AGENT_PROVISIONERS}" > agent/provisioners
+          sha256sum agent/mero-agent agent/mero-agent-gate | tee probe/agent-binaries.sha256
+
+      - name: Determine GCP auth mode
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            echo "mode=wif" >> "${GITHUB_OUTPUT}"
+          elif [[ -n "${SA_KEY}" ]]; then
+            echo "mode=key" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::error::Set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_PACKER_SERVICE_ACCOUNT_EMAIL, or GCP_SERVICE_ACCOUNT_KEY."
+            exit 1
+          fi
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode == 'key' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Setup packer
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
+        with:
+          version: v1.11.2
+
+      # The release agent image: kept, so the post-release agent e2e boots the
+      # image this KMS serves. mdma never resolves the merotee-agent- prefix.
+      - name: Build the agent image
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        id: build_image
+        working-directory: mero-tee
+        env:
+          IMAGE_ROLE: agent
+          MERO_AGENT_BINARY: ../agent/mero-agent
+          MERO_AGENT_GATE_BINARY: ../agent/mero-agent-gate
+          PACKER_FORCE_BUILD: "true"
+          PACKER_LOG: 1
+        run: |
+          set -euo pipefail
+          if [[ -n "${AGENT_PROVISIONERS//[[:space:]]/}" ]]; then
+            export MERO_AGENT_PROVISIONERS_FILE=../agent/provisioners
+          fi
+          ./init.sh
+          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-agent-build.log
+
+      - name: Show build log on failure
+        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+        run: tail -200 /tmp/packer-agent-build.log 2>/dev/null || true
+
+      # Measures only: the release holds no provisioner's private key, and a
+      # debug image built without provisioners is checked end to end by the
+      # post-release agent e2e.
+      - name: Boot and measure the agent image
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        env:
+          PROBE_NAME: agent-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+          PROVISION_MODE: skip
+          OUT_DIR: probe
+        run: |
+          set -euo pipefail
+          export IMAGE="merotee-agent-${PROFILE}-${VERSION//./-}"
+          export IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          bash scripts/release/agent/run-agent-probe.sh
+          gcloud compute images describe "${IMAGE}" --project "${IMAGE_PROJECT}" --format=json \
+            | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/agent-image.json
+
+      - name: Upload the agent policy
+        if: ${{ steps.plan.outputs.build == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-policy-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
+          path: |
+            probe/agent-attestation-policy.${{ matrix.profile }}.json
+            probe/agent-image.json
+            probe/agent-binaries.sha256
+          retention-days: 7
+
+      - name: Delete the agent image if it was not measured
+        if: ${{ failure() && steps.build_image.outcome == 'success' }}
+        run: |
+          gcloud compute images delete "merotee-agent-${PROFILE}-${VERSION//./-}" \
+            --project "${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}" --quiet || true
+
   kms-image:
     name: Build and probe KMS image (${{ matrix.profile }})
-    needs: [prepare, node-policy, build-binary]
-    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    needs: [prepare, node-policy, build-binary, agent-image]
+    # Whatever agent-image concluded: it only adds an agent allowlist.
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/master' &&
+          needs.prepare.outputs.publish_release == 'true' &&
+          needs.node-policy.result == 'success' && needs.build-binary.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -193,6 +366,39 @@ jobs:
             }' node-policy/published-mrtds.json > build/node-allowlist.json
           jq -e 'all(.[]; type == "array" and length > 0)' build/node-allowlist.json >/dev/null \
             || { echo "::error::mero-tee-v${VERSION} has no complete ${PROFILE} node allowlist"; exit 1; }
+
+      - name: Download the agent policy, if the agent image was measured
+        id: agent_policy
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-policy-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
+          path: agent-policy/
+
+      # The KMS keeps one TCB list for every role (the mero-kms role asserts the
+      # two files agree), so the agent entry takes the node's. Copied into the
+      # probe artifacts, so release-metadata publishes exactly what was baked.
+      - name: Stage the agent allowlist the KMS serves
+        id: agent_allowlist
+        run: |
+          set -euo pipefail
+          policy="agent-policy/agent-attestation-policy.${PROFILE}.json"
+          if [[ ! -s "${policy}" ]]; then
+            echo "::warning::No measured ${PROFILE} agent image: this KMS image serves nodes only"
+            echo "file=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          jq --slurpfile node build/node-allowlist.json \
+            '{allowed_tcb_statuses: $node[0].allowed_tcb_statuses,
+              allowed_mrtd, allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3}' \
+            "${policy}" > build/agent-allowlist.json
+          jq -e 'all(.[]; type == "array" and length > 0)' build/agent-allowlist.json >/dev/null \
+            || { echo "::warning::The ${PROFILE} agent policy is incomplete; serving nodes only"; echo "file=" >> "${GITHUB_OUTPUT}"; exit 0; }
+          jq --arg p "${PROFILE}" --arg v "${VERSION}" \
+            '. + {schema_version: 1, role: "agent", profile: $p, version: $v}' \
+            build/agent-allowlist.json > "probe/agent-attestation-policy.${PROFILE}.json"
+          cp agent-policy/agent-image.json probe/agent-image.json 2>/dev/null || true
+          echo "file=../build/agent-allowlist.json" >> "${GITHUB_OUTPUT}"
 
       - name: Determine GCP auth mode
         id: auth_mode
@@ -246,6 +452,7 @@ jobs:
           IMAGE_ROLE: kms
           MERO_KMS_BINARY: ../build/mero-kms
           KMS_NODE_POLICY_FILE: ../build/node-allowlist.json
+          KMS_AGENT_POLICY_FILE: ${{ steps.agent_allowlist.outputs.file }}
           PACKER_FORCE_BUILD: "true"
           PACKER_LOG: 1
         run: |
@@ -304,7 +511,13 @@ jobs:
   release-metadata:
     name: Release Metadata
     needs: [prepare, node-policy, build-binary, kms-image]
-    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
+    # Explicit results rather than the implicit success(): kms-image runs after
+    # the best-effort agent-image, whatever it concluded, and so must this.
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/master' &&
+          needs.prepare.outputs.publish_release == 'true' &&
+          needs.node-policy.result == 'success' && needs.build-binary.result == 'success' &&
+          needs.kms-image.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -349,6 +562,14 @@ jobs:
           mkdir -p release-assets
           syft dir:artifacts -o "spdx-json=release-assets/kms-binaries-sbom.spdx.json"
           bash scripts/release/kms/assemble-release-assets.sh
+          # The agent allowlist each KMS image bakes, for the profiles that
+          # serve agents; signed with the rest (sign-release-assets.sh).
+          for policy in probe-artifacts/kms-probe-"${PREP_VERSION}"-*/agent-attestation-policy.*.json; do
+            [[ -f "${policy}" ]] || continue
+            profile="$(jq -r '.profile' "${policy}")"
+            cp "${policy}" "release-assets/kms-agent-attestation-policy.${profile}.json"
+            echo "Publishing the ${profile} agent allowlist"
+          done
 
       - name: Install cosign for keyless signing
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1

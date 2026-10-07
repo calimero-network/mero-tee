@@ -112,6 +112,34 @@ release's jobs instead, which keeps the original push event.
 
 </Steps>
 
+### Agents in the KMS release
+
+[Private agents](/flows/private-agents/) ride the KMS release, best effort.
+Alongside the node-policy wait, `agent-image` builds the reference agent image
+for each profile: `mero-agent-gate` plus the stub agent, named
+`merotee-agent-<profile>-<version>`. It boots that image once with
+`ephemeral-store=true` and has Intel Trust Authority measure it. A measured
+profile's KMS image then also bakes that agent allowlist (`kms_agent_policy_file`,
+with the node allowlist's TCB statuses). Release-metadata publishes it as
+`kms-agent-attestation-policy.<profile>.json`, signed like the other assets.
+
+If an agent build or measurement fails, nothing else changes: that profile's KMS
+image is built node-only, exactly as before agents, and the release goes on.
+`kms-image` and `release-metadata` check their real dependencies' results
+explicitly for this. `locked-read-only` gets an agent image only when the
+`MERO_AGENT_PROVISIONERS` repository variable lists the provisioners it accepts.
+
+After a successful release, **Post-release agent e2e**
+(`post-release-agent-e2e.yaml`) proves the chain on fresh TDX VMs:
+1. It boots a one-replica KMS from the release image, and the agent image with a
+   blank data disk pointed at it.
+2. merod verifies that KMS against the signed release policy, and the KMS
+   releases the agent's disk key under the `mero-agent/` prefix.
+3. It verifies the gate against the signed agent policy and provisions a secret.
+4. It resets the agent and checks the disk reopens with the same signing key.
+
+A release that published no agent policy for the profile is skipped.
+
 ### KMS release assets
 
 Uploaded to the `mero-kms-v<version>` release, each trust asset with `.sig`,
@@ -126,6 +154,9 @@ Uploaded to the `mero-kms-v<version>` release, each trust asset with `.sig`,
 - `kms-release-manifest.json`, `kms-checksums.txt` (SHA-256 of the binary
   archives), `kms-binaries-sbom.spdx.json`, `kms-rekor-index.json`, and
   `kms-trust-bundle.tar.gz` (all of the above, for offline transfer).
+- `kms-agent-attestation-policy.<profile>.json`, for each profile whose KMS image
+  serves agents: the agent allowlist that image bakes in, which a provisioner or
+  account owner verifies an agent's quote against.
 
 The KMS images themselves live in the images project, named
 `merotee-kms-<profile>-<version>`; MDMA deploys clusters from them.
@@ -200,7 +231,10 @@ from the root, so equal keys mean one root), and that Intel Trust Authority
 verifies both quotes with identical measurements; a joiner that measures
 differently is replaced by a new VM, up to three times, as described above. It deletes its image, VMs and
 firewall rule when done. Run it to prove a change to the image before the
-Release mero-kms workflow builds and measures it for real. Like branch node
+Release mero-kms workflow builds and measures it for real. With `with_agent`, it
+first builds and measures the agent image from the same commit and provisions it
+a throwaway secret on TDX. It then bakes that agent allowlist into the KMS it
+probes, which is the KMS a release serving agents ships. Like branch node
 builds, its image carries a suffix and its own family, so it can never be
 mistaken for a release.
 

@@ -88,11 +88,22 @@ A `locked-read-only` image must list at least one provisioner (the build fails
 otherwise) and never accepts unauthenticated bundles. A debug image built without a
 list accepts Base-mode bundles from anyone who verified its quote.
 
-## Measuring an agent image
+## Measuring and releasing an agent image
 
-No KMS can list an agent image before it is measured. The
-[Agent TDX image probe](https://github.com/calimero-network/mero-tee/actions/workflows/agent-tdx-image-probe.yaml)
-boots the image with `ephemeral-store=true` and has Intel Trust Authority verify its
-quote. It writes `agent-attestation-policy.<profile>.json`, then provisions a throwaway
-secret through `mero-agent-provision` against that policy. That file is what a KMS
-image serving agents is built with (`kms_agent_policy_file`).
+No KMS can list an agent image before it is measured, so each measurement boots the
+image with `ephemeral-store=true` and has Intel Trust Authority verify its quote. The
+result, `agent-attestation-policy.<profile>.json`, is what a KMS image serving agents
+is built with (`kms_agent_policy_file`).
+
+- **Release.** `Release mero-kms` does this for the reference agent image of every
+  profile, best effort, and publishes the signed
+  `kms-agent-attestation-policy.<profile>.json`. **Post-release agent e2e** then
+  runs the whole chain on the release
+  ([release pipeline](/operate/release-pipeline/#agents-in-the-kms-release)).
+- **Before merging.** `kms-tdx-image-probe.yaml` with `with_agent` runs the same
+  measurement from a branch, provisions a throwaway secret, and probes a KMS that
+  serves the agent.
+
+merod trusts only a KMS whose policy a release signed. A branch can therefore
+prove each half on hardware, but an agent getting its disk key from a KMS is first
+seen on a release.

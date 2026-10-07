@@ -204,7 +204,7 @@ should wait for an agent that needs it.
 | 1 | mero-kms, mero-tee | Role-tagged policy entries, all five registers matched within one entry; per-role key prefix; optional agent policy in the KMS image. | Done |
 | 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
-| 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Probe done (`agent-tdx-image-probe.yaml`); release waits on the agent binary's source |
+| 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
 | 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
 | 6 | mdma | Optional: deploy agents and run rollovers. | |
 
@@ -229,7 +229,7 @@ should wait for an agent that needs it.
 
 ## Open decisions
 
-Phase 4's release and later need these decisions first:
+A real agent binary, and phases 5-6, need these decisions first:
 
 - A model inside the TD for the first agent, or is a hosted API acceptable?
 - Where does the agent source live, and is it published?
