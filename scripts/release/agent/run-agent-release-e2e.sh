@@ -27,8 +27,13 @@ set -euo pipefail
 #   PROVISION_BIN          a built mero-agent-provision
 #   OUT_DIR
 # Optional env:
-#   PROVISIONER_KEY        a listed provisioner's secret; without it, Base mode
-#                          (an image built without provisioners: not locked)
+#   PROVISIONER_KEY        a listed provisioner's secret. Without it, a debug
+#                          image (built without provisioners) is provisioned in
+#                          Base mode, and a locked-read-only image -- which
+#                          accepts listed provisioners only -- is not
+#                          provisioned: its gate is verified and its disk
+#                          reopened, and its provisioning is proven by
+#                          kms-tdx-image-probe with a throwaway listed key.
 #   KMS_PORT (8080), GATE_PORT (8090), WAIT_TIMEOUT_MINUTES (25)
 
 for var in VERSION PROFILE IMAGE_PROJECT PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE \
@@ -132,14 +137,20 @@ wait_for "the agent gate (its disk opened with an agent key)" "${gate}/health" '
 
 # --- 3. verify, then provision ----------------------------------------------------
 "${PROVISION_BIN}" attest --gate "${gate}" --policy "${AGENT_POLICY}" | tee "${OUT_DIR}/attest-1.json"
-printf '{"secrets":{"E2E_SECRET":"e2e-%s"}}' "${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/e2e-secrets.json"
-auth=(--unauthenticated)
-[[ -n "${PROVISIONER_KEY:-}" ]] && auth=(--key "${PROVISIONER_KEY}")
-"${PROVISION_BIN}" provision --gate "${gate}" --policy "${AGENT_POLICY}" \
-  "${auth[@]}" --secrets "${OUT_DIR}/e2e-secrets.json" | tee "${OUT_DIR}/provision.json"
-rm -f "${OUT_DIR}/e2e-secrets.json"
-jq -e '.written == ["E2E_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
-  || { echo "::error::the gate did not write the secret"; exit 1; }
+provisioned="no"
+if [[ -n "${PROVISIONER_KEY:-}" || "${PROFILE}" != "locked-read-only" ]]; then
+  printf '{"secrets":{"E2E_SECRET":"e2e-%s"}}' "${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/e2e-secrets.json"
+  auth=(--unauthenticated)
+  [[ -n "${PROVISIONER_KEY:-}" ]] && auth=(--key "${PROVISIONER_KEY}")
+  "${PROVISION_BIN}" provision --gate "${gate}" --policy "${AGENT_POLICY}" \
+    "${auth[@]}" --secrets "${OUT_DIR}/e2e-secrets.json" | tee "${OUT_DIR}/provision.json"
+  rm -f "${OUT_DIR}/e2e-secrets.json"
+  jq -e '.written == ["E2E_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
+    || { echo "::error::the gate did not write the secret"; exit 1; }
+  provisioned="yes"
+else
+  echo "::notice::No listed provisioner key for locked-read-only: verifying the gate and its disk, not provisioning"
+fi
 
 # --- 4. reboot: the same disk, the same key -----------------------------------
 gcloud compute instances reset "${agent_vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}"
@@ -155,7 +166,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo "## Private agent end to end (${PROFILE}, ${VERSION})"
     echo "- KMS \`${kms_image}\` released the agent's disk key; the gate verified against the signed agent policy."
-    echo "- A secret was provisioned sealed to the TD."
+    echo "- A secret provisioned sealed to the TD: ${provisioned}."
     echo "- After a reset the disk reopened: signing key \`${before}\` unchanged."
   } >> "${GITHUB_STEP_SUMMARY}"
 fi

@@ -7,9 +7,12 @@ run-name: Post-release agent e2e (${{ inputs.release_version || github.event.wor
 # gate verifies against the release's SIGNED agent policy, a secret is
 # provisioned, and the disk reopens after a reset.
 #
-# Runs after every successful "Release mero-kms" on master, for the profiles
-# whose agent policy the release published; skips a release that published
-# none (an agent measurement that failed is best effort there). The probe VMs
+# Runs after every successful "Release mero-kms" on master, for each profile
+# whose agent policy the release published; skips a profile it published none
+# for (an agent measurement that failed is best effort there, and
+# locked-read-only has an agent image only when MERO_AGENT_PROVISIONERS is set).
+# A locked-read-only agent is provisioned only with MERO_AGENT_PROVISIONER_KEY,
+# a listed provisioner's secret; without it its gate and disk are verified. The probe VMs
 # are deleted at the end; the release images are not touched.
 
 on:
@@ -49,9 +52,13 @@ env:
 
 jobs:
   e2e:
-    name: Agent end to end (${{ inputs.profile || 'debug' }})
+    name: Agent end to end (${{ matrix.profile }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(inputs.profile && format('["{0}"]', inputs.profile) || '["debug","debug-read-only","locked-read-only"]') }}
     if: >-
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event.workflow_run.conclusion == 'success' &&
@@ -59,7 +66,7 @@ jobs:
            github.event.workflow_run.event == 'push' &&
            github.event.workflow_run.head_repository.full_name == github.repository) }}
     env:
-      PROFILE: ${{ inputs.profile || 'debug' }}
+      PROFILE: ${{ matrix.profile }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -138,7 +145,7 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
           AGENT_POLICY: ${{ steps.release.outputs.policy }}
-          PROBE_NAME: agent-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          PROBE_NAME: agent-e2e-${{ matrix.profile == 'locked-read-only' && 'lro' || matrix.profile == 'debug-read-only' && 'dro' || 'dbg' }}-${{ github.run_id }}-${{ github.run_attempt }}
           PROVISION_BIN: target/release/mero-agent-provision
           # A listed provisioner's key, for a locked-read-only image.
           PROVISIONER_KEY_B64: ${{ secrets.MERO_AGENT_PROVISIONER_KEY }}
