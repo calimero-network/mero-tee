@@ -1,0 +1,14 @@
+---
+# Paths, on the machine running Packer, of the binaries to bake in. The agent
+# binary is an artifact the release workflow downloads and checks against a
+# pinned digest; its source may be private, its measurements are published.
+# mero-agent-gate is built from this repository's commit.
+mero_agent_binary: ""
+mero_agent_gate_binary: ""
+# No provisioner is baked in: the first sealed bundle claims a running agent
+# for its sender's key (mero-agent-gate/README.md), so whoever builds or runs
+# the image cannot choose who sets its secrets.
+# The dedicated non-root user the agent runs as. The gate runs as root (quotes
+# need it) and shares the signing key and secrets with this user's group.
+mero_agent_user: mero-agent
+mero_agent_gate_port: 8090

@@ -104,9 +104,12 @@ same replica after a release always fails:
    unsealed request). A failed nonce check → `401 invalid_challenge`; a failed identity
    binding → `peer_id_mismatch`; otherwise `attestation_verification_failed`.
 
-6. **Enforce the measurement policy.** The reported TCB status must be in
-   `allowed_tcb_statuses` (`403 tcb_status_rejected` otherwise), and each of MRTD and
-   RTMR0–3 must match its allowlist (`403 measurement_policy_rejected` otherwise). An
+6. **Enforce the measurement policy and infer the role.** The reported TCB status must
+   be in `allowed_tcb_statuses` (`403 tcb_status_rejected` otherwise), and MRTD and
+   RTMR0–3 must all match the allowlists of one policy entry: the node entry, or the
+   agent entry on a KMS that serves agents (`403 measurement_policy_rejected`
+   otherwise, naming the first failing register of the closest entry). The matched
+   entry's role decides the key path in step 8; the requester never states it. An
    empty allowlist for any enforced register is treated as a rejection, so a
    misconfigured policy fails closed. See [Policy Management](/flows/policy-management/).
 
@@ -116,8 +119,11 @@ same replica after a release always fails:
    `429 rate_limited`.
 
 8. **Derive the key.** Only now does the KMS derive the key by HKDF from the cluster
-   root along the path `{KEY_NAMESPACE_PREFIX}/{profile}/{peerId}` (e.g.
-   `merod/storage/<profile>/<peerId>`). The derivation is deterministic in those inputs,
+   root along the path `{prefix}/{profile}/{peerId}`, where the prefix is the matched
+   role's: `KEY_NAMESPACE_PREFIX` for a node (e.g. `merod/storage/<profile>/<peerId>`,
+   unchanged from before roles), `AGENT_KEY_NAMESPACE_PREFIX` for an agent (e.g.
+   `mero-agent/storage/<profile>/<peerId>`). An agent therefore never derives a node's
+   key, whatever peer ID it presents. The derivation is deterministic in those inputs,
    so every replica of the cluster derives the same key.
 
 9. **Return the key, sealed** to the node's one-time `sealToB64` key (AES-GCM under an

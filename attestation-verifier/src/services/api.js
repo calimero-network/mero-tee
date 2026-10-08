@@ -28,6 +28,22 @@ export async function verifyKmsAttestation(attestation, nonceB64 = null) {
   return data;
 }
 
+/**
+ * Verify a pasted mero-agent-gate `/attest` response: the quote via ITA, the
+ * nonce, and that the quote commits to the two keys the gate named.
+ */
+export async function verifyAgentAttestation(attestation, nonceB64 = null) {
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ attestation, agent: true, ...(nonceB64 ? { nonce_b64: nonceB64 } : {}) }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 export async function verifyNodeAttestation(nodeUrl) {
   const base = getApiBase();
   const res = await fetch(`${base}/api/verify`, {

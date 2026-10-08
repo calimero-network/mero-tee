@@ -369,6 +369,22 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
+      # The agent image's boot (docs/design/private-agents.md). Its RTMR3
+      # extend is what the KMS's agent policy entry matches, so the role string
+      # is executed and checked byte for byte. Its data disk is the node's
+      # encrypted-disk logic narrowed: only ever LUKS2 with integrity, keyed
+      # from the KMS, never plain, never reformatted, never on a downgraded
+      # release.
+      - name: Check agent-init extends RTMR3 as an agent
+        id: agent_rtmr3_test
+        shell: bash
+        run: scripts/ci/tests/agent-init-rtmr3-test.sh
+
+      - name: Check the agent's data disk is encrypted and never reformatted
+        id: agent_data_disk_test
+        shell: bash
+        run: scripts/ci/tests/agent-init-data-disk-test.sh
+
       # The root filesystem is sealed behind dm-verity as the image build's last
       # step (mero-tee#334). Runs the seal against a disk image on a loop device,
       # laid out like an ungrown GCP base image: the root is written as EROFS with
@@ -520,6 +536,8 @@ jobs:
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
+            --checks-line "- agent-init extends RTMR3 as an agent: ${{ steps.agent_rtmr3_test.outcome }}" \
+            --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
             --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
 
-use crate::policy::AttestationPolicy;
+use crate::policy::{AttestationPolicy, Role};
 use crate::sealed;
 use crate::stateless_challenge;
 use crate::util::unix_now_secs;
@@ -140,7 +140,7 @@ async fn release_key(
         Some(seal_to) => sealed::request_binding(seal_to, &request.peer_id),
         None => hash_peer_id(&request.peer_id),
     };
-    verify_and_enforce_attestation(
+    let role = verify_and_enforce_attestation(
         &state.config,
         &quote_bytes,
         &challenge_nonce,
@@ -151,10 +151,10 @@ async fn release_key(
 
     spend_challenge(state, request, challenge_expires_at)?;
 
-    let key_path = key_path_for_peer(&state.config, &request.peer_id);
+    let key_path = key_path_for_peer(&state.config, role, &request.peer_id);
     let key_hex = state.backend.derive_key_hex(&key_path)?;
 
-    info!(peer_id = %request.peer_id, "Key derived successfully");
+    info!(peer_id = %request.peer_id, %role, "Key derived successfully");
     let Some(seal_to) = seal_to else {
         warn!(
             peer_id = %request.peer_id,
@@ -181,7 +181,8 @@ async fn release_key(
     }))
 }
 
-/// Verify the TDX attestation quote and enforce measurement policy.
+/// Verify the TDX attestation quote and enforce measurement policy, returning
+/// the role of the policy entry the quote matched.
 ///
 /// Validates the quote cryptographically, checks nonce/peer-ID bindings, and
 /// enforces the register-level measurement policy.
@@ -196,7 +197,7 @@ async fn verify_and_enforce_attestation(
     challenge_nonce: &[u8; 32],
     binding: &[u8; 32],
     peer_id: &str,
-) -> Result<(), ServiceError> {
+) -> Result<Role, ServiceError> {
     #[cfg(feature = "mock-attestation")]
     let is_mock = is_mock_quote(quote_bytes);
     #[cfg(feature = "mock-attestation")]
@@ -256,16 +257,14 @@ async fn verify_and_enforce_attestation(
 
     info!(peer_id = %peer_id, "Attestation verified successfully");
 
+    // A mock quote has no measurements to infer a role from; it is released
+    // node keys, as before roles existed.
     #[cfg(feature = "mock-attestation")]
     if is_mock {
         warn!("Skipping measurement policy checks for accepted mock attestation");
-    } else {
-        enforce_attestation_policy(config, &verification_result)?;
+        return Ok(Role::Node);
     }
-    #[cfg(not(feature = "mock-attestation"))]
-    enforce_attestation_policy(config, &verification_result)?;
-
-    Ok(())
+    enforce_attestation_policy(config, &verification_result)
 }
 
 /// SHA-256 hash of the peer ID string, used as the `application_data` binding
@@ -315,12 +314,17 @@ fn spend_challenge(
     )
 }
 
-/// Build the key derivation path: `{namespace}/{profile}/{peerId}`.
-/// This ensures each profile+peer combination gets a unique deterministic key.
-pub(crate) fn key_path_for_peer(config: &Config, peer_id: &str) -> String {
+/// Build the key derivation path: `{namespace}/{profile}/{peerId}`, where the
+/// namespace is the role's. This ensures each role+profile+peer combination
+/// gets a unique deterministic key; node paths are unchanged from before roles.
+pub(crate) fn key_path_for_peer(config: &Config, role: Role, peer_id: &str) -> String {
+    let namespace = match role {
+        Role::Node => &config.key_namespace_prefix,
+        Role::Agent => &config.agent_key_namespace_prefix,
+    };
     format!(
         "{}/{}/{}",
-        config.key_namespace_prefix.trim_matches('/'),
+        namespace.trim_matches('/'),
         config.kms_profile,
         peer_id
     )
@@ -389,35 +393,57 @@ pub(crate) fn build_signature_payload(
         .map_err(|e| ServiceError::InvalidSignature(format!("failed to serialize payload: {}", e)))
 }
 
-/// Verify that the quote's TCB status and all five TDX measurement registers
-/// (MRTD, RTMR0-3) match the loaded attestation policy. Skipped entirely when
-/// `enforce_measurement_policy` is false (dev/debug only).
+/// Verify that the quote's TCB status is allowed and that all five TDX
+/// measurement registers (MRTD, RTMR0-3) match ONE policy entry, and return
+/// that entry's role. Skipped entirely when `enforce_measurement_policy` is
+/// false (dev/debug only), which releases node keys as before roles existed.
+///
+/// On no match, the error names the first failing register of the entry that
+/// matched the most registers: the one the operator most likely meant.
 pub(crate) fn enforce_attestation_policy(
     config: &Config,
     verification_result: &VerificationResult,
-) -> Result<(), ServiceError> {
+) -> Result<Role, ServiceError> {
     let policy = &config.attestation_policy;
     if !policy.enforce_measurement_policy {
-        return Ok(());
+        return Ok(Role::Node);
     }
 
     enforce_tcb_status(policy, verification_result)?;
 
     let body = &verification_result.quote.body;
-    let quote_registers: [(&str, &str); 5] = [
-        ("MRTD", &body.mrtd),
-        ("RTMR0", &body.rtmr0),
-        ("RTMR1", &body.rtmr1),
-        ("RTMR2", &body.rtmr2),
-        ("RTMR3", &body.rtmr3),
+    let quote_registers: [&str; 5] = [
+        &body.mrtd,
+        &body.rtmr0,
+        &body.rtmr1,
+        &body.rtmr2,
+        &body.rtmr3,
     ];
 
-    for ((label, allowlist), (_, actual)) in policy.register_fields().iter().zip(quote_registers) {
-        AttestationPolicy::check_measurement(allowlist, label, actual)
-            .map_err(|(_, msg)| ServiceError::MeasurementPolicyRejected(msg))?;
+    let mut closest: Option<(usize, Role, String)> = None;
+    for entry in &policy.entries {
+        let mut matched = 0;
+        let mut first_failure = None;
+        for ((label, allowlist), actual) in entry.register_fields().iter().zip(quote_registers) {
+            match AttestationPolicy::check_measurement(allowlist, label, actual) {
+                Ok(()) => matched += 1,
+                Err((_, msg)) => {
+                    first_failure.get_or_insert(msg);
+                }
+            }
+        }
+        let Some(failure) = first_failure else {
+            return Ok(entry.role);
+        };
+        if closest.as_ref().is_none_or(|(best, ..)| matched > *best) {
+            closest = Some((matched, entry.role, failure));
+        }
     }
 
-    Ok(())
+    Err(ServiceError::MeasurementPolicyRejected(match closest {
+        Some((_, role, failure)) => format!("{failure} (closest policy entry: {role})"),
+        None => "the measurement policy has no entries".to_owned(),
+    }))
 }
 
 fn enforce_tcb_status(

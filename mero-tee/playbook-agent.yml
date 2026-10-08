@@ -1,0 +1,118 @@
+---
+# Private agent TDX image (docs/design/private-agents.md). Same base, lockdown
+# and dm-verity seal as the KMS image (playbook-kms.yml), plus the GCE disk
+# naming the node image (playbook.yml) needs for its data disk. Built with
+# `image_role = "agent"` in ubuntu.pkr.hcl.
+- hosts: all
+  become: true
+  vars:
+    # Installed by the mero-agent role (nvme-cli) and post_tasks below,
+    # required in the sealed root.
+    gce_udev_paths:
+      - /usr/lib/udev/rules.d/65-gce-disk-naming.rules
+      - /usr/lib/udev/google_nvme_id
+      - /usr/sbin/nvme
+  pre_tasks:
+    - name: Refresh apt metadata cache only (avoid non-deterministic full upgrades)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    # Shippers first: the mero-agent role writes its config into the
+    # directories they create. Off until agent-init finds an endpoint.
+    - role: ansible/roles/node-exporter
+      vars:
+        version: "{{ node_exporter_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vmagent
+      vars:
+        vmagent_version: "{{ vmagent_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vector
+      vars:
+        version: "{{ vector_version }}"
+
+    - role: ansible/roles/mero-agent
+
+    - role: ansible/roles/cleanup
+
+    - role: ansible/roles/merod-lockdown
+      when: lockdown_profile == 'locked-read-only'
+
+    # The sealed root boots with a tmpfs overlay (systemd.volatile=overlay), so
+    # /tmp and /var are in RAM, as on the KMS. The agent's state is on the
+    # encrypted data disk only.
+    - role: ansible/roles/verity-root
+
+  post_tasks:
+    # Names the build in RTMR3 (agent-init extends it with role, profile and
+    # this hash). The dm-verity root hash is what the disk is checked against.
+    # merod is in it because it is the client the disk key goes through.
+    - name: Compute the agent content hash
+      shell: |
+        { find /etc/mero-agent /usr/local/lib/mero-agent /etc/vector /etc/vmagent \
+            /etc/systemd/system/node_exporter.service.d -type f 2>/dev/null
+          echo /usr/local/bin/mero-agent
+          echo /usr/local/bin/mero-agent-gate
+          echo /usr/local/bin/merod
+          [ -f /etc/default/grub ] && echo /etc/default/grub
+        } | sort -u | xargs -r sha256sum | sha256sum | awk '{print $1}'
+      register: root_hash_result
+      changed_when: false
+
+    - name: Add calimero.root_hash to the kernel cmdline (RTMR2)
+      copy:
+        content: |
+          # Agent content hash (RTMR[2]); names the build. The dm-verity root hash is what the disk is checked against.
+          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
+        dest: /etc/default/grub.d/60-calimero-root-hash.cfg
+        mode: "0644"
+
+    - name: Update GRUB
+      command: update-grub
+      changed_when: true
+
+    # AFTER every role, and after merod-lockdown in particular: lockdown's
+    # openssh-server purge takes google-compute-engine with it, which owns these
+    # paths (see the same task in playbook.yml).
+    - name: Install the GCE disk-naming udev rule and helper
+      copy:
+        src: "ansible/roles/merotee/files/gce-udev/{{ item.name }}"
+        dest: "{{ item.dest }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
+        - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }
+
+    - name: Stat the GCE disk-naming files before sealing
+      stat:
+        path: "{{ item }}"
+      register: gce_udev_files
+      loop: "{{ gce_udev_paths }}"
+
+    - name: Assert the GCE disk-naming files survived every role
+      assert:
+        that: item.stat.exists
+        fail_msg: "{{ item.item }} is missing just before the seal"
+      loop: "{{ gce_udev_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # LAST task: seal the root; on locked-read-only remove the Packer user first
+    # (see the same task in playbook.yml for why both run in one process).
+    - name: Seal the root filesystem behind dm-verity
+      command: >-
+        /usr/local/sbin/calimero-seal-root
+        {{ '--remove-user ubuntu' if lockdown_profile == 'locked-read-only' else '' }}
+        {% for path in gce_udev_paths %}--require {{ path }} {% endfor %}
+      changed_when: true
+      register: seal_result
+
+    - name: Show what the seal wrote (partitions, root hash)
+      debug:
+        var: seal_result.stdout_lines

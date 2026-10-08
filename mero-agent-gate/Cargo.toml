@@ -1,0 +1,58 @@
+[package]
+name = "mero-agent-gate"
+version = "2.3.112"
+authors = ["Calimero Limited <info@calimero.network>"]
+edition = "2021"
+repository = "https://github.com/calimero-network/mero-tee"
+license = "MIT OR Apache-2.0"
+description = "Attestation and sealed secret provisioning for private agent TDX images"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Runs inside the agent TD: serves /attest and /provision.
+[[bin]]
+name = "mero-agent-gate"
+path = "src/main.rs"
+
+# Runs on the provisioner's machine: verifies a gate's quote, then seals
+# secrets to it.
+[[bin]]
+name = "mero-agent-provision"
+path = "src/bin/mero-agent-provision.rs"
+
+[features]
+# DEV/TEST ONLY, as in mero-kms: compiles mock quote generation into the gate
+# and mock quote acceptance into the provisioner. Default OFF.
+mock-attestation = ["calimero-tee-attestation/mock-attestation"]
+
+[dependencies]
+axum = "0.8"
+base64 = "0.23"
+# Ed25519 for the agent's signing key, the one an account owner authorizes as
+# a device. Generated in the TD, never leaves it.
+ed25519-dalek = "3"
+eyre = "0.6"
+hex = "0.4"
+# RFC 9180 HPKE, so a provisioner can seal secrets with any HPKE library.
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+# hpke takes a rand_core 0.9 RNG; the OS one is all the gate needs.
+rand_core = { version = "0.9", features = ["os_rng"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zeroize = "1"
+
+# Same core rev as mero-kms: one quote and verification implementation for
+# both services.
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "23cf02c965a2ca2f9eb4d8abe47ce54a763c7fab" }
+
+[dev-dependencies]
+calimero-server-primitives = { git = "https://github.com/calimero-network/core", rev = "23cf02c965a2ca2f9eb4d8abe47ce54a763c7fab" }
+tower = { version = "0.5", features = ["util"] }

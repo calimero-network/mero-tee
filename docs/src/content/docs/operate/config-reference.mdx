@@ -82,7 +82,8 @@ There is no shared store and no Redis.
 | --- | --- | --- |
 | `MERO_KMS_PROFILE` | string — `locked-read-only` | KMS profile cohort. One of `debug`, `debug-read-only`, `locked-read-only`. If an image-profile pin file is present it must match (see below). |
 | `KMS_POLICY_PROFILE` | string — *(deprecated alias)* | Legacy alias for `MERO_KMS_PROFILE`. If both are set they must agree; using it alone logs a deprecation warning. |
-| `KEY_NAMESPACE_PREFIX` | string — `merod/storage` | Namespace prefix for key-derivation paths. Surrounding slashes are trimmed. Keys are HKDF'd from the cluster root on `{prefix}/{profile}/{peerId}`. |
+| `KEY_NAMESPACE_PREFIX` | string — `merod/storage` | Namespace prefix for node key-derivation paths. Surrounding slashes are trimmed. Node keys are HKDF'd from the cluster root on `{prefix}/{profile}/{peerId}`. |
+| `AGENT_KEY_NAMESPACE_PREFIX` | string — `mero-agent/storage` | Namespace prefix for agent key-derivation paths, used for a quote that matched the agent allowlist. Must differ from `KEY_NAMESPACE_PREFIX` or the KMS refuses to start, so no agent can be released a node's key. |
 
 ### Node allowlist (baked)
 
@@ -97,13 +98,33 @@ There is no shared store and no Redis.
 | `ALLOWED_RTMR2` | CSV — *(empty)* | Allowed node RTMR2 values (48-byte hex). |
 | `ALLOWED_RTMR3` | CSV — *(empty)* | Allowed node RTMR3 values (48-byte hex). |
 
+### Agent allowlist (baked, optional)
+
+A KMS that also serves [private agent](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md)
+images has a second allowlist. Set all five or none: a partial agent allowlist
+refuses startup, with enforcement on or off. Unset, the KMS serves nodes only.
+The TCB status list above applies to agents too.
+
+| Variable | Type / Default | Meaning |
+| --- | --- | --- |
+| `AGENT_ALLOWED_MRTD` | CSV — *(empty)* | Allowed agent MRTD values (48-byte hex). |
+| `AGENT_ALLOWED_RTMR0` | CSV — *(empty)* | Allowed agent RTMR0 values (48-byte hex). |
+| `AGENT_ALLOWED_RTMR1` | CSV — *(empty)* | Allowed agent RTMR1 values (48-byte hex). |
+| `AGENT_ALLOWED_RTMR2` | CSV — *(empty)* | Allowed agent RTMR2 values (48-byte hex). |
+| `AGENT_ALLOWED_RTMR3` | CSV — *(empty)* | Allowed agent RTMR3 values (48-byte hex). |
+
+Each allowlist is one policy entry. A quote passes only if all five of its
+registers are in the lists of **one** entry, and is released keys under that
+entry's role: the node prefix for the node entry, the agent prefix for the
+agent entry. A quote mixing registers from both images matches neither.
+
 Booleans accept `1/true/yes/on` and `0/false/no/off` (case-insensitive).
 
 The `ALLOWED_*` values are the node image's measurements for this profile, taken
 from the node release's `published-mrtds.json` at build time. This is the **only**
 policy source: the KMS never fetches a policy at runtime. When enforcement is on,
-every register allowlist (and the TCB status list) must be non-empty or the
-service refuses to start (`validate_policy_requirements`,
+every register allowlist of every entry (and the TCB status list) must be
+non-empty or the service refuses to start (`validate_policy_requirements`,
 `mero-kms/src/policy.rs`).
 
 ### Cluster
@@ -232,9 +253,12 @@ sets the build-host defaults.
 | `zone` | `europe-west4-a` | GCP zone. |
 | `subnetwork` | `""` | Optional build subnetwork. |
 | `version` | `""` (supplied at build) | Image version, threaded into the image name/family. |
-| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`. |
+| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` builds the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`, a prefix mdma's dispatcher never resolves. |
 | `mero_kms_binary` | `""` | `kms` only: path of the `mero-kms` binary to bake in, built from the release commit. |
 | `kms_node_policy_file` | `""` | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
+| `mero_agent_binary` | `""` | `agent` only: path of the agent program to bake in as `/usr/local/bin/mero-agent`. Measured (RTMR2 content hash, dm-verity). |
+| `mero_agent_gate_binary` | `""` | `agent` only: path of the `mero-agent-gate` binary, built from this repository. |
+| `kms_agent_policy_file` | `""` | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Empty bakes no agent entry and leaves `kms.env` unchanged. |
 
 ### Ansible play variables
 
@@ -371,6 +395,9 @@ Optional CI overrides read by `mero-tee/build-and-release.sh`:
 | `PACKER_GCP_PROJECT_ID` (or `GOOGLE_CLOUD_PROJECT` / `CLOUDSDK_CORE_PROJECT`) | Overrides the Packer `project_id`. |
 | `PACKER_GCP_REGION` / `PACKER_GCP_ZONE` / `PACKER_GCP_SUBNETWORK` | Override the corresponding Packer vars. |
 | `PACKER_FORCE_BUILD` | When `true`, passes `packer build -force` to replace pre-existing image artifacts. |
+| `IMAGE_ROLE` | `kms` or `agent` selects that image role (default `node`). |
+| `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE`, `KMS_AGENT_POLICY_FILE` | `IMAGE_ROLE=kms`: the binary and allowlists to bake (the agent one optional). |
+| `MERO_AGENT_BINARY`, `MERO_AGENT_GATE_BINARY` | `IMAGE_ROLE=agent`: the binaries to bake. No provisioner is baked; the first owner claims a running agent. |
 
 The script builds one profile when its first argument is a profile name,
 otherwise all three (`locked-read-only`, `debug-read-only`, `debug`).

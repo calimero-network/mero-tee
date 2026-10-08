@@ -1,0 +1,141 @@
+name: Agent TDX image probe
+run-name: Agent TDX image probe (${{ inputs.profile }})
+
+# Builds the private agent image from this commit (docs/design/private-agents.md)
+# with mero-agent-gate and the stub agent (scripts/agent/stub-mero-agent.py),
+# boots it on a real TDX VM in ephemeral mode, has Intel Trust Authority verify
+# its quote, and provisions it a throwaway secret through mero-agent-provision
+# (scripts/release/agent/run-agent-probe.sh).
+#
+# Its artifact `agent-attestation-policy.<profile>.json` is what a KMS image
+# serving agents is built with (`kms_agent_policy_file`). Publishes nothing, and
+# deletes its image, VM and firewall rule at the end. The release workflow that
+# publishes an agent image and its signed policy waits on where the agent
+# binary comes from (the design's open decisions).
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Agent image profile"
+        required: true
+        type: choice
+        options:
+          - debug
+          - locked-read-only
+      wait_timeout_minutes:
+        description: "How long to wait for the gate to answer"
+        required: true
+        default: "15"
+
+concurrency:
+  group: agent-tdx-image-probe-${{ github.ref }}-${{ inputs.profile }}
+  cancel-in-progress: false
+
+env:
+  PACKER_GITHUB_API_TOKEN: ${{ github.token }}
+  PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
+  PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
+  PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
+  PACKER_GCP_SUBNETWORK: ${{ vars.GCP_PACKER_SUBNETWORK }}
+  VM_PROJECT: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+  VM_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+  VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
+  ITA_APPRAISAL_URL: ${{ vars.ITA_APPRAISAL_URL }}
+  # Never a release: a probe image always carries a suffix and its own family.
+  IMAGE_SUFFIX: ${{ format('-a{0}-{1}', github.run_number, github.run_attempt) }}
+  PROFILE: ${{ inputs.profile }}
+
+jobs:
+  probe:
+    name: Build, measure and provision an agent image (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: agent-tdx-image-probe
+
+      - name: Build mero-agent-gate and mero-agent-provision
+        run: |
+          set -euo pipefail
+          cargo build -p mero-agent-gate --release --locked
+          mkdir -p probe
+          cp target/release/mero-agent-gate target/release/mero-agent-provision probe/
+          cp scripts/agent/stub-mero-agent.py probe/mero-agent
+          sha256sum probe/mero-agent-gate probe/mero-agent | tee probe/binaries.sha256
+
+      - name: Authenticate to GCP via service account key
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Setup packer
+        uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
+        with:
+          version: v1.11.2
+
+      - name: Build the agent image
+        working-directory: mero-tee
+        env:
+          IMAGE_ROLE: agent
+          MERO_AGENT_BINARY: ../probe/mero-agent
+          MERO_AGENT_GATE_BINARY: ../probe/mero-agent-gate
+          PACKER_LOG: 1
+        run: |
+          set -euo pipefail
+          ./init.sh
+          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-build.log
+
+      - name: Show build log on failure
+        if: ${{ failure() }}
+        run: tail -200 /tmp/packer-build.log 2>/dev/null || true
+
+      - name: Resolve names
+        id: names
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.imageVersion' mero-tee/versions.json)"
+          {
+            echo "image=merotee-agent-${PROFILE}-${version//./-}${IMAGE_SUFFIX}"
+            echo "image_project=${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Boot, measure and provision the agent
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          IMAGE_PROJECT: ${{ steps.names.outputs.image_project }}
+          PROBE_NAME: agent-probe${{ env.IMAGE_SUFFIX }}
+          WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+          PROVISION_BIN: probe/mero-agent-provision
+          OUT_DIR: probe
+        run: bash scripts/release/agent/run-agent-probe.sh
+
+      - name: Upload probe artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-tdx-image-probe-${{ inputs.profile }}-${{ github.run_id }}
+          path: |
+            probe/
+            !probe/mero-agent-gate
+            !probe/mero-agent-provision
+          if-no-files-found: ignore
+
+      - name: Delete the probe image
+        if: ${{ always() }}
+        run: |
+          image="${{ steps.names.outputs.image }}"
+          [[ -n "${image}" && "${image}" == *"${IMAGE_SUFFIX}" ]] && gcloud compute images delete \
+            "${image}" --project "${{ steps.names.outputs.image_project }}" --quiet || true

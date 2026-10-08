@@ -7,4 +7,9 @@ mero_kms_binary: ""
 #  ... "allowed_rtmr3": [...]} -- the measurements of the node image released
 # with it. Baked into the image, so it is part of the KMS's own measurements.
 kms_node_policy_file: ""
+# Optional: the agent allowlist, in the same shape, for a KMS that also serves
+# agent images. Its allowed_tcb_statuses must equal the node file's: the KMS
+# keeps one list, for the platform, not per image. Empty serves no agent and
+# leaves kms.env exactly as it was before agents existed.
+kms_agent_policy_file: ""
 kms_listen_port: 8080
