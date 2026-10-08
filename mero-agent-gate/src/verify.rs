@@ -2,8 +2,9 @@
 //! published measurements, then seal secrets to the key that quote covers.
 //!
 //! This is also the check an account owner runs before authorizing the agent's
-//! signing key as a device: [`attest_gate`] returns the signing key only once
-//! the quote that commits to it has passed.
+//! signing key as a device: [`attest_gate`] returns the signing key, and the
+//! owner the agent was claimed by, only once the quote that commits to them
+//! has passed. An owner authorizes the key only if that owner is itself.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -12,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::keys::random_32;
 use crate::protocol::{
-    key_binding, seal_bundle, AttestRequest, AttestResponse, ProvisionRequest, ProvisionResponse,
-    SecretsBundle,
+    key_binding, keypair_from_secret, seal_bundle, AttestRequest, AttestResponse, ProvisionRequest,
+    ProvisionResponse, SecretsBundle,
 };
 
 /// The agent allowlist, in the shape `kms_agent_policy_file` and the release's
@@ -85,6 +86,9 @@ pub struct VerifiedGate {
     pub provisioning_public_key: [u8; 32],
     #[serde(serialize_with = "as_base64")]
     pub signing_public_key: [u8; 32],
+    /// Who claimed the agent; `None` while unclaimed.
+    #[serde(serialize_with = "as_base64_opt")]
+    pub owner_public_key: Option<[u8; 32]>,
     pub tcb_status: Option<String>,
     pub mrtd: String,
     pub rtmr0: String,
@@ -97,6 +101,16 @@ fn as_base64<S: serde::Serializer>(key: &[u8; 32], serializer: S) -> Result<S::O
     serializer.serialize_str(&BASE64.encode(key))
 }
 
+fn as_base64_opt<S: serde::Serializer>(
+    key: &Option<[u8; 32]>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match key {
+        Some(key) => serializer.serialize_some(&BASE64.encode(key)),
+        None => serializer.serialize_none(),
+    }
+}
+
 fn decode_32(field: &str, value: &str) -> Result<[u8; 32], String> {
     BASE64
         .decode(value.trim())
@@ -106,7 +120,8 @@ fn decode_32(field: &str, value: &str) -> Result<[u8; 32], String> {
 }
 
 /// Check a gate's `/attest` answer to `nonce`: the quote is genuine and fresh,
-/// commits to the two keys the answer names, and the image is in `policy`.
+/// commits to the keys and the owner the answer names, and the image is in
+/// `policy`.
 ///
 /// `allow_mock` accepts a mock quote, and exists only in the
 /// `mock-attestation` build.
@@ -121,10 +136,15 @@ pub async fn verify_attest_response(
         &response.provisioning_public_key_b64,
     )?;
     let signing = decode_32("signingPublicKeyB64", &response.signing_public_key_b64)?;
+    let owner = response
+        .owner_public_key_b64
+        .as_deref()
+        .map(|owner| decode_32("ownerPublicKeyB64", owner))
+        .transpose()?;
     let quote = BASE64
         .decode(response.quote_b64.trim())
         .map_err(|_| "quoteB64 is not base64".to_owned())?;
-    let binding = key_binding(&provisioning, &signing);
+    let binding = key_binding(&provisioning, &signing, owner.as_ref());
 
     #[cfg(feature = "mock-attestation")]
     let verification = if calimero_tee_attestation::is_mock_quote(&quote) {
@@ -143,7 +163,7 @@ pub async fn verify_attest_response(
         return Err("the quote does not carry this request's nonce".to_owned());
     }
     if !verification.application_hash_verified {
-        return Err("the quote does not commit to the keys the gate named".to_owned());
+        return Err("the quote does not commit to the keys and owner the gate named".to_owned());
     }
     if !verification.quote_verified {
         return Err("the quote's signature did not verify".to_owned());
@@ -160,6 +180,7 @@ pub async fn verify_attest_response(
     Ok(VerifiedGate {
         provisioning_public_key: provisioning,
         signing_public_key: signing,
+        owner_public_key: owner,
         tcb_status: verification.tcb_status.clone(),
         mrtd: normalize(&body.mrtd),
         rtmr0: normalize(&body.rtmr0),
@@ -199,20 +220,38 @@ pub async fn attest_gate(
     .await
 }
 
-/// Seal `bundle` to a verified gate and post it.
+/// Whether `gate` may be provisioned by the holder of `owner_secret`: it is
+/// unclaimed (this provisioning claims it), or claimed by that key. An agent
+/// someone else claimed is refused before anything is sent: whoever claimed
+/// it could read what it is given.
+pub fn check_owner(gate: &VerifiedGate, owner_secret: &[u8; 32]) -> Result<[u8; 32], String> {
+    let (_, mine) = keypair_from_secret(owner_secret)?;
+    match gate.owner_public_key {
+        Some(owner) if owner != mine => Err(format!(
+            "this agent is claimed by another key ({}); it is not yours. Send it nothing and \
+             do not authorize its signing key",
+            BASE64.encode(owner)
+        )),
+        _ => Ok(mine),
+    }
+}
+
+/// Seal `bundle` to a verified gate as the holder of `owner_secret` and post
+/// it. The first bundle an unclaimed agent accepts claims it for that key.
 pub async fn provision_gate(
     client: &reqwest::Client,
     gate_url: &str,
     gate: &VerifiedGate,
-    provisioner_secret: Option<&[u8; 32]>,
+    owner_secret: &[u8; 32],
     bundle: &SecretsBundle,
 ) -> Result<ProvisionResponse, String> {
-    let (encapped, ciphertext) =
-        seal_bundle(&gate.provisioning_public_key, provisioner_secret, bundle)?;
+    let mine = check_owner(gate, owner_secret)?;
+    let (encapped, ciphertext) = seal_bundle(&gate.provisioning_public_key, owner_secret, bundle)?;
     let response = client
         .post(format!("{}/provision", gate_url.trim_end_matches('/')))
         .json(&ProvisionRequest {
             provisioning_public_key_b64: BASE64.encode(gate.provisioning_public_key),
+            sender_public_key_b64: BASE64.encode(mine),
             encapped_key_b64: BASE64.encode(encapped),
             ciphertext_b64: BASE64.encode(ciphertext),
         })
@@ -256,6 +295,40 @@ mod tests {
             advisory_ids: Vec::new(),
             quote,
         }
+    }
+
+    fn gate_owned_by(owner: Option<[u8; 32]>) -> VerifiedGate {
+        VerifiedGate {
+            provisioning_public_key: [1; 32],
+            signing_public_key: [2; 32],
+            owner_public_key: owner,
+            tcb_status: None,
+            mrtd: String::new(),
+            rtmr0: String::new(),
+            rtmr1: String::new(),
+            rtmr2: String::new(),
+            rtmr3: String::new(),
+        }
+    }
+
+    #[test]
+    fn an_unclaimed_or_own_agent_may_be_provisioned() {
+        let (_, mine) = keypair_from_secret(&[0x22; 32]).unwrap();
+        assert_eq!(
+            check_owner(&gate_owned_by(None), &[0x22; 32]).unwrap(),
+            mine
+        );
+        assert_eq!(
+            check_owner(&gate_owned_by(Some(mine)), &[0x22; 32]).unwrap(),
+            mine
+        );
+    }
+
+    #[test]
+    fn an_agent_claimed_by_another_key_is_refused() {
+        let (_, theirs) = keypair_from_secret(&[0x33; 32]).unwrap();
+        let err = check_owner(&gate_owned_by(Some(theirs)), &[0x22; 32]).unwrap_err();
+        assert!(err.contains("not yours"), "{err}");
     }
 
     #[test]

@@ -2,19 +2,22 @@
 //!
 //! ```text
 //! mero-agent-provision keygen --out <secret-file>
-//! mero-agent-provision attest    --gate <url> --policy <agent-policy.json>
+//! mero-agent-provision attest    --gate <url> --policy <agent-policy.json> [--key <secret-file>]
 //! mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
 //!                                --key <secret-file> --secrets <secrets.json>
 //! ```
 //!
-//! `keygen` makes a provisioner's X25519 key and prints its public half, the
-//! line to list in the image's `provisioners` file. `attest` verifies a gate
-//! and prints the keys its quote covers; an account owner authorizes the
-//! printed `signingPublicKey` as the agent's device. `provision` verifies the
-//! gate the same way, then seals `secrets.json` (`{"secrets": {"NAME": "value"}}`)
-//! to it. Nothing is sent before the quote passes.
+//! `keygen` makes the owner's X25519 key and prints its public half. It never
+//! leaves the owner's machine. `attest` verifies a gate and prints the keys its
+//! quote covers, including the owner that claimed it, if any; with `--key`, it
+//! fails unless the agent is unclaimed or claimed by that key. An account owner
+//! authorizes the printed `signingPublicKey` as the agent's device only after
+//! it shows their own key as owner. `provision` verifies the gate the same way,
+//! refuses an agent someone else claimed, then seals `secrets.json`
+//! (`{"secrets": {"NAME": "value"}}`) to it under `--key`. The first bundle an
+//! agent accepts claims it for that key. Nothing is sent before the quote
+//! passes, and afterwards the gate is attested again to prove the claim.
 //!
-//! `--unauthenticated` seals without a provisioner key (debug images only);
 //! `--allow-mock` accepts a mock quote (`mock-attestation` builds only).
 
 use std::io::Write;
@@ -25,7 +28,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use mero_agent_gate::keys::random_32;
 use mero_agent_gate::protocol::{keypair_from_secret, SecretsBundle};
-use mero_agent_gate::verify::{attest_gate, provision_gate, AgentPolicy};
+use mero_agent_gate::verify::{
+    attest_gate, check_owner, provision_gate, AgentPolicy, VerifiedGate,
+};
 use zeroize::Zeroizing;
 
 struct Args {
@@ -45,7 +50,7 @@ impl Args {
                 .strip_prefix("--")
                 .ok_or_else(|| format!("unexpected argument '{}'", raw[i]))?
                 .to_owned();
-            if matches!(flag.as_str(), "unauthenticated" | "allow-mock") {
+            if flag == "allow-mock" {
                 flags.push((flag, None));
                 i += 1;
             } else {
@@ -127,21 +132,37 @@ async fn run(args: Args) -> Result<(), String> {
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
-    let verified = attest_gate(
-        &client,
-        gate_url,
-        &policy,
-        #[cfg(feature = "mock-attestation")]
-        args.switch("allow-mock"),
-    )
-    .await?;
-    if verified.tcb_status.as_deref() == Some("Mock") {
-        eprintln!("WARNING: accepted a MOCK quote; the agent policy was not checked");
-    } else {
-        eprintln!("Gate verified: its quote matches the agent policy");
-    }
+    let verify = || async {
+        let verified = attest_gate(
+            &client,
+            gate_url,
+            &policy,
+            #[cfg(feature = "mock-attestation")]
+            args.switch("allow-mock"),
+        )
+        .await?;
+        if verified.tcb_status.as_deref() == Some("Mock") {
+            eprintln!("WARNING: accepted a MOCK quote; the agent policy was not checked");
+        } else {
+            eprintln!("Gate verified: its quote matches the agent policy");
+        }
+        Ok::<VerifiedGate, String>(verified)
+    };
+    let verified = verify().await?;
 
     if args.command == "attest" {
+        if args.flags.iter().any(|(flag, _)| flag == "key") {
+            let key = read_secret_key(args.value("key")?)?;
+            check_owner(&verified, &key)?;
+            eprintln!(
+                "{}",
+                if verified.owner_public_key.is_some() {
+                    "Claimed by your key"
+                } else {
+                    "Unclaimed: your first provisioning claims it"
+                }
+            );
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&verified).map_err(|e| e.to_string())?
@@ -156,15 +177,28 @@ async fn run(args: Args) -> Result<(), String> {
     let bundle: SecretsBundle =
         serde_json::from_str(&text).map_err(|e| format!("{secrets_path}: {e}"))?;
     bundle.validate()?;
-    let key = if args.switch("unauthenticated") {
-        None
-    } else {
-        Some(read_secret_key(args.value("key")?)?)
-    };
-    let response = provision_gate(&client, gate_url, &verified, key.as_deref(), &bundle).await?;
+    let key = read_secret_key(args.value("key")?)?;
+    let response = provision_gate(&client, gate_url, &verified, &key, &bundle).await?;
+
+    // The gate's word is not proof of the claim: a fresh quote must bind it.
+    let after = verify().await?;
+    let mine = check_owner(&after, &key)?;
+    if after.owner_public_key != Some(mine) {
+        return Err("the gate accepted the secrets, but its quote binds no owner".to_owned());
+    }
+    if after.signing_public_key != verified.signing_public_key {
+        return Err("the gate's signing key changed while provisioning".to_owned());
+    }
+    eprintln!("Claimed by your key; authorize signingPublicKey as this agent's device");
     println!(
         "{}",
-        serde_json::to_string(&response).map_err(|e| e.to_string())?
+        serde_json::to_string(&serde_json::json!({
+            "written": response.written,
+            "claimed": response.claimed,
+            "ownerPublicKey": BASE64.encode(mine),
+            "signingPublicKey": BASE64.encode(after.signing_public_key),
+        }))
+        .map_err(|e| e.to_string())?
     );
     Ok(())
 }

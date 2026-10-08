@@ -175,44 +175,25 @@ jobs:
     env:
       PROFILE: ${{ matrix.profile }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      # Base64 X25519 keys, one per line, of the provisioners a released agent
-      # image accepts secrets from. Required for locked-read-only, whose agent
-      # image is skipped without it.
-      AGENT_PROVISIONERS: ${{ vars.MERO_AGENT_PROVISIONERS }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Decide whether this profile ships an agent image
-        id: plan
-        run: |
-          set -euo pipefail
-          if [[ "${PROFILE}" == "locked-read-only" && -z "${AGENT_PROVISIONERS//[[:space:]]/}" ]]; then
-            echo "::notice::No MERO_AGENT_PROVISIONERS variable: no locked-read-only agent image this release"
-            echo "build=false" >> "${GITHUB_OUTPUT}"
-          else
-            echo "build=true" >> "${GITHUB_OUTPUT}"
-          fi
-
       - name: Setup rust cache
-        if: ${{ steps.plan.outputs.build == 'true' }}
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-mero-agent-gate
 
       - name: Build mero-agent-gate and stage the reference agent
-        if: ${{ steps.plan.outputs.build == 'true' }}
         run: |
           set -euo pipefail
           cargo build --release --locked -p mero-agent-gate
           mkdir -p agent probe
           cp target/release/mero-agent-gate target/release/mero-agent-provision agent/
           cp scripts/agent/stub-mero-agent.py agent/mero-agent
-          printf '%s\n' "${AGENT_PROVISIONERS}" > agent/provisioners
           sha256sum agent/mero-agent agent/mero-agent-gate | tee probe/agent-binaries.sha256
 
       - name: Determine GCP auth mode
-        if: ${{ steps.plan.outputs.build == 'true' }}
         id: auth_mode
         env:
           WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -246,11 +227,9 @@ jobs:
           export_environment_variables: true
 
       - name: Setup gcloud
-        if: ${{ steps.plan.outputs.build == 'true' }}
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: Setup packer
-        if: ${{ steps.plan.outputs.build == 'true' }}
         uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
         with:
           version: v1.11.2
@@ -258,7 +237,6 @@ jobs:
       # The release agent image: kept, so the post-release agent e2e boots the
       # image this KMS serves. mdma never resolves the merotee-agent- prefix.
       - name: Build the agent image
-        if: ${{ steps.plan.outputs.build == 'true' }}
         id: build_image
         working-directory: mero-tee
         env:
@@ -269,9 +247,6 @@ jobs:
           PACKER_LOG: 1
         run: |
           set -euo pipefail
-          if [[ -n "${AGENT_PROVISIONERS//[[:space:]]/}" ]]; then
-            export MERO_AGENT_PROVISIONERS_FILE=../agent/provisioners
-          fi
           ./init.sh
           ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-agent-build.log
 
@@ -279,11 +254,10 @@ jobs:
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
         run: tail -200 /tmp/packer-agent-build.log 2>/dev/null || true
 
-      # Measures only: the release holds no provisioner's private key, and a
-      # debug image built without provisioners is checked end to end by the
-      # post-release agent e2e.
+      # Measures only, on an ephemeral store: the measurement VM is never
+      # claimed. Provisioning is checked end to end by the post-release agent
+      # e2e, which claims its own VM with a throwaway key.
       - name: Boot and measure the agent image
-        if: ${{ steps.plan.outputs.build == 'true' }}
         env:
           PROBE_NAME: agent-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
@@ -298,7 +272,6 @@ jobs:
             | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/agent-image.json
 
       - name: Upload the agent policy
-        if: ${{ steps.plan.outputs.build == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agent-policy-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}

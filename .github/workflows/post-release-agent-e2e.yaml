@@ -9,11 +9,10 @@ run-name: Post-release agent e2e (${{ inputs.release_version || github.event.wor
 #
 # Runs after every successful "Release mero-kms" on master, for each profile
 # whose agent policy the release published; skips a profile it published none
-# for (an agent measurement that failed is best effort there, and
-# locked-read-only has an agent image only when MERO_AGENT_PROVISIONERS is set).
-# A locked-read-only agent is provisioned only with MERO_AGENT_PROVISIONER_KEY,
-# a listed provisioner's secret; without it its gate and disk are verified. The probe VMs
-# are deleted at the end; the release images are not touched.
+# for (an agent measurement is best effort there). The e2e claims its own VM
+# with a throwaway owner key made on the runner, as any owner would; no
+# repository secret can provision an agent. The probe VMs are deleted at the
+# end; the release images are not touched.
 
 on:
   workflow_run:
@@ -147,16 +146,10 @@ jobs:
           AGENT_POLICY: ${{ steps.release.outputs.policy }}
           PROBE_NAME: agent-e2e-${{ matrix.profile == 'locked-read-only' && 'lro' || matrix.profile == 'debug-read-only' && 'dro' || 'dbg' }}-${{ github.run_id }}-${{ github.run_attempt }}
           PROVISION_BIN: target/release/mero-agent-provision
-          # A listed provisioner's key, for a locked-read-only image.
-          PROVISIONER_KEY_B64: ${{ secrets.MERO_AGENT_PROVISIONER_KEY }}
           OUT_DIR: e2e/out
         run: |
           set -euo pipefail
           export IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
-          if [[ -n "${PROVISIONER_KEY_B64}" ]]; then
-            ( umask 077; printf '%s' "${PROVISIONER_KEY_B64}" > "${RUNNER_TEMP}/provisioner.key" )
-            export PROVISIONER_KEY="${RUNNER_TEMP}/provisioner.key"
-          fi
           bash scripts/release/agent/run-agent-release-e2e.sh
 
       - name: Upload e2e artifacts

@@ -123,7 +123,8 @@ function quoteReportData(quoteB64) {
 }
 
 // mero-agent-gate's report-data binding (mero-agent-gate/src/protocol.rs).
-const AGENT_ATTEST_DOMAIN = Buffer.from('mero-agent-gate/attest/v1');
+const AGENT_ATTEST_DOMAIN = Buffer.from('mero-agent-gate/attest/v2');
+const NO_OWNER = Buffer.alloc(32);
 
 function decodeKey32(field, value) {
   const bytes = typeof value === 'string' ? Buffer.from(value.trim(), 'base64') : Buffer.alloc(0);
@@ -133,19 +134,26 @@ function decodeKey32(field, value) {
 
 /**
  * The keys a mero-agent-gate quote commits to: report_data[32..64] must be
- * SHA-256(domain ‖ provisioning key ‖ signing key). Returns them only if so.
+ * SHA-256(domain ‖ provisioning key ‖ signing key ‖ owner key), the owner being
+ * the key that claimed the agent, or 32 zero bytes while it is unclaimed.
+ * Returns them only if so.
  */
 function verifyAgentKeys(attestation) {
   const provisioning = decodeKey32('provisioningPublicKeyB64', attestation.provisioningPublicKeyB64);
   const signing = decodeKey32('signingPublicKeyB64', attestation.signingPublicKeyB64);
+  const owner = attestation.ownerPublicKeyB64 == null
+    ? null
+    : decodeKey32('ownerPublicKeyB64', attestation.ownerPublicKeyB64);
   const expected = crypto.createHash('sha256')
-    .update(AGENT_ATTEST_DOMAIN).update(provisioning).update(signing).digest();
+    .update(AGENT_ATTEST_DOMAIN).update(provisioning).update(signing)
+    .update(owner ?? NO_OWNER).digest();
   if (!quoteReportData(extractQuote(attestation)).subarray(32, 64).equals(expected)) {
     throw new Error('Quote does not commit to the keys the gate named');
   }
   return {
     provisioningPublicKeyB64: provisioning.toString('base64'),
     signingPublicKeyB64: signing.toString('base64'),
+    ownerPublicKeyB64: owner ? owner.toString('base64') : null,
   };
 }
 

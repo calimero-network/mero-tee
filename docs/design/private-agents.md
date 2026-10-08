@@ -75,7 +75,9 @@ tool credentials). They are provisioned after boot, encrypted to the TD:
    nonce to its provisioning public key, an HPKE key generated in the TD.
 2. The provisioner verifies the quote against the agent release's published
    measurements.
-3. The provisioner encrypts the secrets to that key and posts them.
+3. The provisioner encrypts the secrets to that key and posts them. The first
+   provisioner claims the agent: its key is kept on the encrypted disk, bound into
+   every later quote, and is the only key that can provision again.
 4. The agent stores them on its encrypted disk. Nobody else, including the
    transport, sees them in plaintext.
 
@@ -210,12 +212,14 @@ should wait for an agent that needs it.
 
 ## Decisions taken while building the prototype
 
-- **Who may provision.** The image bakes a list of provisioner X25519 keys
-  (`mero_agent_provisioners_file`, measured), and the gate opens only HPKE
-  Auth-mode messages from a listed key. Whoever holds a listed key (an operator
-  CLI or an owner's client) can provision, so the open question below is now
-  about who holds those keys, not about the protocol. `locked-read-only` requires
-  a list; a debug image without one accepts Base mode.
+- **Who may provision: the owner who claims the agent.** A first prototype baked
+  a list of provisioner keys into the image. That let whoever builds the image
+  (Calimero) choose who sets every agent's secrets, so it was dropped. Now nothing
+  is baked: the first valid HPKE Auth-mode bundle claims the agent for its
+  sender's X25519 key, which the gate stores on the encrypted disk and binds into
+  every quote. Only that key provisions again. A claim race is visible, not
+  silent: the real owner's CLI sees another key in the quote, sends nothing, and
+  the owner replaces the VM. No key that can provision an agent exists in CI.
 - **The gate holds the signing key.** It generates the Ed25519 key on the
   encrypted disk and attests it beside the provisioning key, so the agent needs
   no attestation code of its own.
@@ -233,4 +237,3 @@ A real agent binary, and phases 5-6, need these decisions first:
 
 - A model inside the TD for the first agent, or is a hosted API acceptable?
 - Where does the agent source live, and is it published?
-- Who runs provisioning: an operator CLI, or the account owner's client?

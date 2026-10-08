@@ -49,44 +49,56 @@ Instance metadata carries addresses only:
 
 ```text
 POST /attest  {"nonceB64": <32 bytes>}
-→ {"quoteB64", "reportDataHex", "provisioningPublicKeyB64", "signingPublicKeyB64"}
+→ {"quoteB64", "reportDataHex", "provisioningPublicKeyB64", "signingPublicKeyB64",
+   "ownerPublicKeyB64"}
 
-report_data = nonce ‖ SHA-256("mero-agent-gate/attest/v1" ‖ provisioning_pub ‖ signing_pub)
+report_data = nonce ‖ SHA-256("mero-agent-gate/attest/v2"
+                              ‖ provisioning_pub ‖ signing_pub ‖ owner_pub)
 ```
 
 The **provisioning key** (X25519) is generated in memory at every start of the gate.
 The **signing key** (Ed25519) is generated on the agent's first boot and kept on the
-encrypted disk. One quote proves both keys belong to a TD running the measured image.
+encrypted disk. The **owner key** is the X25519 key that claimed the agent (see
+below), or 32 zero bytes while it is unclaimed. One quote proves all three belong to
+a TD running the measured image.
 
 Before authorizing the signing key as the agent's device, an account owner runs
 `mero-agent-provision attest --gate <url> --policy <agent-policy.json>`, or uses the
 **Agent** tab of the attestation verifier. Both verify the quote, the nonce, the key
-binding and the registers against the agent policy, and only then show the key.
+binding and the registers against the agent policy, and only then show the key and
+its owner. Authorize the signing key only when the owner shown is your own key.
 
 ## Provisioning secrets
 
 The image is public, so it holds no secrets. They arrive sealed to the TD:
 
 ```text
+mero-agent-provision keygen --out owner.key     # once; the key stays with the owner
 mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
-                               --key <provisioner.key> --secrets secrets.json
+                               --key owner.key --secrets secrets.json
 ```
 
-1. The CLI verifies the gate's quote as above. Nothing is sent before it passes.
+1. The CLI verifies the gate's quote as above, and refuses an agent whose quote
+   binds another owner. Nothing is sent before both pass.
 2. It seals `{"secrets": {"NAME": "value"}}` with RFC 9180 HPKE
    (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305) to the provisioning
-   key. It uses **Auth** mode under the provisioner's own X25519 key.
-3. The gate opens it only if that sender key is in the image's baked provisioner list
-   (`/etc/mero-agent/provisioners`, measured). It writes each secret to
+   key. It uses **Auth** mode under the owner's X25519 key.
+3. An unclaimed gate is claimed by the first valid bundle: it stores the sender's key
+   at `/mnt/agent/keys/owner.x25519` before writing any secret. A claimed gate opens
+   bundles from that key only (`403` otherwise). It writes each secret to
    `/mnt/agent/secrets/<NAME>`, readable by the gate (root) and the agent's group only.
+4. The CLI attests again and checks the fresh quote binds its key as the owner.
 
 The HPKE `info` binds the message to the recipient key. A message cannot be replayed to
 another agent or after the gate restarts; a provisioner whose `/attest` predates a
 restart gets `409 stale_provisioning_key` and attests again.
 
-A `locked-read-only` image must list at least one provisioner (the build fails
-otherwise) and never accepts unauthenticated bundles. A debug image built without a
-list accepts Base-mode bundles from anyone who verified its quote.
+No provisioner is baked into the image. Neither Calimero, which builds and runs it,
+nor anyone else chooses who sets an agent's secrets: its first owner does. The claim
+lives on the encrypted disk, so it survives reboots and ends with the disk. Whoever
+reaches a fresh agent first can claim it, but that is never silent: the claimant's key
+is in every quote, so the real owner sees "not yours", sends nothing and replaces the
+VM. Launch an agent and claim it in one step.
 
 ## Measuring and releasing an agent image
 
@@ -101,8 +113,9 @@ is built with (`kms_agent_policy_file`).
   runs the whole chain on the release
   ([release pipeline](/operate/release-pipeline/#agents-in-the-kms-release)).
 - **Before merging.** `kms-tdx-image-probe.yaml` with `with_agent` runs the same
-  measurement from a branch, provisions a throwaway secret, and probes a KMS that
-  serves the agent.
+  measurement from a branch, claims the VM with a throwaway owner key, provisions a
+  throwaway secret, checks a second key is refused, and probes a KMS that serves the
+  agent.
 
 merod trusts only a KMS whose policy a release signed. A branch can therefore
 prove each half on hardware, but an agent getting its disk key from a KMS is first

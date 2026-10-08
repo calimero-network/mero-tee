@@ -70,14 +70,6 @@ jobs:
           cp scripts/agent/stub-mero-agent.py probe/mero-agent
           sha256sum probe/mero-agent-gate probe/mero-agent | tee probe/binaries.sha256
 
-      # A throwaway provisioner, baked into the image's list: the probe can set
-      # this image's secrets and nobody else can. The key never leaves the run.
-      - name: Make a throwaway provisioner key
-        run: |
-          set -euo pipefail
-          probe/mero-agent-provision keygen --out "${RUNNER_TEMP}/provisioner.key" > probe/provisioners
-          cat probe/provisioners
-
       - name: Authenticate to GCP via service account key
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -99,7 +91,6 @@ jobs:
           IMAGE_ROLE: agent
           MERO_AGENT_BINARY: ../probe/mero-agent
           MERO_AGENT_GATE_BINARY: ../probe/mero-agent-gate
-          MERO_AGENT_PROVISIONERS_FILE: ../probe/provisioners
           PACKER_LOG: 1
         run: |
           set -euo pipefail
@@ -128,7 +119,6 @@ jobs:
           WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
           PROVISION_BIN: probe/mero-agent-provision
-          PROVISIONER_KEY: ${{ runner.temp }}/provisioner.key
           OUT_DIR: probe
         run: bash scripts/release/agent/run-agent-probe.sh
 

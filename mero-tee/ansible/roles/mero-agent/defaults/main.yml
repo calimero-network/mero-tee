@@ -5,11 +5,9 @@
 # mero-agent-gate is built from this repository's commit.
 mero_agent_binary: ""
 mero_agent_gate_binary: ""
-# Optional: a file listing the provisioners allowed to set the agent's secrets,
-# one base64 X25519 public key per line (`mero-agent-provision keygen` prints
-# one). Baked and measured. Empty bakes none: a debug image then accepts
-# unauthenticated provisioning, and a locked-read-only image accepts none.
-mero_agent_provisioners_file: ""
+# No provisioner is baked in: the first sealed bundle claims a running agent
+# for its sender's key (mero-agent-gate/README.md), so whoever builds or runs
+# the image cannot choose who sets its secrets.
 # The dedicated non-root user the agent runs as. The gate runs as root (quotes
 # need it) and shares the signing key and secrets with this user's group.
 mero_agent_user: mero-agent

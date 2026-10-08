@@ -14,9 +14,10 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::keys::{ProvisioningKey, Share};
+use crate::keys::{store_owner, ProvisioningKey, Share};
 use crate::protocol::{
     key_binding, open_bundle, report_data, AttestRequest, AttestResponse, OpenError,
     ProvisionRequest, ProvisionResponse, SecretsBundle,
@@ -65,12 +66,38 @@ pub struct Gate {
     pub secrets_dir: PathBuf,
     /// Who besides the gate reads them: the agent's group.
     pub share: Share,
-    /// X25519 keys of the provisioners baked into the image.
-    pub provisioners: Vec<[u8; 32]>,
-    /// Accept Base-mode (unauthenticated) bundles. Debug images only.
-    pub allow_unauthenticated: bool,
+    /// The owner's X25519 key, once claimed; held across a claim so two
+    /// first bundles cannot both claim.
+    pub owner: Mutex<Option<[u8; 32]>>,
+    /// Where the claim is recorded, on the encrypted disk.
+    pub owner_path: PathBuf,
     /// Whether any bundle has been written since this start.
     pub provisioned: AtomicBool,
+}
+
+impl Gate {
+    /// A gate as `main` builds it: no bundle written yet.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        quoter: Arc<dyn Quoter>,
+        provisioning: ProvisioningKey,
+        signing_public: [u8; 32],
+        secrets_dir: PathBuf,
+        share: Share,
+        owner: Option<[u8; 32]>,
+        owner_path: PathBuf,
+    ) -> Self {
+        Self {
+            quoter,
+            provisioning,
+            signing_public,
+            secrets_dir,
+            share,
+            owner: Mutex::new(owner),
+            owner_path,
+            provisioned: AtomicBool::new(false),
+        }
+    }
 }
 
 pub fn router(gate: Arc<Gate>) -> Router {
@@ -117,6 +144,7 @@ impl IntoResponse for GateError {
 async fn health(State(gate): State<Arc<Gate>>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
+        "claimed": gate.owner.lock().await.is_some(),
         "provisioned": gate.provisioned.load(Ordering::Relaxed),
     }))
 }
@@ -134,7 +162,12 @@ async fn attest(
     Json(request): Json<AttestRequest>,
 ) -> Result<Json<AttestResponse>, GateError> {
     let nonce = decode_32("nonceB64", &request.nonce_b64)?;
-    let binding = key_binding(&gate.provisioning.public, &gate.signing_public);
+    let owner = *gate.owner.lock().await;
+    let binding = key_binding(
+        &gate.provisioning.public,
+        &gate.signing_public,
+        owner.as_ref(),
+    );
     let data = report_data(&nonce, &binding);
     let quoter = Arc::clone(&gate.quoter);
     let quote = tokio::task::spawn_blocking(move || quoter.quote(data))
@@ -152,6 +185,7 @@ async fn attest(
         report_data_hex: hex::encode(data),
         provisioning_public_key_b64: BASE64.encode(gate.provisioning.public),
         signing_public_key_b64: BASE64.encode(gate.signing_public),
+        owner_public_key_b64: owner.map(|key| BASE64.encode(key)),
     }))
 }
 
@@ -172,6 +206,7 @@ async fn provision(
             "sealed to a provisioning key this gate no longer holds; attest again",
         ));
     }
+    let sender = decode_32("senderPublicKeyB64", &request.sender_public_key_b64)?;
     let encapped = BASE64
         .decode(request.encapped_key_b64.trim())
         .map_err(|_| GateError::bad_request("encappedKeyB64 is not base64"))?;
@@ -179,46 +214,63 @@ async fn provision(
         .decode(request.ciphertext_b64.trim())
         .map_err(|_| GateError::bad_request("ciphertextB64 is not base64"))?;
 
-    let (bundle, sender) = open_bundle(
+    // Held to the end: a claim and the secrets it brings are one step, and a
+    // second first bundle waits, then finds the agent claimed.
+    let mut owner = gate.owner.lock().await;
+    if let Some(current) = *owner {
+        if current != sender {
+            warn!("Refused a bundle from a key that does not own this agent");
+            return Err(GateError::new(
+                StatusCode::FORBIDDEN,
+                "not_the_owner",
+                "this agent is claimed by another key",
+            ));
+        }
+    }
+    let bundle = open_bundle(
         &gate.provisioning.private,
         &gate.provisioning.public,
-        &gate.provisioners,
-        gate.allow_unauthenticated,
+        &sender,
         &encapped,
         &ciphertext,
     )
     .map_err(|e| match e {
-        OpenError::Unauthorized => {
-            warn!("Refused a provisioning message no listed provisioner sealed");
-            GateError::new(
-                StatusCode::FORBIDDEN,
-                "unauthorized_provisioner",
-                e.to_string(),
-            )
+        OpenError::NotFromSender => {
+            warn!("Refused a bundle not sealed by the key it names");
+            GateError::new(StatusCode::FORBIDDEN, "not_from_sender", e.to_string())
         }
         OpenError::Malformed(_) => GateError::bad_request(e.to_string()),
     })?;
     bundle.validate().map_err(GateError::bad_request)?;
 
+    // The claim is durable before any secret is written: an owner told it
+    // claimed the agent has, even if the gate dies next.
+    let claimed = owner.is_none();
+    if claimed {
+        let path = gate.owner_path.clone();
+        let share = gate.share;
+        blocking(move || store_owner(&path, share, &sender).map_err(|e| e.to_string())).await?;
+        *owner = Some(sender);
+        info!(owner = %BASE64.encode(sender), "Agent claimed");
+    }
+
     let secrets_dir = gate.secrets_dir.clone();
     let share = gate.share;
-    let written = tokio::task::spawn_blocking(move || write_secrets(&secrets_dir, share, &bundle))
-        .await
-        .map_err(|e| {
-            GateError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "write_failed",
-                e.to_string(),
-            )
-        })?
-        .map_err(|e| GateError::new(StatusCode::INTERNAL_SERVER_ERROR, "write_failed", e))?;
+    let written = blocking(move || write_secrets(&secrets_dir, share, &bundle)).await?;
     gate.provisioned.store(true, Ordering::Relaxed);
-    info!(
-        secrets = ?written,
-        provisioner = %sender.map_or_else(|| "unauthenticated".to_owned(), |key| BASE64.encode(key)),
-        "Provisioned secrets"
-    );
-    Ok(Json(ProvisionResponse { written }))
+    info!(secrets = ?written, "Provisioned secrets");
+    Ok(Json(ProvisionResponse { written, claimed }))
+}
+
+/// Run file I/O off the async workers; any failure is a 500.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, GateError> {
+    let fail = |e: String| GateError::new(StatusCode::INTERNAL_SERVER_ERROR, "write_failed", e);
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)
 }
 
 /// Write each secret to `dir/<name>`, readable by the gate and the agent's
@@ -261,6 +313,7 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::*;
+    use crate::keys::load_owner;
     use crate::protocol::{keypair_from_secret, seal_bundle};
     use crate::test_util::TempDir;
 
@@ -272,20 +325,25 @@ mod tests {
         }
     }
 
-    const PROVISIONER_SECRET: [u8; 32] = [0x22; 32];
+    const OWNER_SECRET: [u8; 32] = [0x22; 32];
+    const OTHER_SECRET: [u8; 32] = [0x33; 32];
 
-    fn gate(dir: &TempDir, allow_unauthenticated: bool) -> Arc<Gate> {
-        let (_, provisioner) = keypair_from_secret(&PROVISIONER_SECRET).unwrap();
-        Arc::new(Gate {
-            quoter: Arc::new(EchoQuoter),
-            provisioning: ProvisioningKey::generate(),
-            signing_public: [0x55; 32],
-            secrets_dir: dir.path().join("secrets"),
-            share: Share::default(),
-            provisioners: vec![provisioner],
-            allow_unauthenticated,
-            provisioned: AtomicBool::new(false),
-        })
+    fn public(secret: &[u8; 32]) -> [u8; 32] {
+        keypair_from_secret(secret).unwrap().1
+    }
+
+    /// A gate over `dir`, picking up a claim an earlier start recorded there.
+    fn gate(dir: &TempDir) -> Arc<Gate> {
+        let owner_path = dir.path().join("owner.x25519");
+        Arc::new(Gate::new(
+            Arc::new(EchoQuoter),
+            ProvisioningKey::generate(),
+            [0x55; 32],
+            dir.path().join("secrets"),
+            Share::default(),
+            load_owner(&owner_path).unwrap(),
+            owner_path,
+        ))
     }
 
     async fn post(
@@ -309,9 +367,11 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    fn sealed_request(
+    /// A bundle sealed by `sealed_by`, naming `named` as its sender.
+    fn request_naming(
         gate: &Gate,
-        sender: Option<&[u8; 32]>,
+        sealed_by: &[u8; 32],
+        named: &[u8; 32],
         pairs: &[(&str, &str)],
     ) -> serde_json::Value {
         let bundle = SecretsBundle {
@@ -320,40 +380,49 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
         };
-        let (enc, ct) = seal_bundle(&gate.provisioning.public, sender, &bundle).unwrap();
+        let (enc, ct) = seal_bundle(&gate.provisioning.public, sealed_by, &bundle).unwrap();
         json!({
             "provisioningPublicKeyB64": BASE64.encode(gate.provisioning.public),
+            "senderPublicKeyB64": BASE64.encode(public(named)),
             "encappedKeyB64": BASE64.encode(enc),
             "ciphertextB64": BASE64.encode(ct),
         })
     }
 
-    #[tokio::test]
-    async fn the_quote_binds_the_nonce_and_both_keys() {
-        let dir = TempDir::new("attest");
-        let gate = gate(&dir, false);
+    fn request(gate: &Gate, sender: &[u8; 32], pairs: &[(&str, &str)]) -> serde_json::Value {
+        request_naming(gate, sender, sender, pairs)
+    }
+
+    async fn attest(gate: &Arc<Gate>) -> serde_json::Value {
         let (status, body) = post(
-            &gate,
+            gate,
             "/attest",
             json!({ "nonceB64": BASE64.encode([7u8; 32]) }),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+        body
+    }
+
+    #[tokio::test]
+    async fn an_unclaimed_quote_binds_no_owner() {
+        let dir = TempDir::new("attest");
+        let gate = gate(&dir);
+        let body = attest(&gate).await;
         let quote = BASE64.decode(body["quoteB64"].as_str().unwrap()).unwrap();
         let expected = report_data(
             &[7; 32],
-            &key_binding(&gate.provisioning.public, &[0x55; 32]),
+            &key_binding(&gate.provisioning.public, &[0x55; 32], None),
         );
         assert_eq!(quote, expected);
-        assert_eq!(body["reportDataHex"], hex::encode(expected));
-        assert_eq!(body["signingPublicKeyB64"], BASE64.encode([0x55u8; 32]));
+        assert!(body.get("ownerPublicKeyB64").is_none());
     }
 
     #[tokio::test]
     async fn a_short_nonce_is_refused() {
         let dir = TempDir::new("attest-nonce");
         let (status, _) = post(
-            &gate(&dir, false),
+            &gate(&dir),
             "/attest",
             json!({ "nonceB64": BASE64.encode([7u8; 16]) }),
         )
@@ -362,79 +431,162 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_listed_provisioner_writes_owner_only_files() {
-        let dir = TempDir::new("provision");
-        let gate = gate(&dir, false);
-        let request = sealed_request(
+    async fn the_first_bundle_claims_the_agent_and_the_quote_says_so() {
+        let dir = TempDir::new("claim");
+        let gate = gate(&dir);
+        let (status, body) = post(
             &gate,
-            Some(&PROVISIONER_SECRET),
-            &[("API_KEY", "s3cret"), ("MODEL", "m")],
-        );
-        let (status, body) = post(&gate, "/provision", request).await;
+            "/provision",
+            request(
+                &gate,
+                &OWNER_SECRET,
+                &[("API_KEY", "s3cret"), ("MODEL", "m")],
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["written"], json!(["API_KEY", "MODEL"]));
+        assert_eq!(body["claimed"], true);
         let path = dir.path().join("secrets/API_KEY");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "s3cret");
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(gate.provisioned.load(Ordering::Relaxed));
+
+        let owner = public(&OWNER_SECRET);
+        let body = attest(&gate).await;
+        assert_eq!(body["ownerPublicKeyB64"], BASE64.encode(owner));
+        let quote = BASE64.decode(body["quoteB64"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            quote,
+            report_data(
+                &[7; 32],
+                &key_binding(&gate.provisioning.public, &[0x55; 32], Some(&owner))
+            )
+        );
     }
 
     #[tokio::test]
-    async fn an_unlisted_provisioner_writes_nothing() {
-        let dir = TempDir::new("provision-unlisted");
-        let gate = gate(&dir, false);
-        let request = sealed_request(&gate, Some(&[0x33; 32]), &[("API_KEY", "evil")]);
-        let (status, body) = post(&gate, "/provision", request).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body["error"], "unauthorized_provisioner");
-        assert!(!dir.path().join("secrets/API_KEY").exists());
+    async fn the_owner_provisions_again_without_claiming_again() {
+        let dir = TempDir::new("claim-again");
+        let gate = gate(&dir);
+        post(
+            &gate,
+            "/provision",
+            request(&gate, &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, &OWNER_SECRET, &[("A", "2")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["claimed"], false);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("secrets/A")).unwrap(),
+            "2"
+        );
     }
 
     #[tokio::test]
-    async fn base_mode_needs_a_gate_that_allows_it() {
-        let dir = TempDir::new("provision-base");
-        let strict = gate(&dir, false);
-        let (status, _) = post(
-            &strict,
+    async fn another_key_cannot_provision_a_claimed_agent() {
+        let dir = TempDir::new("claim-other");
+        let gate = gate(&dir);
+        post(
+            &gate,
             "/provision",
-            sealed_request(&strict, None, &[("A", "b")]),
+            request(&gate, &OWNER_SECRET, &[("API_KEY", "mine")]),
+        )
+        .await;
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, &OTHER_SECRET, &[("API_KEY", "evil")]),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "not_the_owner");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("secrets/API_KEY")).unwrap(),
+            "mine"
+        );
+    }
 
-        let debug = gate(&dir, true);
-        let (status, _) = post(
-            &debug,
+    #[tokio::test]
+    async fn naming_the_owner_without_its_key_is_refused() {
+        let dir = TempDir::new("claim-impersonate");
+        let gate = gate(&dir);
+        post(
+            &gate,
             "/provision",
-            sealed_request(&debug, None, &[("A", "b")]),
+            request(&gate, &OWNER_SECRET, &[("API_KEY", "mine")]),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        let forged = request_naming(&gate, &OTHER_SECRET, &OWNER_SECRET, &[("API_KEY", "evil")]);
+        let (status, body) = post(&gate, "/provision", forged).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "not_from_sender");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("secrets/API_KEY")).unwrap(),
+            "mine"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forged_first_bundle_claims_nothing() {
+        let dir = TempDir::new("claim-forged");
+        let gate = gate(&dir);
+        let forged = request_naming(&gate, &OTHER_SECRET, &OWNER_SECRET, &[("A", "b")]);
+        let (status, _) = post(&gate, "/provision", forged).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!dir.path().join("owner.x25519").exists());
+        assert!(gate.owner.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_claim_survives_a_restart() {
+        let dir = TempDir::new("claim-restart");
+        let before = gate(&dir);
+        post(
+            &before,
+            "/provision",
+            request(&before, &OWNER_SECRET, &[("A", "b")]),
+        )
+        .await;
+        let after = gate(&dir);
+        let body = attest(&after).await;
+        assert_eq!(
+            body["ownerPublicKeyB64"],
+            BASE64.encode(public(&OWNER_SECRET))
+        );
+        let (status, _) = post(
+            &after,
+            "/provision",
+            request(&after, &OTHER_SECRET, &[("A", "c")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn a_message_for_an_earlier_start_is_stale() {
         let dir = TempDir::new("provision-stale");
-        let before_restart = gate(&dir, false);
-        let request = sealed_request(&before_restart, Some(&PROVISIONER_SECRET), &[("A", "b")]);
-        let after_restart = gate(&dir, false);
+        let before_restart = gate(&dir);
+        let request = request(&before_restart, &OWNER_SECRET, &[("A", "b")]);
+        let after_restart = gate(&dir);
         let (status, body) = post(&after_restart, "/provision", request).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body["error"], "stale_provisioning_key");
     }
 
     #[tokio::test]
-    async fn a_bad_name_writes_nothing_at_all() {
+    async fn a_bad_name_writes_nothing_and_claims_nothing() {
         let dir = TempDir::new("provision-name");
-        let gate = gate(&dir, false);
-        let request = sealed_request(
-            &gate,
-            Some(&PROVISIONER_SECRET),
-            &[("GOOD", "x"), ("../escape", "y")],
-        );
+        let gate = gate(&dir);
+        let request = request(&gate, &OWNER_SECRET, &[("GOOD", "x"), ("../escape", "y")]);
         let (status, _) = post(&gate, "/provision", request).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
@@ -442,5 +594,9 @@ mod tests {
             "validated before any write"
         );
         assert!(!dir.path().join("escape").exists());
+        assert!(
+            gate.owner.lock().await.is_none(),
+            "a refused bundle claims nothing"
+        );
     }
 }

@@ -13,9 +13,11 @@ set -euo pipefail
 #      a KMS image is built with (`kms_agent_policy_file`) and a provisioner
 #      verifies against;
 #   2. runs `mero-agent-provision provision` against the gate with that policy,
-#      so the quote is verified again by the same code a provisioner uses, and
-#      a throwaway secret is sealed to the TD with a throwaway provisioner key;
-#   3. checks the gate reports itself provisioned.
+#      so the quote is verified again by the same code an owner uses, and a
+#      throwaway secret is sealed to the TD under a throwaway owner key, which
+#      claims the VM;
+#   3. checks the gate reports itself provisioned and claimed, and that a
+#      second key is refused: a fresh quote binds the first owner.
 #
 # Creates and always deletes its own VM and firewall rule; the image is the
 # caller's to keep or delete.
@@ -29,25 +31,22 @@ set -euo pipefail
 #   PROVISION_BIN          a built mero-agent-provision
 #   OUT_DIR                where attest responses, ITA evidence and the policy go
 # Optional env:
-#   PROVISION_MODE         key (default): seal with PROVISIONER_KEY, a provisioner
-#                          the image lists; unauthenticated: Base mode, for a
-#                          debug image built without a list; skip: measure only
-#                          (a release, which holds no provisioner's private key)
-#   PROVISIONER_KEY        the provisioner secret, for PROVISION_MODE=key
+#   PROVISION_MODE         claim (default): claim the VM with a throwaway owner
+#                          key made here, which never leaves the runner;
+#                          skip: measure only
 #   GATE_PORT (8090), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL,
 #   AGENT_ALLOWED_TCB_STATUSES (uptodate; a declared release input, as for the
 #   KMS, not a reading)
 #
 # Output: ${OUT_DIR}/agent-attestation-policy.${PROFILE}.json
 
-PROVISION_MODE="${PROVISION_MODE:-key}"
+PROVISION_MODE="${PROVISION_MODE:-claim}"
 case "${PROVISION_MODE}" in
-  key | unauthenticated | skip) ;;
-  *) echo "::error::PROVISION_MODE must be key, unauthenticated or skip"; exit 1 ;;
+  claim | skip) ;;
+  *) echo "::error::PROVISION_MODE must be claim or skip"; exit 1 ;;
 esac
 required=(IMAGE IMAGE_PROJECT PROFILE PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE ITA_API_KEY OUT_DIR)
 [[ "${PROVISION_MODE}" == skip ]] || required+=(PROVISION_BIN)
-[[ "${PROVISION_MODE}" == key ]] && required+=(PROVISIONER_KEY)
 for var in "${required[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     echo "::error::${var} is required"
@@ -154,22 +153,33 @@ jq -e '[.allowed_tcb_statuses, .allowed_mrtd, .allowed_rtmr0, .allowed_rtmr1, .a
   | all(type == "array" and length > 0)' "${policy}" >/dev/null \
   || { echo "::error::the agent policy is incomplete: $(cat "${policy}")"; exit 1; }
 
-# --- 2. provision, as a provisioner would ---------------------------------------
+# --- 2. claim and provision, as an owner would -----------------------------------
 if [[ "${PROVISION_MODE}" != skip ]]; then
-  auth=(--key "${PROVISIONER_KEY:-}")
-  [[ "${PROVISION_MODE}" == unauthenticated ]] && auth=(--unauthenticated)
+  keys="$(mktemp -d)"
+  "${PROVISION_BIN}" keygen --out "${keys}/owner.key" >"${OUT_DIR}/owner.pub"
+  "${PROVISION_BIN}" keygen --out "${keys}/other.key" >/dev/null
   printf '{"secrets":{"PROBE_SECRET":"%s"}}' "probe-${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/probe-secrets.json"
   "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
-    "${auth[@]}" --secrets "${OUT_DIR}/probe-secrets.json" \
+    --key "${keys}/owner.key" --secrets "${OUT_DIR}/probe-secrets.json" \
     | tee "${OUT_DIR}/provision.json"
   rm -f "${OUT_DIR}/probe-secrets.json"
-  jq -e '.written == ["PROBE_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
-    || { echo "::error::the gate did not write the probe secret"; exit 1; }
+  jq -e --arg owner "$(cat "${OUT_DIR}/owner.pub")" \
+    '.written == ["PROBE_SECRET"] and .claimed == true and .ownerPublicKey == $owner' \
+    "${OUT_DIR}/provision.json" >/dev/null \
+    || { echo "::error::the gate did not write the probe secret under a claim"; exit 1; }
 
-  # --- 3. the gate says so ------------------------------------------------------
+  # --- 3. the gate says so, and nobody else gets in -----------------------------
   curl -fsS --max-time 5 "${gate}/health" >"${OUT_DIR}/health-after.json"
-  jq -e '.provisioned == true' "${OUT_DIR}/health-after.json" >/dev/null \
-    || { echo "::error::the gate does not report itself provisioned"; exit 1; }
+  jq -e '.provisioned == true and .claimed == true' "${OUT_DIR}/health-after.json" >/dev/null \
+    || { echo "::error::the gate does not report itself provisioned and claimed"; exit 1; }
+  if "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
+      --key "${keys}/other.key" --secrets <(printf '{"secrets":{"X":"y"}}') \
+      >"${OUT_DIR}/foreign.json" 2>"${OUT_DIR}/foreign.err"; then
+    echo "::error::a second key provisioned a claimed agent"; exit 1
+  fi
+  grep -q "not yours" "${OUT_DIR}/foreign.err" \
+    || { echo "::error::a second key failed for the wrong reason: $(cat "${OUT_DIR}/foreign.err")"; exit 1; }
+  rm -rf "${keys}"
 fi
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then

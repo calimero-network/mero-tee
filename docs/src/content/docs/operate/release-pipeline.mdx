@@ -126,12 +126,10 @@ with the node allowlist's TCB statuses). Release-metadata publishes it as
 If an agent build or measurement fails, nothing else changes: that profile's KMS
 image is built node-only, exactly as before agents, and the release goes on.
 `kms-image` and `release-metadata` check their real dependencies' results
-explicitly for this. `locked-read-only` gets an agent image only when the
-`MERO_AGENT_PROVISIONERS` repository variable lists the provisioners it accepts.
-That variable holds base64 X25519 **public** keys, one per line, each printed by
-`mero-agent-provision keygen`. They are baked into the image and measured, so
-changing the list means a new release. Keep the private keys with the people or
-services that provision agents, never in this repository's CI.
+explicitly for this. Every profile gets an agent image. None bakes a
+provisioner: each running agent is claimed by its first owner
+([owner claim](/flows/private-agents/#provisioning-secrets)), so no repository
+variable or secret decides who sets an agent's secrets.
 
 After a successful release, **Post-release agent e2e**
 (`post-release-agent-e2e.yaml`) proves the chain on fresh TDX VMs:
@@ -139,15 +137,14 @@ After a successful release, **Post-release agent e2e**
    blank data disk pointed at it.
 2. merod verifies that KMS against the signed release policy, and the KMS
    releases the agent's disk key under the `mero-agent/` prefix.
-3. It verifies the gate against the signed agent policy and provisions a secret.
-4. It resets the agent and checks the disk reopens with the same signing key.
+3. It verifies the gate against the signed agent policy, claims the agent with a
+   throwaway owner key made on the runner, provisions a secret, and checks a
+   second key is refused.
+4. It resets the agent and checks the disk reopens with the same signing key and
+   owner, the owner provisions again, and the second key is still refused.
 
 It runs for every profile the release published an agent policy for, and skips
-the others. A `locked-read-only` agent accepts listed provisioners only, so the
-e2e provisions it only when the `MERO_AGENT_PROVISIONER_KEY` secret holds a
-listed key. Without that key it still proves the disk key, the attestation and
-the reboot. Locked provisioning itself is proven before merge by
-`kms-tdx-image-probe` with a throwaway listed key.
+the others.
 
 ### KMS release assets
 

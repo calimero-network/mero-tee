@@ -9,11 +9,13 @@ set -euo pipefail
 #      signed policy, and the KMS releases a key only because the agent's quote
 #      matches its AGENT entry (under the mero-agent/ prefix). The gate starts
 #      only once the disk is open, so a gate answering proves the whole chain;
-#   3. verifies the gate's quote against the release's signed agent policy and
-#      provisions a secret through mero-agent-provision;
-#   4. resets the agent VM: the gate must come back with the SAME signing key,
-#      which lives on the encrypted disk, so the disk was reopened with the
-#      same KMS key rather than reformatted.
+#   3. verifies the gate's quote against the release's signed agent policy and,
+#      as an owner would, claims the agent with a throwaway key made here and
+#      provisions a secret through mero-agent-provision; a second key is refused;
+#   4. resets the agent VM: the gate must come back with the SAME signing key
+#      and the SAME owner, both on the encrypted disk, so the disk was reopened
+#      with the same KMS key rather than reformatted; the owner provisions
+#      again and the second key is still refused.
 #
 # Creates and always deletes its own VMs, disk and firewall rule.
 #
@@ -27,13 +29,6 @@ set -euo pipefail
 #   PROVISION_BIN          a built mero-agent-provision
 #   OUT_DIR
 # Optional env:
-#   PROVISIONER_KEY        a listed provisioner's secret. Without it, a debug
-#                          image (built without provisioners) is provisioned in
-#                          Base mode, and a locked-read-only image -- which
-#                          accepts listed provisioners only -- is not
-#                          provisioned: its gate is verified and its disk
-#                          reopened, and its provisioning is proven by
-#                          kms-tdx-image-probe with a throwaway listed key.
 #   KMS_PORT (8080), GATE_PORT (8090), WAIT_TIMEOUT_MINUTES (25)
 
 for var in VERSION PROFILE IMAGE_PROJECT PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE \
@@ -135,22 +130,36 @@ agent_ip="$(vm_ip "${agent_vm}" 'accessConfigs[0].natIP')"
 gate="http://${agent_ip}:${GATE_PORT}"
 wait_for "the agent gate (its disk opened with an agent key)" "${gate}/health" '.status == "ok"'
 
-# --- 3. verify, then provision ----------------------------------------------------
+# --- 3. verify, claim, provision -------------------------------------------------
+keys="$(mktemp -d)"
+"${PROVISION_BIN}" keygen --out "${keys}/owner.key" >"${OUT_DIR}/owner.pub"
+"${PROVISION_BIN}" keygen --out "${keys}/other.key" >/dev/null
+owner="$(cat "${OUT_DIR}/owner.pub")"
 "${PROVISION_BIN}" attest --gate "${gate}" --policy "${AGENT_POLICY}" | tee "${OUT_DIR}/attest-1.json"
-provisioned="no"
-if [[ -n "${PROVISIONER_KEY:-}" || "${PROFILE}" != "locked-read-only" ]]; then
-  printf '{"secrets":{"E2E_SECRET":"e2e-%s"}}' "${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/e2e-secrets.json"
-  auth=(--unauthenticated)
-  [[ -n "${PROVISIONER_KEY:-}" ]] && auth=(--key "${PROVISIONER_KEY}")
+jq -e '.ownerPublicKey == null' "${OUT_DIR}/attest-1.json" >/dev/null \
+  || { echo "::error::a fresh agent on a blank disk is already claimed"; exit 1; }
+
+provision() { # key label
+  printf '{"secrets":{"E2E_SECRET":"e2e-%s-%s"}}' "${GITHUB_RUN_ID:-local}" "$2" >"${OUT_DIR}/e2e-secrets.json"
+  local rc=0
   "${PROVISION_BIN}" provision --gate "${gate}" --policy "${AGENT_POLICY}" \
-    "${auth[@]}" --secrets "${OUT_DIR}/e2e-secrets.json" | tee "${OUT_DIR}/provision.json"
+    --key "$1" --secrets "${OUT_DIR}/e2e-secrets.json" || rc=$?
   rm -f "${OUT_DIR}/e2e-secrets.json"
-  jq -e '.written == ["E2E_SECRET"]' "${OUT_DIR}/provision.json" >/dev/null \
-    || { echo "::error::the gate did not write the secret"; exit 1; }
-  provisioned="yes"
-else
-  echo "::notice::No listed provisioner key for locked-read-only: verifying the gate and its disk, not provisioning"
-fi
+  return "${rc}"
+}
+refused() { # label
+  if provision "${keys}/other.key" foreign >"${OUT_DIR}/foreign-$1.json" 2>"${OUT_DIR}/foreign-$1.err"; then
+    echo "::error::a second key provisioned a claimed agent ($1)"; exit 1
+  fi
+  grep -q "not yours" "${OUT_DIR}/foreign-$1.err" \
+    || { echo "::error::a second key failed for the wrong reason ($1): $(cat "${OUT_DIR}/foreign-$1.err")"; exit 1; }
+}
+
+provision "${keys}/owner.key" claim | tee "${OUT_DIR}/provision.json"
+jq -e --arg owner "${owner}" '.written == ["E2E_SECRET"] and .claimed == true and .ownerPublicKey == $owner' \
+  "${OUT_DIR}/provision.json" >/dev/null \
+  || { echo "::error::the gate did not write the secret under a claim"; exit 1; }
+refused before-reset
 
 # --- 4. reboot: the same disk, the same key -----------------------------------
 gcloud compute instances reset "${agent_vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}"
@@ -161,13 +170,20 @@ before="$(jq -r '.signingPublicKey' "${OUT_DIR}/attest-1.json")"
 after="$(jq -r '.signingPublicKey' "${OUT_DIR}/attest-2.json")"
 [[ -n "${before}" && "${before}" == "${after}" ]] \
   || { echo "::error::the signing key changed across a reset (${before} -> ${after}): the disk was not reopened"; exit 1; }
+jq -e --arg owner "${owner}" '.ownerPublicKey == $owner' "${OUT_DIR}/attest-2.json" >/dev/null \
+  || { echo "::error::the claim did not survive a reset"; exit 1; }
+refused after-reset
+provision "${keys}/owner.key" again | tee "${OUT_DIR}/provision-2.json"
+jq -e '.written == ["E2E_SECRET"] and .claimed == false' "${OUT_DIR}/provision-2.json" >/dev/null \
+  || { echo "::error::the owner could not provision again after a reset"; exit 1; }
+rm -rf "${keys}"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo "## Private agent end to end (${PROFILE}, ${VERSION})"
     echo "- KMS \`${kms_image}\` released the agent's disk key; the gate verified against the signed agent policy."
-    echo "- A secret provisioned sealed to the TD: ${provisioned}."
-    echo "- After a reset the disk reopened: signing key \`${before}\` unchanged."
+    echo "- A throwaway owner key \`${owner}\` claimed the agent and provisioned a secret sealed to the TD; a second key was refused."
+    echo "- After a reset the disk reopened: signing key \`${before}\` and the owner unchanged; the owner provisioned again and the second key was still refused."
   } >> "${GITHUB_STEP_SUMMARY}"
 fi
 echo "Agent end to end: OK"

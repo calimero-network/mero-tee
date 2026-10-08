@@ -114,6 +114,16 @@ export function AgentVerificationPage() {
             <li>Intel Trust Authority token: {result.itaVerified ? 'verified' : 'NOT verified'}</li>
             <li>Nonce: {result.nonceVerified ? 'bound to this request' : 'NOT checked (give the nonce you sent)'}</li>
             <li>Keys: {result.keysVerified ? 'committed to by the quote' : 'NOT committed to'}</li>
+            {result.keys && (
+              <li>
+                Owner:{' '}
+                {result.keys.ownerPublicKeyB64 ? (
+                  <>claimed by <code>{result.keys.ownerPublicKeyB64}</code>; authorize it only if that is your key</>
+                ) : (
+                  'unclaimed; the first sealed bundle claims it'
+                )}
+              </li>
+            )}
             {result.registers.map((r) => (
               <li key={r.reg}>
                 {r.reg.toUpperCase()}: {r.ok ? 'in the agent policy' : 'NOT in the agent policy'} <code>{r.actual}</code>
@@ -123,7 +133,7 @@ export function AgentVerificationPage() {
           {trusted ? (
             <p>
               Signing key{result.profile ? ` (${result.profile})` : ''}, safe to authorize as this agent&apos;s
-              device: <code>{result.keys.signingPublicKeyB64}</code>
+              device once its owner above is your key: <code>{result.keys.signingPublicKeyB64}</code>
             </p>
           ) : (
             <div className="error-banner">Do not authorize this agent&apos;s key: a check above failed.</div>

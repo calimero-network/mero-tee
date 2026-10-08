@@ -102,13 +102,6 @@ variable "mero_agent_gate_binary" {
   default = ""
 }
 
-# Base64 X25519 keys of the provisioners allowed to set an agent's secrets,
-# one per line. Required for a locked-read-only agent image.
-variable "mero_agent_provisioners_file" {
-  type    = string
-  default = ""
-}
-
 variable "mero_kms_binary" {
   type    = string
   default = ""
@@ -221,7 +214,6 @@ build {
       "-e", "kms_agent_policy_file=${var.kms_agent_policy_file}",
       "-e", "mero_agent_binary=${var.mero_agent_binary}",
       "-e", "mero_agent_gate_binary=${var.mero_agent_gate_binary}",
-      "-e", "mero_agent_provisioners_file=${var.mero_agent_provisioners_file}",
     ]
   }
 }

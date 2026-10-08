@@ -19,8 +19,9 @@
 #   metrics-endpoint     Optional. Remote-write URL vmagent ships host metrics to.
 #   observability-token  Optional. Bearer token both present to those endpoints.
 # A wrong value can only fail the boot or send the agent's warrants or logs
-# somewhere else. Prompts, tools, model choice, limits and the provisioners
-# allowed to set secrets are baked into /etc/mero-agent and measured.
+# somewhere else. Prompts, tools, model choice and limits are baked into
+# /etc/mero-agent and measured; who may set secrets is whoever claims the agent
+# first (mero-agent-gate), never metadata.
 set -euo pipefail
 
 LOG_DIR="/run/mero-agent"

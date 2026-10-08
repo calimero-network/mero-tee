@@ -132,6 +132,41 @@ pub fn load_or_create_signing_key(path: &Path, share: Share) -> EyreResult<Signi
     }
 }
 
+/// The owner of this agent, if it has been claimed: the X25519 public key in
+/// `path` (32 raw bytes), on the encrypted disk.
+pub fn load_owner(path: &Path) -> EyreResult<Option<[u8; 32]>> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let key: [u8; 32] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| eyre::eyre!("{} is not a 32-byte X25519 key", path.display()))?;
+            Ok(Some(key))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).wrap_err_with(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Record `owner` as this agent's owner, once. `create_new`, so a claim can
+/// never be overwritten, not even by a second claim racing the first across a
+/// restart; durable before the call returns, so a claim the owner was told
+/// about survives a crash.
+pub fn store_owner(path: &Path, share: Share, owner: &[u8; 32]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(share.file_mode())
+        .open(path)?;
+    share.apply(path)?;
+    file.write_all(owner)?;
+    file.sync_all()?;
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +215,22 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let err = load_or_create_signing_key(&path, Share::default()).unwrap_err();
         assert!(err.to_string().contains("owner"), "{err}");
+    }
+
+    #[test]
+    fn an_owner_is_stored_once_and_reloaded() {
+        let dir = TempDir::new("owner");
+        let path = dir.path().join("owner.x25519");
+        assert_eq!(load_owner(&path).unwrap(), None);
+        store_owner(&path, Share::default(), &[7; 32]).unwrap();
+        assert_eq!(load_owner(&path).unwrap(), Some([7; 32]));
+        let err = store_owner(&path, Share::default(), &[8; 32]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            load_owner(&path).unwrap(),
+            Some([7; 32]),
+            "a claim is never overwritten"
+        );
     }
 
     #[test]

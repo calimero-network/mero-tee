@@ -9,32 +9,6 @@
       - mero_agent_gate_binary | length > 0
     fail_msg: "Pass -e mero_agent_binary=... and -e mero_agent_gate_binary=... to build an agent image."
 
-# A locked image with no provisioner could never be given its secrets: the gate
-# refuses unauthenticated provisioning there. Fail the build, not the boot.
-- name: Require a provisioner list on locked-read-only
-  assert:
-    that:
-      - mero_agent_provisioners_file | length > 0
-    fail_msg: "A locked-read-only agent image needs -e mero_agent_provisioners_file=...; it accepts secrets only from listed provisioners."
-  when: lockdown_profile == 'locked-read-only'
-
-- name: Read the provisioner list
-  set_fact:
-    mero_agent_provisioners: >-
-      {{ lookup('file', mero_agent_provisioners_file).splitlines()
-         | map('trim') | reject('equalto', '') | reject('match', '^#') | list }}
-  when: mero_agent_provisioners_file | length > 0
-
-# The gate refuses a malformed line at startup; refuse it here instead, where
-# the build log says why.
-- name: Refuse a malformed provisioner key
-  assert:
-    that:
-      - item is match('^[A-Za-z0-9+/]{43}=$')
-    fail_msg: "'{{ item }}' is not a base64 X25519 public key (mero-agent-provision keygen prints one)."
-  loop: "{{ mero_agent_provisioners | default([]) }}"
-  when: mero_agent_provisioners_file | length > 0
-
 - name: Install the data-disk and attestation packages
   apt:
     name:
@@ -158,17 +132,6 @@
   copy:
     content: "{{ image_version }}\n"
     dest: /etc/mero-agent/min-tee-release-version
-    mode: "0644"
-
-- name: Bake the provisioner list
-  copy:
-    content: |
-      # Provisioners allowed to set this agent's secrets (base64 X25519).
-      # Baked at build time; part of this image's measurements.
-      {% for key in mero_agent_provisioners | default([]) %}
-      {{ key }}
-      {% endfor %}
-    dest: /etc/mero-agent/provisioners
     mode: "0644"
 
 - name: Bake the gate configuration
