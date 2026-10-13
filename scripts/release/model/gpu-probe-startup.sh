@@ -54,12 +54,25 @@ export DEBIAN_FRONTEND=noninteractive
   nvidia-smi
 } >"${LOG}/driver.log" 2>&1 || { tail_to_serial "${LOG}/driver.log"; fail "driver install"; }
 
-# Confidential computing: record the GPU's CC state and mark it ready, which a
-# GPU in CC mode needs before CUDA work is accepted.
+tail_to_serial "${LOG}/driver.log" 8
+
+# Confidential computing: a GPU in CC mode wants the persistence daemon (with
+# UVM persistence) before it is used, and must be marked ready before CUDA work
+# is accepted. Everything nvidia-smi says goes to the serial console; none of
+# it is fatal here, since vLLM fails plainly if the GPU is unusable.
+{
+  nvidia-persistenced --uvm-persistence-mode || systemctl start nvidia-persistenced
+  nvidia-smi
+  nvidia-smi conf-compute -f
+  nvidia-smi conf-compute -grs
+  nvidia-smi conf-compute -srs 1
+  nvidia-smi conf-compute -grs
+  nvidia-smi -q | head -n 60
+} >"${LOG}/gpu.log" 2>&1 || true
+tail_to_serial "${LOG}/gpu.log" 120
 cc_features="$(nvidia-smi conf-compute -f 2>&1 | tr '\n' ' ' || true)"
-nvidia-smi conf-compute -srs 1 >/dev/null 2>&1 || true
 cc_ready="$(nvidia-smi conf-compute -grs 2>&1 | tr '\n' ' ' || true)"
-gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader)"
+gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | tr '\n' ' ' || true)"
 say "STAGE gpu ${gpu} | ${cc_features} | ${cc_ready}"
 
 say "STAGE vllm ${VLLM_VERSION:-latest}"
