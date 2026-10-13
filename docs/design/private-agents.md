@@ -1,8 +1,8 @@
 # Design: private agents on GCP TDX
 
-Status: prototype. Phases 1-3 are implemented in this repository, and phase 4
-has a measurement probe. Phase 4's release and phases 5-6 wait on the open
-decisions below. See [How it works](../src/content/docs/flows/private-agents.mdx)
+Status: prototype. Phases 1-4 are implemented in this repository. Phases 5-8,
+an always-on agent scoped to the contexts its owner picks, are planned below
+under "Always-on agents". See [How it works](../src/content/docs/flows/private-agents.mdx)
 for the protocol as built.
 
 Run agents next to the Calimero fleet as a third TDX image role, `agent`, so
@@ -93,12 +93,65 @@ the context, method and arguments (`fleet_delegated_access`; the `/intents`
 routes in `traefik-routing.yml.j2`; `/sealed/v2` for sealed transport).
 
 - The agent's signing key is generated in the TD and never leaves it.
-- An account owner authorizes that key as a device of the account the agent
-  acts for, after checking that the agent's quote binds the key (`/attest`,
-  with the signing key in `report_data`). The owner trusts a measured build,
-  not an operator.
+- The agent is its own account, rooted at that key, not a device of its
+  owner's account. The owner admits that account to the groups it may use,
+  after checking that the agent's quote binds the key (`/attest`, with the
+  signing key in `report_data`). The owner trusts a measured build, not an
+  operator. See "Always-on agents" for why.
 - The agent seals its intents to a relay over `/sealed/v2`, so the relay
   operator does not see the arguments in transit.
+
+## Always-on agents
+
+The product is an agent that keeps working while its owner is offline, and acts
+only in the contexts its owner scopes it to. Never as the owner, never
+elsewhere.
+
+**Scope is membership.** The agent is its own account. Its owner puts the
+contexts it may use in a `Restricted` subgroup and admits the agent's account
+there, and nowhere else:
+
+- Role `Member` where it writes and `ReadOnly` where it only reads.
+- Capabilities stripped to none: no `CAN_INVITE_MEMBERS`, `MANAGE_*`,
+  `CAN_JOIN_OPEN_SUBGROUPS` or `CAN_AUTHOR_ON_BEHALF`.
+- Removing it is `members/remove` on that subgroup. The owner's own devices are
+  untouched, which they would not be if the agent were one of them, and a device
+  of the owner would act with the owner's full reach, not a scoped one.
+- Relays already enforce the author's role: a warrant from an author that is
+  `ReadOnly` in the context is refused (Core,
+  `protocol/delegated-authorship.mdx`).
+
+**The agent has to read, and today it cannot.** An agent answers what it reads:
+the feed, issues, documents. App state is read by running a view method through
+JSON-RPC `execute`, and a relay refuses `execute` to an account-anchored session
+because it would run as the relay's identity (Core, `server/src/jsonrpc.rs`,
+`caller_identity`). A warrant carries writes only. So an agent that holds no
+group keys can write to its contexts but not read them. Two ways out:
+
+| Option | What it takes | Cost per agent |
+| --- | --- | --- |
+| A. One merod per agent | The agent's account is a node's own account: it holds the group keys of exactly the groups it was admitted to, syncs, and reads and writes directly. Works with Core as it is. A node holds one account (Core, `governance-store/src/node_device.rs`), so one agent is one merod. | One merod process. Several can share an agent TD as separate processes and data directories, at the price of tenants sharing a TD. |
+| B. Delegated reads through relays | Core: a signed read request that a relay runs as a view under the author's principal, refusing any write, gated on the author's membership and role in the context; and a caller-scoped event subscription, so the agent wakes on new items. The relay is a `RelayTee` member and holds the keys already. | None beyond the agent process: many agents share a TD and the existing relays. |
+
+Start with A: it needs no Core change and proves the product. Move to B once
+the agent count makes a merod per agent the main cost. B keeps the agent
+holding no group keys, which also shrinks what an agent compromise exposes.
+
+**The model.** The agent's model runs in a separate confidential GPU TD (one
+H100 for the pilot), behind a small gateway in that TD that checks an
+entitlement, enforces a turn quota and counts usage. Prompts reach only an
+attested build. The agent image stays CPU-only. The gateway reports daily
+usage totals per agent, never prompts or per-request times.
+
+**Who does what.**
+
+- mdma deploys and stops agent VMs, holds the plan and the quota, signs the
+  model entitlement, and bills usage. It never holds an agent's keys and never
+  signs a membership change.
+- The owner's client (console in the browser, or CLI) claims the agent, checks
+  its quote, and signs the admission into the scoped subgroup.
+- Stopping the VM and withholding the entitlement is the immediate stop.
+  Removing the agent from its subgroup is the cryptographic one.
 
 ## The KMS has to tell agents from nodes
 
@@ -192,12 +245,11 @@ TDX firmware, the release workflow), plus:
 - **A separate agent-only KMS binary.** The KMS change is small, and one binary
   serves both deployment models.
 
-**Later: agents as TEE members.** An agent that must read private context state
-needs group keys, so it must be admitted as a TEE member and run its own merod.
-Core admits `ReadOnlyTee` and `RelayTee` today; an agent needs a member type
-whose admission policy names agent measurements, and mdma would assign agents
-to namespaces as it assigns relays. That spans Core, mdma and this repo, and
-should wait for an agent that needs it.
+**A new TEE member type for agents.** An agent admitted as a TEE member, with a
+member type whose admission policy names agent measurements, would let peers
+check that a member is an attested agent build. It is not needed for reading:
+option A reads as an ordinary member, and option B reads through a relay. It
+waits for a reason to require attestation of the member itself.
 
 ## Work
 
@@ -207,8 +259,10 @@ should wait for an agent that needs it.
 | 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
-| 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
-| 6 | mdma | Optional: deploy agents and run rollovers. | |
+| 5 | agent, client | Agent runtime in the image, as its own account on its own merod (option A). Owner-side check of the agent's quote before admitting its account to a scoped `Restricted` subgroup. | Planned |
+| 6 | mdma | `Agent` record (owner, VM, status, plan); deploy, stop, delete and roll over agent VMs; console page; `agents` and `turns_per_day` on the plan; daily usage totals billed as metered usage. | Planned |
+| 7 | mero-tee, gateway | Confidential GPU image: model server on loopback and the entitlement-checking gateway in one TD; model weights baked and pinned by sha256. | Planned |
+| 8 | Core | Option B: delegated reads and caller-scoped event subscription through relays; invitations that carry a role and capabilities, so an agent joins scoped from the start. | Planned |
 
 ## Decisions taken while building the prototype
 
@@ -233,7 +287,15 @@ should wait for an agent that needs it.
 
 ## Open decisions
 
-A real agent binary, and phases 5-6, need these decisions first:
+Decided:
 
-- A model inside the TD for the first agent, or is a hosted API acceptable?
+- **The first agent's model runs in Calimero's own confidential GPU TD**, not a
+  hosted API.
+- **An agent acts only in the contexts its owner scopes it to**, as its own
+  account, never on its owner's behalf.
+
+Still open:
+
 - Where does the agent source live, and is it published?
+- Do agents of different owners share a TD (option A: one merod each, separate
+  processes), or does each get its own VM?
