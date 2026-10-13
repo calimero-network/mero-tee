@@ -67,14 +67,17 @@ gpu_diag() {
   tail_to_serial "${LOG}/diag.log" 110
 }
 systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
+# It drops to its own user and writes its PID file there, so the directory
+# must be that user's.
 rm -rf /var/run/nvidia-persistenced
+install -d -o nvidia-persistenced -g nvidia-persistenced /var/run/nvidia-persistenced
 # The daemon opens /dev/nvidia0 and /dev/nvidia-uvm, which nothing has created
 # yet: create them (and load nvidia-uvm) the way nvidia-smi would on first use.
 modprobe nvidia-uvm >/dev/null 2>&1 || true
 nvidia-modprobe -c=0 -u >/dev/null 2>&1 || true
 ls -l /dev/nvidia* >"${LOG}/devnodes.log" 2>&1 || true
 tail_to_serial "${LOG}/devnodes.log" 10
-if ! nvidia-persistenced --uvm-persistence-mode --verbose >"${LOG}/persistenced.log" 2>&1; then
+if ! nvidia-persistenced --user nvidia-persistenced --uvm-persistence-mode --verbose >"${LOG}/persistenced.log" 2>&1; then
   tail_to_serial "${LOG}/persistenced.log"
   gpu_diag
   fail "nvidia-persistenced"
