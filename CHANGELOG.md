@@ -8,6 +8,14 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Security
 
+- **Logs leave the TEE only through an egress guard.** Node, KMS and agent images ship their journal to `logs-endpoint`, which instance metadata sets, so the VM's operator can read every line.
+  - **Before.** Lines left with every journald field (`_CMDLINE`, `_PID`, `_BOOT_ID`, `_MACHINE_ID`, ...) and nothing masked.
+  - **The guard.** Each image's `vector_partial.yaml` now routes its journal through `guard_egress`, which runs the baked `egress-guard.vrl`, and the sink reads nothing else. The guard ships only `timestamp`, `message`, `unit`, `hostname`, `instance_*` and `priority`. It masks PEM private keys, JWTs, `Bearer`/`Basic` credentials, URL userinfo, `token` query parameters, recovery phrases and the value of any secret-named key, and caps a message at 8 KiB. It also masks the application data an audit of core found merod logging at its default level: guest `execution log` lines, method error payloads, guest panic text and the panic hook. Admin login names, serde-echoed client values, jti, the JSON-RPC client id and KMS error bodies are masked too. Public keys, context IDs and peer IDs are kept. A line it cannot process is dropped (`drop_on_error`, `drop_on_abort`).
+  - **Enforcement.** `configure_vector.sh` refuses a partial without the guard, and the `locked-read-only` conformance role refuses to build one.
+  - **Removed.** `setup_vector_config.sh`, unused, which wrote an unguarded config.
+  - **Tests.** `scripts/ci/tests/log-egress-guard-test.sh` runs the guard with the pinned Vector release. It validates each generated config, checks that a fixture of credentials leaves nothing behind, and checks that non-secret identifiers survive.
+  - **Measurements.** Changes every image's measurements.
+
 - **Every binary the image build downloads is pinned by sha256.** The build used to fetch merod, meroctl, mero-auth, Traefik, node_exporter and vmagent by version alone, with nothing checking the archive. It installed Vector by piping `https://sh.vector.dev` into `bash`. A release asset replaced upstream, or an installer host serving something else, would have been baked into an image, and the image's attestation would then vouch for code nobody reviewed.
   - **The lock.** `mero-tee/build-inputs.lock.json` pins the sha256 of each archive for the versions `versions.json` names. `group_vars/all.yml` loads it, and every download in the node, KMS and agent roles is a `get_url` with `checksum:` from it. A missing or mismatched entry fails the build.
   - **Vector** now comes from its GitHub release archive, sha256-checked, installed to `/opt/vector`.

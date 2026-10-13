@@ -33,3 +33,13 @@ transforms:
       .instance_type = "gcp"
       # Substituted by configure_vector.sh from /etc/mero-kms/image-profile.
       .instance_profile = "__IMAGE_PROFILE__"
+
+  # Every line passes egress-guard.vrl before it leaves: only named fields,
+  # credential shapes masked, messages capped. A line the program cannot
+  # process is dropped, never shipped as it came.
+  guard_egress:
+    type: remap
+    inputs: [add_labels]
+    file: /etc/vector/egress-guard.vrl
+    drop_on_error: true
+    drop_on_abort: true

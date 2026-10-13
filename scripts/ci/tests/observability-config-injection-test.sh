@@ -30,6 +30,7 @@ for tool in vector vmagent; do
   chmod +x "${SB}/configure_${tool}.sh" "${SB}/${tool}/fetch_secret.sh"
 done
 cp "${ROLES}/mero-kms/files/vector-partial-kms.yaml" "${SB}/vector/vector_partial.yaml"
+cp "${ROLES}/vector/files/egress-guard.vrl" "${SB}/vector/egress-guard.vrl"
 cp "${ROLES}/mero-kms/files/vmagent-scrape-config.yml" "${SB}/vmagent/scrape_config.yml"
 printf 'locked-read-only\n' > "${SB}/mero-kms/image-profile"
 printf '#!/usr/bin/env bash\nexit 0\n' > "${SB}/bin/systemctl"

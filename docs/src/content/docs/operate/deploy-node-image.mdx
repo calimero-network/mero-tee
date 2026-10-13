@@ -204,6 +204,39 @@ present. `node_exporter` is started alongside `vmagent`, because it is the only
 thing the default scrape config targets — its unit file is installed by the
 image but is not enabled, so without that it would be a dead scrape target.
 
+:::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
+Instance metadata picks the log sink, so treat every shipped line as readable
+by the VM's operator. Node, KMS and agent images send their journal through
+the `guard_egress` transform before the sink. It runs
+`mero-tee/ansible/roles/vector/files/egress-guard.vrl`, which is baked into the
+image and measured.
+
+The guard does three things:
+- **Allowlists fields.** Only `timestamp`, `message`, `unit`, `hostname`,
+  `instance_name`, `instance_type`, `instance_profile` and `priority` leave.
+  journald's `_CMDLINE`, `_PID`, `_BOOT_ID`, `_MACHINE_ID` and the rest are
+  dropped.
+- **Masks credentials** in the message: PEM private keys, JWTs, `Bearer` and
+  `Basic` credentials, and the value of any secret-named key (`password`,
+  `token`, `secret`, `api_key`, `private_key`, `seed`, `mnemonic`, `cookie`,
+  `authorization` and similar).
+- **Masks application data merod logs at its default level.** That is a guest's
+  `execution log` lines, a method's error payload, guest panic text and the
+  panic hook. It also masks admin login names, client values that serde errors
+  echo, a refresh token's jti, the JSON-RPC client id, KMS error bodies, URL
+  userinfo, `token` query parameters and 24-word recovery phrases. Public keys,
+  context IDs and peer IDs are kept, because diagnosis needs them.
+- **Caps each message** at 8 KiB.
+
+A line the program fails on is dropped, never shipped unguarded.
+`configure_vector.sh` refuses a config without the guard, and the
+`locked-read-only` conformance role refuses to build one.
+`scripts/ci/tests/log-egress-guard-test.sh` runs the guard with the pinned
+Vector release.
+
+This is a backstop. Services still must not log secrets.
+:::
+
 :::note[The observability credential comes only from MDMA]
 `observability-token` is the only way a node gets the token its shippers
 present, and the `provided` provider simply reads it from disk. There is no

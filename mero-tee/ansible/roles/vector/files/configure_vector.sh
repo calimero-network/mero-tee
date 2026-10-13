@@ -89,6 +89,14 @@ echo "Step 3: Creating final Vector configuration..."
 # Read partial config content
 PARTIAL_CONFIG=$(cat "$PARTIAL_CONFIG_PATH")
 
+# The sink reads only `guard_egress`, which runs egress-guard.vrl (field
+# allowlist, credential masking, size cap). A partial config without it would
+# leave vector with a sink whose input does not exist; say why instead.
+if ! grep -q '^  guard_egress:' "$PARTIAL_CONFIG_PATH" || [ ! -s "${EGRESS_GUARD_PATH:-/etc/vector/egress-guard.vrl}" ]; then
+    echo "Error: no guard_egress transform or egress-guard.vrl; refusing to ship logs unfiltered" >&2
+    exit 1
+fi
+
 # Stamp which image this node runs. `locked-read-only` is production; the debug
 # profiles are not publicly trusted and are rebuilt freely. Without it, a log
 # line from a throwaway debug node reads identically to one from production.
@@ -110,7 +118,7 @@ sinks:
   victoria_logs:
     type: elasticsearch
     inputs:
-      - add_labels
+      - guard_egress
     api_version: v8
     compression: gzip
     endpoints:
