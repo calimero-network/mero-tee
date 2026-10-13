@@ -121,6 +121,23 @@ there, and nowhere else:
   `ReadOnly` in the context is refused (Core,
   `protocol/delegated-authorship.mdx`).
 
+**The network knows it is an agent, and whose.** The agent gets its own key and
+its own agent account, rooted at the key the gate generates in the TD; it is
+never one of its owner's devices. Every member then sees, for that account,
+that it is an agent and which account answers for it:
+
+- The marker is signed by the owner, not by the agent: "account X is an agent
+  of account O". Peers accept it only from O, and only while O is a member of
+  the group the agent is in, so the agent can neither claim an owner nor drop
+  its marker.
+- Member metadata (`GroupOp::MemberMetadataSet`) is not enough on its own: a
+  member may set its own metadata, so an agent could rewrite or remove a flag
+  kept there. The marker needs a governance op of its own (or a field on the
+  admission op) that only the owner signs and peers cannot see the agent undo.
+- Apps and clients show the marker beside the agent's writes ("agent of
+  Alice"); a warrant already names the author's account, so nothing per write
+  changes.
+
 **Agents are tenants on the shared relay fleet, like cloud users.** mdma already
 serves many accounts from one relay merod: each account keeps its keys outside
 the node, and the relay acts only on what that account signs or may see. An
@@ -153,19 +170,33 @@ costs a process, not a VM:
   shared relay; an owner who wants isolation gets a dedicated agent VM.
 
 **The model.** The agent's model runs in a separate confidential GPU TD (one
-H100 for the pilot), behind a small gateway in that TD that checks an
-entitlement, enforces a turn quota and counts usage. Prompts reach only an
-attested build. The agent image stays CPU-only. The gateway reports daily
-usage totals per agent, never prompts or per-request times.
+H100 for the pilot). The gateway is part of mdma, and the traffic through it is
+sealed end to end, as delegated execution's is through a relay:
+
+- The GPU TD runs the sealed transport Core's server uses (`/sealed/v2`: a
+  Noise NK session to a transport key bound into the TD's quote). The agent
+  verifies that quote and seals every model request to the GPU TD.
+- mdma's gateway sees the outer request only: which agent account, signed by
+  its key, and the size. It checks the agent's plan and quota, picks a GPU TD,
+  and forwards the sealed body. It cannot read a prompt or a completion.
+- Token counts come from inside the GPU TD: it returns a usage record signed
+  by its attested key with each response, outside the sealed body, and mdma
+  bills from those. mdma meters requests on its own; tokens it can only take
+  from the TD.
+- What mdma learns is metadata: which agent called, when, and how large. Keep
+  per-request records only as long as quota needs them, and daily totals for
+  billing.
+
+The agent image stays CPU-only.
 
 **Who does what.**
 
-- mdma deploys and stops agent VMs, holds the plan and the quota, signs the
-  model entitlement, and bills usage. It never holds an agent's keys and never
+- mdma deploys and stops agent VMs, holds the plan and the quota, runs the
+  model gateway (sealed traffic it cannot read), and bills usage. It never holds an agent's keys and never
   signs a membership change.
 - The owner's client (console in the browser, or CLI) claims the agent, checks
   its quote, and signs the admission into the scoped subgroup.
-- Stopping the VM and withholding the entitlement is the immediate stop.
+- Stopping the VM and refusing the agent at the gateway is the immediate stop.
   Removing the agent from its subgroup is the cryptographic one.
 
 ## The KMS has to tell agents from nodes
@@ -280,8 +311,8 @@ relay fleet costs nothing per agent and keeps keys out of the agent.
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
 | 5 | mero-tee, agent, client | Multi-tenant agent TD: the gate holds one signing key, claim and secrets directory per agent and signs only for that agent; sandboxed agent processes; per-agent `/attest`. Agent runtime reading with `/query`, waking on events, writing with warrants through its assigned relay. Owner-side check of the agent's quote before admitting its account to a scoped `Restricted` subgroup. | Planned |
 | 6 | mdma | `Agent` record (owner, agent TD, relay, status, plan); place agents on agent TDs as it places accounts on relays; deploy, roll over and retire agent TDs; console page; `agents` and `turns_per_day` on the plan; daily usage totals billed as metered usage. | Planned |
-| 7 | mero-tee, gateway | Confidential GPU image: model server on loopback and the entitlement-checking gateway in one TD; model weights baked and pinned by sha256. | Planned |
-| 8 | Core | Invitations that carry a role and capabilities, so an agent joins scoped from the start (today an invitation always grants `Member`). | Planned |
+| 7 | mero-tee, mdma | Confidential GPU image: model server behind the sealed transport, signed usage records, weights baked and pinned by sha256. mdma gateway: agent-signed requests, plan and quota, routing to a GPU TD, billing from signed usage. | Planned |
+| 8 | Core | Owner-signed agent marker ("X is an agent of O") that the agent cannot remove; invitations that carry a role and capabilities, so an agent joins scoped from the start (today an invitation always grants `Member`). | Planned |
 
 ## Decisions taken while building the prototype
 
