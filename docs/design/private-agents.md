@@ -1,8 +1,8 @@
 # Design: private agents on GCP TDX
 
 Status: prototype. Phases 1-4 are implemented in this repository. Phases 5-8,
-an always-on agent scoped to the contexts its owner picks, are planned below
-under "Always-on agents". See [How it works](../src/content/docs/flows/private-agents.mdx)
+always-on agents scoped to the contexts their owners pick, many to an agent TD,
+are planned below under "Always-on agents". See [How it works](../src/content/docs/flows/private-agents.mdx)
 for the protocol as built.
 
 Run agents next to the Calimero fleet as a third TDX image role, `agent`, so
@@ -121,21 +121,36 @@ there, and nowhere else:
   `ReadOnly` in the context is refused (Core,
   `protocol/delegated-authorship.mdx`).
 
-**The agent has to read, and today it cannot.** An agent answers what it reads:
-the feed, issues, documents. App state is read by running a view method through
-JSON-RPC `execute`, and a relay refuses `execute` to an account-anchored session
-because it would run as the relay's identity (Core, `server/src/jsonrpc.rs`,
-`caller_identity`). A warrant carries writes only. So an agent that holds no
-group keys can write to its contexts but not read them. Two ways out:
+**Agents are tenants on the shared relay fleet, like cloud users.** mdma already
+serves many accounts from one relay merod: each account keeps its keys outside
+the node, and the relay acts only on what that account signs or may see. An
+agent is one more such account, and Core serves everything it needs today:
 
-| Option | What it takes | Cost per agent |
+| Need | Core path | Checked against |
 | --- | --- | --- |
-| A. One merod per agent | The agent's account is a node's own account: it holds the group keys of exactly the groups it was admitted to, syncs, and reads and writes directly. Works with Core as it is. A node holds one account (Core, `governance-store/src/node_device.rs`), so one agent is one merod. | One merod process. Several can share an agent TD as separate processes and data directories, at the price of tenants sharing a TD. |
-| B. Delegated reads through relays | Core: a signed read request that a relay runs as a view under the author's principal, refusing any write, gated on the author's membership and role in the context; and a caller-scoped event subscription, so the agent wakes on new items. The relay is a `RelayTee` member and holds the keys already. | None beyond the agent process: many agents share a TD and the existing relays. |
+| Write | Warrant to `POST /contexts/{id}/intents` | The author's role in the context; the relay must be `RelayTee` |
+| Read | `POST /admin-api/contexts/{id}/query`, read-only methods only | The account's membership, re-checked per call under the execution lock |
+| Wake on new items | Event subscription from an account session | The account's membership; the grant is re-derived on a membership change |
+| Find its contexts | Caller-scoped `GET /admin-api/contexts`, `/namespaces` | Only the account's own groups |
 
-Start with A: it needs no Core change and proves the product. Move to B once
-the agent count makes a merod per agent the main cost. B keeps the agent
-holding no group keys, which also shrinks what an agent compromise exposes.
+So the agent holds no group keys, and an agent compromise exposes only that
+agent's own account and secrets. Reads and event streams are sealed on a relay
+with `forward_auth` (Core, `protocol/client-paths.mdx`).
+
+**Many agents per agent TD.** The agent side is multi-tenant too, so an agent
+costs a process, not a VM:
+
+- The gate holds every agent's signing key on the encrypted disk and signs
+  warrants and query sessions only for the agent that asks. It never hands a
+  key to an agent process.
+- Each agent has its own owner claim, secrets directory and Unix user. Agent
+  processes are sandboxed (systemd per-agent units, no access to the gate's
+  key store or another agent's directory).
+- `/attest` names the agent: its signing key and owner key in `report_data`,
+  so an owner checks the quote for their agent, not just for the VM.
+- Tenants share a TD, so a bug that escapes an agent's sandbox reaches the
+  other agents on it. That is the price of packing, as it is for tenants on a
+  shared relay; an owner who wants isolation gets a dedicated agent VM.
 
 **The model.** The agent's model runs in a separate confidential GPU TD (one
 H100 for the pilot), behind a small gateway in that TD that checks an
@@ -248,8 +263,12 @@ TDX firmware, the release workflow), plus:
 **A new TEE member type for agents.** An agent admitted as a TEE member, with a
 member type whose admission policy names agent measurements, would let peers
 check that a member is an attested agent build. It is not needed for reading:
-option A reads as an ordinary member, and option B reads through a relay. It
-waits for a reason to require attestation of the member itself.
+an agent reads as a tenant through a relay. It waits for a reason to require
+attestation of the member itself.
+
+**One merod per agent.** It gives each agent the group keys of exactly its
+groups and needs no relay, but costs a node per agent, while tenancy on the
+relay fleet costs nothing per agent and keeps keys out of the agent.
 
 ## Work
 
@@ -259,10 +278,10 @@ waits for a reason to require attestation of the member itself.
 | 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
-| 5 | agent, client | Agent runtime in the image, as its own account on its own merod (option A). Owner-side check of the agent's quote before admitting its account to a scoped `Restricted` subgroup. | Planned |
-| 6 | mdma | `Agent` record (owner, VM, status, plan); deploy, stop, delete and roll over agent VMs; console page; `agents` and `turns_per_day` on the plan; daily usage totals billed as metered usage. | Planned |
+| 5 | mero-tee, agent, client | Multi-tenant agent TD: the gate holds one signing key, claim and secrets directory per agent and signs only for that agent; sandboxed agent processes; per-agent `/attest`. Agent runtime reading with `/query`, waking on events, writing with warrants through its assigned relay. Owner-side check of the agent's quote before admitting its account to a scoped `Restricted` subgroup. | Planned |
+| 6 | mdma | `Agent` record (owner, agent TD, relay, status, plan); place agents on agent TDs as it places accounts on relays; deploy, roll over and retire agent TDs; console page; `agents` and `turns_per_day` on the plan; daily usage totals billed as metered usage. | Planned |
 | 7 | mero-tee, gateway | Confidential GPU image: model server on loopback and the entitlement-checking gateway in one TD; model weights baked and pinned by sha256. | Planned |
-| 8 | Core | Option B: delegated reads and caller-scoped event subscription through relays; invitations that carry a role and capabilities, so an agent joins scoped from the start. | Planned |
+| 8 | Core | Invitations that carry a role and capabilities, so an agent joins scoped from the start (today an invitation always grants `Member`). | Planned |
 
 ## Decisions taken while building the prototype
 
@@ -294,8 +313,9 @@ Decided:
 - **An agent acts only in the contexts its owner scopes it to**, as its own
   account, never on its owner's behalf.
 
+- **Agents of different owners share an agent TD**, as tenants share a relay;
+  a dedicated agent VM is an option for an owner who wants isolation.
+
 Still open:
 
 - Where does the agent source live, and is it published?
-- Do agents of different owners share a TD (option A: one merod each, separate
-  processes), or does each get its own VM?
