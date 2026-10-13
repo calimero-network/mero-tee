@@ -51,16 +51,28 @@ export DEBIAN_FRONTEND=noninteractive
   fi
   apt-get install -y "nvidia-utils-${DRIVER}-server" "nvidia-compute-utils-${DRIVER}-server"
   modprobe nvidia
-  # A GPU in confidential mode is torn down when its last client exits and
-  # does not come back, so the persistence daemon must hold it from the start,
-  # before nvidia-smi or anything else opens it.
-  nvidia-persistenced --uvm-persistence-mode
-} >"${LOG}/driver.log" 2>&1 || {
-  tail_to_serial "${LOG}/driver.log"
-  dmesg | grep -iE 'nvrm|nvidia|xid|tdx' | tail -n 60 >"${LOG}/dmesg.log" || true
-  tail_to_serial "${LOG}/dmesg.log" 60
-  fail "driver install"
+} >"${LOG}/driver.log" 2>&1 || { tail_to_serial "${LOG}/driver.log"; fail "driver install"; }
+
+# A GPU in confidential mode is torn down when its last client exits and does
+# not come back, so a persistence daemon with UVM persistence must hold it
+# before nvidia-smi or anything else opens it. The utilities package starts its
+# own unit without that flag, which keeps a second daemon from starting, so
+# that one is replaced.
+gpu_diag() {
+  {
+    journalctl -t nvidia-persistenced -u nvidia-persistenced --no-pager -n 40
+    lspci -nn | grep -i nvidia
+    dmesg | grep -iE 'nvrm|xid|nvidia' | tail -n 60
+  } >"${LOG}/diag.log" 2>&1 || true
+  tail_to_serial "${LOG}/diag.log" 110
 }
+systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
+rm -rf /var/run/nvidia-persistenced
+if ! nvidia-persistenced --uvm-persistence-mode --verbose >"${LOG}/persistenced.log" 2>&1; then
+  tail_to_serial "${LOG}/persistenced.log"
+  gpu_diag
+  fail "nvidia-persistenced"
+fi
 
 tail_to_serial "${LOG}/driver.log" 8
 
@@ -82,8 +94,7 @@ cc_ready="$(nvidia-smi conf-compute -grs 2>&1 | tr '\n' ' ' || true)"
 gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | tr '\n' ' ' || true)"
 say "STAGE gpu ${gpu} | ${cc_features} | ${cc_ready}"
 if ! nvidia-smi -L >/dev/null 2>&1; then
-  { lspci -nn | grep -i nvidia; dmesg | grep -iE 'nvrm|nvidia|xid' | tail -n 60; } >"${LOG}/dmesg.log" 2>&1 || true
-  tail_to_serial "${LOG}/dmesg.log" 70
+  gpu_diag
   fail "the GPU is not usable"
 fi
 
