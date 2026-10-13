@@ -13,7 +13,11 @@ LOG=/var/log/gpu-probe
 mkdir -p "${LOG}"
 
 say() { echo "GPU-PROBE $*" >/dev/ttyS0 || true; echo "GPU-PROBE $*"; }
-tail_to_serial() { [[ -f "$1" ]] && tail -n "${2:-60}" "$1" | sed 's/^/GPU-PROBE LOG /' >/dev/ttyS0 || true; }
+tail_to_serial() {
+  if [[ -f "$1" ]]; then
+    tail -n "${2:-60}" "$1" | sed 's/^/GPU-PROBE LOG /' >/dev/ttyS0 || true
+  fi
+}
 fail() { say "FAILED $*"; exit 1; }
 trap 'fail "line ${LINENO}: ${BASH_COMMAND}"' ERR
 
