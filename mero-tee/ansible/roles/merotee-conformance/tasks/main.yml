@@ -349,3 +349,26 @@
       and cannot run with snapd masked, and a node has no cloud identity to
       use them with; nodes get their credential from mdma (`provided`).
   loop: "{{ fetch_secret_scripts.results }}"
+
+# Logs leave the TEE for whatever `logs-endpoint` names, so the baked vector
+# config must route every line through the egress guard (field allowlist,
+# credential masking, size cap) before the sink configure_vector.sh adds.
+- name: Read the baked vector partial config and egress guard
+  slurp:
+    path: "{{ item }}"
+  register: vector_egress_files
+  loop:
+    - /etc/vector/vector_partial.yaml
+    - /etc/vector/egress-guard.vrl
+
+- name: Assert logs leave only through the egress guard
+  assert:
+    that:
+      - "(vector_egress_files.results[0].content | b64decode) is search('(?m)^  guard_egress:')"
+      - "(vector_egress_files.results[0].content | b64decode) is search('(?m)^    file: /etc/vector/egress-guard.vrl$')"
+      - "(vector_egress_files.results[0].content | b64decode) is search('(?m)^    drop_on_error: true$')"
+      - "(vector_egress_files.results[1].content | b64decode) is search('REDACTED')"
+    fail_msg: >-
+      The baked vector config does not route logs through guard_egress
+      (egress-guard.vrl). Every shipped line is readable by whoever sets
+      logs-endpoint; see mero-tee/ansible/roles/vector/files/egress-guard.vrl.

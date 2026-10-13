@@ -529,6 +529,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/build-inputs-pinned-test.sh
 
+      # Logs leave the TEE for an endpoint the VM operator chooses. Every image
+      # routes them through egress-guard.vrl first; runs it with the pinned
+      # Vector release and validates each generated config.
+      - name: Check logs leave only through the egress guard
+        id: log_egress_guard_test
+        shell: bash
+        run: scripts/ci/tests/log-egress-guard-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -580,6 +588,7 @@ jobs:
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
+            --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

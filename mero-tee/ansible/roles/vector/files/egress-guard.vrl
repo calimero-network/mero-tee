@@ -1,0 +1,38 @@
+# Runs on every log line before it leaves the TEE (the `guard_egress` transform
+# in each image's vector_partial.yaml; configure_vector.sh points the sink at
+# nothing else).
+#
+# The sink is `logs-endpoint` instance metadata, which whoever runs the VM
+# chooses, so every line shipped is readable by the operator. Services are
+# meant not to log secrets; this is the backstop for the line that does:
+#
+#   * only the fields below leave. journald attaches _CMDLINE, _EXE, _PID,
+#     _BOOT_ID, _MACHINE_ID, _SYSTEMD_CGROUP and more to every entry; none is
+#     needed to debug a node and a command line can carry an argument that is
+#     not meant to;
+#   * credential shapes in the message are masked: PEM private keys, JWTs,
+#     Bearer/Basic credentials, and the value of any secret-named key;
+#   * a message is cut at 8 KiB, so a dumped request body or state blob does
+#     not leave whole.
+#
+# Changing this file changes every image's measurements. Covered by
+# scripts/ci/tests/log-egress-guard-test.sh, which runs it with the pinned
+# Vector binary.
+msg = to_string(.message) ?? ""
+msg = replace(msg, r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)', "[REDACTED private key]")
+msg = replace(msg, r'\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}', "[REDACTED jwt]")
+msg = replace(msg, r'(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}', "$1 [REDACTED]")
+msg = replace(msg, r'(?i)((?:password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|secret[_-]?key|access[_-]?key|seed|mnemonic|authorization|cookie)"?\s*[:=]\s*"?)[^\s",}\]]+', "${1}[REDACTED]")
+if strlen(msg) > 8192 {
+  msg = slice!(msg, 0, 8192) + " [TRUNCATED]"
+}
+. = {
+  "timestamp": .timestamp,
+  "message": msg,
+  "unit": .unit,
+  "hostname": .hostname,
+  "instance_name": .instance_name,
+  "instance_type": .instance_type,
+  "instance_profile": .instance_profile,
+  "priority": .PRIORITY,
+}

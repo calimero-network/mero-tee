@@ -15,13 +15,15 @@
     group: root
     mode: "0755"
 
-- name: Copy setup script
+# What every shipped line passes through first (see the file's header). Baked,
+# so measured: an operator cannot loosen it.
+- name: Install the log egress guard
   copy:
-    src: setup_vector_config.sh
-    dest: /etc/vector/setup_vector_config.sh
+    src: egress-guard.vrl
+    dest: /etc/vector/egress-guard.vrl
     owner: root
     group: root
-    mode: "0755"
+    mode: "0644"
 
 - name: Copy configure_vector.sh script
   copy:

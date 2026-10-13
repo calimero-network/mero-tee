@@ -44,6 +44,7 @@ sed -e "s@/etc/vector@${SB}/vector@g" \
     "$SRC" > "${SB}/configure.sh"
 chmod +x "${SB}/configure.sh"
 cp "$PARTIAL" "${SB}/vector/vector_partial.yaml"
+cp "${REPO_ROOT}/mero-tee/ansible/roles/vector/files/egress-guard.vrl" "${SB}/vector/egress-guard.vrl"
 
 cat > "${SB}/bin/systemctl" <<'STUB'
 #!/usr/bin/env bash
