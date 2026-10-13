@@ -172,8 +172,8 @@ read is validated.
 | --- | --- |
 | `kms-bootstrap` | `true` on exactly one replica, the first of a new cluster, which generates the root. Anything other than `true`, `false` or empty stops the boot. Clear it (`false`) once the cluster has formed. |
 | `kms-peers` | Comma-separated base URLs (`http[s]://host[:port]`) of replicas to join from. Required unless `kms-bootstrap=true`. |
-| `logs-endpoint` | Optional. VictoriaLogs ingest URL. vector ships the journal of `mero-kms-init`, `mero-kms`, `vector` and `vmagent` there, labelled `instance_name="mero-kms"`. |
-| `metrics-endpoint` | Optional. Remote-write URL. vmagent ships node_exporter host metrics there, labelled `instance_type="mero-kms"` and `instance_profile`. Both listen on loopback only. |
+| `logs-endpoint` | Optional. VictoriaLogs ingest URL, `https://` except on a `debug` or `debug-read-only` image. vector ships the journal of `mero-kms-init`, `mero-kms`, `vector` and `vmagent` there, labelled `instance_name="mero-kms"`. |
+| `metrics-endpoint` | Optional. Remote-write URL, `https://` except on a `debug` or `debug-read-only` image. vmagent ships node_exporter host metrics there, labelled `instance_type="mero-kms"` and `instance_profile`. Both listen on loopback only. |
 | `observability-token` | Optional. Bearer token both shippers present. Read at boot only: rotating it means replacing the replicas, one at a time. |
 
 A URL or token that could inject configuration (anything but a plain http(s)

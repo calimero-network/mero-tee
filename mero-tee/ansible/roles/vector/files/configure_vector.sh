@@ -45,6 +45,21 @@ if [[ ! "$VICTORIA_LOGS_URL" =~ $URL_RE ]]; then
     exit 1
 fi
 
+# Only a debug image may send this over plain http. The request carries the
+# observability bearer token and every line or sample it ships, and the URL is
+# whatever instance metadata names, so on any other profile, an unknown one
+# included, a plain-http endpoint would hand both to anyone on the path.
+EGRESS_PROFILE=$(tr -d '\r\n' < "${OBS_PROFILE_FILE:-/etc/calimero/image-profile}" 2>/dev/null || true)
+case "${EGRESS_PROFILE}" in
+    debug|debug-read-only) ;;
+    *)
+        if [[ "$VICTORIA_LOGS_URL" != https://* ]]; then
+            echo "Error: profile '${EGRESS_PROFILE:-unknown}' ships only to an https endpoint; refusing a plain-http URL" >&2
+            exit 1
+        fi
+        ;;
+esac
+
 echo "=== Configuring Vector ==="
 echo "Partial config: $PARTIAL_CONFIG_PATH"
 echo "Victoria Logs URL: $VICTORIA_LOGS_URL"
