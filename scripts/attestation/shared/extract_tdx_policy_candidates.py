@@ -277,8 +277,8 @@ def extract_tcb_status_candidates(payload: Any) -> List[Tuple[str, str, str]]:
 # observation-derived `["outofdate"]`, which rejected patched hosts outright.
 #
 # REVIEW THIS. Drop `outofdate` and add `--require-observed-allowed` to the probe
-# call sites once the probes report `uptodate`; the warning this script emits on
-# every release says when that is.
+# call sites once the probes report `uptodate`. `require_outofdate_review` fails
+# the run the first time one does, so this cannot be forgotten.
 DEFAULT_ALLOWED_TCB_STATUSES = ["uptodate", "outofdate"]
 
 
@@ -347,6 +347,35 @@ def report_observed_vs_allowed(
     print(f"WARNING: {message}", file=sys.stderr)
 
 
+def require_outofdate_review(
+    observed: List[str],
+    allowed: List[str],
+    *,
+    keep_outofdate: bool,
+) -> None:
+    """Fail once a probe host reports ``uptodate`` while ``outofdate`` is still allowed.
+
+    ``outofdate`` is in ``DEFAULT_ALLOWED_TCB_STATUSES`` only because the probe fleet
+    reported it. A probe host that reports ``uptodate`` means the hosts have been
+    patched, so accepting ``outofdate`` is no longer needed and only admits hosts
+    with known, fixed vulnerabilities. Nothing would say so: the warning above fires
+    only for an observed status the policy rejects. So this stops the run and names
+    the change. ``--keep-outofdate`` lets a release through while the rest of the
+    fleet catches up; it is a workflow edit, reviewed like the default itself.
+    """
+    if "uptodate" not in observed or "outofdate" not in allowed or keep_outofdate:
+        return
+    message = (
+        "The probe host reports TCB status uptodate, but the policy still accepts "
+        "outofdate. Drop \"outofdate\" from DEFAULT_ALLOWED_TCB_STATUSES in "
+        "scripts/attestation/shared/extract_tdx_policy_candidates.py and pass "
+        "--require-observed-allowed at the probe call sites. If hosts the fleet runs on "
+        "still report OutOfDate, pass --keep-outofdate at this call site until they do."
+    )
+    print(f"::error::{message}")
+    raise RuntimeError(message)
+
+
 def compact_json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"))
 
@@ -393,6 +422,15 @@ def main() -> int:
             "so the inconsistency cannot come back silently."
         ),
     )
+    parser.add_argument(
+        "--keep-outofdate",
+        action="store_true",
+        help=(
+            "Keep accepting 'outofdate' although this probe host reports 'uptodate'. "
+            "Without it, such a run fails, so the allowlist is narrowed as soon as the "
+            "hosts are patched. For a fleet whose hosts are not all patched yet."
+        ),
+    )
     args = parser.parse_args()
 
     claims = load_json(args.claims)
@@ -416,6 +454,11 @@ def main() -> int:
         observed_tcb_statuses,
         allowed_tcb_statuses,
         require_observed_allowed=args.require_observed_allowed,
+    )
+    require_outofdate_review(
+        observed_tcb_statuses,
+        allowed_tcb_statuses,
+        keep_outofdate=args.keep_outofdate,
     )
 
     allowed_mrtd = [mrtd[0]]

@@ -471,6 +471,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-sealed-route-test.sh
 
+      # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
+      # it; the first probe that reports `uptodate` must fail the release and
+      # name the change, so the allowlist narrows as soon as hosts are patched.
+      - name: Check a patched probe host stops a release that accepts outofdate
+        id: tcb_outofdate_gate_test
+        shell: bash
+        run: scripts/ci/tests/tcb-outofdate-gate-test.sh
+
       # The delegated routers (`/intents`, `/presence-intents`,
       # `/context-intents`, `/governance-intents`) skip auth-node
       # on relays. Routes requests through every router the way Traefik does,
