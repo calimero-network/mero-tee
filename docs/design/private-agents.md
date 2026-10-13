@@ -84,6 +84,51 @@ tool credentials). They are provisioned after boot, encrypted to the TD:
 The attestation-verifier gains an agent page, so a third party can run the
 same check.
 
+## The agent: mero-bot on NEAR AI Cloud
+
+The first real agent is [mero-bot](https://github.com/calimero-network/mero-bot), run headless. It has no model inside the TD. Every model call goes to NEAR AI Cloud's private inference, and mero-bot checks NEAR's attestation itself before it sends anything:
+
+- Intel TDX quotes for the gateway and each model replica;
+- NVIDIA GPU evidence;
+- the TLS key every request goes over;
+- a signature on every answer.
+
+The GPU TD of our own that this design once planned is parked.
+
+**What the image adds** (`mero_bot_bundle`, `scripts/agent/mero-bot-agent.sh`)
+
+- Node at `/opt/node` and mero-bot's release bundle at `/opt/mero-bot`, both checked against their sha256 in `build-inputs.lock.json`. The bundle holds mero-bot's production `node_modules`, mero-mcp included, so nothing is fetched at run time.
+- Both are in the content hash.
+- The agent binary is the launcher. It waits for the owner's secrets, then runs `mero-bot --headless --fixed-code --attested-only` as the agent user.
+  - Its working directory and `HOME` are on the encrypted disk.
+  - Its environment holds only the allowlisted secrets.
+  - Provisioning again restarts it.
+  - `--attested-only` refuses a config in which any agent a turn can reach (the default, each route, and their hand-offs and fallbacks) does not check its model server's attestation. The image therefore never sends a prompt to an unattested model, whatever the owner provisions.
+
+**Secrets the owner provisions** (`mero-agent-provision`)
+
+| Name | |
+| --- | --- |
+| `MERO_AGENTS_JSON` | mero-bot's `agents.json`: NEAR profiles only (`"attest": "near"`), and the model to use |
+| `CALIMERO_NODE_URL` | the owner's node |
+| `CALIMERO_AUTH_TOKEN` + `CALIMERO_REFRESH_TOKEN`, or `CALIMERO_USERNAME` + `CALIMERO_PASSWORD` | the node login |
+| `NEAR_AI_API_KEY` | the key the profile's `apiKeyEnv` names |
+| `HYPERFEED_CONTEXT` | optional: pins the feed |
+
+**What this step does not do yet**
+
+- The agent acts as its owner's node login. A login limited to the contexts the owner picks is what bounds it. Its own account, and warrants through relays (below), come later.
+- The image restricts no egress. mero-bot reaches the owner's node, NEAR's gateway, Intel's PCS and NVIDIA's attestation service.
+- Model choice is the owner's, through `MERO_AGENTS_JSON`, so it is not measured. What is measured is that only attested providers can be used.
+
+**Turning it on.** A mero-bot release tag publishes `mero-bot-<version>-linux-x64.tar.gz` and its sha256. To bake it:
+
+1. Set `meroBotVersion` in `versions.json`.
+2. Run `scripts/release/pin-build-inputs.sh`, with `gh` logged in, since mero-bot is a private repo.
+3. Build with `MERO_BOT_BUNDLE`. `agent-tdx-image-probe.yaml` does this with `agent: mero-bot`, and needs the `MERO_BOT_RELEASE_TOKEN` secret.
+
+Without `meroBotVersion`, the image stays the stub.
+
 ## Acting in Calimero: warrants through relays
 
 The agent writes to Calimero exactly as any keyholder without an account on a
@@ -207,6 +252,7 @@ should wait for an agent that needs it.
 | 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
+| 4b | mero-tee, mero-bot | mero-bot as the agent: headless, NEAR AI Cloud attested, pinned bundle and launcher (see "The agent: mero-bot on NEAR AI Cloud"). | In progress: needs a mero-bot release pinned in `versions.json` |
 | 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
 | 6 | mdma | Optional: deploy agents and run rollovers. | |
 
@@ -235,5 +281,8 @@ should wait for an agent that needs it.
 
 A real agent binary, and phases 5-6, need these decisions first:
 
-- A model inside the TD for the first agent, or is a hosted API acceptable?
-- Where does the agent source live, and is it published?
+- ~~A model inside the TD for the first agent, or is a hosted API acceptable?~~
+  A hosted API whose TEE mero-bot attests: NEAR AI Cloud.
+- ~~Where does the agent source live, and is it published?~~
+  calimero-network/mero-bot, private for now; the image pins its release bundle
+  by sha256 and publishes the measurements.

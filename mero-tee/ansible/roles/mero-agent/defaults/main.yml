@@ -5,6 +5,12 @@
 # mero-agent-gate is built from this repository's commit.
 mero_agent_binary: ""
 mero_agent_gate_binary: ""
+# mero-bot as the agent (calimero-network/mero-bot): the path, on the machine
+# running Packer, of its release bundle (mero-bot-<version>-linux-x64.tar.gz),
+# which must hash to its pin in build-inputs.lock.json. With it, Node is baked
+# from its pin too, and mero_agent_binary is the launcher,
+# scripts/agent/mero-bot-agent.sh. Empty: no mero-bot and no Node.
+mero_bot_bundle: ""
 # No provisioner is baked in: the first sealed bundle claims a running agent
 # for its sender's key (mero-agent-gate/README.md), so whoever builds or runs
 # the image cannot choose who sets its secrets.

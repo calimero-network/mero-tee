@@ -141,6 +141,93 @@
     - { src: "{{ mero_agent_binary }}", dest: /usr/local/bin/mero-agent }
     - { src: "{{ mero_agent_gate_binary }}", dest: /usr/local/bin/mero-agent-gate }
 
+# mero-bot (scripts/agent/mero-bot-agent.sh runs it): Node and the bundle,
+# both at their pins in build-inputs.lock.json. The bundle carries its
+# production node_modules, mero-mcp included, so nothing is fetched at run time.
+- name: Bake mero-bot and Node
+  when: mero_bot_bundle | length > 0
+  block:
+    - name: Require mero-bot and Node to be pinned
+      assert:
+        that:
+          - build_inputs.meroBot is defined
+          - build_inputs.node is defined
+        fail_msg: >-
+          build-inputs.lock.json pins no meroBot or no node. Set meroBotVersion
+          and nodeVersion in versions.json and run scripts/release/pin-build-inputs.sh.
+
+    - name: Hash the mero-bot bundle
+      stat:
+        path: "{{ mero_bot_bundle }}"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: mero_bot_bundle_stat
+
+    - name: Require the bundle to be the pinned one
+      vars:
+        bundle_name: "mero-bot-{{ build_inputs.meroBot.version }}-linux-x64.tar.gz"
+      assert:
+        that:
+          - mero_bot_bundle_stat.stat.exists
+          - mero_bot_bundle_stat.stat.checksum == build_inputs.meroBot.sha256[bundle_name]
+        fail_msg: >-
+          {{ mero_bot_bundle }} hashes to {{ mero_bot_bundle_stat.stat.checksum | default('nothing') }},
+          not the pin for {{ bundle_name }} ({{ build_inputs.meroBot.sha256[bundle_name] | default('none') }}).
+
+    - name: Download Node (sha256-pinned)
+      get_url:
+        url: "https://nodejs.org/dist/v{{ build_inputs.node.version }}/node-v{{ build_inputs.node.version }}-linux-x64.tar.xz"
+        dest: /tmp/node-linux-x64.tar.xz
+        checksum: "sha256:{{ build_inputs.node.sha256['node-v' ~ build_inputs.node.version ~ '-linux-x64.tar.xz'] }}"
+        mode: "0644"
+        timeout: 120
+      register: node_download
+      retries: 5
+      delay: 10
+      until: node_download is succeeded
+
+    - name: Create /opt/node and /opt/mero-bot
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /opt/node
+        - /opt/mero-bot
+
+    - name: Extract Node
+      unarchive:
+        src: /tmp/node-linux-x64.tar.xz
+        dest: /opt/node
+        remote_src: yes
+        extra_opts: ["--strip-components=1", "--no-same-owner"]
+
+    - name: Extract mero-bot
+      unarchive:
+        src: "{{ mero_bot_bundle }}"
+        dest: /opt/mero-bot
+        extra_opts: ["--strip-components=1", "--no-same-owner"]
+
+    - name: Remove the Node archive
+      file:
+        path: /tmp/node-linux-x64.tar.xz
+        state: absent
+
+    - name: Check that mero-bot starts on the baked Node
+      command: /opt/node/bin/node /opt/mero-bot/dist/cli.js --help
+      register: mero_bot_help
+      changed_when: false
+      failed_when: mero_bot_help.rc != 0 or '--attested-only' not in mero_bot_help.stdout
+
+    - name: Record the mero-bot version
+      copy:
+        content: "{{ build_inputs.meroBot.version }}\n"
+        dest: /etc/mero-agent/mero-bot-version
+        mode: "0644"
+
 - name: Pin the image profile
   copy:
     content: "{{ lockdown_profile }}\n"

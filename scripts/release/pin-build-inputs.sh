@@ -16,7 +16,9 @@
 #   scripts/release/pin-build-inputs.sh --check     # exit 1 if it would change
 #   scripts/release/pin-build-inputs.sh --download  # also hash each archive
 #
-# Run from the repository root (or pass --root). Needs curl and python3.
+# Run from the repository root (or pass --root). Needs curl and python3, and
+# gh logged in with read access to calimero-network/mero-bot (a private repo)
+# when versions.json sets meroBotVersion.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -84,6 +86,22 @@ COMPONENTS = {
         "sums": "vector-{v}-SHA256SUMS",
         "assets": ["vector-{v}-x86_64-unknown-linux-gnu.tar.gz"],
     },
+    # The agent image's mero-bot runtime (mero-agent role, mero_bot_bundle).
+    "node": {
+        "key": "nodeVersion",
+        "base": "https://nodejs.org/dist/v{v}",
+        "sums": "SHASUMS256.txt",
+        "assets": ["node-v{v}-linux-x64.tar.xz"],
+    },
+    # Private: read through gh. Optional until the agent image runs mero-bot.
+    "meroBot": {
+        "key": "meroBotVersion",
+        "gh": "calimero-network/mero-bot",
+        "tag": "v{v}",
+        "sums": "mero-bot-{v}-linux-x64.tar.gz.sha256",
+        "assets": ["mero-bot-{v}-linux-x64.tar.gz"],
+        "optional": True,
+    },
 }
 
 
@@ -94,6 +112,16 @@ def fetch(url):
     )
     if out.returncode != 0:
         sys.exit(f"FATAL: could not fetch {url}: {out.stderr.decode().strip()}")
+    return out.stdout
+
+
+def fetch_gh(repo, tag, asset):
+    out = subprocess.run(
+        ["gh", "release", "download", tag, "--repo", repo, "--pattern", asset, "--output", "-"],
+        check=False, capture_output=True,
+    )
+    if out.returncode != 0:
+        sys.exit(f"FATAL: could not fetch {asset} from {repo} {tag}: {out.stderr.decode().strip()}")
     return out.stdout
 
 
@@ -109,17 +137,25 @@ def parse_sums(text):
 lock = {}
 for name, c in COMPONENTS.items():
     version = versions.get(c["key"], "")
+    if not version and c.get("optional"):
+        continue
     if not version:
         sys.exit(f"FATAL: {versions_path} has no {c['key']}")
-    base = c["base"].format(v=version)
-    sums = parse_sums(fetch(f"{base}/{c['sums'].format(v=version)}").decode())
+    if "gh" in c:
+        tag = c["tag"].format(v=version)
+        base = f"{c['gh']} {tag}"
+        get = lambda name, c=c, tag=tag: fetch_gh(c["gh"], tag, name)
+    else:
+        base = c["base"].format(v=version)
+        get = lambda name, base=base: fetch(f"{base}/{name}")
+    sums = parse_sums(get(c["sums"].format(v=version)).decode())
     pinned = {}
     for asset in (a.format(v=version) for a in c["assets"]):
         digest = sums.get(asset)
         if not digest:
             sys.exit(f"FATAL: {asset} is not listed in {base}/{c['sums'].format(v=version)}")
         if download:
-            actual = hashlib.sha256(fetch(f"{base}/{asset}")).hexdigest()
+            actual = hashlib.sha256(get(asset)).hexdigest()
             if actual != digest:
                 sys.exit(f"FATAL: {asset} hashes to {actual}, but its checksum file says {digest}")
         pinned[asset] = digest
