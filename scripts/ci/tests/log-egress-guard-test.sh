@@ -122,6 +122,17 @@ cat > "${SB}/events.json" <<EOF
 {"timestamp":"t","message":"basic Basic LEAKbasic0123456789 mnemonic=LEAKmn seed: LEAKseed private_key=LEAKpk","unit":"merod.service"}
 {"timestamp":"t","message":"context_id=5Hx9abc public_key=ed25519:AbC token_id=7 tokens: 4 secrets loaded","unit":"merod.service"}
 {"timestamp":"t","message":"${long}","unit":"merod.service"}
+{"timestamp":"t","message":"execution log 0| LEAKguestlog balance=12","unit":"merod.service"}
+{"timestamp":"t","message":"Request failed err=FunctionCallError(\"the method call returned an error: LEAKapperr\")","unit":"merod.service"}
+{"timestamp":"t","message":"WASM method execution failed error_debug=RuntimeError guest panicked: LEAKpanic at src/lib.rs:1:1","unit":"merod.service"}
+{"timestamp":"t","message":"\u001b[3merror_message\u001b[0m\u001b[2m=\u001b[0mLEAKcoloured","unit":"merod.service"}
+{"timestamp":"t","message":"panicked panic.message=LEAKpanicmsg panic.backtrace=LEAKbt","unit":"merod.service"}
+{"timestamp":"t","message":"Created the admin account (user: LEAKadmin) user=LEAKuser","unit":"merod.service"}
+{"timestamp":"t","message":"Authentication failed: invalid type: string \"LEAKserde\", unknown variant \`LEAKvariant\`","unit":"mero-auth.service"}
+{"timestamp":"t","message":"Refresh token reuse detected for key K1 (jti LEAKjti) client_id=Some(String(\"LEAKid\"))","unit":"merod.service"}
+{"timestamp":"t","message":"KMS get-key request failed (500): Internal - LEAKkmsbody","unit":"merod.service"}
+{"timestamp":"t","message":"fetching https://LEAKuser:LEAKpass@apps.test/a.wasm?access_token=LEAKqt&x=1","unit":"merod.service"}
+{"timestamp":"t","message":"abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress leak","unit":"merod.service"}
 EOF
 "${VECTOR_BIN}" vrl -i "${SB}/events.json" -p "$GUARD" -o 2>/dev/null > "${SB}/shipped.json" \
   || fail "the guard program does not run"
@@ -131,11 +142,12 @@ import json, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines() if l.startswith("{")]
 events = [json.loads(l) for l in lines]
 failures = []
-if len(events) != 9:
-    failures.append(f"expected 9 events out, got {len(events)}")
+if len(events) != 20:
+    failures.append(f"expected 20 events out, got {len(events)}")
 shipped = "\n".join(lines)
-if "LEAK" in shipped:
-    leaks = sorted({w for w in shipped.replace('"', " ").split() if "LEAK" in w})
+# Every planted secret contains "leak" in some case; none may survive.
+if "leak" in shipped.lower():
+    leaks = sorted({w for w in shipped.replace('"', " ").split() if "leak" in w.lower()})
     failures.append(f"secret material left the guard: {leaks}")
 allowed = {"timestamp", "message", "unit", "hostname", "instance_name", "instance_type", "instance_profile", "priority"}
 for e in events:
@@ -150,6 +162,8 @@ keep = events[7]["message"] if len(events) > 7 else ""
 for word in ["context_id=5Hx9abc", "public_key=ed25519:AbC", "token_id=7", "tokens: 4", "secrets loaded"]:
     if word not in keep:
         failures.append(f"non-secret text was masked: {word!r} missing from {keep!r}")
+if "]]" in shipped:
+    failures.append("a value was masked twice (stray ']]' in the output)")
 big = events[8]["message"] if len(events) > 8 else ""
 if not (big.endswith("[TRUNCATED]") and len(big) <= 8192 + len(" [TRUNCATED]")):
     failures.append(f"a 9000-byte message was not capped at 8 KiB (got {len(big)} bytes)")

@@ -220,6 +220,12 @@ The guard does three things:
   `Basic` credentials, and the value of any secret-named key (`password`,
   `token`, `secret`, `api_key`, `private_key`, `seed`, `mnemonic`, `cookie`,
   `authorization` and similar).
+- **Masks application data merod logs at its default level.** That is a guest's
+  `execution log` lines, a method's error payload, guest panic text and the
+  panic hook. It also masks admin login names, client values that serde errors
+  echo, a refresh token's jti, the JSON-RPC client id, KMS error bodies, URL
+  userinfo, `token` query parameters and 24-word recovery phrases. Public keys,
+  context IDs and peer IDs are kept, because diagnosis needs them.
 - **Caps each message** at 8 KiB.
 
 A line the program fails on is dropped, never shipped unguarded.

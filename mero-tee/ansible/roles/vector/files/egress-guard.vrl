@@ -11,7 +11,12 @@
 #     needed to debug a node and a command line can carry an argument that is
 #     not meant to;
 #   * credential shapes in the message are masked: PEM private keys, JWTs,
-#     Bearer/Basic credentials, and the value of any secret-named key;
+#     Bearer/Basic credentials, URL userinfo and token parameters, recovery
+#     phrases, and the value of any secret-named key;
+#   * application data merod logs at its default level is masked: a guest's
+#     log lines, a method's error payload, guest panic text and the panic hook,
+#     with login names, serde-echoed client values, jti, the JSON-RPC client id
+#     and KMS error bodies (core audit, 2026-10-13);
 #   * a message is cut at 8 KiB, so a dumped request body or state blob does
 #     not leave whole.
 #
@@ -19,10 +24,37 @@
 # scripts/ci/tests/log-egress-guard-test.sh, which runs it with the pinned
 # Vector binary.
 msg = to_string(.message) ?? ""
+# merod colours its fields (`\x1b[3mfield\x1b[0m\x1b[2m=\x1b[0mvalue`); strip
+# that first so the patterns below see `field=value`.
+msg = replace(msg, r'\x1b\[[0-9;]*m', "")
+# Application data, which merod logs at its default level: a guest's own log
+# lines, a method's error payload, and guest panic text (also in the runtime's
+# error_message/error_debug fields and the panic hook). The prefix stays, so a
+# line still says that something happened.
+msg = replace(msg, r'(execution log\s+\d+\|).*', "$1 [REDACTED app log]")
+msg = replace(msg, r'(the method call returned an error: ).*', "${1}[REDACTED app error]")
+msg = replace(msg, r'((?:guest|host) panicked: ).*', "${1}[REDACTED panic]")
+msg = replace(msg, r'(\berror_(?:message|debug)=).*', "${1}[REDACTED]")
+msg = replace(msg, r'(\bpanic\.(?:message|backtrace)=).*', "${1}[REDACTED]")
+# Operator-chosen login names, client-echoed values in serde errors, a refresh
+# token's jti, the client-chosen JSON-RPC id, and a KMS error body.
+msg = replace(msg, r'\(user: [^)]*\)', "(user: [REDACTED])")
+msg = replace(msg, r'\buser=\S+', "user=[REDACTED]")
+msg = replace(msg, r'(invalid (?:type|value): \w+ )"[^"]*"', "${1}\"[REDACTED]\"")
+msg = replace(msg, r'(unknown (?:variant|field) )`[^`]*`', "${1}`[REDACTED]`")
+msg = replace(msg, r'\(jti [^)]*\)', "(jti [REDACTED])")
+msg = replace(msg, r'\bclient_id=\S+', "client_id=[REDACTED]")
+msg = replace(msg, r'(KMS \S+ request failed \([^)]*\): [^-]*- ).*', "${1}[REDACTED]")
+# Credentials in URLs: userinfo and a `token` query parameter.
+msg = replace(msg, r'(https?://)[^/@\s]+@', "${1}[REDACTED]@")
+msg = replace(msg, r'([?&](?:access_)?token=)[^&\s"]+', "${1}[REDACTED]")
+# CLI secret labels and a 24-word recovery phrase.
+msg = replace(msg, r'(?m)^((?:Session-Secret|Secret):\s+)\S+', "${1}[REDACTED]")
+msg = replace(msg, r'\b(?:[a-z]{3,8}\s+){23}[a-z]{3,8}\b', "[REDACTED mnemonic]")
 msg = replace(msg, r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)', "[REDACTED private key]")
 msg = replace(msg, r'\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}', "[REDACTED jwt]")
 msg = replace(msg, r'(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}', "$1 [REDACTED]")
-msg = replace(msg, r'(?i)((?:password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|secret[_-]?key|access[_-]?key|seed|mnemonic|authorization|cookie)"?\s*[:=]\s*"?)[^\s",}\]]+', "${1}[REDACTED]")
+msg = replace(msg, r'(?i)((?:password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key|secret[_-]?key|access[_-]?key|seed|mnemonic|authorization|cookie|kek|plaintext|payload|args)"?\s*[:=]\s*"?)[^\s",}\]\[][^\s",}\]]*', "${1}[REDACTED]")
 if strlen(msg) > 8192 {
   msg = slice!(msg, 0, 8192) + " [TRUNCATED]"
 }
