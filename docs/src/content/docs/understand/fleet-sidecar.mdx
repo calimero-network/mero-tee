@@ -1110,20 +1110,36 @@ intent (the warrant and the method's arguments) is plaintext there. With the
 `node-sealed` router, a client can instead attest `merod`'s transport key
 (`POST /admin-api/tee/attest`, already public) and seal the intent to it: Traefik
 forwards opaque `POST /sealed/v2` requests, and only `merod`, inside the TD,
-opens them. mero-js does this with `connectCloud({ seal })`.
+opens them. mero-js seals a delegated session's relay traffic this way by
+default.
 
 The router is exempt from `auth-node` because forwardAuth could not apply to it,
-and that is safe only because `merod` enforces the boundary itself: in proxy auth
-mode it lets an opened request reach nothing but what it serves without a
-credential, which here is the intents, presence-intents, context-intents and
-governance-intents routes and the public probes and TEE routes. Which inner paths qualify is decided by `merod`, not by
-this repository: there is no inner-path allowlist here to keep in step.
-A sealed request for anything `auth-node` guards is refused inside the envelope
-with `403 sealed_route_unguarded`. So on these nodes intents are sealed, while
-logins (`/auth/`, served by mero-auth, outside `merod`) and session-bearing reads
-are not.
+and that is safe only because `merod` enforces the boundary itself. In proxy auth
+mode, an opened request reaches what `merod` serves without a credential (the
+intents, presence-intents, context-intents and governance-intents routes and the
+public probes and TEE routes). With `server.sealed.forward_auth`, which
+`calimero-init` sets on relays to mero-auth's loopback origin
+(`http://127.0.0.1:3001`, the same one Traefik's `auth-service` uses), it also
+reaches whatever `auth-node` would have let the same token reach:
 
-`merod` enforces that rule from 0.11.0-rc.52. An older `merod` routes an opened
+- `/auth/` and `/admin/` are forwarded to mero-auth, as the `auth-public` router
+  does, so a login is sealed end to end.
+- Any other guarded route is checked with mero-auth's `/auth/validate`, as
+  `auth-node` does. A refusal comes back sealed, and the route is never reached.
+  An admission sets the `X-Auth-*` identity from mero-auth's answer, never from
+  the envelope.
+
+Which inner paths qualify is decided by `merod` and mero-auth, not by this
+repository: there is no inner-path allowlist here to keep in step. On a node
+whose `merod` lacks `forward_auth`, a sealed request for anything `auth-node`
+guards is refused inside the envelope with `403 sealed_route_unguarded`, and
+mero-js falls back to plain TLS for that relay's logged-in calls: intents stay
+sealed, logins and session-bearing reads do not.
+`scripts/ci/tests/sealed-forward-auth-test.sh` keeps the setting relay-only,
+non-fatal at boot, equal to Traefik's `auth-service`, and on a `merodVersion`
+of at least 0.11.0-rc.84.
+
+`merod` enforces the boundary from 0.11.0-rc.52. An older `merod` routes an opened
 request anywhere, which would make the router a way around every guard on the
 node, so `scripts/ci/tests/traefik-sealed-route-test.sh` refuses the router with
 an older `merodVersion`. It also pins the router to the relay-only block, to the
