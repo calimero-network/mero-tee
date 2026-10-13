@@ -1,8 +1,8 @@
 # Design: private agents on GCP TDX
 
-Status: prototype. Phases 1-4 are implemented in this repository. Phases 5-8,
-always-on agents scoped to the contexts their owners pick, many to an agent TD,
-are planned below under "Always-on agents". See [How it works](../src/content/docs/flows/private-agents.mdx)
+Status: prototype. Phases 1-3 are implemented in this repository, and phase 4
+has a measurement probe. Phase 4's release and phases 5-6 wait on the open
+decisions below. See [How it works](../src/content/docs/flows/private-agents.mdx)
 for the protocol as built.
 
 Run agents next to the Calimero fleet as a third TDX image role, `agent`, so
@@ -93,139 +93,12 @@ the context, method and arguments (`fleet_delegated_access`; the `/intents`
 routes in `traefik-routing.yml.j2`; `/sealed/v2` for sealed transport).
 
 - The agent's signing key is generated in the TD and never leaves it.
-- The agent is its own account, rooted at that key, not a device of its
-  owner's account. The owner admits that account to the groups it may use,
-  after checking that the agent's quote binds the key (`/attest`, with the
-  signing key in `report_data`). The owner trusts a measured build, not an
-  operator. See "Always-on agents" for why.
+- An account owner authorizes that key as a device of the account the agent
+  acts for, after checking that the agent's quote binds the key (`/attest`,
+  with the signing key in `report_data`). The owner trusts a measured build,
+  not an operator.
 - The agent seals its intents to a relay over `/sealed/v2`, so the relay
   operator does not see the arguments in transit.
-
-## Always-on agents
-
-The product is an agent that keeps working while its owner is offline, and acts
-only in the contexts its owner scopes it to. Never as the owner, never
-elsewhere.
-
-**Scope is membership.** The agent is its own account. Its owner puts the
-contexts it may use in a `Restricted` subgroup and admits the agent's account
-there, and nowhere else:
-
-- Role `Member` where it writes and `ReadOnly` where it only reads.
-- Capabilities stripped to none: no `CAN_INVITE_MEMBERS`, `MANAGE_*`,
-  `CAN_JOIN_OPEN_SUBGROUPS` or `CAN_AUTHOR_ON_BEHALF`.
-- Removing it is `members/remove` on that subgroup. The owner's own devices are
-  untouched, which they would not be if the agent were one of them, and a device
-  of the owner would act with the owner's full reach, not a scoped one.
-- Relays already enforce the author's role: a warrant from an author that is
-  `ReadOnly` in the context is refused (Core,
-  `protocol/delegated-authorship.mdx`).
-
-**The network knows it is an agent, and whose.** The agent gets its own key and
-its own agent account, rooted at the key the gate generates in the TD; it is
-never one of its owner's devices. Every member then sees, for that account,
-that it is an agent and which account answers for it:
-
-- The marker is signed by the owner, not by the agent: "account X is an agent
-  of account O". Peers accept it only from O, and only while O is a member of
-  the group the agent is in, so the agent can neither claim an owner nor drop
-  its marker.
-- Member metadata (`GroupOp::MemberMetadataSet`) is not enough on its own: a
-  member may set its own metadata, so an agent could rewrite or remove a flag
-  kept there. The marker needs a governance op of its own (or a field on the
-  admission op) that only the owner signs and peers cannot see the agent undo.
-- Apps and clients show the marker beside the agent's writes ("agent of
-  Alice"); a warrant already names the author's account, so nothing per write
-  changes.
-
-**Nobody talks to the agent directly.** The agent runtime is mero-bot, and its
-owner reaches it through the owner's Hyperfeed: at claim, the owner and the
-agent share a feed, and that is the agent's home. Other people reach it only by
-writing in a context it is a member of, and it answers there. It wakes on its
-contexts' events, reads through its relay and replies with a warrant. So:
-
-- The agent TD serves no API for conversation. Its only inbound endpoints are
-  the gate's `/health`, `/attest` and `/provision`, for its owner's claim, and
-  nothing else is reachable from outside the TD.
-- Who may talk to it is who may write in its contexts: membership already
-  decides it, and the conversation is kept, synced and access-controlled like
-  any other state.
-- Instructions come from the owner's feed only. Anyone who can write in a
-  scoped context can put text in front of the agent, so it treats everything
-  it reads elsewhere as data, and its scope bounds what a successful injection
-  can reach.
-- mero-bot today runs beside its owner's own node. In the agent TD it has no
-  node: it reaches Calimero as a tenant of its relay (the paths below, sealed
-  with mero-js's sealed transport) and the model through mdma's sealed
-  gateway, and the gate signs for it.
-
-**Agents are tenants on the shared relay fleet, like cloud users.** mdma already
-serves many accounts from one relay merod: each account keeps its keys outside
-the node, and the relay acts only on what that account signs or may see. An
-agent is one more such account, and Core serves everything it needs today:
-
-| Need | Core path | Checked against |
-| --- | --- | --- |
-| Write | Warrant to `POST /contexts/{id}/intents` | The author's role in the context; the relay must be `RelayTee` |
-| Read | `POST /admin-api/contexts/{id}/query`, read-only methods only | The account's membership, re-checked per call under the execution lock |
-| Wake on new items | Event subscription from an account session | The account's membership; the grant is re-derived on a membership change |
-| Find its contexts | Caller-scoped `GET /admin-api/contexts`, `/namespaces` | Only the account's own groups |
-
-So the agent holds no group keys, and an agent compromise exposes only that
-agent's own account and secrets. Reads and event streams are sealed on a relay
-with `forward_auth` (Core, `protocol/client-paths.mdx`).
-
-**Many agents per agent TD.** The agent side is multi-tenant too, so an agent
-costs a process, not a VM:
-
-- The gate holds every agent's signing key on the encrypted disk and signs
-  warrants and query sessions only for the agent that asks. It never hands a
-  key to an agent process.
-- Each agent has its own owner claim, secrets directory and Unix user. Agent
-  processes are sandboxed (systemd per-agent units, no access to the gate's
-  key store or another agent's directory).
-- `/attest` names the agent: its signing key and owner key in `report_data`,
-  so an owner checks the quote for their agent, not just for the VM.
-- Tenants share a TD, so a bug that escapes an agent's sandbox reaches the
-  other agents on it. That is the price of packing, as it is for tenants on a
-  shared relay; an owner who wants isolation gets a dedicated agent VM.
-
-**The model.** The agent's model runs in a separate confidential GPU TD (one
-H100 for the pilot). The gateway is part of mdma, and the traffic through it is
-sealed end to end, as delegated execution's is through a relay:
-
-- The GPU TD runs the sealed transport Core's server uses (`/sealed/v2`: a
-  Noise NK session to a transport key bound into the TD's quote). The agent
-  verifies that quote and seals every model request to the GPU TD.
-- mdma's gateway sees the outer request only: which agent account, signed by
-  its key, and the size. It checks the agent's plan and quota, picks a GPU TD,
-  and forwards the sealed body. It cannot read a prompt or a completion.
-- Token counts come from inside the GPU TD: it returns a usage record signed
-  by its attested key with each response, outside the sealed body, and mdma
-  bills from those. mdma meters requests on its own; tokens it can only take
-  from the TD.
-- What mdma learns is metadata: which agent called, when, and how large. Keep
-  per-request records only as long as quota needs them, and daily totals for
-  billing.
-
-The agent image stays CPU-only.
-
-What one GPU TD carries is measured, not assumed: the `GPU model probe`
-workflow (`scripts/release/model/`) pins a model to a Hub commit and the sha256
-of every file, serves it with vLLM on a confidential a3-highgpu-1g VM, and
-reports time to first token, decode speed per user and turns per day under a
-Hyperfeed-shaped load (a 10k-token turn sharing a 4k-token brief, 500 tokens
-out). It publishes nothing; the image build that bakes the weights comes after.
-
-**Who does what.**
-
-- mdma deploys and stops agent VMs, holds the plan and the quota, runs the
-  model gateway (sealed traffic it cannot read), and bills usage. It never holds an agent's keys and never
-  signs a membership change.
-- The owner's client (console in the browser, or CLI) claims the agent, checks
-  its quote, and signs the admission into the scoped subgroup.
-- Stopping the VM and refusing the agent at the gateway is the immediate stop.
-  Removing the agent from its subgroup is the cryptographic one.
 
 ## The KMS has to tell agents from nodes
 
@@ -319,15 +192,12 @@ TDX firmware, the release workflow), plus:
 - **A separate agent-only KMS binary.** The KMS change is small, and one binary
   serves both deployment models.
 
-**A new TEE member type for agents.** An agent admitted as a TEE member, with a
-member type whose admission policy names agent measurements, would let peers
-check that a member is an attested agent build. It is not needed for reading:
-an agent reads as a tenant through a relay. It waits for a reason to require
-attestation of the member itself.
-
-**One merod per agent.** It gives each agent the group keys of exactly its
-groups and needs no relay, but costs a node per agent, while tenancy on the
-relay fleet costs nothing per agent and keeps keys out of the agent.
+**Later: agents as TEE members.** An agent that must read private context state
+needs group keys, so it must be admitted as a TEE member and run its own merod.
+Core admits `ReadOnlyTee` and `RelayTee` today; an agent needs a member type
+whose admission policy names agent measurements, and mdma would assign agents
+to namespaces as it assigns relays. That spans Core, mdma and this repo, and
+should wait for an agent that needs it.
 
 ## Work
 
@@ -337,10 +207,8 @@ relay fleet costs nothing per agent and keeps keys out of the agent.
 | 2 | mero-tee | `agent` image role, `playbook-agent.yml`, `mero-agent` role with `agent-init`. | Done, every profile |
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
-| 5 | mero-tee, agent, client | Multi-tenant agent TD: the gate holds one signing key, claim and secrets directory per agent and signs only for that agent; sandboxed agent processes; per-agent `/attest`. Agent runtime reading with `/query`, waking on events, writing with warrants through its assigned relay. Owner-side check of the agent's quote before admitting its account to a scoped `Restricted` subgroup. | Planned |
-| 6 | mdma | `Agent` record (owner, agent TD, relay, status, plan); place agents on agent TDs as it places accounts on relays; deploy, roll over and retire agent TDs; console page; `agents` and `turns_per_day` on the plan; daily usage totals billed as metered usage. | Planned |
-| 7 | mero-tee, mdma | Confidential GPU image: model server behind the sealed transport, signed usage records, weights baked and pinned by sha256. mdma gateway: agent-signed requests, plan and quota, routing to a GPU TD, billing from signed usage. | Planned |
-| 8 | Core | Owner-signed agent marker ("X is an agent of O") that the agent cannot remove; invitations that carry a role and capabilities, so an agent joins scoped from the start (today an invitation always grants `Member`). | Planned |
+| 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
+| 6 | mdma | Optional: deploy agents and run rollovers. | |
 
 ## Decisions taken while building the prototype
 
@@ -365,16 +233,7 @@ relay fleet costs nothing per agent and keeps keys out of the agent.
 
 ## Open decisions
 
-Decided:
+A real agent binary, and phases 5-6, need these decisions first:
 
-- **The first agent's model runs in Calimero's own confidential GPU TD**, not a
-  hosted API.
-- **An agent acts only in the contexts its owner scopes it to**, as its own
-  account, never on its owner's behalf.
-
-- **Agents of different owners share an agent TD**, as tenants share a relay;
-  a dedicated agent VM is an option for an owner who wants isolation.
-
-Still open:
-
+- A model inside the TD for the first agent, or is a hosted API acceptable?
 - Where does the agent source live, and is it published?
