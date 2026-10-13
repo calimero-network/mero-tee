@@ -8,17 +8,37 @@
     - /etc/node_exporter
     - /var/lib/node_exporter
 
-- name: Download node exporter binary from GitHub releases
-  unarchive:
-    src: https://github.com/prometheus/node_exporter/releases/download/v{{ version }}/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz
-    dest: /usr/local/bin
-    mode: "0755"
-    remote_src: yes
-    extra_opts: [--strip-components=1]
+- name: Require node_exporter to be pinned for this version
+  assert:
+    that: build_inputs.nodeExporter.version == version
+    fail_msg: >-
+      build-inputs.lock.json pins node_exporter {{ build_inputs.nodeExporter.version }} but
+      the build asked for {{ version }}. Run scripts/release/pin-build-inputs.sh.
+
+- name: Download node exporter from GitHub releases (sha256-pinned)
+  get_url:
+    url: "https://github.com/prometheus/node_exporter/releases/download/v{{ version }}/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz"
+    dest: "/tmp/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz"
+    checksum: "sha256:{{ build_inputs.nodeExporter.sha256['node_exporter-' ~ version ~ '.linux-' ~ cpu_architecture ~ '.tar.gz'] }}"
+    mode: "0644"
+    timeout: 120
   register: node_exporter_download
   retries: 5
   delay: 10
   until: node_exporter_download is succeeded
+
+- name: Extract node exporter
+  unarchive:
+    src: "/tmp/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz"
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+
+- name: Remove the node exporter archive
+  file:
+    path: "/tmp/node_exporter-{{ version }}.linux-{{ cpu_architecture }}.tar.gz"
+    state: absent
 
 - name: Create systemd service for node exporter
   copy:

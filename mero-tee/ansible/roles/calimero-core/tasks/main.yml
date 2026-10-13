@@ -1,32 +1,39 @@
 ---
-- name: Download merod binary from GitHub releases
-  unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/merod_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
-    dest: /usr/local/bin
-    mode: "0755"
-    remote_src: yes
-  register: merod_download
-  retries: 5
-  delay: 10
-  until: merod_download is succeeded
-- name: Download meroctl binary from GitHub releases
-  unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ meroctl_version | default(merod_version, true) }}/meroctl_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
-    dest: /usr/local/bin
-    mode: "0755"
-    remote_src: yes
-  register: meroctl_download
-  retries: 5
-  delay: 10
-  until: meroctl_download is succeeded
+# merod, meroctl and mero-auth come from the core release named by
+# versions.json `merodVersion`, each archive checked against the sha256 pinned
+# for that version in build-inputs.lock.json (group_vars/all.yml).
+- name: Require the core binaries to be pinned for this merod version
+  assert:
+    that:
+      - merod_version | length > 0
+      - build_inputs.merod.version == merod_version
+    fail_msg: >-
+      build-inputs.lock.json pins merod {{ build_inputs.merod.version }} but the
+      build asked for {{ merod_version }}. Run scripts/release/pin-build-inputs.sh.
 
-- name: Download mero-auth binary from GitHub releases
+- name: Download the core binaries from GitHub releases (sha256-pinned)
+  get_url:
+    url: "https://github.com/calimero-network/core/releases/download/{{ merod_version }}/{{ item }}_{{ cpu_platform }}-unknown-linux-gnu.tar.gz"
+    dest: "/tmp/{{ item }}_{{ cpu_platform }}-unknown-linux-gnu.tar.gz"
+    checksum: "sha256:{{ build_inputs.merod.sha256[item ~ '_' ~ cpu_platform ~ '-unknown-linux-gnu.tar.gz'] }}"
+    mode: "0644"
+    timeout: 120
+  loop: [merod, meroctl, mero-auth]
+  register: core_download
+  retries: 5
+  delay: 10
+  until: core_download is succeeded
+
+- name: Extract the core binaries
   unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/mero-auth_{{ cpu_platform }}-unknown-linux-gnu.tar.gz
+    src: "/tmp/{{ item }}_{{ cpu_platform }}-unknown-linux-gnu.tar.gz"
     dest: /usr/local/bin
     mode: "0755"
     remote_src: yes
-  register: mero_auth_download
-  retries: 5
-  delay: 10
-  until: mero_auth_download is succeeded
+  loop: [merod, meroctl, mero-auth]
+
+- name: Remove the core archives
+  file:
+    path: "/tmp/{{ item }}_{{ cpu_platform }}-unknown-linux-gnu.tar.gz"
+    state: absent
+  loop: [merod, meroctl, mero-auth]

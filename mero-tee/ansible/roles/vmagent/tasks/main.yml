@@ -10,10 +10,18 @@
     - /etc/vmagent
     - /var/lib/vmagent
 
-- name: Download vmagent archive from GitHub releases
+- name: Require vmagent to be pinned for this version
+  assert:
+    that: build_inputs.vmagent.version == vmagent_version
+    fail_msg: >-
+      build-inputs.lock.json pins vmagent {{ build_inputs.vmagent.version }} but the
+      build asked for {{ vmagent_version }}. Run scripts/release/pin-build-inputs.sh.
+
+- name: Download vmagent archive from GitHub releases (sha256-pinned)
   get_url:
     url: "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v{{ vmagent_version }}/vmutils-linux-{{ cpu_architecture }}-v{{ vmagent_version }}.tar.gz"
     dest: "/tmp/vmutils-linux-{{ cpu_architecture }}-v{{ vmagent_version }}.tar.gz"
+    checksum: "sha256:{{ build_inputs.vmagent.sha256['vmutils-linux-' ~ cpu_architecture ~ '-v' ~ vmagent_version ~ '.tar.gz'] }}"
     mode: "0644"
     timeout: 120
   register: vmagent_archive

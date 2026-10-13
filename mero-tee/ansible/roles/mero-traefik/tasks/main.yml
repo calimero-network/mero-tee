@@ -4,16 +4,36 @@
     name: apache2-utils
     state: present
 
-- name: Download Traefik binary from GitHub releases
-  unarchive:
-    src: https://github.com/traefik/traefik/releases/download/v{{ traefik_version }}/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz
-    dest: /usr/local/bin
-    mode: "0755"
-    remote_src: yes
+- name: Require Traefik to be pinned for this version
+  assert:
+    that: build_inputs.traefik.version == traefik_version
+    fail_msg: >-
+      build-inputs.lock.json pins Traefik {{ build_inputs.traefik.version }} but the
+      build asked for {{ traefik_version }}. Run scripts/release/pin-build-inputs.sh.
+
+- name: Download Traefik from GitHub releases (sha256-pinned)
+  get_url:
+    url: "https://github.com/traefik/traefik/releases/download/v{{ traefik_version }}/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz"
+    dest: "/tmp/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz"
+    checksum: "sha256:{{ build_inputs.traefik.sha256['traefik_v' ~ traefik_version ~ '_linux_' ~ cpu_architecture ~ '.tar.gz'] }}"
+    mode: "0644"
+    timeout: 120
   register: traefik_download
   retries: 5
   delay: 10
   until: traefik_download is succeeded
+
+- name: Extract Traefik
+  unarchive:
+    src: "/tmp/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz"
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+
+- name: Remove the Traefik archive
+  file:
+    path: "/tmp/traefik_v{{ traefik_version }}_linux_{{ cpu_architecture }}.tar.gz"
+    state: absent
 
 - name: Create traefik base directory
   file:

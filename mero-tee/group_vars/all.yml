@@ -1,0 +1,10 @@
+---
+# Every third-party or release binary the image build downloads, with the
+# sha256 of the exact archive (build-inputs.lock.json, beside the playbooks).
+# A role fetches with `get_url: checksum:` from this table, so a release asset
+# replaced upstream, or a version bumped in versions.json without a matching
+# lock entry, fails the build instead of baking unmeasured code into an image
+# whose attestation would then vouch for it.
+#
+# Refresh with scripts/release/pin-build-inputs.sh after changing versions.json.
+build_inputs: "{{ lookup('file', playbook_dir ~ '/build-inputs.lock.json') | from_json }}"

@@ -521,6 +521,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/sealed-forward-auth-test.sh
 
+      # Every binary the image build downloads is pinned by sha256 in
+      # mero-tee/build-inputs.lock.json, for the versions versions.json names,
+      # and every download in the image's Ansible is checked against it.
+      - name: Check every image build input is pinned by sha256
+        id: build_inputs_pinned_test
+        shell: bash
+        run: scripts/ci/tests/build-inputs-pinned-test.sh
+
       - name: Summarize lint outcomes
         if: ${{ always() }}
         run: |
@@ -571,6 +579,7 @@ jobs:
             --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
+            --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \

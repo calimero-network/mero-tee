@@ -28,16 +28,36 @@
 # merod only for `merod kms disk-key`: the same client nodes use, so the KMS
 # handshake and its verification against the signed release policy are one
 # implementation. Never run as a service here.
-- name: Download merod for the KMS disk-key client
-  unarchive:
-    src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/merod_x86_64-unknown-linux-gnu.tar.gz
-    dest: /usr/local/bin
-    mode: "0755"
-    remote_src: yes
+- name: Require merod to be pinned for this version
+  assert:
+    that: build_inputs.merod.version == merod_version
+    fail_msg: >-
+      build-inputs.lock.json pins merod {{ build_inputs.merod.version }} but the
+      build asked for {{ merod_version }}. Run scripts/release/pin-build-inputs.sh.
+
+- name: Download merod for the KMS disk-key client (sha256-pinned)
+  get_url:
+    url: "https://github.com/calimero-network/core/releases/download/{{ merod_version }}/merod_x86_64-unknown-linux-gnu.tar.gz"
+    dest: /tmp/merod_x86_64-unknown-linux-gnu.tar.gz
+    checksum: "sha256:{{ build_inputs.merod.sha256['merod_x86_64-unknown-linux-gnu.tar.gz'] }}"
+    mode: "0644"
+    timeout: 120
   register: merod_download
   retries: 5
   delay: 10
   until: merod_download is succeeded
+
+- name: Extract merod
+  unarchive:
+    src: /tmp/merod_x86_64-unknown-linux-gnu.tar.gz
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+
+- name: Remove the merod archive
+  file:
+    path: /tmp/merod_x86_64-unknown-linux-gnu.tar.gz
+    state: absent
 
 - name: Probe whether the baked merod can fetch a data-disk key
   command: /usr/local/bin/merod kms disk-key --help
