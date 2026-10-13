@@ -1282,6 +1282,34 @@ log "Taking device-key callers' identity from the proxy..."
   'server.proxy_identity=true' \
   || fatal "failed to set server.proxy_identity; refusing to serve device-key sessions node-wide"
 
+# Sealed logins and logged-in calls. A sealed request reaches traefik only as
+# `POST /sealed/v2` (the `node-sealed` router), so `auth-node` never sees the
+# route or token inside it, and merod, in proxy auth mode, refuses every
+# guarded route an opened request names (`sealed_route_unguarded`). Clients
+# then send their login, token, reads and event streams as plain TLS, which
+# ends outside the TD.
+#
+# With `forward_auth`, merod does for an opened request what traefik would
+# have done: it forwards `/auth/` and `/admin/` to mero-auth (the
+# `auth-public` split) and asks mero-auth's `/auth/validate` about every other
+# guarded route (the `auth-node` check), setting the `X-Auth-*` identity
+# only from mero-auth's answer. mero-auth stays the one authority, so a sealed
+# request reaches exactly what the same token reaches through traefik.
+#
+# The origin is traefik's `auth-service` (routing.yml); merod accepts only a
+# loopback `http` origin, since tokens cross it in the clear.
+# `scripts/ci/tests/sealed-forward-auth-test.sh` keeps the two equal and the
+# pinned merod new enough to know the key.
+#
+# Non-fatal on failure: a node without it serves sealed requests exactly as
+# before, and clients fall back to plain TLS for logged-in calls. A merod
+# that predates the key refuses it (`[server.sealed]` denies unknown fields)
+# and writes nothing, so the rest of config.toml is untouched.
+log "Guarding sealed requests with mero-auth..."
+"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+  'server.sealed.forward_auth="http://127.0.0.1:3001"' \
+  || log "WARN: failed to set server.sealed.forward_auth; logins and logged-in calls stay outside the sealed transport"
+
 # No `server.cors.allowed_origins` is set. merod admits browser pages from any
 # origin on a node that takes callers' identity from the proxy (the key above):
 # the proxy, not the page's origin, says who the caller is, so the origin guard
