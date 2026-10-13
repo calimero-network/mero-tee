@@ -6,6 +6,16 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Security
+
+- **Every binary the image build downloads is pinned by sha256.** The build used to fetch merod, meroctl, mero-auth, Traefik, node_exporter and vmagent by version alone, with nothing checking the archive. It installed Vector by piping `https://sh.vector.dev` into `bash`. A release asset replaced upstream, or an installer host serving something else, would have been baked into an image, and the image's attestation would then vouch for code nobody reviewed.
+  - **The lock.** `mero-tee/build-inputs.lock.json` pins the sha256 of each archive for the versions `versions.json` names. `group_vars/all.yml` loads it, and every download in the node, KMS and agent roles is a `get_url` with `checksum:` from it. A missing or mismatched entry fails the build.
+  - **Vector** now comes from its GitHub release archive, sha256-checked, installed to `/opt/vector`.
+  - **Refreshing it.** `scripts/release/pin-build-inputs.sh` rewrites the lock from the publishers' checksum files; `--check` reports a stale lock, and `--download` also hashes each archive.
+  - **Checks.** `scripts/ci/tests/build-inputs-pinned-test.sh` refuses a lock that disagrees with `versions.json`, and any download in the roles without a pinned checksum. It fails on the previous roles with eight findings. The node-image release preflight runs `--check`.
+  - **Bumps.** A version bump needs the lock refreshed: calimero-network/core's fleet bump will run the script.
+  - **Measurements.** The Vector install changes, so the image's measurements change.
+
 ### Added
 
 - **Private agent image, gate and provisioner (prototype).** Phases 2-3 of `docs/design/private-agents.md`, and a phase-4 probe:

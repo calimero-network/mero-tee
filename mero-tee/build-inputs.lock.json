@@ -1,0 +1,34 @@
+{
+  "merod": {
+    "version": "0.11.0-rc.84",
+    "sha256": {
+      "merod_x86_64-unknown-linux-gnu.tar.gz": "c207bae8883c78b9d2f93756fa3ffdf8fe59d858957669040dc2566e396c24ee",
+      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "0c42a752114d8babbecbbc7ba90c48191738a41816995e77b8986f3760c834bb",
+      "mero-auth_x86_64-unknown-linux-gnu.tar.gz": "e1f68a2b9c9d40214b98eede75d417e5b111a0e984384134413d70248235e5d8"
+    }
+  },
+  "traefik": {
+    "version": "3.5.0",
+    "sha256": {
+      "traefik_v3.5.0_linux_amd64.tar.gz": "2ecdcb14492481749176710bce15434bcc22c3124f32867233bb00f4160de661"
+    }
+  },
+  "nodeExporter": {
+    "version": "1.9.1",
+    "sha256": {
+      "node_exporter-1.9.1.linux-amd64.tar.gz": "becb950ee80daa8ae7331d77966d94a611af79ad0d3307380907e0ec08f5b4e8"
+    }
+  },
+  "vmagent": {
+    "version": "1.132.0",
+    "sha256": {
+      "vmutils-linux-amd64-v1.132.0.tar.gz": "fd3eaa294050fc849931e8947212c736825a7a49e5509ee4555e288750861fc8"
+    }
+  },
+  "vector": {
+    "version": "0.50.0",
+    "sha256": {
+      "vector-0.50.0-x86_64-unknown-linux-gnu.tar.gz": "951ceb14f2382c1438696552745221c5584d6895f9aa2b0e12ff0e30271d4b0e"
+    }
+  }
+}

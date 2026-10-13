@@ -92,6 +92,14 @@ jobs:
           ' mero-tee/versions.json >/dev/null
           echo "image_version=${image_version}" >> "${GITHUB_OUTPUT}"
 
+      # The build checks each download against mero-tee/build-inputs.lock.json
+      # (get_url checksum). Check the lock against the publishers here too, so
+      # a stale or wrong pin fails in seconds rather than three builds in.
+      - name: Check build inputs are pinned to what was published
+        run: |
+          scripts/ci/tests/build-inputs-pinned-test.sh
+          scripts/release/pin-build-inputs.sh --check
+
       - name: Resolve merod release gate (master only)
         id: release_gate
         env:

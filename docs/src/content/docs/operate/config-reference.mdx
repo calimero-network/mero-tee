@@ -236,6 +236,34 @@ The single source of pinned component versions (`mero-tee/versions.json`):
 | `merodVersion` | The `calimero-network/core` merod tag baked into the image. Overridable at build time via `GATED_MEROD_VERSION`. |
 | `traefikVersion` / `nodeExporterVersion` / `vmagentVersion` / `vectorVersion` | Third-party components installed by the Ansible roles. |
 
+### `build-inputs.lock.json`
+
+`mero-tee/build-inputs.lock.json` pins the sha256 of every archive the image
+build downloads, for the versions `versions.json` names: merod, meroctl and
+mero-auth from the core release, Traefik, node_exporter, vmagent and Vector.
+`group_vars/all.yml` loads it as `build_inputs`. Every download in the Ansible
+roles is a `get_url` with `checksum:` taken from it, so an archive replaced
+upstream fails the build instead of being baked into an image. The same happens
+to a version moved without a matching lock entry. Vector is installed from its
+release archive, not by piping `sh.vector.dev` into a shell.
+
+```bash
+scripts/release/pin-build-inputs.sh             # rewrite the lock from versions.json
+scripts/release/pin-build-inputs.sh --check     # exit 1 if the lock is stale
+scripts/release/pin-build-inputs.sh --download  # also hash each archive
+```
+
+The script reads the checksum file each publisher ships with the release, such
+as core's `SHA256SUMS`. Review the lock change like code.
+
+Two checks enforce the lock:
+- CI's `build-inputs-pinned-test.sh` refuses a lock that disagrees with
+  `versions.json`, and any download in the roles without a pinned checksum.
+- The node-image release preflight runs `--check` against the publishers.
+
+A `GATED_MEROD_VERSION` other than `merodVersion` fails the build until the
+lock pins it.
+
 ### Packer variables
 
 Declared in `mero-tee/ubuntu.pkr.hcl`; the x86 var-file `ubuntu-x86.pkrvars.hcl`
