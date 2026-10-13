@@ -68,6 +68,12 @@ gpu_diag() {
 }
 systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
 rm -rf /var/run/nvidia-persistenced
+# The daemon opens /dev/nvidia0 and /dev/nvidia-uvm, which nothing has created
+# yet: create them (and load nvidia-uvm) the way nvidia-smi would on first use.
+modprobe nvidia-uvm >/dev/null 2>&1 || true
+nvidia-modprobe -c=0 -u >/dev/null 2>&1 || true
+ls -l /dev/nvidia* >"${LOG}/devnodes.log" 2>&1 || true
+tail_to_serial "${LOG}/devnodes.log" 10
 if ! nvidia-persistenced --uvm-persistence-mode --verbose >"${LOG}/persistenced.log" 2>&1; then
   tail_to_serial "${LOG}/persistenced.log"
   gpu_diag
