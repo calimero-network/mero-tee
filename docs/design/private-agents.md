@@ -210,6 +210,13 @@ sealed end to end, as delegated execution's is through a relay:
 
 The agent image stays CPU-only.
 
+What one GPU TD carries is measured, not assumed: the `GPU model probe`
+workflow (`scripts/release/model/`) pins a model to a Hub commit and the sha256
+of every file, serves it with vLLM on a confidential a3-highgpu-1g VM, and
+reports time to first token, decode speed per user and turns per day under a
+Hyperfeed-shaped load (a 10k-token turn sharing a 4k-token brief, 500 tokens
+out). It publishes nothing; the image build that bakes the weights comes after.
+
 **Who does what.**
 
 - mdma deploys and stops agent VMs, holds the plan and the quota, runs the
