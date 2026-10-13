@@ -55,30 +55,31 @@ export DEBIAN_FRONTEND=noninteractive
 
 # A GPU in confidential mode is torn down when its last client exits and does
 # not come back, so a persistence daemon with UVM persistence must hold it
-# before nvidia-smi or anything else opens it. The utilities package starts its
-# own unit without that flag, which keeps a second daemon from starting, so
-# that one is replaced.
+# before nvidia-smi or anything else opens it. The utilities package ships and
+# starts nvidia-persistenced without that flag; a second daemon only loses the
+# PID-file lock to it, so the packaged unit is given the flag and restarted.
 gpu_diag() {
   {
+    systemctl status nvidia-persistenced --no-pager
     journalctl -t nvidia-persistenced -u nvidia-persistenced --no-pager -n 40
+    ls -l /dev/nvidia*
     lspci -nn | grep -i nvidia
     dmesg | grep -iE 'nvrm|xid|nvidia' | tail -n 60
   } >"${LOG}/diag.log" 2>&1 || true
-  tail_to_serial "${LOG}/diag.log" 110
+  tail_to_serial "${LOG}/diag.log" 130
 }
-systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
-# It drops to its own user and writes its PID file there, so the directory
-# must be that user's.
-rm -rf /var/run/nvidia-persistenced
-install -d -o nvidia-persistenced -g nvidia-persistenced /var/run/nvidia-persistenced
-# The daemon opens /dev/nvidia0 and /dev/nvidia-uvm, which nothing has created
-# yet: create them (and load nvidia-uvm) the way nvidia-smi would on first use.
 modprobe nvidia-uvm >/dev/null 2>&1 || true
 nvidia-modprobe -c=0 -u >/dev/null 2>&1 || true
-ls -l /dev/nvidia* >"${LOG}/devnodes.log" 2>&1 || true
-tail_to_serial "${LOG}/devnodes.log" 10
-if ! nvidia-persistenced --user nvidia-persistenced --uvm-persistence-mode --verbose >"${LOG}/persistenced.log" 2>&1; then
-  tail_to_serial "${LOG}/persistenced.log"
+mkdir -p /etc/systemd/system/nvidia-persistenced.service.d
+cat >/etc/systemd/system/nvidia-persistenced.service.d/uvm.conf <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/nvidia-persistenced --user nvidia-persistenced --uvm-persistence-mode --verbose
+UNIT
+systemctl daemon-reload
+systemctl restart nvidia-persistenced >/dev/null 2>&1 || true
+sleep 5
+if ! systemctl is-active --quiet nvidia-persistenced; then
   gpu_diag
   fail "nvidia-persistenced"
 fi
