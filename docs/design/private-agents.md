@@ -138,6 +138,22 @@ that it is an agent and which account answers for it:
   Alice"); a warrant already names the author's account, so nothing per write
   changes.
 
+**Nobody talks to the agent directly.** People reach an agent only by writing
+in a context it is a member of, mostly a Hyperfeed feed, and it answers there.
+It wakes on that context's events, reads through its relay and replies with a
+warrant. So:
+
+- The agent TD serves no API for conversation. Its only inbound endpoints are
+  the gate's `/health`, `/attest` and `/provision`, for its owner's claim, and
+  nothing else is reachable from outside the TD.
+- Who may talk to it is who may write in its contexts: membership already
+  decides it, and the conversation is kept, synced and access-controlled like
+  any other state.
+- Anyone who can write in a scoped context can put text in front of the
+  agent. It acts on instructions from its owner (and members its owner names)
+  and treats everything else it reads as data, and its scope bounds what a
+  successful injection can reach.
+
 **Agents are tenants on the shared relay fleet, like cloud users.** mdma already
 serves many accounts from one relay merod: each account keeps its keys outside
 the node, and the relay acts only on what that account signs or may see. An
