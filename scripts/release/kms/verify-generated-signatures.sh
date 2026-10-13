@@ -18,6 +18,9 @@ signed_assets=(
   release-assets/kms-compatibility-map.json
   release-assets/kms-rekor-index.json
 )
+shopt -s nullglob
+signed_assets+=(release-assets/kms-agent-attestation-policy.*.json)
+shopt -u nullglob
 
 for asset in "${signed_assets[@]}"; do
   base_name="$(basename "${asset}")"

@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["mero-kms"]
+members = ["mero-kms", "mero-agent-gate"]
 

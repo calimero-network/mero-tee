@@ -26,6 +26,36 @@
     - allowed_rtmr2
     - allowed_rtmr3
 
+# The agent entry is matched on its own (see docs/design/private-agents.md), so
+# a quote must match all five of its registers to be released an agent key.
+- name: Read the agent allowlist this KMS serves
+  set_fact:
+    kms_agent_policy: "{{ lookup('file', kms_agent_policy_file) | from_json }}"
+  when: kms_agent_policy_file | length > 0
+
+- name: Refuse an empty agent allowlist
+  assert:
+    that:
+      - kms_agent_policy[item] | default([]) | length > 0
+    fail_msg: "The agent allowlist has no {{ item }}; a KMS with an empty list would serve nobody or everybody."
+  loop:
+    - allowed_tcb_statuses
+    - allowed_mrtd
+    - allowed_rtmr0
+    - allowed_rtmr1
+    - allowed_rtmr2
+    - allowed_rtmr3
+  when: kms_agent_policy_file | length > 0
+
+# mero-kms keeps one TCB status list for every role; an agent file asking for
+# a different one would be silently ignored, so refuse it instead.
+- name: Require the agent allowlist's TCB statuses to match the node allowlist's
+  assert:
+    that:
+      - (kms_agent_policy.allowed_tcb_statuses | map('lower') | sort) == (kms_node_policy.allowed_tcb_statuses | map('lower') | sort)
+    fail_msg: "The agent and node allowlists list different allowed_tcb_statuses; mero-kms applies one list to both."
+  when: kms_agent_policy_file | length > 0
+
 # tdx_guest provides both the RTMR3 extend interface and configfs-tsm quotes.
 - name: Install linux-modules-extra for tdx_guest
   apt:

@@ -77,6 +77,7 @@ export default defineConfig({
             'flows/key-release',
             'flows/verification',
             'flows/policy-management',
+            'flows/private-agents',
           ],
         },
         {

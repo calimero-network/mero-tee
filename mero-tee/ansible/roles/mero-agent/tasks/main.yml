@@ -1,0 +1,262 @@
+---
+# The private agent image (docs/design/private-agents.md): the agent binary,
+# mero-agent-gate (attestation and sealed secret provisioning), agent-init and
+# their units. No merod service: merod is baked only for `merod kms disk-key`.
+- name: Require the agent and gate binaries
+  assert:
+    that:
+      - mero_agent_binary | length > 0
+      - mero_agent_gate_binary | length > 0
+    fail_msg: "Pass -e mero_agent_binary=... and -e mero_agent_gate_binary=... to build an agent image."
+
+- name: Install the data-disk and attestation packages
+  apt:
+    name:
+      - cryptsetup
+      - nvme-cli
+      - python3
+    state: present
+
+# tdx_guest provides both the RTMR3 extend interface and configfs-tsm quotes.
+- name: Install linux-modules-extra for tdx_guest and dm_integrity
+  apt:
+    name: "linux-modules-extra-{{ ansible_kernel }}"
+    state: present
+  ignore_errors: true
+  when: ansible_kernel is defined
+
+# merod only for `merod kms disk-key`: the same client nodes use, so the KMS
+# handshake and its verification against the signed release policy are one
+# implementation. Never run as a service here.
+- name: Download merod for the KMS disk-key client
+  unarchive:
+    src: https://github.com/calimero-network/core/releases/download/{{ merod_version }}/merod_x86_64-unknown-linux-gnu.tar.gz
+    dest: /usr/local/bin
+    mode: "0755"
+    remote_src: yes
+  register: merod_download
+  retries: 5
+  delay: 10
+  until: merod_download is succeeded
+
+- name: Probe whether the baked merod can fetch a data-disk key
+  command: /usr/local/bin/merod kms disk-key --help
+  register: merod_disk_key_help
+  changed_when: false
+  failed_when: false
+
+# On every profile: an agent keeps state only on the encrypted disk, so an
+# image that cannot open one boots into nothing.
+- name: Assert the baked merod can unlock an encrypted data disk
+  assert:
+    that:
+      - merod_disk_key_help.rc == 0
+      - "'--key-out' in merod_disk_key_help.stdout"
+      - "'--create-identity' in merod_disk_key_help.stdout"
+    fail_msg: >-
+      The baked merod ({{ merod_version }}) has no `kms disk-key`; agent-init
+      could never open the agent's data disk. Bump merodVersion in versions.json.
+
+- name: Probe cryptsetup and the kernel's dm-crypt / dm-integrity support
+  shell: |
+    set -euo pipefail
+    cryptsetup --version
+    kver="$(ls -1 /lib/modules | sort -V | tail -n1)"
+    modinfo -k "${kver}" dm_crypt >/dev/null
+    modinfo -k "${kver}" dm_integrity >/dev/null
+  args:
+    executable: /bin/bash
+  register: disk_crypto_probe
+  changed_when: false
+  failed_when: false
+
+- name: Assert the image can create LUKS2 volumes with integrity
+  assert:
+    that:
+      - disk_crypto_probe.rc == 0
+    fail_msg: "cryptsetup or dm_crypt/dm_integrity is missing: {{ disk_crypto_probe.stderr | default('') }}"
+
+- name: Ensure grub.d exists
+  file:
+    path: /etc/default/grub.d
+    state: directory
+    mode: "0755"
+
+- name: Add calimero.role=agent and the profile to the kernel cmdline (RTMR2)
+  copy:
+    content: |
+      # Role/profile kernel params for TDX attestation (RTMR[2]): an agent image
+      # never measures as a node or KMS image, or the other way round.
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=agent calimero.profile={{ lockdown_profile }}"
+    dest: /etc/default/grub.d/50-calimero-profile.cfg
+    mode: "0644"
+
+- name: Create the agent user
+  user:
+    name: "{{ mero_agent_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create mero-agent directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/mero-agent
+    - /usr/local/lib/mero-agent
+    - /etc/systemd/system/node_exporter.service.d
+
+- name: Install the agent and gate binaries
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { src: "{{ mero_agent_binary }}", dest: /usr/local/bin/mero-agent }
+    - { src: "{{ mero_agent_gate_binary }}", dest: /usr/local/bin/mero-agent-gate }
+
+- name: Pin the image profile
+  copy:
+    content: "{{ lockdown_profile }}\n"
+    dest: /etc/mero-agent/image-profile
+    mode: "0644"
+
+# The downgrade floor agent-init holds tee-release-version to, as on a node.
+- name: Bake the minimum tee-release-version
+  copy:
+    content: "{{ image_version }}\n"
+    dest: /etc/mero-agent/min-tee-release-version
+    mode: "0644"
+
+- name: Bake the gate configuration
+  template:
+    src: gate.env.j2
+    dest: /etc/mero-agent/gate.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the agent boot script
+  template:
+    src: agent-init.sh.j2
+    dest: /usr/local/lib/mero-agent/init.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the agent vector partial config
+  copy:
+    src: vector-partial-agent.yaml
+    dest: /etc/vector/vector_partial.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the agent vmagent scrape config
+  copy:
+    src: vmagent-scrape-config.yml
+    dest: /etc/vmagent/scrape_config.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Bind node_exporter to loopback
+  copy:
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/local/bin/node_exporter --web.listen-address=127.0.0.1:9100
+    dest: /etc/systemd/system/node_exporter.service.d/loopback.conf
+    mode: "0644"
+
+- name: Install mero-agent-init.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-agent boot: extend RTMR3, open the encrypted data disk
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/lib/mero-agent/init.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-agent-init.service
+    mode: "0644"
+
+# Restarts in place: a restart only rotates the provisioning key, which a
+# provisioner learns from a fresh /attest. The signing key is on the disk.
+#
+# As root, like mero-kms: a configfs-tsm quote needs root (an unprivileged gate
+# gets EACCES from /sys/kernel/config/tsm/report). The agent stays unprivileged
+# and reads the key and secrets through its group (GATE_SHARE_GROUP).
+- name: Install mero-agent-gate.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-agent-gate: attestation and sealed secret provisioning
+      Requires=mero-agent-init.service
+      After=mero-agent-init.service
+
+      [Service]
+      EnvironmentFile=/etc/mero-agent/gate.env
+      ExecStart=/usr/local/bin/mero-agent-gate
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+      ReadWritePaths=/mnt/agent
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-agent-gate.service
+    mode: "0644"
+
+# The agent reads its secrets from MERO_AGENT_SECRETS_DIR and waits for them
+# itself: until a provisioner has called /provision the directory is empty.
+- name: Install mero-agent.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-agent
+      Requires=mero-agent-init.service
+      After=mero-agent-init.service mero-agent-gate.service
+
+      [Service]
+      User={{ mero_agent_user }}
+      Group={{ mero_agent_user }}
+      EnvironmentFile=/run/mero-agent/agent.env
+      ExecStart=/usr/local/bin/mero-agent
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+      ReadWritePaths=/mnt/agent
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-agent.service
+    mode: "0644"
+
+- name: Enable the agent units
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - mero-agent-init.service
+    - mero-agent-gate.service
+    - mero-agent.service

@@ -16,6 +16,12 @@ assets_for_rekor=(
   release-assets/kms-trust-bundle.tar.gz
   release-assets/kms-compatibility-map.json
 )
+# The agent allowlists this release's KMS images serve, for the profiles whose
+# agent image was measured (docs/design/private-agents.md). Optional: a
+# release whose agent measurement failed ships node-only KMS images and none.
+shopt -s nullglob
+assets_for_rekor+=(release-assets/kms-agent-attestation-policy.*.json)
+shopt -u nullglob
 
 for asset in "${assets_for_rekor[@]}"; do
   base_name="$(basename "${asset}")"

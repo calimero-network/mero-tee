@@ -4,6 +4,7 @@ import './TabNav.css';
 const TABS = [
   { path: '/kms', label: 'KMS', description: 'Verify a mero-kms (GCP TDX) attestation' },
   { path: '/mero-tee', label: 'Mero TEE', description: 'Verify mero-tee node attestations' },
+  { path: '/agent', label: 'Agent', description: 'Verify a private agent before trusting its key' },
 ];
 
 export function TabNav() {
