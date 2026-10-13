@@ -11,10 +11,11 @@
 # route `auth-node` guards, DELETEs included.
 #
 # So, while the router exists:
-#   * it sits inside the relay-only `fleet_delegated_access` block, since the
-#     delegated routes (`/intents`, `/presence-intents`, `/context-intents`,
-#     `/governance-intents`) are the only writes a sealed request can do on
-#     these nodes;
+#   * it sits inside the relay-only `fleet_delegated_access` block. A sealed
+#     request reaches the delegated routes (`/intents`, `/presence-intents`,
+#     `/context-intents`, `/governance-intents`) and, where merod has
+#     `server.sealed.forward_auth`, whatever mero-auth admits for its token
+#     (see sealed-forward-auth-test.sh);
 #   * it matches the two envelope paths exactly, POST and OPTIONS only, never a
 #     prefix;
 #   * it is rate limited and never behind `auth-node` (which would make it

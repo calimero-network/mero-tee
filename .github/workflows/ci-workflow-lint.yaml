@@ -487,6 +487,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-sealed-route-test.sh
 
+      # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
+      # it; the first probe that reports `uptodate` must fail the release and
+      # name the change, so the allowlist narrows as soon as hosts are patched.
+      - name: Check a patched probe host stops a release that accepts outofdate
+        id: tcb_outofdate_gate_test
+        shell: bash
+        run: scripts/ci/tests/tcb-outofdate-gate-test.sh
+
       # The delegated routers (`/intents`, `/presence-intents`,
       # `/context-intents`, `/governance-intents`) skip auth-node
       # on relays. Routes requests through every router the way Traefik does,
@@ -504,6 +512,14 @@ jobs:
         id: log_auth_probe_test
         shell: bash
         run: scripts/ci/tests/node-log-auth-probe-test.sh
+
+      # Relays set `server.sealed.forward_auth` so a sealed login or logged-in
+      # call is checked by the same mero-auth traefik's auth-node asks, on a
+      # merod (>= 0.11.0-rc.84) that knows the key, and never fatally.
+      - name: Check sealed requests are guarded by traefik's own mero-auth
+        id: sealed_forward_auth_test
+        shell: bash
+        run: scripts/ci/tests/sealed-forward-auth-test.sh
 
       - name: Summarize lint outcomes
         if: ${{ always() }}
@@ -554,6 +570,7 @@ jobs:
             --checks-line "- delegated routes serve exactly their own paths: ${{ steps.traefik_delegated_route_test.outcome }}" \
             --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
+            --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
