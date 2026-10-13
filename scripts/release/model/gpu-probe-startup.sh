@@ -44,10 +44,12 @@ export DEBIAN_FRONTEND=noninteractive
 {
   apt-get update
   apt-get install -y --no-install-recommends ubuntu-drivers-common python3-venv jq
+  # The open kernel modules prebuilt for this kernel; ubuntu-drivers' --gpgpu
+  # set is headless and leaves out nvidia-smi, so the utilities come after.
   if ! ubuntu-drivers install --gpgpu "nvidia:${DRIVER}-server-open"; then
-    apt-get install -y "linux-modules-nvidia-${DRIVER}-server-open-$(uname -r)" \
-      "nvidia-utils-${DRIVER}-server" "nvidia-compute-utils-${DRIVER}-server"
+    apt-get install -y "linux-modules-nvidia-${DRIVER}-server-open-$(uname -r)"
   fi
+  apt-get install -y "nvidia-utils-${DRIVER}-server" "nvidia-compute-utils-${DRIVER}-server"
   modprobe nvidia
   nvidia-smi
 } >"${LOG}/driver.log" 2>&1 || { tail_to_serial "${LOG}/driver.log"; fail "driver install"; }
