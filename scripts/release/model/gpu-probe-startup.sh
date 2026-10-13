@@ -43,7 +43,8 @@ say "STAGE driver ${DRIVER}"
 export DEBIAN_FRONTEND=noninteractive
 {
   apt-get update
-  apt-get install -y --no-install-recommends ubuntu-drivers-common python3-venv jq
+  # Triton compiles a small C helper against Python's headers when vLLM starts.
+  apt-get install -y --no-install-recommends ubuntu-drivers-common python3-venv python3-dev build-essential jq
   # The open kernel modules prebuilt for this kernel; ubuntu-drivers' --gpgpu
   # set is headless and leaves out nvidia-smi, so the utilities come after.
   if ! ubuntu-drivers install --gpgpu "nvidia:${DRIVER}-server-open"; then
