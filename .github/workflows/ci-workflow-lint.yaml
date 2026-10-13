@@ -8,6 +8,7 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
+      - "scripts/agent/**"
       - "mero-tee/**"
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
+      - "scripts/agent/**"
       - "mero-tee/**"
   workflow_dispatch:
 
@@ -53,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh mero-tee/**/*.sh)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0
@@ -385,6 +387,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/agent-init-data-disk-test.sh
 
+      # The agent image's mero-bot launcher: it starts mero-bot only once the
+      # owner has provisioned it, with its allowlisted secrets and nothing else
+      # in its environment, never a secret in an argv, and restarts on new ones.
+      - name: Check the mero-bot launcher passes only its secrets
+        id: mero_bot_launcher_test
+        shell: bash
+        run: scripts/ci/tests/mero-bot-agent-launcher-test.sh
+
       # The root filesystem is sealed behind dm-verity as the image build's last
       # step (mero-tee#334). Runs the seal against a disk image on a loop device,
       # laid out like an ungrown GCP base image: the root is written as EROFS with
@@ -570,6 +580,7 @@ jobs:
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- agent-init extends RTMR3 as an agent: ${{ steps.agent_rtmr3_test.outcome }}" \
             --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
+            --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
             --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \

@@ -8,7 +8,8 @@
 # something a reviewer ever saw. So:
 #
 #   * mero-tee/build-inputs.lock.json pins, for the version versions.json
-#     names, every component the build fetches, each with a 64-hex sha256;
+#     names, every component the build fetches, each with a 64-hex sha256
+#     (mero-bot only once versions.json names meroBotVersion);
 #   * every `get_url` in the image's Ansible carries `checksum:`, taken from
 #     that lock;
 #   * no `unarchive` fetches a URL itself (it cannot check a digest), and no
@@ -37,9 +38,15 @@ KEYS = {
     "nodeExporter": "nodeExporterVersion",
     "vmagent": "vmagentVersion",
     "vector": "vectorVersion",
+    "node": "nodeVersion",
+    "meroBot": "meroBotVersion",
 }
+# Pinned only once versions.json names a version: the agent image's mero-bot.
+OPTIONAL = {"meroBot"}
 for name, key in KEYS.items():
     entry = lock.get(name)
+    if not entry and name in OPTIONAL and not versions.get(key):
+        continue
     if not entry:
         failures.append(f"build-inputs.lock.json pins no {name}")
         continue

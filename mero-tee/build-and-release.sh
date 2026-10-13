@@ -73,6 +73,18 @@ fi
 # and mero-agent-gate. No provisioner is baked: the first owner claims a
 # running agent.
 if [[ "${IMAGE_ROLE:-node}" == "agent" ]]; then
+  # MERO_BOT_BUNDLE: the agent is mero-bot (its release bundle, checked against
+  # its pin in build-inputs.lock.json), started by the launcher in this repo.
+  if [[ -n "${MERO_BOT_BUNDLE:-}" ]]; then
+    [[ -f "${MERO_BOT_BUNDLE}" ]] || { echo "::error::MERO_BOT_BUNDLE ${MERO_BOT_BUNDLE} does not exist"; exit 1; }
+    launcher="$(realpath "$(dirname "${BASH_SOURCE[0]}")/../scripts/agent/mero-bot-agent.sh")"
+    if [[ -n "${MERO_AGENT_BINARY:-}" && "$(realpath "${MERO_AGENT_BINARY}")" != "${launcher}" ]]; then
+      echo "::error::with MERO_BOT_BUNDLE the agent is ${launcher}; unset MERO_AGENT_BINARY"
+      exit 1
+    fi
+    MERO_AGENT_BINARY="${launcher}"
+    packer_args+=(-var "mero_bot_bundle=$(realpath "${MERO_BOT_BUNDLE}")")
+  fi
   [[ -f "${MERO_AGENT_BINARY:-}" ]] || { echo "::error::IMAGE_ROLE=agent needs MERO_AGENT_BINARY (the agent binary)"; exit 1; }
   [[ -f "${MERO_AGENT_GATE_BINARY:-}" ]] || { echo "::error::IMAGE_ROLE=agent needs MERO_AGENT_GATE_BINARY (a built mero-agent-gate)"; exit 1; }
   packer_args+=(

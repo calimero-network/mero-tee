@@ -1,8 +1,11 @@
 name: Agent TDX image probe
-run-name: Agent TDX image probe (${{ inputs.profile }})
+run-name: Agent TDX image probe (${{ inputs.profile }}, ${{ inputs.agent }})
 
 # Builds the private agent image from this commit (docs/design/private-agents.md)
 # with mero-agent-gate and the stub agent (scripts/agent/stub-mero-agent.py),
+# or with `agent: mero-bot` the mero-bot release versions.json pins
+# (meroBotVersion), started by scripts/agent/mero-bot-agent.sh. That download
+# needs the MERO_BOT_RELEASE_TOKEN secret: read access to calimero-network/mero-bot.
 # boots it on a real TDX VM in ephemeral mode, has Intel Trust Authority verify
 # its quote, and provisions it a throwaway secret through mero-agent-provision
 # (scripts/release/agent/run-agent-probe.sh).
@@ -23,6 +26,14 @@ on:
         options:
           - debug
           - locked-read-only
+      agent:
+        description: "The agent the image runs"
+        required: true
+        type: choice
+        default: stub
+        options:
+          - stub
+          - mero-bot
       wait_timeout_minutes:
         description: "How long to wait for the gate to answer"
         required: true
@@ -70,6 +81,22 @@ jobs:
           cp scripts/agent/stub-mero-agent.py probe/mero-agent
           sha256sum probe/mero-agent-gate probe/mero-agent | tee probe/binaries.sha256
 
+      # The bundle is checked against its pin again in the build (mero-agent role).
+      - name: Download the pinned mero-bot bundle
+        if: ${{ inputs.agent == 'mero-bot' }}
+        env:
+          GH_TOKEN: ${{ secrets.MERO_BOT_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN}" ]] || { echo "::error::agent=mero-bot needs the MERO_BOT_RELEASE_TOKEN secret"; exit 1; }
+          version="$(jq -r '.meroBotVersion // empty' mero-tee/versions.json)"
+          [[ -n "${version}" ]] || { echo "::error::versions.json pins no meroBotVersion; set it and run scripts/release/pin-build-inputs.sh"; exit 1; }
+          asset="mero-bot-${version}-linux-x64.tar.gz"
+          gh release download "v${version}" --repo calimero-network/mero-bot --pattern "${asset}" --dir probe
+          want="$(jq -r --arg a "${asset}" '.meroBot.sha256[$a] // empty' mero-tee/build-inputs.lock.json)"
+          echo "${want}  probe/${asset}" | sha256sum -c -
+          echo "MERO_BOT_BUNDLE=$(realpath "probe/${asset}")" >>"${GITHUB_ENV}"
+
       - name: Authenticate to GCP via service account key
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -89,11 +116,12 @@ jobs:
         working-directory: mero-tee
         env:
           IMAGE_ROLE: agent
-          MERO_AGENT_BINARY: ../probe/mero-agent
           MERO_AGENT_GATE_BINARY: ../probe/mero-agent-gate
           PACKER_LOG: 1
         run: |
           set -euo pipefail
+          # With MERO_BOT_BUNDLE, build-and-release.sh bakes the mero-bot launcher instead.
+          [[ -n "${MERO_BOT_BUNDLE:-}" ]] || export MERO_AGENT_BINARY=../probe/mero-agent
           ./init.sh
           ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-build.log
 
@@ -131,6 +159,7 @@ jobs:
             probe/
             !probe/mero-agent-gate
             !probe/mero-agent-provision
+            !probe/mero-bot-*.tar.gz
           if-no-files-found: ignore
 
       - name: Delete the probe image

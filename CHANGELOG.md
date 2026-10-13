@@ -6,6 +6,17 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Added
+
+- **The agent image can run mero-bot.**
+  - **What it is.** mero-bot runs headless on its owner's Hyperfeed. Its model calls go to NEAR AI Cloud, attested by mero-bot before anything is sent.
+  - **What is baked.** `MERO_BOT_BUNDLE` (Packer `mero_bot_bundle`) bakes Node and mero-bot's release bundle at `/opt/node` and `/opt/mero-bot`, both checked against `build-inputs.lock.json` (`nodeVersion`, `meroBotVersion`).
+  - **The launcher.** `/usr/local/bin/mero-agent` becomes `scripts/agent/mero-bot-agent.sh`. It waits for the owner to provision `MERO_AGENTS_JSON`, `CALIMERO_NODE_URL` and a node login, and passes mero-bot only its allowlisted secrets, never in an argv. It runs mero-bot with `--attested-only`, and restarts it on new secrets.
+  - **The probe.** `agent-tdx-image-probe.yaml` takes `agent: mero-bot`.
+  - **Not yet on.** The image stays the stub until `versions.json` names a mero-bot release.
+  - **Tests.** `scripts/ci/tests/mero-bot-agent-launcher-test.sh`; the pin test covers `node` and `meroBot`.
+  - **Design.** `docs/design/private-agents.md`, "The agent: mero-bot on NEAR AI Cloud".
+
 ### Security
 
 - **Logs and metrics leave a non-debug image only over https.**

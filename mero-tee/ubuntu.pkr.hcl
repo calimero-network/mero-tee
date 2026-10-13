@@ -102,6 +102,13 @@ variable "mero_agent_gate_binary" {
   default = ""
 }
 
+# Optional for image_role "agent": mero-bot's release bundle, baked with Node
+# (mero-agent role); mero_agent_binary is then scripts/agent/mero-bot-agent.sh.
+variable "mero_bot_bundle" {
+  type    = string
+  default = ""
+}
+
 variable "mero_kms_binary" {
   type    = string
   default = ""
@@ -214,6 +221,7 @@ build {
       "-e", "kms_agent_policy_file=${var.kms_agent_policy_file}",
       "-e", "mero_agent_binary=${var.mero_agent_binary}",
       "-e", "mero_agent_gate_binary=${var.mero_agent_gate_binary}",
+      "-e", "mero_bot_bundle=${var.mero_bot_bundle}",
     ]
   }
 }
