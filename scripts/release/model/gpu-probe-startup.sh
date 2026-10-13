@@ -51,8 +51,16 @@ export DEBIAN_FRONTEND=noninteractive
   fi
   apt-get install -y "nvidia-utils-${DRIVER}-server" "nvidia-compute-utils-${DRIVER}-server"
   modprobe nvidia
-  nvidia-smi
-} >"${LOG}/driver.log" 2>&1 || { tail_to_serial "${LOG}/driver.log"; fail "driver install"; }
+  # A GPU in confidential mode is torn down when its last client exits and
+  # does not come back, so the persistence daemon must hold it from the start,
+  # before nvidia-smi or anything else opens it.
+  nvidia-persistenced --uvm-persistence-mode
+} >"${LOG}/driver.log" 2>&1 || {
+  tail_to_serial "${LOG}/driver.log"
+  dmesg | grep -iE 'nvrm|nvidia|xid|tdx' | tail -n 60 >"${LOG}/dmesg.log" || true
+  tail_to_serial "${LOG}/dmesg.log" 60
+  fail "driver install"
+}
 
 tail_to_serial "${LOG}/driver.log" 8
 
@@ -61,7 +69,6 @@ tail_to_serial "${LOG}/driver.log" 8
 # is accepted. Everything nvidia-smi says goes to the serial console; none of
 # it is fatal here, since vLLM fails plainly if the GPU is unusable.
 {
-  nvidia-persistenced --uvm-persistence-mode || systemctl start nvidia-persistenced
   nvidia-smi
   nvidia-smi conf-compute -f
   nvidia-smi conf-compute -grs
@@ -74,6 +81,11 @@ cc_features="$(nvidia-smi conf-compute -f 2>&1 | tr '\n' ' ' || true)"
 cc_ready="$(nvidia-smi conf-compute -grs 2>&1 | tr '\n' ' ' || true)"
 gpu="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>&1 | tr '\n' ' ' || true)"
 say "STAGE gpu ${gpu} | ${cc_features} | ${cc_ready}"
+if ! nvidia-smi -L >/dev/null 2>&1; then
+  { lspci -nn | grep -i nvidia; dmesg | grep -iE 'nvrm|nvidia|xid' | tail -n 60; } >"${LOG}/dmesg.log" 2>&1 || true
+  tail_to_serial "${LOG}/dmesg.log" 70
+  fail "the GPU is not usable"
+fi
 
 say "STAGE vllm ${VLLM_VERSION:-latest}"
 {
