@@ -80,4 +80,27 @@ grep -q 'instance_type=mero-kms' "${SB}/systemd/vmagent.service" || fail "KMS me
 grep -q 'instance_profile=locked-read-only' "${SB}/systemd/vmagent.service" || fail "KMS metrics carry the wrong profile"
 grep -q -- '-httpListenAddr=127.0.0.1:8429' "${SB}/systemd/vmagent.service" || fail "vmagent does not listen on loopback"
 
-echo "PASS: shipper configs refuse injected URLs and tokens; KMS labels and loopback hold"
+# Plain http only on a debug image: anything else, an unknown profile included,
+# would send the token and every line or sample in the clear.
+for profile in locked-read-only "" unexpected; do
+  printf '%s\n' "$profile" > "${SB}/mero-kms/image-profile"
+  rm -f "${SB}/vector/vector.yaml" "${SB}/systemd/vmagent.service"
+  vector "http://victoria.test/insert/elasticsearch" true provided "${SB}/vector/provided_token" \
+    && fail "configure_vector.sh accepted plain http on profile '${profile}'"
+  [[ -e "${SB}/vector/vector.yaml" ]] && fail "configure_vector.sh wrote a config for plain http on '${profile}'"
+  vmagent "http://victoria.test/api/v1/write" true provided "${SB}/vector/provided_token" \
+    && fail "configure_vmagent.sh accepted plain http on profile '${profile}'"
+  [[ -e "${SB}/systemd/vmagent.service" ]] && fail "configure_vmagent.sh wrote a unit for plain http on '${profile}'"
+done
+rm -f "${SB}/mero-kms/image-profile"
+vector "http://victoria.test/insert/elasticsearch" true provided "${SB}/vector/provided_token" \
+  && fail "configure_vector.sh accepted plain http with no profile file"
+for profile in debug debug-read-only; do
+  printf '%s\n' "$profile" > "${SB}/mero-kms/image-profile"
+  vector "http://victoria.test/insert/elasticsearch" true provided "${SB}/vector/provided_token" \
+    || { cat "${SB}/out" >&2; fail "configure_vector.sh refused plain http on debug profile '${profile}'"; }
+  vmagent "http://victoria.test/api/v1/write" true provided "${SB}/vector/provided_token" \
+    || { cat "${SB}/out" >&2; fail "configure_vmagent.sh refused plain http on debug profile '${profile}'"; }
+done
+
+echo "PASS: shipper configs refuse injected URLs and tokens, and plain http outside debug; KMS labels and loopback hold"

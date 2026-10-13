@@ -8,6 +8,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Security
 
+- **Logs and metrics leave a non-debug image only over https.**
+  - **The problem.** `configure_vector.sh` and `configure_vmagent.sh` accepted a plain `http://` `logs-endpoint` or `metrics-endpoint`. Each request carries the observability bearer token and every shipped line or sample, and instance metadata sets the URL, so a plain-http endpoint handed both to anyone on the path.
+  - **Now.** Both scripts refuse a non-https URL unless the image profile is `debug` or `debug-read-only`. An unknown or missing profile counts as production, so it is refused too.
+  - **Tests.** `observability-config-injection-test.sh` checks that plain http is refused on `locked-read-only`, on an empty or unknown profile and with no profile file, and that it is accepted on both debug profiles.
+  - **Measurements.** Changes every image's measurements.
+  - **Operators.** An operator whose production endpoint is plain http must move it to https before rolling this image.
+
 - **Logs leave the TEE only through an egress guard.** Node, KMS and agent images ship their journal to `logs-endpoint`, which instance metadata sets, so the VM's operator can read every line.
   - **Before.** Lines left with every journald field (`_CMDLINE`, `_PID`, `_BOOT_ID`, `_MACHINE_ID`, ...) and nothing masked.
   - **The guard.** Each image's `vector_partial.yaml` now routes its journal through `guard_egress`, which runs the baked `egress-guard.vrl`, and the sink reads nothing else. The guard ships only `timestamp`, `message`, `unit`, `hostname`, `instance_*` and `priority`. It masks PEM private keys, JWTs, `Bearer`/`Basic` credentials, URL userinfo, `token` query parameters, recovery phrases and the value of any secret-named key, and caps a message at 8 KiB. It also masks the application data an audit of core found merod logging at its default level: guest `execution log` lines, method error payloads, guest panic text and the panic hook. Admin login names, serde-echoed client values, jti, the JSON-RPC client id and KMS error bodies are masked too. Public keys, context IDs and peer IDs are kept. A line it cannot process is dropped (`drop_on_error`, `drop_on_abort`).
