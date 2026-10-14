@@ -2,21 +2,29 @@
 //!
 //! ```text
 //! mero-agent-provision keygen --out <secret-file>
-//! mero-agent-provision attest    --gate <url> --policy <agent-policy.json> [--key <secret-file>]
+//! mero-agent-provision attest    --gate <url> --policy <agent-policy.json> \
+//!                                [--agent <id> [--key <secret-file>]]
 //! mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
-//!                                --key <secret-file> --secrets <secrets.json>
+//!                                --agent <id> --key <secret-file> --secrets <secrets.json>
+//! mero-agent-provision release   --gate <url> --policy <agent-policy.json> \
+//!                                --agent <id> --key <secret-file>
 //! ```
+//!
+//! An agent TD hosts several agents; each is named by an agent id, which
+//! whoever places it (mdma) chooses, and is claimed by its own owner.
 //!
 //! `keygen` makes the owner's X25519 key and prints its public half. It never
 //! leaves the owner's machine. `attest` verifies a gate and prints the keys its
-//! quote covers, including the owner that claimed it, if any; with `--key`, it
-//! fails unless the agent is unclaimed or claimed by that key. An account owner
-//! authorizes the printed `signingPublicKey` as the agent's device only after
-//! it shows their own key as owner. `provision` verifies the gate the same way,
-//! refuses an agent someone else claimed, then seals `secrets.json`
-//! (`{"secrets": {"NAME": "value"}}`) to it under `--key`. The first bundle an
-//! agent accepts claims it for that key. Nothing is sent before the quote
+//! quote covers for `--agent`, including the owner that claimed it, if any
+//! (without `--agent`, the TD alone); with `--key`, it fails unless the agent
+//! is unclaimed or claimed by that key. An account owner authorizes the printed
+//! `signingPublicKey` as the agent's device only after it shows their own key
+//! as owner. `provision` verifies the gate the same way, refuses an agent
+//! someone else claimed, then seals `secrets.json` (`{"secrets": {"NAME":
+//! "value"}}`) to it under `--key`. The first bundle for an agent id claims a
+//! free slot on the TD for it and that key. Nothing is sent before the quote
 //! passes, and afterwards the gate is attested again to prove the claim.
+//! `release` stops the agent and erases its slot: claim, keys, secrets, state.
 //!
 //! `--allow-mock` accepts a mock quote (`mock-attestation` builds only).
 
@@ -29,7 +37,7 @@ use base64::Engine;
 use mero_agent_gate::keys::random_32;
 use mero_agent_gate::protocol::{keypair_from_secret, SecretsBundle};
 use mero_agent_gate::verify::{
-    attest_gate, check_owner, provision_gate, AgentPolicy, VerifiedGate,
+    attest_gate, check_owner, provision_gate, release_gate, AgentPolicy, VerifiedGate,
 };
 use zeroize::Zeroizing;
 
@@ -72,13 +80,14 @@ impl Args {
             .ok_or_else(|| format!("--{name} is required"))
     }
 
+    /// Whether `--name` was given, with or without a value.
     fn switch(&self, name: &str) -> bool {
         self.flags.iter().any(|(flag, _)| flag == name)
     }
 }
 
 const USAGE: &str =
-    "usage: mero-agent-provision <keygen|attest|provision> [flags]; see the module docs";
+    "usage: mero-agent-provision <keygen|attest|provision|release> [flags]; see the module docs";
 
 fn read_policy(path: &str) -> Result<AgentPolicy, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -119,10 +128,18 @@ async fn run(args: Args) -> Result<(), String> {
     if args.command == "keygen" {
         return keygen(&args);
     }
-    if args.command != "attest" && args.command != "provision" {
+    if !["attest", "provision", "release"].contains(&args.command.as_str()) {
         return Err(USAGE.to_owned());
     }
     let gate_url = args.value("gate")?;
+    let agent = if args.command == "attest" && !args.switch("agent") {
+        if args.switch("key") {
+            return Err("--key needs --agent: a key owns an agent, not the TD".to_owned());
+        }
+        None
+    } else {
+        Some(args.value("agent")?)
+    };
     let policy = read_policy(args.value("policy")?)?;
     #[cfg(not(feature = "mock-attestation"))]
     if args.switch("allow-mock") {
@@ -136,6 +153,7 @@ async fn run(args: Args) -> Result<(), String> {
         let verified = attest_gate(
             &client,
             gate_url,
+            agent,
             &policy,
             #[cfg(feature = "mock-attestation")]
             args.switch("allow-mock"),
@@ -151,7 +169,7 @@ async fn run(args: Args) -> Result<(), String> {
     let verified = verify().await?;
 
     if args.command == "attest" {
-        if args.flags.iter().any(|(flag, _)| flag == "key") {
+        if args.switch("key") {
             let key = read_secret_key(args.value("key")?)?;
             check_owner(&verified, &key)?;
             eprintln!(
@@ -166,6 +184,27 @@ async fn run(args: Args) -> Result<(), String> {
         println!(
             "{}",
             serde_json::to_string_pretty(&verified).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+
+    if args.command == "release" {
+        let key = read_secret_key(args.value("key")?)?;
+        check_owner(&verified, &key)?;
+        let response = release_gate(&client, gate_url, &verified, &key).await?;
+        // The gate's word is not proof: a fresh quote must bind no owner.
+        let after = verify().await?;
+        if after.owner_public_key.is_some() {
+            return Err(
+                "the gate says it released the agent, but its quote still binds an owner"
+                    .to_owned(),
+            );
+        }
+        eprintln!("Released: the agent stopped and its slot was erased");
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({ "released": response.released }))
+                .map_err(|e| e.to_string())?
         );
         return Ok(());
     }
@@ -186,8 +225,15 @@ async fn run(args: Args) -> Result<(), String> {
     if after.owner_public_key != Some(mine) {
         return Err("the gate accepted the secrets, but its quote binds no owner".to_owned());
     }
-    if after.signing_public_key != verified.signing_public_key {
-        return Err("the gate's signing key changed while provisioning".to_owned());
+    let signing = after
+        .signing_public_key
+        .ok_or("the gate accepted the secrets, but its quote binds no signing key")?;
+    // Unclaimed before, the claim made the key; claimed before, it must not change.
+    if verified
+        .signing_public_key
+        .is_some_and(|before| before != signing)
+    {
+        return Err("the agent's signing key changed while provisioning".to_owned());
     }
     eprintln!("Claimed by your key; authorize signingPublicKey as this agent's device");
     println!(
@@ -196,7 +242,8 @@ async fn run(args: Args) -> Result<(), String> {
             "written": response.written,
             "claimed": response.claimed,
             "ownerPublicKey": BASE64.encode(mine),
-            "signingPublicKey": BASE64.encode(after.signing_public_key),
+            "agentId": after.agent_id,
+            "signingPublicKey": BASE64.encode(signing),
         }))
         .map_err(|e| e.to_string())?
     );

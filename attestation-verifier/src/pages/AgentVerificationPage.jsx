@@ -4,8 +4,8 @@ import { extractMeasurementsFromQuoteB64 } from '../utils/attestation.js';
 import './VerificationPage.css';
 
 const ATTEST_EXAMPLE = `NONCE=$(head -c 32 /dev/urandom | base64 -w0); echo "$NONCE"
-curl -s -X POST http://<agent>:8090/attest \\
-  -H 'content-type: application/json' -d "{\\"nonceB64\\":\\"$NONCE\\"}"`;
+curl -s -X POST http://<agent-td>:8090/attest -H 'content-type: application/json' \\
+  -d "{\\"nonceB64\\":\\"$NONCE\\",\\"agentId\\":\\"<your agent id>\\"}"`;
 
 const REGISTERS = ['mrtd', 'rtmr0', 'rtmr1', 'rtmr2', 'rtmr3'];
 
@@ -71,16 +71,18 @@ export function AgentVerificationPage() {
   };
 
   const { status, error, result } = state;
-  const trusted = result && result.itaVerified && result.nonceVerified && result.keysVerified && result.policyOk;
+  const trusted = result && result.itaVerified && result.nonceVerified && result.keysVerified && result.policyOk
+    && Boolean(result.keys?.signingPublicKeyB64);
 
   return (
     <section className="verification-page">
       <h2>Private agent (GCP TDX)</h2>
       <p className="hint">
         Call the agent&apos;s <code>/attest</code> with a nonce you chose and paste the response with the
-        agent policy of its release. Its quote is verified by Intel Trust Authority, must carry your
-        nonce and commit to the keys the gate names, and its MRTD/RTMR0–3 must be in the policy. Only
-        then is the signing key below the agent&apos;s, running the measured build.
+        agent policy of its release. One agent TD hosts several owners&apos; agents, so ask for yours by
+        its agent id. The quote is verified by Intel Trust Authority, must carry your nonce and commit
+        to that agent id and the keys the gate names, and its MRTD/RTMR0–3 must be in the policy. Only
+        then is the signing key below your agent&apos;s, running the measured build.
       </p>
       <form onSubmit={onSubmit} className="verifier-form">
         <div className="input-row input-row--col">
@@ -116,6 +118,12 @@ export function AgentVerificationPage() {
             <li>Keys: {result.keysVerified ? 'committed to by the quote' : 'NOT committed to'}</li>
             {result.keys && (
               <li>
+                Agent:{' '}
+                {result.keys.agentId ? <code>{result.keys.agentId}</code> : 'none named (a quote of the TD alone)'}
+              </li>
+            )}
+            {result.keys && (
+              <li>
                 Owner:{' '}
                 {result.keys.ownerPublicKeyB64 ? (
                   <>claimed by <code>{result.keys.ownerPublicKeyB64}</code>; authorize it only if that is your key</>
@@ -135,6 +143,8 @@ export function AgentVerificationPage() {
               Signing key{result.profile ? ` (${result.profile})` : ''}, safe to authorize as this agent&apos;s
               device once its owner above is your key: <code>{result.keys.signingPublicKeyB64}</code>
             </p>
+          ) : result.keysVerified && result.keys && !result.keys.signingPublicKeyB64 ? (
+            <p className="hint">This agent is not claimed yet, so it has no signing key to authorize.</p>
           ) : (
             <div className="error-banner">Do not authorize this agent&apos;s key: a check above failed.</div>
           )}

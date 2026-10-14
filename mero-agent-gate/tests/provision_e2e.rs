@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use mero_agent_gate::keys::{ProvisioningKey, Share};
+use mero_agent_gate::keys::ProvisioningKey;
 use mero_agent_gate::protocol::{
     keypair_from_secret, AttestRequest, AttestResponse, SecretsBundle,
 };
-use mero_agent_gate::server::{router, Gate, MockQuoter};
-use mero_agent_gate::verify::{attest_gate, provision_gate, verify_attest_response, AgentPolicy};
+use mero_agent_gate::server::{router, Gate, MockQuoter, NoUnits};
+use mero_agent_gate::slots::open_slots;
+use mero_agent_gate::verify::{
+    attest_gate, provision_gate, release_gate, verify_attest_response, AgentPolicy,
+};
 
 const OWNER: [u8; 32] = [0x42; 32];
 const SOMEONE_ELSE: [u8; 32] = [0x43; 32];
@@ -27,18 +30,14 @@ fn policy() -> AgentPolicy {
     }
 }
 
+const AGENT: &str = "agent-1";
+
 async fn serve(dir: &std::path::Path) -> (String, Arc<Gate>) {
-    std::fs::create_dir_all(dir.join("keys")).unwrap();
-    let owner_path = dir.join("keys/owner.x25519");
-    let owner = mero_agent_gate::keys::load_owner(&owner_path).unwrap();
     let gate = Arc::new(Gate::new(
         Arc::new(MockQuoter),
         ProvisioningKey::generate(),
-        [0x55; 32],
-        dir.join("secrets"),
-        Share::default(),
-        owner,
-        owner_path,
+        open_slots(&dir.join("agents"), 2, "").unwrap(),
+        Arc::new(NoUnits),
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -65,8 +64,10 @@ async fn the_first_provisioner_claims_the_agent_and_only_it_provisions_again() {
     let client = reqwest::Client::new();
     let (_, owner) = keypair_from_secret(&OWNER).unwrap();
 
-    let verified = attest_gate(&client, &url, &policy(), true).await.unwrap();
-    assert_eq!(verified.signing_public_key, [0x55; 32]);
+    let verified = attest_gate(&client, &url, Some(AGENT), &policy(), true)
+        .await
+        .unwrap();
+    assert_eq!(verified.signing_public_key, None);
     assert_eq!(verified.owner_public_key, None);
 
     let bundle = SecretsBundle {
@@ -78,13 +79,16 @@ async fn the_first_provisioner_claims_the_agent_and_only_it_provisions_again() {
     assert_eq!(written.written, vec!["MODEL_API_KEY"]);
     assert!(written.claimed);
     assert_eq!(
-        std::fs::read_to_string(dir.join("secrets/MODEL_API_KEY")).unwrap(),
+        std::fs::read_to_string(dir.join("agents/1/secrets/MODEL_API_KEY")).unwrap(),
         "sk-test"
     );
 
-    // A fresh quote binds the owner.
-    let claimed = attest_gate(&client, &url, &policy(), true).await.unwrap();
+    // A fresh quote binds the owner and the signing key the claim made.
+    let claimed = attest_gate(&client, &url, Some(AGENT), &policy(), true)
+        .await
+        .unwrap();
     assert_eq!(claimed.owner_public_key, Some(owner));
+    assert!(claimed.signing_public_key.is_some());
 
     // Someone else is refused by their own CLI before anything is sent...
     let err = provision_gate(&client, &url, &claimed, &SOMEONE_ELSE, &bundle)
@@ -106,7 +110,7 @@ async fn the_first_provisioner_claims_the_agent_and_only_it_provisions_again() {
         .unwrap();
     assert!(!again.claimed);
     assert_eq!(
-        std::fs::read_to_string(dir.join("secrets/MODEL_API_KEY")).unwrap(),
+        std::fs::read_to_string(dir.join("agents/1/secrets/MODEL_API_KEY")).unwrap(),
         "sk-rotated"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -123,14 +127,18 @@ async fn a_claim_survives_a_gate_restart() {
     };
     {
         let (url, _gate) = serve(&dir).await;
-        let verified = attest_gate(&client, &url, &policy(), true).await.unwrap();
+        let verified = attest_gate(&client, &url, Some(AGENT), &policy(), true)
+            .await
+            .unwrap();
         provision_gate(&client, &url, &verified, &OWNER, &bundle)
             .await
             .unwrap();
     }
     let (url, _gate) = serve(&dir).await;
     let (_, owner) = keypair_from_secret(&OWNER).unwrap();
-    let verified = attest_gate(&client, &url, &policy(), true).await.unwrap();
+    let verified = attest_gate(&client, &url, Some(AGENT), &policy(), true)
+        .await
+        .unwrap();
     assert_eq!(verified.owner_public_key, Some(owner));
     assert!(
         provision_gate(&client, &url, &verified, &SOMEONE_ELSE, &bundle)
@@ -147,7 +155,7 @@ async fn a_claim_survives_a_gate_restart() {
 async fn a_mock_quote_is_refused_unless_allowed() {
     let dir = temp_dir("mock");
     let (url, _gate) = serve(&dir).await;
-    let err = attest_gate(&reqwest::Client::new(), &url, &policy(), false)
+    let err = attest_gate(&reqwest::Client::new(), &url, Some(AGENT), &policy(), false)
         .await
         .unwrap_err();
     assert!(err.contains("mock"), "{err}");
@@ -165,6 +173,7 @@ async fn a_substituted_provisioning_key_is_caught() {
         .post(format!("{url}/attest"))
         .json(&AttestRequest {
             nonce_b64: BASE64.encode(nonce),
+            agent_id: Some(AGENT.to_owned()),
         })
         .send()
         .await
@@ -173,10 +182,10 @@ async fn a_substituted_provisioning_key_is_caught() {
         .await
         .unwrap();
     response.provisioning_public_key_b64 = BASE64.encode(ProvisioningKey::generate().public);
-    let err = verify_attest_response(&response, &nonce, &policy(), true)
+    let err = verify_attest_response(&response, &nonce, Some(AGENT), &policy(), true)
         .await
         .unwrap_err();
-    assert!(err.contains("does not commit to the keys"), "{err}");
+    assert!(err.contains("does not commit to the agent, keys"), "{err}");
 }
 
 #[tokio::test]
@@ -187,6 +196,7 @@ async fn a_replayed_quote_fails_on_a_fresh_nonce() {
         .post(format!("{url}/attest"))
         .json(&AttestRequest {
             nonce_b64: BASE64.encode([1u8; 32]),
+            agent_id: Some(AGENT.to_owned()),
         })
         .send()
         .await
@@ -194,8 +204,88 @@ async fn a_replayed_quote_fails_on_a_fresh_nonce() {
         .json()
         .await
         .unwrap();
-    let err = verify_attest_response(&response, &[2u8; 32], &policy(), true)
+    let err = verify_attest_response(&response, &[2u8; 32], Some(AGENT), &policy(), true)
         .await
         .unwrap_err();
     assert!(err.contains("nonce"), "{err}");
+}
+
+/// Two owners on one TD: each has its own agent, signing key and secrets, and
+/// neither can provision or release the other's.
+#[tokio::test]
+async fn two_owners_share_a_td_and_neither_reaches_the_other() {
+    let dir = temp_dir("tenants");
+    let (url, _gate) = serve(&dir).await;
+    let client = reqwest::Client::new();
+    let secret = |v: &str| SecretsBundle {
+        secrets: [("MODEL_API_KEY".to_owned(), v.to_owned())].into(),
+    };
+
+    let mine = attest_gate(&client, &url, Some("mine"), &policy(), true)
+        .await
+        .unwrap();
+    provision_gate(&client, &url, &mine, &OWNER, &secret("sk-mine"))
+        .await
+        .unwrap();
+    let theirs = attest_gate(&client, &url, Some("theirs"), &policy(), true)
+        .await
+        .unwrap();
+    provision_gate(&client, &url, &theirs, &SOMEONE_ELSE, &secret("sk-theirs"))
+        .await
+        .unwrap();
+
+    let mine = attest_gate(&client, &url, Some("mine"), &policy(), true)
+        .await
+        .unwrap();
+    let theirs = attest_gate(&client, &url, Some("theirs"), &policy(), true)
+        .await
+        .unwrap();
+    assert_ne!(mine.signing_public_key, theirs.signing_public_key);
+    assert_ne!(mine.owner_public_key, theirs.owner_public_key);
+
+    // A quote for one agent is not a quote for the other.
+    let nonce = [5u8; 32];
+    let response: AttestResponse = client
+        .post(format!("{url}/attest"))
+        .json(&AttestRequest {
+            nonce_b64: BASE64.encode(nonce),
+            agent_id: Some("theirs".to_owned()),
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut posing = response;
+    posing.agent_id = Some("mine".to_owned());
+    let err = verify_attest_response(&posing, &nonce, Some("mine"), &policy(), true)
+        .await
+        .unwrap_err();
+    assert!(err.contains("does not commit"), "{err}");
+
+    // Neither touches the other's agent.
+    assert!(
+        provision_gate(&client, &url, &mine, &SOMEONE_ELSE, &secret("evil"))
+            .await
+            .unwrap_err()
+            .contains("not yours")
+    );
+    assert!(release_gate(&client, &url, &mine, &SOMEONE_ELSE)
+        .await
+        .unwrap_err()
+        .contains("not yours"));
+
+    // Its owner releases one; the other is untouched.
+    release_gate(&client, &url, &mine, &OWNER).await.unwrap();
+    let after = attest_gate(&client, &url, Some("mine"), &policy(), true)
+        .await
+        .unwrap();
+    assert_eq!(after.owner_public_key, None);
+    assert!(!dir.join("agents/1/secrets/MODEL_API_KEY").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("agents/2/secrets/MODEL_API_KEY")).unwrap(),
+        "sk-theirs"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

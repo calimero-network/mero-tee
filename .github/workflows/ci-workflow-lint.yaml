@@ -387,6 +387,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/agent-init-data-disk-test.sh
 
+      # An agent TD hosts several owners' agents, one per slot: each slot's
+      # keys and secrets are its group's alone, and its unit runs as its own
+      # user, writes only its own state and sees no other agent's processes.
+      - name: Check each agent slot is its own user's alone
+        id: agent_slots_test
+        shell: bash
+        run: scripts/ci/tests/agent-init-slots-test.sh
+
       # The agent image's mero-bot launcher: it starts mero-bot only once the
       # owner has provisioned it, with its allowlisted secrets and nothing else
       # in its environment, never a secret in an argv, and restarts on new ones.
@@ -580,6 +588,7 @@ jobs:
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- agent-init extends RTMR3 as an agent: ${{ steps.agent_rtmr3_test.outcome }}" \
             --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
+            --checks-line "- agent slots isolated per user: ${{ steps.agent_slots_test.outcome }}" \
             --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
             --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
             --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \

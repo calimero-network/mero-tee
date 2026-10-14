@@ -14,7 +14,13 @@ mero_bot_bundle: ""
 # No provisioner is baked in: the first sealed bundle claims a running agent
 # for its sender's key (mero-agent-gate/README.md), so whoever builds or runs
 # the image cannot choose who sets its secrets.
-# The dedicated non-root user the agent runs as. The gate runs as root (quotes
-# need it) and shares the signing key and secrets with this user's group.
-mero_agent_user: mero-agent
+# How many agents one agent TD hosts (mero-tee#467). Slot n has its own user
+# and group (<mero_agent_user_prefix><n>), its own directory on the encrypted
+# disk, its own claim, signing key and secrets, and its own unit
+# (mero-agent@<n>.service). The gate runs as root (quotes need it) and shares
+# slot n's keys and secrets with that slot's group only. Size the VM for it:
+# each agent may take up to mero_agent_memory_max.
+mero_agent_slots: 8
+mero_agent_user_prefix: mero-agent-
+mero_agent_memory_max: 1G
 mero_agent_gate_port: 8090

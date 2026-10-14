@@ -75,14 +75,51 @@ tool credentials). They are provisioned after boot, encrypted to the TD:
    nonce to its provisioning public key, an HPKE key generated in the TD.
 2. The provisioner verifies the quote against the agent release's published
    measurements.
-3. The provisioner encrypts the secrets to that key and posts them. The first
-   provisioner claims the agent: its key is kept on the encrypted disk, bound into
-   every later quote, and is the only key that can provision again.
+3. The provisioner encrypts the secrets to that key, for its agent id, and posts
+   them. The first provisioner for an agent id claims it: its key is kept on the
+   encrypted disk, bound into every later quote for that agent, and is the only key
+   that can provision or release it.
 4. The agent stores them on its encrypted disk. Nobody else, including the
    transport, sees them in plaintext.
 
 The attestation-verifier gains an agent page, so a third party can run the
 same check.
+
+## Several agents on one TD
+
+A TD per customer wastes most of it: mero-bot calls its model over the network, so
+an agent is a Node process that mostly waits. One agent TD therefore hosts several
+owners' agents, one per **slot** (mero-tee#467). The image bakes the number of slots
+(`mero_agent_slots`, 8 by default) and a memory limit per agent; mdma picks the VM
+size to match.
+
+- **Per-agent claim.** An agent is named by an agent id that whoever places it
+  (mdma) chooses. The first sealed bundle for an id claims a free slot for that id
+  and its sender's key. Quotes are per agent: `report_data` binds the agent id, its
+  signing key and its owner, so each owner verifies their own agent, not just the
+  TD. The HPKE `info` binds the agent id, so a bundle for one agent never opens for
+  another.
+- **Per-agent keys and files.** Slot `n` has its own Ed25519 signing key, made at
+  claim time, and its own directory, `agents/<n>/`. Its keys and secrets are
+  readable by the gate and the group `mero-agent-<n>` only, and its state is
+  writable by the user `mero-agent-<n>` only. Users are baked into the image,
+  because the root filesystem is read-only.
+- **Per-agent processes.** Slot `n`'s agent runs as `mero-agent@<n>.service`, as
+  user `mero-agent-<n>`. It writes only its own state, sees no other process
+  (`ProtectProc=invisible`), has no capabilities, and has a memory limit.
+- **Release.** The owner seals `{"release": true}` for its agent. The gate stops the
+  slot's unit, erases its claim, keys, secrets and state, and starts it again,
+  empty, for the next owner. A slot is claimed exactly while its `id` file exists:
+  it is written last on a claim and removed first on a release. Whatever an
+  interrupted claim or release leaves is erased before the slot is used again.
+- **What the operator learns.** `/health` gives counts only. Which agent ids a TD
+  holds, and whose they are, is answered one agent id at a time, as a quote.
+
+Sharing a TD shares its kernel: an agent that escapes its sandbox reaches the other
+agents on that TD, their secrets included. An owner who needs more isolation gets a
+TD of their own, with one slot. Anyone who can reach a gate can take free slots under
+agent ids nobody was given. That costs capacity, never another owner's agent: each
+owner's quote names the key that claimed their agent.
 
 ## The agent: mero-bot on NEAR AI Cloud
 
@@ -99,7 +136,7 @@ The GPU TD of our own that this design once planned is parked.
 
 - Node at `/opt/node` and mero-bot's release bundle at `/opt/mero-bot`, both checked against their sha256 in `build-inputs.lock.json`. The bundle holds mero-bot's production `node_modules`, mero-mcp included, so nothing is fetched at run time.
 - Both are in the content hash.
-- The agent binary is the launcher. It waits for the owner's secrets, then runs `mero-bot --headless --fixed-code --attested-only` as the agent user.
+- The agent binary is the launcher, one per slot. It waits for its slot's owner's secrets, then runs `mero-bot --headless --fixed-code --attested-only` as that slot's user.
   - Its working directory and `HOME` are on the encrypted disk.
   - Its environment holds only the allowlisted secrets.
   - Provisioning again restarts it.
@@ -225,6 +262,8 @@ TDX firmware, the release workflow), plus:
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
 | Agent compromise | Exposes the agent's own secrets; an attacker acts as it within its account. No node or group keys. | Scope the agent's account to what it needs. |
+| Sandbox escape on a shared TD | Exposes the other agents on that TD: their secrets, keys and state. | One user, one unit and one directory per agent; no capabilities. A dedicated TD for owners who need it. |
+| Free slots taken by strangers | A TD fills up with agents nobody placed. | Capacity only: no owner's agent is at risk. mdma places new agents elsewhere. |
 | Owners do not re-authorize at a release | The agent stops working at rollover. | Start new agents and request authorization before deleting old ones. |
 | Release coupling | In the one-train model, agent and node releases roll each other. | Move agents to their own KMS cluster. |
 
@@ -253,6 +292,7 @@ should wait for an agent that needs it.
 | 3 | mero-tee | `mero-agent-gate`: `/attest` and sealed secret provisioning; verifier page for agent quotes. | Done, with `mero-agent-provision` |
 | 4 | mero-tee | Release: build and measure the agent image, add it to the KMS policy, publish its measurements; post-release e2e. | Done, best effort in `release-kms.yaml` with the stub agent as the reference agent; `post-release-agent-e2e.yaml` |
 | 4b | mero-tee, mero-bot | mero-bot as the agent: headless, NEAR AI Cloud attested, pinned bundle and launcher (see "The agent: mero-bot on NEAR AI Cloud"). | In progress: needs a mero-bot release pinned in `versions.json` |
+| 5a | mero-tee | Several owners' agents on one TD: per-agent claim, quote, signing key and release; one user and unit per slot (see "Several agents on one TD"). | Done |
 | 5 | agent, client | Warrant integration through relays; owner-side device authorization with a quote check. | |
 | 6 | mdma | Optional: deploy agents and run rollovers. | |
 
@@ -265,7 +305,10 @@ should wait for an agent that needs it.
   sender's X25519 key, which the gate stores on the encrypted disk and binds into
   every quote. Only that key provisions again. A claim race is visible, not
   silent: the real owner's CLI sees another key in the quote, sends nothing, and
-  the owner replaces the VM. No key that can provision an agent exists in CI.
+  the owner is given another agent. No key that can provision an agent exists in CI.
+- **Slots, baked.** The number of agents a TD hosts, and their users, are baked
+  into the image and measured. Users cannot be added to a read-only root at run
+  time, and a fixed number keeps memory limits honest.
 - **The gate holds the signing key.** It generates the Ed25519 key on the
   encrypted disk and attests it beside the provisioning key, so the agent needs
   no attestation code of its own.

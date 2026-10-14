@@ -12,6 +12,7 @@
 pub mod keys;
 pub mod protocol;
 pub mod server;
+pub mod slots;
 pub mod verify;
 
 #[cfg(test)]

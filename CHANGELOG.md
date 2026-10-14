@@ -8,6 +8,15 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **One agent TD hosts several owners' agents** (mero-tee#467).
+  - **Why.** mero-bot calls its model over the network, so an agent is a Node process that mostly waits; a TD per customer wastes most of it.
+  - **Slots.** The image bakes `mero_agent_slots` (8) slots. Slot `n` has its own user and group `mero-agent-<n>`, its own unit `mero-agent@<n>.service`, and its own directory `/mnt/agent/agents/<n>/` with its claim, signing key, secrets and state. Keys and secrets are readable by the gate and that slot's group only. A slot's unit writes only its own state, sees no other process (`ProtectProc=invisible`), has no capabilities, and has a memory limit (`mero_agent_memory_max`).
+  - **Per-agent claim and quote.** Requests name an agent id (`[a-z0-9][a-z0-9-]{0,62}`). The first sealed bundle for an id claims a free slot for it and its sender (`503 no_free_slot` when full). Quotes bind the agent id, its signing key and its owner (`attest/v3`), so each owner verifies their own agent. HPKE `info` binds the agent id (`provision/v2`), so a bundle never opens for another agent. A quote without an agent id measures the TD alone.
+  - **Release.** `POST /release`, sealed `{"release": true}` by the agent's owner, stops the slot's unit, erases its claim, keys, secrets and state, and starts it again empty. `mero-agent-provision release` does this and checks a fresh quote binds no owner.
+  - **Breaking.** `mero-agent-provision attest`, `provision` and `release` take `--agent <id>`. `/health` reports counts (`slots`, `claimed`, `free`, `provisioned`). The signing key is made when an agent is claimed, not at first boot. The verifier's Agent tab checks the v3 binding.
+  - **Tests.** Gate unit and HTTP tests for two owners on one TD, replay across agents, a full TD, release and an interrupted release; a pinned binding vector shared with the verifier; `scripts/ci/tests/agent-init-slots-test.sh` for the slot directories and unit sandbox; the launcher test runs from a slot; the post-release e2e claims two agents for two owners, resets, and releases one.
+  - **Measurements.** The agent image's measurements change.
+
 - **The agent image can run mero-bot.**
   - **What it is.** mero-bot runs headless on its owner's Hyperfeed. Its model calls go to NEAR AI Cloud, attested by mero-bot before anything is sent.
   - **What is baked.** `MERO_BOT_BUNDLE` (Packer `mero_bot_bundle`) bakes Node and mero-bot's release bundle at `/opt/node` and `/opt/mero-bot`, both checked against `build-inputs.lock.json` (`nodeVersion`, `meroBotVersion`).

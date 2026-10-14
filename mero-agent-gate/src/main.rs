@@ -1,4 +1,5 @@
-//! mero-agent-gate: serves `/attest` and `/provision` inside an agent TD.
+//! mero-agent-gate: serves `/attest`, `/provision` and `/release` inside an
+//! agent TD that hosts several agents, one per slot.
 //!
 //! # Environment
 //!
@@ -6,29 +7,32 @@
 //! comes from instance metadata.
 //!
 //! Nobody is baked in as allowed to provision: the first HPKE Auth-mode bundle
-//! claims the agent for its sender key, which is kept on the encrypted disk
-//! (`keys/owner.x25519`) and bound into every later quote. Only that key can
-//! provision again.
+//! for an agent id claims a free slot for that id and its sender key, which is
+//! kept on the encrypted disk (`agents/<n>/keys/owner.x25519`) and bound into
+//! every later quote for that agent. Only that key can provision or release it.
 //!
 //! | Variable | Default | Meaning |
 //! |---|---|---|
 //! | `GATE_LISTEN_ADDR` | `0.0.0.0:8090` | HTTP listen address |
-//! | `GATE_STATE_DIR` | `/mnt/agent` | The encrypted data disk. Secrets go to `secrets/`, the signing key to `keys/` |
+//! | `GATE_STATE_DIR` | `/mnt/agent` | The encrypted data disk. Slot `n` lives in `agents/<n>/` ([`slots`](mero_agent_gate::slots)) |
 //! | `GATE_REQUIRE_MOUNT` | `true` | Refuse to start unless `GATE_STATE_DIR` is a mount point, so nothing lands on the boot disk |
-//! | `GATE_SHARE_GROUP` | *(none)* | The agent's group: the signing key and secrets are made readable by it (0640, directories 0750), and by nobody else. The gate runs as root, which configfs-tsm quotes need |
+//! | `GATE_SLOTS` | `1` | How many agents the TD hosts |
+//! | `GATE_SLOT_GROUP_PREFIX` | *(none)* | Slot `n`'s keys and secrets are made readable by the group `<prefix><n>` (0640, directories 0750), and by nobody else. Empty: owner-only. The gate runs as root, which configfs-tsm quotes need |
+//! | `GATE_SLOT_UNIT` | *(none)* | Slot `n`'s agent as a systemd unit, `{slot}` standing for `n` (`mero-agent@{slot}.service`): stopped before a release erases the slot, started after. Empty: none |
 //! | `GATE_IMAGE_PROFILE_FILE` | `/etc/mero-agent/image-profile` | The image's profile |
 //! | `GATE_MOCK_ATTESTATION` | `false` | Serve mock quotes. `mock-attestation` builds only |
 
 use std::net::SocketAddr;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use eyre::{bail, Result as EyreResult, WrapErr};
-use mero_agent_gate::keys::{load_or_create_signing_key, load_owner, ProvisioningKey, Share};
-use mero_agent_gate::server::{router, Gate, Quoter, TdxQuoter};
+use mero_agent_gate::keys::ProvisioningKey;
+use mero_agent_gate::server::{router, Gate, NoUnits, Quoter, SystemdUnits, TdxQuoter, Units};
+use mero_agent_gate::slots::open_slots;
 use tracing::info;
 #[cfg(feature = "mock-attestation")]
 use tracing::warn;
@@ -59,16 +63,6 @@ fn is_mount_point(path: &Path) -> EyreResult<bool> {
     Ok(own.dev() != parent.dev())
 }
 
-/// A directory only the gate and the agent's group may enter.
-fn private_dir(path: &Path, share: Share) -> EyreResult<()> {
-    std::fs::create_dir_all(path).wrap_err_with(|| format!("{}", path.display()))?;
-    share
-        .apply(path)
-        .wrap_err_with(|| format!("{}", path.display()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(share.dir_mode()))
-        .wrap_err_with(|| format!("{}", path.display()))
-}
-
 #[tokio::main]
 async fn main() -> EyreResult<()> {
     tracing_subscriber::fmt()
@@ -89,9 +83,21 @@ async fn main() -> EyreResult<()> {
     ))
     .map(|p| p.trim().to_owned())
     .unwrap_or_default();
-    let share = match std::env::var("GATE_SHARE_GROUP") {
-        Ok(group) if !group.trim().is_empty() => Share::group(group.trim())?,
-        _ => Share::default(),
+    let slot_count: u32 = match std::env::var("GATE_SLOTS") {
+        Ok(value) => value.trim().parse().wrap_err("GATE_SLOTS")?,
+        Err(_) => 1,
+    };
+    let group_prefix = std::env::var("GATE_SLOT_GROUP_PREFIX").unwrap_or_default();
+    let units: Arc<dyn Units> = match std::env::var("GATE_SLOT_UNIT") {
+        Ok(template) if !template.trim().is_empty() => {
+            if !template.contains("{slot}") {
+                bail!("GATE_SLOT_UNIT must name the slot with {{slot}}");
+            }
+            Arc::new(SystemdUnits {
+                template: template.trim().to_owned(),
+            })
+        }
+        _ => Arc::new(NoUnits),
     };
 
     let require_mount = env_bool("GATE_REQUIRE_MOUNT", true)?;
@@ -115,32 +121,14 @@ async fn main() -> EyreResult<()> {
     #[cfg(not(feature = "mock-attestation"))]
     let quoter: Arc<dyn Quoter> = Arc::new(TdxQuoter);
 
-    let keys_dir = state_dir.join("keys");
-    let secrets_dir = state_dir.join("secrets");
-    private_dir(&keys_dir, share)?;
-    private_dir(&secrets_dir, share)?;
-    let signing = load_or_create_signing_key(&keys_dir.join("signing.ed25519"), share)?;
-    let signing_public = signing.verifying_key().to_bytes();
-    drop(signing);
-
-    let owner_path = keys_dir.join("owner.x25519");
-    let owner = load_owner(&owner_path)?;
-    let claimed = owner.is_some();
-
-    let gate = Arc::new(Gate::new(
-        quoter,
-        ProvisioningKey::generate(),
-        signing_public,
-        secrets_dir,
-        share,
-        owner,
-        owner_path,
-    ));
+    let slots = open_slots(&state_dir.join("agents"), slot_count, group_prefix.trim())?;
+    let claimed = slots.iter().filter(|s| s.claim.is_some()).count();
+    let gate = Arc::new(Gate::new(quoter, ProvisioningKey::generate(), slots, units));
     info!(
         profile = %profile,
+        slots = slot_count,
         claimed,
         provisioning_key = %BASE64.encode(gate.provisioning.public),
-        signing_key = %BASE64.encode(gate.signing_public),
         "mero-agent-gate ready"
     );
 

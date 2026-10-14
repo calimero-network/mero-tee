@@ -111,12 +111,20 @@
     dest: /etc/default/grub.d/50-calimero-profile.cfg
     mode: "0644"
 
-- name: Create the agent user
+- name: Require at least one agent slot
+  assert:
+    that: mero_agent_slots | int >= 1
+    fail_msg: "mero_agent_slots must be at least 1"
+
+# One user and group per slot, baked in: the root filesystem is read-only, so
+# none can be added at run time. A slot's agent reads only its own slot.
+- name: Create the agent users, one per slot
   user:
-    name: "{{ mero_agent_user }}"
+    name: "{{ mero_agent_user_prefix }}{{ item }}"
     system: true
     shell: /usr/sbin/nologin
     create_home: false
+  loop: "{{ range(1, (mero_agent_slots | int) + 1) | list }}"
 
 - name: Create mero-agent directories
   file:
@@ -330,32 +338,50 @@
     dest: /etc/systemd/system/mero-agent-gate.service
     mode: "0644"
 
-# The agent reads its secrets from MERO_AGENT_SECRETS_DIR and waits for them
-# itself: until a provisioner has called /provision the directory is empty.
-- name: Install mero-agent.service
+# Slot n's agent, as its own user. It reads its secrets from its slot and
+# waits for them itself: until its owner provisions, the slot is empty. It sees
+# no other process (ProtectProc), and writes only its own state.
+- name: Install mero-agent@.service
   copy:
     content: |
       [Unit]
-      Description=mero-agent
+      Description=mero-agent in slot %i
       Requires=mero-agent-init.service
       After=mero-agent-init.service mero-agent-gate.service
 
       [Service]
-      User={{ mero_agent_user }}
-      Group={{ mero_agent_user }}
+      User={{ mero_agent_user_prefix }}%i
+      Group={{ mero_agent_user_prefix }}%i
       EnvironmentFile=/run/mero-agent/agent.env
+      Environment=MERO_AGENT_SLOT=%i
       ExecStart=/usr/local/bin/mero-agent
       Restart=on-failure
       RestartSec=5
       NoNewPrivileges=yes
       PrivateTmp=yes
+      PrivateDevices=yes
       ProtectHome=yes
       ProtectSystem=strict
-      ReadWritePaths=/mnt/agent
+      ReadWritePaths=/mnt/agent/agents/%i/state
+      ProtectProc=invisible
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectKernelLogs=yes
+      ProtectControlGroups=yes
+      ProtectClock=yes
+      ProtectHostname=yes
+      RestrictSUIDSGID=yes
+      RestrictNamespaces=yes
+      RestrictRealtime=yes
+      LockPersonality=yes
+      CapabilityBoundingSet=
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+      MemoryMax={{ mero_agent_memory_max }}
+      TasksMax=512
 
       [Install]
       WantedBy=multi-user.target
-    dest: /etc/systemd/system/mero-agent.service
+    dest: /etc/systemd/system/mero-agent@.service
     mode: "0644"
 
 - name: Enable the agent units
@@ -366,4 +392,9 @@
   loop:
     - mero-agent-init.service
     - mero-agent-gate.service
-    - mero-agent.service
+
+- name: Enable one agent unit per slot
+  systemd:
+    name: "mero-agent@{{ item }}.service"
+    enabled: true
+  loop: "{{ range(1, (mero_agent_slots | int) + 1) | list }}"
