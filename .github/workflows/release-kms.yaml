@@ -11,7 +11,8 @@ name: Release mero-kms
 # nothing (see scripts/release/kms/get-version-info.sh).
 #
 # Agents (docs/design/private-agents.md): `agent-image` builds and measures the
-# reference agent image per profile (mero-agent-gate and the stub agent) and,
+# reference agent image per profile (mero-agent-gate and mero-bot, the release
+# versions.json pins, else the stub agent) and,
 # when that succeeds, the profile's KMS image also serves it (its agent
 # allowlist, published as kms-agent-attestation-policy.<profile>.json). It is
 # best effort: an agent build or measurement that fails leaves that KMS image
@@ -191,7 +192,38 @@ jobs:
           mkdir -p agent probe
           cp target/release/mero-agent-gate target/release/mero-agent-provision agent/
           cp scripts/agent/stub-mero-agent.py agent/mero-agent
-          sha256sum agent/mero-agent agent/mero-agent-gate | tee probe/agent-binaries.sha256
+
+      # The release's agent is mero-bot once versions.json pins it
+      # (meroBotVersion, with its sha256 in build-inputs.lock.json); until then,
+      # the stub. The bundle is checked against its pin again in the build
+      # (mero-agent role). A pin without the token fails this job, which leaves
+      # the KMS image node-only, as any failed agent build does.
+      - name: Download the pinned mero-bot bundle
+        env:
+          GH_TOKEN: ${{ secrets.MERO_BOT_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.meroBotVersion // empty' mero-tee/versions.json)"
+          if [[ -z "${version}" ]]; then
+            echo "versions.json pins no meroBotVersion: the reference agent is the stub"
+            exit 0
+          fi
+          [[ -n "${GH_TOKEN}" ]] || { echo "::error::versions.json pins mero-bot ${version}; the release needs the MERO_BOT_RELEASE_TOKEN secret to fetch it"; exit 1; }
+          asset="mero-bot-${version}-linux-x64.tar.gz"
+          gh release download "v${version}" --repo calimero-network/mero-bot --pattern "${asset}" --dir agent
+          want="$(jq -r --arg a "${asset}" '.meroBot.sha256[$a] // empty' mero-tee/build-inputs.lock.json)"
+          [[ -n "${want}" ]] || { echo "::error::build-inputs.lock.json pins no sha256 for ${asset}; run scripts/release/pin-build-inputs.sh"; exit 1; }
+          echo "${want}  agent/${asset}" | sha256sum -c -
+          echo "MERO_BOT_BUNDLE=$(realpath "agent/${asset}")" >>"${GITHUB_ENV}"
+
+      - name: Record the agent's inputs
+        run: |
+          set -euo pipefail
+          if [[ -n "${MERO_BOT_BUNDLE:-}" ]]; then
+            sha256sum scripts/agent/mero-bot-agent.sh "agent/$(basename "${MERO_BOT_BUNDLE}")" agent/mero-agent-gate
+          else
+            sha256sum agent/mero-agent agent/mero-agent-gate
+          fi | tee probe/agent-binaries.sha256
 
       - name: Determine GCP auth mode
         id: auth_mode
@@ -241,12 +273,13 @@ jobs:
         working-directory: mero-tee
         env:
           IMAGE_ROLE: agent
-          MERO_AGENT_BINARY: ../agent/mero-agent
           MERO_AGENT_GATE_BINARY: ../agent/mero-agent-gate
           PACKER_FORCE_BUILD: "true"
           PACKER_LOG: 1
         run: |
           set -euo pipefail
+          # With MERO_BOT_BUNDLE, build-and-release.sh bakes the mero-bot launcher instead.
+          [[ -n "${MERO_BOT_BUNDLE:-}" ]] || export MERO_AGENT_BINARY=../agent/mero-agent
           ./init.sh
           ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-agent-build.log
 

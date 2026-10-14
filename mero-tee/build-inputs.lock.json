@@ -36,5 +36,11 @@
     "sha256": {
       "node-v22.23.3-linux-x64.tar.xz": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de"
     }
+  },
+  "meroBot": {
+    "version": "0.1.0",
+    "sha256": {
+      "mero-bot-0.1.0-linux-x64.tar.gz": "8ed453d863a2c95160131c7f3e9872d189b513aa8df6929537c24c3832060b76"
+    }
   }
 }

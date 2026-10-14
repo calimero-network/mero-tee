@@ -240,7 +240,8 @@ The single source of pinned component versions (`mero-tee/versions.json`):
 
 `mero-tee/build-inputs.lock.json` pins the sha256 of every archive the image
 build downloads, for the versions `versions.json` names: merod, meroctl and
-mero-auth from the core release, Traefik, node_exporter, vmagent and Vector.
+mero-auth from the core release, Traefik, node_exporter, vmagent and Vector, and, for the
+agent image, Node and the mero-bot bundle (`meroBotVersion`).
 `group_vars/all.yml` loads it as `build_inputs`. Every download in the Ansible
 roles is a `get_url` with `checksum:` taken from it, so an archive replaced
 upstream fails the build instead of being baked into an image. The same happens
@@ -251,15 +252,21 @@ release archive, not by piping `sh.vector.dev` into a shell.
 scripts/release/pin-build-inputs.sh             # rewrite the lock from versions.json
 scripts/release/pin-build-inputs.sh --check     # exit 1 if the lock is stale
 scripts/release/pin-build-inputs.sh --download  # also hash each archive
+scripts/release/pin-build-inputs.sh --check --skip-private  # keep mero-bot's pin unchecked
 ```
 
 The script reads the checksum file each publisher ships with the release, such
-as core's `SHA256SUMS`. Review the lock change like code.
+as core's `SHA256SUMS`. mero-bot is a private repository, so its release is read
+through `gh`, which needs read access to it. Review the lock change like code.
 
 Two checks enforce the lock:
 - CI's `build-inputs-pinned-test.sh` refuses a lock that disagrees with
   `versions.json`, and any download in the roles without a pinned checksum.
-- The node-image release preflight runs `--check` against the publishers.
+- The node-image release preflight runs `--check` against the publishers. It
+  checks mero-bot too when the `MERO_BOT_RELEASE_TOKEN` secret is set, and
+  otherwise keeps its pin unchecked (`--skip-private`): the node image does not
+  bake mero-bot, and the agent build checks the bundle it downloads against the
+  same lock.
 
 A `GATED_MEROD_VERSION` other than `merodVersion` fails the build until the
 lock pins it.

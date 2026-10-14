@@ -8,6 +8,9 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **mero-bot 0.1.0 is pinned** (`meroBotVersion`, its bundle's sha256 in `build-inputs.lock.json`). The node-image release preflight checks that pin against mero-bot's release when `MERO_BOT_RELEASE_TOKEN` is set, and keeps it unchecked otherwise (`pin-build-inputs.sh --skip-private`).
+- **The release's agent image runs mero-bot once it is pinned.** `Release mero-kms` downloads the mero-bot bundle `versions.json` pins (`meroBotVersion`) with the `MERO_BOT_RELEASE_TOKEN` secret, checks it against `build-inputs.lock.json`, and bakes the mero-bot launcher instead of the stub agent. Without a pin it still bakes the stub. A pin without the secret fails the agent build, which leaves the KMS images node-only.
+
 - **One agent TD hosts several owners' agents** (mero-tee#467).
   - **Why.** mero-bot calls its model over the network, so an agent is a Node process that mostly waits; a TD per customer wastes most of it.
   - **Slots.** The image bakes `mero_agent_slots` (8) slots. Slot `n` has its own user and group `mero-agent-<n>`, its own unit `mero-agent@<n>.service`, and its own directory `/mnt/agent/agents/<n>/` with its claim, signing key, secrets and state. Keys and secrets are readable by the gate and that slot's group only. A slot's unit writes only its own state, sees no other process (`ProtectProc=invisible`), has no capabilities, and has a memory limit (`mero_agent_memory_max`).
