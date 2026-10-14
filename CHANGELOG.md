@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **Release 2.3.114: the first with private agents.** Bumps `mero-kms` and `imageVersion` to 2.3.114, so `Release mero-kms` builds and measures the agent image (`merotee-agent-<profile>-2-3-114`, running mero-bot 0.1.0 under the multi-tenant mero-agent-gate) and publishes each profile's signed `kms-agent-attestation-policy.<profile>.json`, the allowlist mdma's console verifies a customer's agent against (calimero-network/mdma#467). Every release since agents landed (#456, #469, #471, #472) reused 2.3.113's tag, so none built an agent image. No change to the node image beyond its version.
+
 - **mero-bot 0.1.0 is pinned** (`meroBotVersion`, its bundle's sha256 in `build-inputs.lock.json`). The node-image release preflight checks that pin against mero-bot's release when `MERO_BOT_RELEASE_TOKEN` is set, and keeps it unchecked otherwise (`pin-build-inputs.sh --skip-private`).
 - **The release's agent image runs mero-bot once it is pinned.** `Release mero-kms` downloads the mero-bot bundle `versions.json` pins (`meroBotVersion`) with the `MERO_BOT_RELEASE_TOKEN` secret, checks it against `build-inputs.lock.json`, and bakes the mero-bot launcher instead of the stub agent. Without a pin it still bakes the stub. A pin without the secret fails the agent build, which leaves the KMS images node-only.
 

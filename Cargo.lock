@@ -2721,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "mero-kms"
-version = "2.3.113"
+version = "2.3.114"
 dependencies = [
  "axum",
  "base64 0.23.1",
