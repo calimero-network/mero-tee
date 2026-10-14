@@ -547,6 +547,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/build-inputs-pinned-test.sh
 
+      # Release mero-kms signs each agent allowlist and verifies what it signed.
+      # Signing writes a .bundle.json beside each, which the allowlists' glob
+      # also matches: 2.3.114 verified its bundles as assets and published nothing.
+      - name: Check the release signs and verifies only the agent allowlists
+        id: kms_agent_policy_signing_test
+        shell: bash
+        run: scripts/ci/tests/kms-agent-policy-signing-test.sh
+
       # Logs leave the TEE for an endpoint the VM operator chooses. Every image
       # routes them through egress-guard.vrl first; runs it with the pinned
       # Vector release and validates each generated config.
@@ -608,6 +616,7 @@ jobs:
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
+            --checks-line "- release signs only the agent allowlists: ${{ steps.kms_agent_policy_signing_test.outcome }}" \
             --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \
