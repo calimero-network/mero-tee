@@ -188,10 +188,19 @@ the context, method and arguments (`fleet_delegated_access`; the `/intents`
 routes in `traefik-routing.yml.j2`; `/sealed/v2` for sealed transport).
 
 - The agent's signing key is generated in the TD and never leaves it.
-- An account owner authorizes that key as a device of the account the agent
-  acts for, after checking that the agent's quote binds the key (`/attest`,
-  with the signing key in `report_data`). The owner trusts a measured build,
-  not an operator.
+- That key is the root of **the agent's own account**. The agent does not act
+  as its owner: it is a member of the contexts its owner invites it to, and
+  what it does there carries its own name. Its role caps what it can do, and
+  removing it is removing a member. Because the quote binds the key (`/attest`,
+  with the signing key in `report_data`), the owner's console derives the
+  agent's account id from a verified quote, so nobody relaying it can swap in
+  another account to be invited instead. The owner trusts a measured build, not
+  an operator.
+- The owner invites that account like anyone else, and seals each invitation
+  to the agent as an owner secret (`MERO_INVITATION.<name>`); mero-bot joins
+  each once. To work the owner's Hyperfeed it must also be added there as an
+  agent (Settings → Agents → Cloud agents). It drafts what should come from the
+  owner, which the owner's own client sends when approved.
 - The agent seals its intents to a relay over `/sealed/v2`, so the relay
   operator does not see the arguments in transit.
 
@@ -243,8 +252,8 @@ The KMS change above supports both models:
 Either way, a new release means a new root, so the previous release's agent
 disk can never be reopened. The disk is a cache: anything that must outlive a
 release lives in Calimero (written through warrants) or is re-provisioned. A
-new agent has a new signing key, which the account owner authorizes again; old
-keys are revoked when old agents are deleted.
+new agent has a new signing key and so a new account, which the owner invites
+again; an old agent's account is removed from the contexts it was in.
 
 ## Prerequisites
 
@@ -253,9 +262,10 @@ keys are revoked when old agents are deleted.
    agents. A first deployment can use `gcloud` from a release script with the
    image name and `kms-url` metadata; mdma support follows if agents run as a
    fleet.
-3. **Device authorization for an attested key.** The owner's client must
-   verify an agent quote before adding its key as a device. If Core's
-   device-add API cannot carry that check, it lives in the client.
+3. **An account for an attested key.** The owner's client derives the
+   agent's account id from a verified quote and invites it. No Core change:
+   a keyholder's join by invitation and its writes through a relay already
+   exist.
 
 ## Trust that remains and risks
 

@@ -103,9 +103,10 @@ mero-agent-provision release --gate http://<agent-td>:8090 --policy agent-attest
 
 `attest`, `provision` and `release` verify the quote (DCAP, nonce, agent id, key
 binding, agent policy, not a debug TD) before anything is sent. `attest` prints
-the signing key an account owner authorizes as the agent's device, and the owner
-key that claimed it; authorize the signing key only when that owner is your own
-key.
+the agent's signing key, and the owner key that claimed it. The signing key is
+the root of the agent's own Calimero account: its account id is derived from
+it, so the id you invite follows from the verified quote. Invite it only when
+that owner is your own key.
 
 ## Configuration
 

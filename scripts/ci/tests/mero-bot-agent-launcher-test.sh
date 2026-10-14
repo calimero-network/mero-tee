@@ -5,8 +5,12 @@
 #
 #   * it finds its slot's secrets and state from MERO_AGENT_DATA_DIR and
 #     MERO_AGENT_SLOT, and refuses a slot that is not a number
-#   * nothing starts until MERO_AGENTS_JSON, CALIMERO_NODE_URL and a node login
-#     are provisioned
+#   * on a node (CALIMERO_NODE_URL provisioned), nothing starts until
+#     MERO_AGENTS_JSON and a node login are provisioned too
+#   * as an account of its own (no node), MERO_AGENTS_JSON is enough: the
+#     account's root is the slot's signing key, its account and the
+#     invitations provisioned as MERO_INVITATION.* are in the slot's state, and
+#     mero-mcp acts as the same account; a new invitation restarts it
 #   * mero-bot runs headless, with --fixed-code and --attested-only
 #   * its environment is HOME, PATH, its state dirs and the allowlisted secrets:
 #     no other secret (NODE_OPTIONS included) and nothing from the launcher's
@@ -151,5 +155,38 @@ code=$?
 set -e
 [[ ${code} -eq 0 ]] || fail "SIGTERM: the launcher exited ${code}, not 0"
 [[ -e "${WORK}/stopped" ]] || fail "SIGTERM did not reach mero-bot"
+
+# --- As an account of its own ---------------------------------------------------------
+SLOT_DIR="${WORK}/data/agents/4"
+mkdir -p "${SLOT_DIR}/secrets" "${SLOT_DIR}/operator" "${SLOT_DIR}/state" "${SLOT_DIR}/keys"
+export MERO_AGENT_SLOT=4
+rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/env" "${WORK}/stopped"
+secret MERO_AGENTS_JSON '{"agents":{"near":{"runtime":"openai","attest":"near","model":"m"}},"default":"near"}'
+secret MERO_INVITATION.feed '{"namespaceId":"aa","invitation":{}}'
+secret MERO_INVITATION_NOT '{"not":"an invitation by name"}'
+bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
+launcher=$!
+wait_file "${WORK}/env-names"
+expected_env="CALIMERO_MCP_STATE_DIR
+HOME
+MERO_BOT_ACCOUNT_DIR
+MERO_BOT_ACCOUNT_ROOT_FILE
+MERO_BOT_INVITATIONS_DIR
+MERO_BOT_STATE_DIR
+PATH"
+[[ "$(cat "${WORK}/env-names")" == "${expected_env}" ]] || fail "account environment: $(tr '\n' ' ' <"${WORK}/env-names")"
+grep -qx "MERO_BOT_ACCOUNT_ROOT_FILE=${SLOT_DIR}/keys/signing.ed25519" "${WORK}/env" || fail "the account root is not the slot's signing key"
+grep -qx "MERO_BOT_ACCOUNT_DIR=${SLOT_DIR}/state/account" "${WORK}/env" || fail "the account is not in the slot's state"
+[[ "$(ls "${SLOT_DIR}/state/invitations")" == "MERO_INVITATION.feed" ]] || fail "invitations: $(ls "${SLOT_DIR}/state/invitations")"
+cmp -s "${SLOT_DIR}/secrets/MERO_INVITATION.feed" "${SLOT_DIR}/state/invitations/MERO_INVITATION.feed" || fail "the invitation was not copied as provisioned"
+jq -e --arg dir "${SLOT_DIR}/state/account" '.mcpServers["mero-mcp"].env == {CALIMERO_ACCOUNT_DIR: $dir}' \
+  "${SLOT_DIR}/state/home/.mero/mcp.json" >/dev/null || fail "mero-mcp does not act as the account: $(cat "${SLOT_DIR}/state/home/.mero/mcp.json")"
+# A new invitation restarts it, to join.
+secret MERO_INVITATION.team '{"namespaceId":"bb","invitation":{}}'
+set +e
+wait "${launcher}"
+code=$?
+set -e
+[[ ${code} -eq 75 ]] || fail "after a new invitation the launcher exited ${code}, not 75"
 
 echo "OK: the mero-bot launcher waits for provisioning, passes only its secrets, and restarts on new ones"
