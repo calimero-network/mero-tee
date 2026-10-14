@@ -35,6 +35,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
   - **Tests.** `scripts/ci/tests/mero-bot-agent-launcher-test.sh`; the pin test covers `node` and `meroBot`.
   - **Design.** `docs/design/private-agents.md`, "The agent: mero-bot on NEAR AI Cloud".
 
+### Fixed
+
+- **`Release mero-kms` no longer fails verifying its own agent policies.** `verify-generated-signatures.sh` globbed `kms-agent-attestation-policy.*.json` after signing, which also matched the `<policy>.json.bundle.json` files cosign writes beside each policy, and failed looking for a certificate for them. Every release that measures an agent image hit it, starting with 2.3.114's Release Metadata job. It now skips the `.bundle.json` files.
+
 ### Security
 
 - **Logs and metrics leave a non-debug image only over https.**
