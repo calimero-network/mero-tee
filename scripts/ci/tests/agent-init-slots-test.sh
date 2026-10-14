@@ -9,6 +9,8 @@
 #   * the data disk and agents/ are 0711: every slot's user passes through to
 #     its own slot and lists no other
 #   * the agents' environment names the data disk, not one slot's secrets
+#   * slot n's operator/ (the operator's NEAR key) is root:mero-agent-<n> 0750;
+#     the operator key the gate reads is written only when metadata names one
 #   * slot n's unit runs as mero-agent-<n>, writes only its own state, sees no
 #     other process, and has a memory limit; the gate stops it by that name
 #
@@ -59,12 +61,14 @@ PATH="$BIN:\$PATH"
 DATA_MOUNT="$DATA"
 LOG_DIR="$WORK/run"
 RELAY_URL="https://relay.example"
+OPERATOR_KEY="\${OPERATOR_KEY:-}"
 IMAGE_PROFILE="debug"
 AGENT_USER_PREFIX="mero-agent-"
 AGENT_SLOTS=3
 $block_src
 EOF
 bash "$WORK/run.sh" || fail "the agent-environment block failed"
+[[ -e "$WORK/run/operator.x25519" ]] && fail "wrote an operator key though metadata named none"
 calls="$(cat "$WORK/calls")"
 
 expect() { grep -qxF -- "$1" <<<"$calls" || fail "missing: $1"$'\n'"calls:"$'\n'"$calls"; }
@@ -73,7 +77,7 @@ expect "chmod 0711 $DATA"
 expect "install -d -o root -g root -m 0711 $DATA/agents"
 for slot in 1 2 3; do
   dir="$DATA/agents/$slot"
-  expect "install -d -o root -g mero-agent-$slot -m 0750 $dir $dir/keys $dir/secrets"
+  expect "install -d -o root -g mero-agent-$slot -m 0750 $dir $dir/keys $dir/secrets $dir/operator"
   expect "install -d -o mero-agent-$slot -g mero-agent-$slot -m 0700 $dir/state"
 done
 grep -q "agents/4" <<<"$calls" && fail "made a slot past AGENT_SLOTS"
@@ -83,6 +87,16 @@ env_file="$WORK/run/agent.env"
 grep -qxF "MERO_AGENT_DATA_DIR=$DATA" "$env_file" || fail "agent.env does not name the data disk: $(cat "$env_file")"
 grep -qE 'SECRETS_DIR|STATE_DIR|SIGNING_KEY' "$env_file" \
   && fail "agent.env must not name one slot's secrets, state or key: every slot reads it"
+
+# --- the operator key ----------------------------------------------------------
+key="AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+OPERATOR_KEY="$key" bash "$WORK/run.sh" || fail "the agent-environment block failed with an operator key"
+[[ "$(cat "$WORK/run/operator.x25519")" == "$key" ]] || fail "the operator key file is not the metadata's key"
+[[ "$(stat -c %a "$WORK/run/operator.x25519")" == 600 ]] || fail "the operator key file must be root-only"
+grep -qF 'fatal "operator-key is not 32 bytes of base64"' "$TEMPLATE" \
+  || fail "agent-init must refuse an operator key that is not 32 bytes"
+grep -qxF 'GATE_OPERATOR_KEY_FILE=/run/mero-agent/operator.x25519' "${ROLE}/templates/gate.env.j2" \
+  || fail "the gate must read the operator key where agent-init writes it"
 
 # --- the units, statically ----------------------------------------------------
 tasks="${ROLE}/tasks/main.yml"

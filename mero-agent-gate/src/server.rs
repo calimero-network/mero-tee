@@ -1,4 +1,5 @@
-//! The gate's HTTP service: `/health`, `/attest`, `/provision`, `/release`.
+//! The gate's HTTP service: `/health`, `/attest`, `/provision`, `/release`,
+//! `/operator`.
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,8 +19,9 @@ use tracing::{info, warn};
 
 use crate::keys::{ProvisioningKey, Share};
 use crate::protocol::{
-    key_binding, open_message, report_data, validate_agent_id, AttestRequest, AttestResponse,
-    OpenError, ProvisionRequest, ProvisionResponse, ReleaseOrder, ReleaseResponse, SecretsBundle,
+    key_binding, open_message, open_operator_message, report_data, validate_agent_id,
+    AttestRequest, AttestResponse, OpenError, ProvisionRequest, ProvisionResponse, ReleaseOrder,
+    ReleaseResponse, SecretsBundle,
 };
 use crate::slots::Slot;
 
@@ -114,6 +116,11 @@ pub struct Gate {
     /// bundles cannot both claim one agent id or one slot.
     pub slots: Mutex<Vec<Slot>>,
     pub units: Arc<dyn Units>,
+    /// The X25519 key that may write [`crate::protocol::OPERATOR_SECRETS`]
+    /// into a claimed agent (`/operator`). Whoever runs the VM names it; it
+    /// can neither claim nor release an agent nor touch the owner's secrets.
+    /// None: `/operator` refuses everything.
+    pub operator: Option<[u8; 32]>,
 }
 
 impl Gate {
@@ -128,7 +135,15 @@ impl Gate {
             provisioning,
             slots: Mutex::new(slots),
             units,
+            operator: None,
         }
+    }
+
+    /// The gate, with `operator` allowed to write the operator's secrets.
+    #[must_use]
+    pub fn with_operator(mut self, operator: Option<[u8; 32]>) -> Self {
+        self.operator = operator;
+        self
     }
 }
 
@@ -138,6 +153,7 @@ pub fn router(gate: Arc<Gate>) -> Router {
         .route("/attest", post(attest))
         .route("/provision", post(provision))
         .route("/release", post(release))
+        .route("/operator", post(operator))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(gate)
 }
@@ -289,13 +305,17 @@ fn open<T: serde::de::DeserializeOwned>(gate: &Gate, sealed: &Sealed) -> Result<
         &sealed.encapped,
         &sealed.ciphertext,
     )
-    .map_err(|e| match e {
+    .map_err(|e| open_error(sealed, e))
+}
+
+fn open_error(sealed: &Sealed, e: OpenError) -> GateError {
+    match e {
         OpenError::NotFromSender => {
             warn!(agent = %sealed.agent_id, "Refused a message not sealed by the key it names");
             GateError::new(StatusCode::FORBIDDEN, "not_from_sender", e.to_string())
         }
         OpenError::Malformed(_) => GateError::bad_request(e.to_string()),
-    })
+    }
 }
 
 fn not_the_owner(agent_id: &str) -> GateError {
@@ -409,6 +429,62 @@ async fn release(
     }
     Ok(Json(ReleaseResponse {
         released: sealed.agent_id,
+    }))
+}
+
+/// The operator's secrets for a claimed agent: only names in
+/// [`crate::protocol::OPERATOR_SECRETS`], only into the slot's `operator/`, and
+/// only from the operator key. Claiming, releasing and the owner's own secrets
+/// stay the owner's alone; an agent that is not claimed is refused, so the
+/// operator never chooses who holds a slot.
+async fn operator(
+    State(gate): State<Arc<Gate>>,
+    Json(request): Json<ProvisionRequest>,
+) -> Result<Json<ProvisionResponse>, GateError> {
+    let sealed = decode_sealed(&gate, request)?;
+    if gate.operator != Some(sealed.sender) {
+        warn!(agent = %sealed.agent_id, "Refused operator secrets from a key that is not the operator's");
+        return Err(GateError::new(
+            StatusCode::FORBIDDEN,
+            "not_the_operator",
+            if gate.operator.is_none() {
+                "this TD was started with no operator key"
+            } else {
+                "sealed under a key that is not this TD's operator key"
+            },
+        ));
+    }
+    let mut slots = gate.slots.lock().await;
+    let slot = slots
+        .iter_mut()
+        .find(|s| {
+            s.claim
+                .as_ref()
+                .is_some_and(|c| c.agent_id == sealed.agent_id)
+        })
+        .ok_or_else(|| {
+            GateError::new(
+                StatusCode::NOT_FOUND,
+                "unknown_agent",
+                "no claimed agent with this id on this TD; its owner claims it first",
+            )
+        })?;
+    let bundle = open_operator_message(
+        &gate.provisioning.private,
+        &gate.provisioning.public,
+        &sealed.agent_id,
+        &sealed.sender,
+        &sealed.encapped,
+        &sealed.ciphertext,
+    )
+    .map_err(|e| open_error(&sealed, e))?;
+    bundle.validate_operator().map_err(GateError::bad_request)?;
+    let written = write_secrets(&slot.operator_dir(), slot.share, &bundle)
+        .map_err(|e| GateError::internal("write_failed", e))?;
+    info!(agent = %sealed.agent_id, slot = slot.number, secrets = ?written, "Wrote operator secrets");
+    Ok(Json(ProvisionResponse {
+        written,
+        claimed: false,
     }))
 }
 
@@ -1022,6 +1098,206 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(gate.slots.lock().await[0].claim.is_some());
+    }
+
+    const OPERATOR_SECRET: [u8; 32] = [0x44; 32];
+
+    /// A gate whose operator is [`OPERATOR_SECRET`]'s key.
+    fn gate_with_operator(dir: &TempDir) -> Arc<Gate> {
+        Arc::new(
+            Gate::new(
+                Arc::new(EchoQuoter),
+                ProvisioningKey::generate(),
+                open_slots(&dir.path().join("agents"), 2, "").unwrap(),
+                Arc::new(NoUnits),
+            )
+            .with_operator(Some(public(&OPERATOR_SECRET))),
+        )
+    }
+
+    fn operator_request(
+        gate: &Gate,
+        agent: &str,
+        sender: &[u8; 32],
+        pairs: &[(&str, &str)],
+    ) -> serde_json::Value {
+        let (enc, ct) = crate::protocol::seal_operator_message(
+            &gate.provisioning.public,
+            agent,
+            sender,
+            &bundle(pairs),
+        )
+        .unwrap();
+        json!({
+            "agentId": agent,
+            "provisioningPublicKeyB64": BASE64.encode(gate.provisioning.public),
+            "senderPublicKeyB64": BASE64.encode(public(sender)),
+            "encappedKeyB64": BASE64.encode(enc),
+            "ciphertextB64": BASE64.encode(ct),
+        })
+    }
+
+    #[tokio::test]
+    async fn the_operator_writes_the_near_key_beside_the_owner_s_secrets() {
+        let dir = TempDir::new("operator-writes");
+        let gate = gate_with_operator(&dir);
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("MERO_AGENTS_JSON", "{}")]),
+        )
+        .await;
+        let (status, body) = post(
+            &gate,
+            "/operator",
+            operator_request(
+                &gate,
+                "ana",
+                &OPERATOR_SECRET,
+                &[("NEAR_AI_API_KEY", "ours")],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["written"], json!(["NEAR_AI_API_KEY"]));
+        let slot = slot_dir(&dir, 1);
+        assert_eq!(
+            std::fs::read_to_string(slot.join("operator/NEAR_AI_API_KEY")).unwrap(),
+            "ours"
+        );
+        // Apart from the owner's: neither overwrites the other.
+        assert!(!slot.join("secrets/NEAR_AI_API_KEY").exists());
+        assert_eq!(
+            std::fs::read_to_string(slot.join("secrets/MERO_AGENTS_JSON")).unwrap(),
+            "{}"
+        );
+        // The owner is unchanged.
+        assert_eq!(
+            gate.slots.lock().await[0].claim.as_ref().unwrap().owner,
+            public(&OWNER_SECRET)
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_operator_key_writes_operator_secrets() {
+        let dir = TempDir::new("operator-only");
+        let gate = gate_with_operator(&dir);
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        // Not the owner, and not anyone else.
+        for key in [OWNER_SECRET, OTHER_SECRET] {
+            let (status, body) = post(
+                &gate,
+                "/operator",
+                operator_request(&gate, "ana", &key, &[("NEAR_AI_API_KEY", "x")]),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+            assert_eq!(body["error"], "not_the_operator");
+        }
+        // Naming the operator's key without holding it does not open.
+        let (enc, ct) = crate::protocol::seal_operator_message(
+            &gate.provisioning.public,
+            "ana",
+            &OTHER_SECRET,
+            &bundle(&[("NEAR_AI_API_KEY", "x")]),
+        )
+        .unwrap();
+        let forged = json!({
+            "agentId": "ana",
+            "provisioningPublicKeyB64": BASE64.encode(gate.provisioning.public),
+            "senderPublicKeyB64": BASE64.encode(public(&OPERATOR_SECRET)),
+            "encappedKeyB64": BASE64.encode(enc),
+            "ciphertextB64": BASE64.encode(ct),
+        });
+        let (status, body) = post(&gate, "/operator", forged).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_from_sender");
+        assert!(!slot_dir(&dir, 1).join("operator/NEAR_AI_API_KEY").exists());
+    }
+
+    #[tokio::test]
+    async fn the_operator_cannot_claim_write_other_names_or_act_without_a_key() {
+        let dir = TempDir::new("operator-limits");
+        let gate = gate_with_operator(&dir);
+        // An unclaimed agent: the operator never chooses who holds a slot.
+        let (status, body) = post(
+            &gate,
+            "/operator",
+            operator_request(&gate, "ana", &OPERATOR_SECRET, &[("NEAR_AI_API_KEY", "x")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert!(gate.slots.lock().await.iter().all(|s| s.claim.is_none()));
+
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let (status, _) = post(
+            &gate,
+            "/operator",
+            operator_request(
+                &gate,
+                "ana",
+                &OPERATOR_SECRET,
+                &[("CALIMERO_NODE_URL", "https://elsewhere")],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!slot_dir(&dir, 1)
+            .join("operator/CALIMERO_NODE_URL")
+            .exists());
+
+        // A TD started with no operator key refuses everything.
+        let dir = TempDir::new("operator-none");
+        let plain = super::tests::gate(&dir);
+        post(
+            &plain,
+            "/provision",
+            request(&plain, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let (status, body) = post(
+            &plain,
+            "/operator",
+            operator_request(&plain, "ana", &OPERATOR_SECRET, &[("NEAR_AI_API_KEY", "x")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_release_erases_the_operator_s_secrets_too() {
+        let dir = TempDir::new("operator-release");
+        let gate = gate_with_operator(&dir);
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        post(
+            &gate,
+            "/operator",
+            operator_request(&gate, "ana", &OPERATOR_SECRET, &[("NEAR_AI_API_KEY", "x")]),
+        )
+        .await;
+        let (status, _) = post(
+            &gate,
+            "/release",
+            release_request(&gate, "ana", &OWNER_SECRET),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!slot_dir(&dir, 1).join("operator/NEAR_AI_API_KEY").exists());
     }
 
     #[tokio::test]

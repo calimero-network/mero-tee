@@ -18,8 +18,12 @@
 #   logs-endpoint        Optional. VictoriaLogs ingest URL vector ships the journal to.
 #   metrics-endpoint     Optional. Remote-write URL vmagent ships host metrics to.
 #   observability-token  Optional. Bearer token both present to those endpoints.
+#   operator-key         Optional. Base64 X25519 public key of the operator (mdma):
+#                        mero-agent-gate lets its holder write only the operator's
+#                        own secrets (NEAR_AI_API_KEY) into a claimed agent, never
+#                        claim, release or touch the owner's. Missing: nobody can.
 # A wrong value can only fail the boot or send the agent's warrants or logs
-# somewhere else. Prompts, tools, model choice and limits are baked into
+# somewhere else, or let whoever runs the VM pick which NEAR key it pays with. Prompts, tools, model choice and limits are baked into
 # /etc/mero-agent and measured; who may set secrets is whoever claims the agent
 # first (mero-agent-gate), never metadata.
 set -euo pipefail
@@ -138,6 +142,11 @@ is_base_url() {
 KMS_URL="$(get_meta kms-url | tr -d '\r\n')"
 TEE_RELEASE_VERSION="$(get_meta tee-release-version | tr -d '\r\n[:space:]')"
 RELAY_URL="$(get_meta relay-url | tr -d '\r\n')"
+OPERATOR_KEY="$(get_meta operator-key | tr -d '\r\n[:space:]')"
+if [[ -n "$OPERATOR_KEY" ]] \
+  && [[ "$(printf '%s' "$OPERATOR_KEY" | base64 -d 2>/dev/null | wc -c)" != 32 ]]; then
+  fatal "operator-key is not 32 bytes of base64"
+fi
 EPHEMERAL_STORE="$(get_meta ephemeral-store | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
 case "$EPHEMERAL_STORE" in
   true) ;;
@@ -553,7 +562,7 @@ install -d -o root -g root -m 0711 "$DATA_MOUNT/agents"
 for slot in $(seq 1 "$AGENT_SLOTS"); do
   user="${AGENT_USER_PREFIX}${slot}"
   dir="$DATA_MOUNT/agents/$slot"
-  install -d -o root -g "$user" -m 0750 "$dir" "$dir/keys" "$dir/secrets"
+  install -d -o root -g "$user" -m 0750 "$dir" "$dir/keys" "$dir/secrets" "$dir/operator"
   install -d -o "$user" -g "$user" -m 0700 "$dir/state"
 done
 {
@@ -562,4 +571,10 @@ done
   echo "MERO_AGENT_PROFILE=${IMAGE_PROFILE}"
 } > "${LOG_DIR}/agent.env"
 chmod 0644 "${LOG_DIR}/agent.env"
+# The gate reads the operator key from here (GATE_OPERATOR_KEY_FILE); no file,
+# no operator. Root-only: the agents have no use for it.
+rm -f "${LOG_DIR}/operator.x25519"
+if [[ -n "${OPERATOR_KEY:-}" ]]; then
+  (umask 077 && printf '%s\n' "$OPERATOR_KEY" > "${LOG_DIR}/operator.x25519")
+fi
 log "Agent environment: relay=${RELAY_URL} slots=${AGENT_SLOTS} data=${DATA_MOUNT}"

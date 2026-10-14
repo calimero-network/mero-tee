@@ -13,7 +13,9 @@
 #     own environment
 #   * no secret value is ever in an argv
 #   * agents.json is the provisioned one; mcp.json starts the bundle's mero-mcp
-#   * provisioning again stops mero-bot and exits non-zero (systemd restarts it)
+#   * NEAR_AI_API_KEY comes from the operator's operator/ unless the owner set one
+#   * provisioning again, by the owner or the operator, stops mero-bot and exits
+#     non-zero (systemd restarts it)
 #   * SIGTERM stops mero-bot and exits 0
 #
 # Usage: scripts/ci/tests/mero-bot-agent-launcher-test.sh
@@ -29,7 +31,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 # Stand-in for /opt/node/bin/node: records its argv and environment, then waits.
 # Slot 3's directory, as agent-init makes it; the launcher derives it.
 SLOT_DIR="${WORK}/data/agents/3"
-mkdir -p "${WORK}/node/bin" "${WORK}/bot/dist" "${SLOT_DIR}/secrets" "${SLOT_DIR}/state"
+mkdir -p "${WORK}/node/bin" "${WORK}/bot/dist" "${SLOT_DIR}/secrets" "${SLOT_DIR}/operator" "${SLOT_DIR}/state"
 cat >"${WORK}/node/bin/node" <<EOF
 #!/usr/bin/env bash
 echo "\$\$" >"${WORK}/pid"
@@ -57,6 +59,7 @@ wait_file() {
 }
 
 secret() { printf '%s' "$2" >"${SLOT_DIR}/secrets/$1"; }
+operator_secret() { printf '%s' "$2" >"${SLOT_DIR}/operator/$1"; }
 
 # --- Its slot -----------------------------------------------------------------
 for bad in "" "0" "../1" "1/../2" "x"; do
@@ -74,7 +77,7 @@ sleep 1
 grep -q "waiting for the owner" "${WORK}/log" || fail "no waiting line: $(cat "${WORK}/log")"
 
 secret CALIMERO_NODE_URL "https://node.example"
-secret NEAR_AI_API_KEY "near-secret-value"
+operator_secret NEAR_AI_API_KEY "near-operator-value"
 sleep 0.5
 [[ ! -e "${WORK}/argv" ]] || fail "mero-bot started with no agents.json or node login"
 secret CALIMERO_AUTH_TOKEN "auth-secret-value"
@@ -98,7 +101,7 @@ MERO_BOT_STATE_DIR
 NEAR_AI_API_KEY
 PATH"
 [[ "$(cat "${WORK}/env-names")" == "${expected_env}" ]] || fail "environment: $(tr '\n' ' ' <"${WORK}/env-names")"
-grep -qx "NEAR_AI_API_KEY=near-secret-value" "${WORK}/env" || fail "NEAR_AI_API_KEY not passed as provisioned"
+grep -qx "NEAR_AI_API_KEY=near-operator-value" "${WORK}/env" || fail "NEAR_AI_API_KEY not taken from the operator's"
 grep -qx "HOME=${SLOT_DIR}/state/home" "${WORK}/env" || fail "HOME is not on the state dir"
 
 for pid in "$(cat "${WORK}/pid")" "${launcher}"; do
@@ -113,7 +116,8 @@ jq -e --arg node "${WORK}/node/bin/node" --arg mcp "${WORK}/bot/node_modules/@ca
   || fail "mcp.json: $(cat "${SLOT_DIR}/state/home/.mero/mcp.json")"
 
 # --- Provisioning again restarts it -----------------------------------------------
-secret CALIMERO_AUTH_TOKEN "rotated-secret-value"
+# The operator's new NEAR key is a new secret too.
+operator_secret NEAR_AI_API_KEY "near-rotated-value"
 set +e
 wait "${launcher}"
 code=$?
@@ -127,7 +131,19 @@ rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/stopped"
 bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
 launcher=$!
 wait_file "${WORK}/env-names"
-grep -qx "CALIMERO_AUTH_TOKEN=rotated-secret-value" "${WORK}/env" || fail "the restarted mero-bot did not get the new login"
+grep -qx "NEAR_AI_API_KEY=near-rotated-value" "${WORK}/env" || fail "the restarted mero-bot did not get the operator's new key"
+# The owner's own key, if it sets one, wins over the operator's.
+secret NEAR_AI_API_KEY "near-owner-value"
+set +e
+wait "${launcher}"
+code=$?
+set -e
+[[ ${code} -eq 75 ]] || fail "after the owner's key the launcher exited ${code}, not 75"
+rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/stopped"
+bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
+launcher=$!
+wait_file "${WORK}/env-names"
+grep -qx "NEAR_AI_API_KEY=near-owner-value" "${WORK}/env" || fail "the owner's NEAR key did not win over the operator's"
 kill -TERM "${launcher}"
 set +e
 wait "${launcher}"

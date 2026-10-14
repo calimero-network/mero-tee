@@ -3,8 +3,9 @@
 //!
 //! # Environment
 //!
-//! Baked into the image (`/etc/mero-agent/gate.env`) and measured; nothing
-//! comes from instance metadata.
+//! Baked into the image (`/etc/mero-agent/gate.env`) and measured. The one
+//! input from instance metadata is the operator key, and it can only write the
+//! operator's own secrets (see `GATE_OPERATOR_KEY_FILE`).
 //!
 //! Nobody is baked in as allowed to provision: the first HPKE Auth-mode bundle
 //! for an agent id claims a free slot for that id and its sender key, which is
@@ -20,6 +21,7 @@
 //! | `GATE_SLOT_GROUP_PREFIX` | *(none)* | Slot `n`'s keys and secrets are made readable by the group `<prefix><n>` (0640, directories 0750), and by nobody else. Empty: owner-only. The gate runs as root, which configfs-tsm quotes need |
 //! | `GATE_SLOT_UNIT` | *(none)* | Slot `n`'s agent as a systemd unit, `{slot}` standing for `n` (`mero-agent@{slot}.service`): stopped before a release erases the slot, started after. Empty: none |
 //! | `GATE_IMAGE_PROFILE_FILE` | `/etc/mero-agent/image-profile` | The image's profile |
+//! | `GATE_OPERATOR_KEY_FILE` | `/run/mero-agent/operator.x25519` | The operator's X25519 public key, base64. agent-init copies it from the `operator-key` metadata whoever runs the VM sets. Its holder may write only the [`OPERATOR_SECRETS`](mero_agent_gate::protocol::OPERATOR_SECRETS) into a claimed agent (`/operator`). Missing: `/operator` refuses everything |
 //! | `GATE_MOCK_ATTESTATION` | `false` | Serve mock quotes. `mock-attestation` builds only |
 
 use std::net::SocketAddr;
@@ -61,6 +63,24 @@ fn is_mount_point(path: &Path) -> EyreResult<bool> {
     let parent = path.parent().unwrap_or(Path::new("/"));
     let parent = std::fs::metadata(parent).wrap_err_with(|| format!("{}", parent.display()))?;
     Ok(own.dev() != parent.dev())
+}
+
+/// The operator key agent-init wrote, or None when there is none. A file that
+/// is there but holds no 32-byte key stops the gate: half a configuration
+/// should not read as "no operator".
+fn read_operator_key(path: &Path) -> EyreResult<Option<[u8; 32]>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            let bytes = BASE64
+                .decode(text.trim())
+                .wrap_err_with(|| format!("{}: not base64", path.display()))?;
+            let key = <[u8; 32]>::try_from(bytes)
+                .map_err(|_| eyre::eyre!("{}: an operator key is 32 bytes", path.display()))?;
+            Ok(Some(key))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).wrap_err_with(|| format!("{}", path.display())),
+    }
 }
 
 #[tokio::main]
@@ -121,13 +141,21 @@ async fn main() -> EyreResult<()> {
     #[cfg(not(feature = "mock-attestation"))]
     let quoter: Arc<dyn Quoter> = Arc::new(TdxQuoter);
 
+    let operator = read_operator_key(&env_path(
+        "GATE_OPERATOR_KEY_FILE",
+        "/run/mero-agent/operator.x25519",
+    ))?;
+
     let slots = open_slots(&state_dir.join("agents"), slot_count, group_prefix.trim())?;
     let claimed = slots.iter().filter(|s| s.claim.is_some()).count();
-    let gate = Arc::new(Gate::new(quoter, ProvisioningKey::generate(), slots, units));
+    let gate = Arc::new(
+        Gate::new(quoter, ProvisioningKey::generate(), slots, units).with_operator(operator),
+    );
     info!(
         profile = %profile,
         slots = slot_count,
         claimed,
+        operator = %operator.map_or_else(|| "none".to_owned(), |key| BASE64.encode(key)),
         provisioning_key = %BASE64.encode(gate.provisioning.public),
         "mero-agent-gate ready"
     );

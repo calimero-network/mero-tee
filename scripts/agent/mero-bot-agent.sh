@@ -15,7 +15,10 @@
 #   CALIMERO_NODE_URL     required: the owner's node.
 #   CALIMERO_AUTH_TOKEN   the node login, with CALIMERO_REFRESH_TOKEN; or
 #   CALIMERO_USERNAME     with CALIMERO_PASSWORD.
-#   NEAR_AI_API_KEY       the key a NEAR profile names in apiKeyEnv.
+#   NEAR_AI_API_KEY       the key a NEAR profile names in apiKeyEnv. Normally the
+#                         operator's (mdma pays for the agent's model calls):
+#                         the gate writes it to the slot's operator/ directory,
+#                         and the owner's own, if provisioned, wins.
 #   HYPERFEED_CONTEXT     optional: pins the feed.
 # Any other name is ignored: only these reach mero-bot's environment.
 #
@@ -31,6 +34,7 @@ if [[ -z "${MERO_AGENT_SECRETS_DIR:-}" || -z "${MERO_AGENT_STATE_DIR:-}" ]]; the
   SLOT_DIR="${MERO_AGENT_DATA_DIR:?}/agents/$SLOT"
 fi
 SECRETS="${MERO_AGENT_SECRETS_DIR:-$SLOT_DIR/secrets}"
+OPERATOR="${MERO_AGENT_OPERATOR_DIR:-${SLOT_DIR:+$SLOT_DIR/operator}}"
 STATE="${MERO_AGENT_STATE_DIR:-$SLOT_DIR/state}"
 BOT="${MERO_BOT_DIR:-/opt/mero-bot}"
 NODE="${MERO_BOT_NODE:-/opt/node/bin/node}"
@@ -55,8 +59,11 @@ provisioned() {
     && { secret CALIMERO_AUTH_TOKEN || { secret CALIMERO_USERNAME && secret CALIMERO_PASSWORD; }; }
 }
 
-# What changes when the owner provisions again: each secret's name, size and mtime.
-fingerprint() { find "$SECRETS" -maxdepth 1 -type f -printf '%f %s %T@\n' 2>/dev/null | sort; }
+# What changes when the owner or the operator provisions again: each secret's
+# name, size and mtime.
+fingerprint() {
+  find "$SECRETS" ${OPERATOR:+"$OPERATOR"} -maxdepth 1 -type f -printf '%h/%f %s %T@\n' 2>/dev/null | sort
+}
 
 if ! provisioned; then
   log "waiting for the owner to provision MERO_AGENTS_JSON, CALIMERO_NODE_URL and a node login"
@@ -81,7 +88,11 @@ cd "$STATE/work"
   export HOME="$home" PATH="$node_dir:/usr/bin:/bin"
   export MERO_BOT_STATE_DIR="$STATE/mero-bot" CALIMERO_MCP_STATE_DIR="$STATE/mcp"
   for name in "${ENV_SECRETS[@]}"; do
-    if secret "$name"; then export "$name=$(<"$SECRETS/$name")"; fi
+    if secret "$name"; then
+      export "$name=$(<"$SECRETS/$name")"
+    elif [[ "$name" == NEAR_AI_API_KEY && -n "$OPERATOR" && -s "$OPERATOR/$name" ]]; then
+      export "$name=$(<"$OPERATOR/$name")"
+    fi
   done
   exec "$NODE" "$BOT/dist/cli.js" --headless --fixed-code --attested-only
 ) &

@@ -60,6 +60,12 @@ impl Slot {
         self.dir.join("state")
     }
 
+    /// What the operator wrote (`/operator`): apart from the owner's
+    /// `secrets/`, so neither can overwrite the other's.
+    pub fn operator_dir(&self) -> PathBuf {
+        self.dir.join("operator")
+    }
+
     fn id_path(&self) -> PathBuf {
         self.dir.join("id")
     }
@@ -86,6 +92,7 @@ impl Slot {
         private_dir(&slot.dir, share)?;
         private_dir(&slot.keys_dir(), share)?;
         private_dir(&slot.secrets_dir(), share)?;
+        private_dir(&slot.operator_dir(), share)?;
         // agent-init makes state/ and gives it to the slot's user; the gate
         // only ever empties it.
         std::fs::create_dir_all(slot.state_dir())
@@ -118,7 +125,12 @@ impl Slot {
 
     /// Erase everything in the slot but its directories: keys, secrets, state.
     fn erase(&self) -> EyreResult<()> {
-        for dir in [self.keys_dir(), self.secrets_dir(), self.state_dir()] {
+        for dir in [
+            self.keys_dir(),
+            self.secrets_dir(),
+            self.operator_dir(),
+            self.state_dir(),
+        ] {
             empty_dir(&dir)?;
         }
         sync_dir(&self.dir)?;

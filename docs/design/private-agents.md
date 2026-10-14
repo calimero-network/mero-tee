@@ -149,8 +149,21 @@ The GPU TD of our own that this design once planned is parked.
 | `MERO_AGENTS_JSON` | mero-bot's `agents.json`: NEAR profiles only (`"attest": "near"`), and the model to use |
 | `CALIMERO_NODE_URL` | the owner's node |
 | `CALIMERO_AUTH_TOKEN` + `CALIMERO_REFRESH_TOKEN`, or `CALIMERO_USERNAME` + `CALIMERO_PASSWORD` | the node login |
-| `NEAR_AI_API_KEY` | the key the profile's `apiKeyEnv` names |
+| `NEAR_AI_API_KEY` | optional: the key the profile's `apiKeyEnv` names, when the owner pays NEAR itself. Otherwise the operator's is used (below) |
 | `HYPERFEED_CONTEXT` | optional: pins the feed |
+
+**The secret the operator provisions.** mdma pays for each agent's model calls,
+so it gives the agent a NEAR AI key of its own: one from its pool, sealed
+straight to the gate after the owner claims the agent, so the key never passes
+through the owner's browser. The gate's `/operator` takes it only from the key
+the VM's `operator-key` metadata names, only for a claimed agent, only under
+the names in `OPERATOR_SECRETS` (`NEAR_AI_API_KEY`), and only into the slot's
+`operator/` directory, apart from the owner's `secrets/`. The operator cannot
+claim or release an agent or touch the owner's secrets, and a release erases
+what it wrote. What it can do is choose which NEAR key the agent pays with; a
+NEAR key reaches NEAR's attested gateway like any other and reads nothing the
+agent sends. mdma checks the gate's quote itself before sealing, so a fake gate
+cannot collect a key.
 
 **What this step does not do yet**
 
