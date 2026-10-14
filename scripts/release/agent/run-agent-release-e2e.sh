@@ -10,12 +10,15 @@ set -euo pipefail
 #      matches its AGENT entry (under the mero-agent/ prefix). The gate starts
 #      only once the disk is open, so a gate answering proves the whole chain;
 #   3. verifies the gate's quote against the release's signed agent policy and,
-#      as an owner would, claims the agent with a throwaway key made here and
-#      provisions a secret through mero-agent-provision; a second key is refused;
-#   4. resets the agent VM: the gate must come back with the SAME signing key
-#      and the SAME owner, both on the encrypted disk, so the disk was reopened
+#      as an owner would, claims agent e2e-1 with a throwaway key made here and
+#      provisions a secret through mero-agent-provision. A second owner claims
+#      agent e2e-2 on the same TD, and is refused on e2e-1;
+#   4. resets the agent VM: the gate must come back with the SAME signing keys
+#      and the SAME owners, all on the encrypted disk, so the disk was reopened
 #      with the same KMS key rather than reformatted; the owner provisions
-#      again and the second key is still refused.
+#      again and the second key is still refused;
+#   5. the first owner releases e2e-1: its quote binds no owner again, and
+#      e2e-2 keeps its owner and signing key.
 #
 # Creates and always deletes its own VMs, disk and firewall rule.
 #
@@ -133,57 +136,88 @@ wait_for "the agent gate (its disk opened with an agent key)" "${gate}/health" '
 # --- 3. verify, claim, provision -------------------------------------------------
 keys="$(mktemp -d)"
 "${PROVISION_BIN}" keygen --out "${keys}/owner.key" >"${OUT_DIR}/owner.pub"
-"${PROVISION_BIN}" keygen --out "${keys}/other.key" >/dev/null
+"${PROVISION_BIN}" keygen --out "${keys}/other.key" >"${OUT_DIR}/other.pub"
 owner="$(cat "${OUT_DIR}/owner.pub")"
-"${PROVISION_BIN}" attest --gate "${gate}" --policy "${AGENT_POLICY}" | tee "${OUT_DIR}/attest-1.json"
-jq -e '.ownerPublicKey == null' "${OUT_DIR}/attest-1.json" >/dev/null \
+other="$(cat "${OUT_DIR}/other.pub")"
+attest() { # agent out
+  "${PROVISION_BIN}" attest --gate "${gate}" --policy "${AGENT_POLICY}" --agent "$1" | tee "$2"
+}
+attest e2e-1 "${OUT_DIR}/attest-1.json"
+jq -e '.ownerPublicKey == null and .signingPublicKey == null' "${OUT_DIR}/attest-1.json" >/dev/null \
   || { echo "::error::a fresh agent on a blank disk is already claimed"; exit 1; }
 
-provision() { # key label
-  printf '{"secrets":{"E2E_SECRET":"e2e-%s-%s"}}' "${GITHUB_RUN_ID:-local}" "$2" >"${OUT_DIR}/e2e-secrets.json"
+provision() { # agent key label
+  printf '{"secrets":{"E2E_SECRET":"e2e-%s-%s"}}' "${GITHUB_RUN_ID:-local}" "$3" >"${OUT_DIR}/e2e-secrets.json"
   local rc=0
   "${PROVISION_BIN}" provision --gate "${gate}" --policy "${AGENT_POLICY}" \
-    --key "$1" --secrets "${OUT_DIR}/e2e-secrets.json" || rc=$?
+    --agent "$1" --key "$2" --secrets "${OUT_DIR}/e2e-secrets.json" || rc=$?
   rm -f "${OUT_DIR}/e2e-secrets.json"
   return "${rc}"
 }
 refused() { # label
-  if provision "${keys}/other.key" foreign >"${OUT_DIR}/foreign-$1.json" 2>"${OUT_DIR}/foreign-$1.err"; then
+  if provision e2e-1 "${keys}/other.key" foreign >"${OUT_DIR}/foreign-$1.json" 2>"${OUT_DIR}/foreign-$1.err"; then
     echo "::error::a second key provisioned a claimed agent ($1)"; exit 1
   fi
   grep -q "not yours" "${OUT_DIR}/foreign-$1.err" \
     || { echo "::error::a second key failed for the wrong reason ($1): $(cat "${OUT_DIR}/foreign-$1.err")"; exit 1; }
 }
 
-provision "${keys}/owner.key" claim | tee "${OUT_DIR}/provision.json"
-jq -e --arg owner "${owner}" '.written == ["E2E_SECRET"] and .claimed == true and .ownerPublicKey == $owner' \
+provision e2e-1 "${keys}/owner.key" claim | tee "${OUT_DIR}/provision.json"
+jq -e --arg owner "${owner}" '.written == ["E2E_SECRET"] and .claimed == true and .ownerPublicKey == $owner
+  and .agentId == "e2e-1" and (.signingPublicKey | type == "string")' \
   "${OUT_DIR}/provision.json" >/dev/null \
   || { echo "::error::the gate did not write the secret under a claim"; exit 1; }
+provision e2e-2 "${keys}/other.key" tenant | tee "${OUT_DIR}/provision-tenant.json"
+jq -e --arg other "${other}" '.claimed == true and .ownerPublicKey == $other' \
+  "${OUT_DIR}/provision-tenant.json" >/dev/null \
+  || { echo "::error::a second owner could not claim a second agent on the TD"; exit 1; }
+before="$(jq -r '.signingPublicKey' "${OUT_DIR}/provision.json")"
+tenant_before="$(jq -r '.signingPublicKey' "${OUT_DIR}/provision-tenant.json")"
+[[ "${before}" != "${tenant_before}" ]] \
+  || { echo "::error::two agents on one TD share a signing key"; exit 1; }
+curl -fsS --max-time 5 "${gate}/health" | tee "${OUT_DIR}/health.json"
+jq -e '.claimed == 2' "${OUT_DIR}/health.json" >/dev/null \
+  || { echo "::error::the gate does not count two claimed agents"; exit 1; }
 refused before-reset
 
-# --- 4. reboot: the same disk, the same key -----------------------------------
+# --- 4. reboot: the same disk, the same keys ----------------------------------
 gcloud compute instances reset "${agent_vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}"
 sleep 30
 wait_for "the agent gate after a reset" "${gate}/health" '.status == "ok"'
-"${PROVISION_BIN}" attest --gate "${gate}" --policy "${AGENT_POLICY}" | tee "${OUT_DIR}/attest-2.json"
-before="$(jq -r '.signingPublicKey' "${OUT_DIR}/attest-1.json")"
+attest e2e-1 "${OUT_DIR}/attest-2.json"
+attest e2e-2 "${OUT_DIR}/attest-tenant-2.json"
 after="$(jq -r '.signingPublicKey' "${OUT_DIR}/attest-2.json")"
 [[ -n "${before}" && "${before}" == "${after}" ]] \
   || { echo "::error::the signing key changed across a reset (${before} -> ${after}): the disk was not reopened"; exit 1; }
 jq -e --arg owner "${owner}" '.ownerPublicKey == $owner' "${OUT_DIR}/attest-2.json" >/dev/null \
   || { echo "::error::the claim did not survive a reset"; exit 1; }
+jq -e --arg other "${other}" --arg key "${tenant_before}" '.ownerPublicKey == $other and .signingPublicKey == $key' \
+  "${OUT_DIR}/attest-tenant-2.json" >/dev/null \
+  || { echo "::error::the second agent's claim did not survive a reset"; exit 1; }
 refused after-reset
-provision "${keys}/owner.key" again | tee "${OUT_DIR}/provision-2.json"
+provision e2e-1 "${keys}/owner.key" again | tee "${OUT_DIR}/provision-2.json"
 jq -e '.written == ["E2E_SECRET"] and .claimed == false' "${OUT_DIR}/provision-2.json" >/dev/null \
   || { echo "::error::the owner could not provision again after a reset"; exit 1; }
+
+# --- 5. release: the slot is erased, the other agent untouched -----------------
+"${PROVISION_BIN}" release --gate "${gate}" --policy "${AGENT_POLICY}" \
+  --agent e2e-1 --key "${keys}/owner.key" | tee "${OUT_DIR}/release.json"
+attest e2e-1 "${OUT_DIR}/attest-3.json"
+jq -e '.ownerPublicKey == null and .signingPublicKey == null' "${OUT_DIR}/attest-3.json" >/dev/null \
+  || { echo "::error::a released agent is still claimed"; exit 1; }
+attest e2e-2 "${OUT_DIR}/attest-tenant-3.json"
+jq -e --arg other "${other}" --arg key "${tenant_before}" '.ownerPublicKey == $other and .signingPublicKey == $key' \
+  "${OUT_DIR}/attest-tenant-3.json" >/dev/null \
+  || { echo "::error::releasing one agent touched another"; exit 1; }
 rm -rf "${keys}"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo "## Private agent end to end (${PROFILE}, ${VERSION})"
     echo "- KMS \`${kms_image}\` released the agent's disk key; the gate verified against the signed agent policy."
-    echo "- A throwaway owner key \`${owner}\` claimed the agent and provisioned a secret sealed to the TD; a second key was refused."
-    echo "- After a reset the disk reopened: signing key \`${before}\` and the owner unchanged; the owner provisioned again and the second key was still refused."
+    echo "- A throwaway owner key \`${owner}\` claimed agent e2e-1 and provisioned a secret sealed to the TD; a second owner claimed e2e-2 on the same TD and was refused on e2e-1."
+    echo "- After a reset the disk reopened: both agents' signing keys and owners unchanged; the owner provisioned again and the second key was still refused."
+    echo "- The owner released e2e-1: its quote binds no owner; e2e-2 was untouched."
   } >> "${GITHUB_STEP_SUMMARY}"
 fi
 echo "Agent end to end: OK"

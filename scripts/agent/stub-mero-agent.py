@@ -7,16 +7,23 @@ loopback and reports which secrets the gate has provisioned, by NAME, so a
 debug image can be booted end to end before a real agent exists. It never
 reads a secret's value.
 
-Environment (from /run/mero-agent/agent.env, written by agent-init):
-  MERO_AGENT_SECRETS_DIR, MERO_AGENT_STATE_DIR, MERO_AGENT_RELAY_URL
+One runs per slot (mero-agent@<n>.service). Environment: MERO_AGENT_DATA_DIR
+and MERO_AGENT_RELAY_URL (from /run/mero-agent/agent.env, written by
+agent-init) and MERO_AGENT_SLOT (the unit's instance). It reads the slot's
+secrets directory, $MERO_AGENT_DATA_DIR/agents/<slot>/secrets, and listens on
+127.0.0.1:<18080 + slot> (clear of the gate on 8090 and node_exporter on 9100).
 """
 
 import http.server
 import json
 import os
 
-LISTEN = ("127.0.0.1", int(os.environ.get("MERO_AGENT_STUB_PORT", "8081")))
-SECRETS_DIR = os.environ.get("MERO_AGENT_SECRETS_DIR", "/mnt/agent/secrets")
+SLOT = int(os.environ.get("MERO_AGENT_SLOT", "1"))
+LISTEN = ("127.0.0.1", int(os.environ.get("MERO_AGENT_STUB_PORT", str(18080 + SLOT))))
+SECRETS_DIR = os.environ.get(
+    "MERO_AGENT_SECRETS_DIR",
+    os.path.join(os.environ.get("MERO_AGENT_DATA_DIR", "/mnt/agent"), "agents", str(SLOT), "secrets"),
+)
 
 
 def provisioned():
@@ -35,6 +42,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             {
                 "status": "ok",
                 "stub": True,
+                "slot": SLOT,
                 "relay": os.environ.get("MERO_AGENT_RELAY_URL", ""),
                 "secrets": provisioned(),
             }
@@ -50,5 +58,5 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"stub mero-agent on {LISTEN[0]}:{LISTEN[1]}; secrets in {SECRETS_DIR}", flush=True)
+    print(f"stub mero-agent, slot {SLOT}, on {LISTEN[0]}:{LISTEN[1]}; secrets in {SECRETS_DIR}", flush=True)
     http.server.ThreadingHTTPServer(LISTEN, Handler).serve_forever()

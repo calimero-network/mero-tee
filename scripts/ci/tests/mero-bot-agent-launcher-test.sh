@@ -3,6 +3,8 @@
 # against a stand-in for Node that records how it was started and then waits.
 # What it pins:
 #
+#   * it finds its slot's secrets and state from MERO_AGENT_DATA_DIR and
+#     MERO_AGENT_SLOT, and refuses a slot that is not a number
 #   * nothing starts until MERO_AGENTS_JSON, CALIMERO_NODE_URL and a node login
 #     are provisioned
 #   * mero-bot runs headless, with --fixed-code and --attested-only
@@ -25,7 +27,9 @@ trap 'pkill -P $$ 2>/dev/null || true; rm -rf "${WORK:?}"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # Stand-in for /opt/node/bin/node: records its argv and environment, then waits.
-mkdir -p "${WORK}/node/bin" "${WORK}/bot/dist" "${WORK}/secrets" "${WORK}/state"
+# Slot 3's directory, as agent-init makes it; the launcher derives it.
+SLOT_DIR="${WORK}/data/agents/3"
+mkdir -p "${WORK}/node/bin" "${WORK}/bot/dist" "${SLOT_DIR}/secrets" "${SLOT_DIR}/state"
 cat >"${WORK}/node/bin/node" <<EOF
 #!/usr/bin/env bash
 echo "\$\$" >"${WORK}/pid"
@@ -38,7 +42,7 @@ while :; do sleep 0.1; done
 EOF
 chmod +x "${WORK}/node/bin/node"
 
-export MERO_AGENT_SECRETS_DIR="${WORK}/secrets" MERO_AGENT_STATE_DIR="${WORK}/state"
+export MERO_AGENT_DATA_DIR="${WORK}/data"
 export MERO_BOT_DIR="${WORK}/bot" MERO_BOT_NODE="${WORK}/node/bin/node" MERO_BOT_POLL_SECONDS=0.2
 export LAUNCHER_HOST_SECRET=must-not-leak
 
@@ -52,7 +56,15 @@ wait_file() {
   fail "timed out waiting for $1"
 }
 
-secret() { printf '%s' "$2" >"${WORK}/secrets/$1"; }
+secret() { printf '%s' "$2" >"${SLOT_DIR}/secrets/$1"; }
+
+# --- Its slot -----------------------------------------------------------------
+for bad in "" "0" "../1" "1/../2" "x"; do
+  if MERO_AGENT_SLOT="$bad" bash "${LAUNCHER}" >"${WORK}/bad-slot.log" 2>&1; then
+    fail "the launcher ran with slot '${bad}'"
+  fi
+done
+export MERO_AGENT_SLOT=3
 
 # --- Waits for provisioning ---------------------------------------------------
 bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
@@ -87,7 +99,7 @@ NEAR_AI_API_KEY
 PATH"
 [[ "$(cat "${WORK}/env-names")" == "${expected_env}" ]] || fail "environment: $(tr '\n' ' ' <"${WORK}/env-names")"
 grep -qx "NEAR_AI_API_KEY=near-secret-value" "${WORK}/env" || fail "NEAR_AI_API_KEY not passed as provisioned"
-grep -qx "HOME=${WORK}/state/home" "${WORK}/env" || fail "HOME is not on the state dir"
+grep -qx "HOME=${SLOT_DIR}/state/home" "${WORK}/env" || fail "HOME is not on the state dir"
 
 for pid in "$(cat "${WORK}/pid")" "${launcher}"; do
   if tr '\0' ' ' <"/proc/${pid}/cmdline" | grep -qE 'secret-value'; then
@@ -95,10 +107,10 @@ for pid in "$(cat "${WORK}/pid")" "${launcher}"; do
   fi
 done
 
-cmp -s "${WORK}/secrets/MERO_AGENTS_JSON" "${WORK}/state/home/.mero/agents.json" || fail "agents.json is not the provisioned one"
+cmp -s "${SLOT_DIR}/secrets/MERO_AGENTS_JSON" "${SLOT_DIR}/state/home/.mero/agents.json" || fail "agents.json is not the provisioned one"
 jq -e --arg node "${WORK}/node/bin/node" --arg mcp "${WORK}/bot/node_modules/@calimero-network/mero-mcp/dist/index.js" \
-  '.mcpServers["mero-mcp"] == {command: $node, args: [$mcp]}' "${WORK}/state/home/.mero/mcp.json" >/dev/null \
-  || fail "mcp.json: $(cat "${WORK}/state/home/.mero/mcp.json")"
+  '.mcpServers["mero-mcp"] == {command: $node, args: [$mcp]}' "${SLOT_DIR}/state/home/.mero/mcp.json" >/dev/null \
+  || fail "mcp.json: $(cat "${SLOT_DIR}/state/home/.mero/mcp.json")"
 
 # --- Provisioning again restarts it -----------------------------------------------
 secret CALIMERO_AUTH_TOKEN "rotated-secret-value"

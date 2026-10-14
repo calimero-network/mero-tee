@@ -12,7 +12,7 @@ set -euo pipefail
 #      Authority verify it, and extracts its measurements -- the agent policy
 #      a KMS image is built with (`kms_agent_policy_file`) and a provisioner
 #      verifies against;
-#   2. runs `mero-agent-provision provision` against the gate with that policy,
+#   2. runs `mero-agent-provision provision --agent probe` against the gate with that policy,
 #      so the quote is verified again by the same code an owner uses, and a
 #      throwaway secret is sealed to the TD under a throwaway owner key, which
 #      claims the VM;
@@ -117,7 +117,7 @@ until curl -fsS --max-time 5 "${gate}/health" >"${OUT_DIR}/health-before.json"; 
   fi
   sleep 10
 done
-jq -e '.provisioned == false' "${OUT_DIR}/health-before.json" >/dev/null \
+jq -e '.provisioned == 0 and .claimed == 0' "${OUT_DIR}/health-before.json" >/dev/null \
   || { echo "::error::a fresh gate already reports secrets: $(cat "${OUT_DIR}/health-before.json")"; exit 1; }
 
 # --- 1. measure ---------------------------------------------------------------
@@ -159,7 +159,7 @@ if [[ "${PROVISION_MODE}" != skip ]]; then
   "${PROVISION_BIN}" keygen --out "${keys}/owner.key" >"${OUT_DIR}/owner.pub"
   "${PROVISION_BIN}" keygen --out "${keys}/other.key" >/dev/null
   printf '{"secrets":{"PROBE_SECRET":"%s"}}' "probe-${GITHUB_RUN_ID:-local}" >"${OUT_DIR}/probe-secrets.json"
-  "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
+  "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" --agent probe \
     --key "${keys}/owner.key" --secrets "${OUT_DIR}/probe-secrets.json" \
     | tee "${OUT_DIR}/provision.json"
   rm -f "${OUT_DIR}/probe-secrets.json"
@@ -170,9 +170,9 @@ if [[ "${PROVISION_MODE}" != skip ]]; then
 
   # --- 3. the gate says so, and nobody else gets in -----------------------------
   curl -fsS --max-time 5 "${gate}/health" >"${OUT_DIR}/health-after.json"
-  jq -e '.provisioned == true and .claimed == true' "${OUT_DIR}/health-after.json" >/dev/null \
+  jq -e '.provisioned == 1 and .claimed == 1' "${OUT_DIR}/health-after.json" >/dev/null \
     || { echo "::error::the gate does not report itself provisioned and claimed"; exit 1; }
-  if "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" \
+  if "${PROVISION_BIN}" provision --gate "${gate}" --policy "${policy}" --agent probe \
       --key "${keys}/other.key" --secrets <(printf '{"secrets":{"X":"y"}}') \
       >"${OUT_DIR}/foreign.json" 2>"${OUT_DIR}/foreign.err"; then
     echo "::error::a second key provisioned a claimed agent"; exit 1

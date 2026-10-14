@@ -1,9 +1,8 @@
-//! The gate's HTTP service: `/health`, `/attest`, `/provision`.
+//! The gate's HTTP service: `/health`, `/attest`, `/provision`, `/release`.
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, State};
@@ -17,11 +16,12 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::keys::{store_owner, ProvisioningKey, Share};
+use crate::keys::{ProvisioningKey, Share};
 use crate::protocol::{
-    key_binding, open_bundle, report_data, AttestRequest, AttestResponse, OpenError,
-    ProvisionRequest, ProvisionResponse, SecretsBundle,
+    key_binding, open_message, report_data, validate_agent_id, AttestRequest, AttestResponse,
+    OpenError, ProvisionRequest, ProvisionResponse, ReleaseOrder, ReleaseResponse, SecretsBundle,
 };
+use crate::slots::Slot;
 
 /// A sealed bundle is at most 64 secrets of 64 KiB, plus base64 and JSON.
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -57,45 +57,77 @@ impl Quoter for MockQuoter {
     }
 }
 
+/// Stops and starts a slot's agent, so a release never erases files under a
+/// running agent. A trait so the HTTP layer is tested without systemd.
+pub trait Units: Send + Sync + 'static {
+    fn stop(&self, slot: u32) -> Result<(), String>;
+    fn start(&self, slot: u32) -> Result<(), String>;
+}
+
+/// No agent processes to manage (tests, or a gate run by hand).
+pub struct NoUnits;
+
+impl Units for NoUnits {
+    fn stop(&self, _slot: u32) -> Result<(), String> {
+        Ok(())
+    }
+    fn start(&self, _slot: u32) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Each slot's agent as a systemd unit, named by `template` with `{slot}` in
+/// it (`mero-agent@{slot}.service`).
+pub struct SystemdUnits {
+    pub template: String,
+}
+
+impl SystemdUnits {
+    fn run(&self, verb: &str, slot: u32) -> Result<(), String> {
+        let unit = self.template.replace("{slot}", &slot.to_string());
+        let status = std::process::Command::new("systemctl")
+            .args([verb, &unit])
+            .status()
+            .map_err(|e| format!("systemctl {verb} {unit}: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("systemctl {verb} {unit}: {status}"))
+        }
+    }
+}
+
+impl Units for SystemdUnits {
+    fn stop(&self, slot: u32) -> Result<(), String> {
+        self.run("stop", slot)
+    }
+    fn start(&self, slot: u32) -> Result<(), String> {
+        self.run("start", slot)
+    }
+}
+
 /// Everything a request handler needs.
 pub struct Gate {
     pub quoter: Arc<dyn Quoter>,
     pub provisioning: ProvisioningKey,
-    pub signing_public: [u8; 32],
-    /// Where secrets are written, one file per name. On the encrypted disk.
-    pub secrets_dir: PathBuf,
-    /// Who besides the gate reads them: the agent's group.
-    pub share: Share,
-    /// The owner's X25519 key, once claimed; held across a claim so two
-    /// first bundles cannot both claim.
-    pub owner: Mutex<Option<[u8; 32]>>,
-    /// Where the claim is recorded, on the encrypted disk.
-    pub owner_path: PathBuf,
-    /// Whether any bundle has been written since this start.
-    pub provisioned: AtomicBool,
+    /// Every agent's place on the TD; held across a claim, so two first
+    /// bundles cannot both claim one agent id or one slot.
+    pub slots: Mutex<Vec<Slot>>,
+    pub units: Arc<dyn Units>,
 }
 
 impl Gate {
-    /// A gate as `main` builds it: no bundle written yet.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         quoter: Arc<dyn Quoter>,
         provisioning: ProvisioningKey,
-        signing_public: [u8; 32],
-        secrets_dir: PathBuf,
-        share: Share,
-        owner: Option<[u8; 32]>,
-        owner_path: PathBuf,
+        slots: Vec<Slot>,
+        units: Arc<dyn Units>,
     ) -> Self {
         Self {
             quoter,
             provisioning,
-            signing_public,
-            secrets_dir,
-            share,
-            owner: Mutex::new(owner),
-            owner_path,
-            provisioned: AtomicBool::new(false),
+            slots: Mutex::new(slots),
+            units,
         }
     }
 }
@@ -105,6 +137,7 @@ pub fn router(gate: Arc<Gate>) -> Router {
         .route("/health", get(health))
         .route("/attest", post(attest))
         .route("/provision", post(provision))
+        .route("/release", post(release))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(gate)
 }
@@ -129,6 +162,10 @@ impl GateError {
     fn bad_request(details: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_request", details)
     }
+
+    fn internal(error: &'static str, details: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, error, details)
+    }
 }
 
 impl IntoResponse for GateError {
@@ -141,11 +178,17 @@ impl IntoResponse for GateError {
     }
 }
 
+/// Counts only: which agents a TD hosts, and whose they are, is for their
+/// owners to ask about, one agent id at a time.
 async fn health(State(gate): State<Arc<Gate>>) -> Json<serde_json::Value> {
+    let slots = gate.slots.lock().await;
+    let claimed = slots.iter().filter(|s| s.claim.is_some()).count();
     Json(json!({
         "status": "ok",
-        "claimed": gate.owner.lock().await.is_some(),
-        "provisioned": gate.provisioned.load(Ordering::Relaxed),
+        "slots": slots.len(),
+        "claimed": claimed,
+        "free": slots.len() - claimed,
+        "provisioned": slots.iter().filter(|s| s.provisioned).count(),
     }))
 }
 
@@ -162,37 +205,53 @@ async fn attest(
     Json(request): Json<AttestRequest>,
 ) -> Result<Json<AttestResponse>, GateError> {
     let nonce = decode_32("nonceB64", &request.nonce_b64)?;
-    let owner = *gate.owner.lock().await;
+    let agent_id = request.agent_id.unwrap_or_default();
+    if !agent_id.is_empty() {
+        validate_agent_id(&agent_id).map_err(GateError::bad_request)?;
+    }
+    let claim = if agent_id.is_empty() {
+        None
+    } else {
+        gate.slots
+            .lock()
+            .await
+            .iter()
+            .find_map(|s| s.claim.clone().filter(|c| c.agent_id == agent_id))
+    };
+    let signing = claim.as_ref().map(|c| c.signing_public);
+    let owner = claim.as_ref().map(|c| c.owner);
     let binding = key_binding(
         &gate.provisioning.public,
-        &gate.signing_public,
+        &agent_id,
+        signing.as_ref(),
         owner.as_ref(),
     );
     let data = report_data(&nonce, &binding);
     let quoter = Arc::clone(&gate.quoter);
     let quote = tokio::task::spawn_blocking(move || quoter.quote(data))
         .await
-        .map_err(|e| {
-            GateError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "quote_failed",
-                e.to_string(),
-            )
-        })?
-        .map_err(|e| GateError::new(StatusCode::INTERNAL_SERVER_ERROR, "quote_failed", e))?;
+        .map_err(|e| GateError::internal("quote_failed", e.to_string()))?
+        .map_err(|e| GateError::internal("quote_failed", e))?;
     Ok(Json(AttestResponse {
         quote_b64: BASE64.encode(quote),
         report_data_hex: hex::encode(data),
         provisioning_public_key_b64: BASE64.encode(gate.provisioning.public),
-        signing_public_key_b64: BASE64.encode(gate.signing_public),
+        agent_id: (!agent_id.is_empty()).then_some(agent_id),
+        signing_public_key_b64: signing.map(|key| BASE64.encode(key)),
         owner_public_key_b64: owner.map(|key| BASE64.encode(key)),
     }))
 }
 
-async fn provision(
-    State(gate): State<Arc<Gate>>,
-    Json(request): Json<ProvisionRequest>,
-) -> Result<Json<ProvisionResponse>, GateError> {
+/// A sealed request, decoded: for which agent, from whom, and its HPKE parts.
+struct Sealed {
+    agent_id: String,
+    sender: [u8; 32],
+    encapped: Vec<u8>,
+    ciphertext: Vec<u8>,
+}
+
+fn decode_sealed(gate: &Gate, request: ProvisionRequest) -> Result<Sealed, GateError> {
+    validate_agent_id(&request.agent_id).map_err(GateError::bad_request)?;
     let addressed_to = decode_32(
         "provisioningPublicKeyB64",
         &request.provisioning_public_key_b64,
@@ -213,64 +272,159 @@ async fn provision(
     let ciphertext = BASE64
         .decode(request.ciphertext_b64.trim())
         .map_err(|_| GateError::bad_request("ciphertextB64 is not base64"))?;
+    Ok(Sealed {
+        agent_id: request.agent_id,
+        sender,
+        encapped,
+        ciphertext,
+    })
+}
 
-    // Held to the end: a claim and the secrets it brings are one step, and a
-    // second first bundle waits, then finds the agent claimed.
-    let mut owner = gate.owner.lock().await;
-    if let Some(current) = *owner {
-        if current != sender {
-            warn!("Refused a bundle from a key that does not own this agent");
-            return Err(GateError::new(
-                StatusCode::FORBIDDEN,
-                "not_the_owner",
-                "this agent is claimed by another key",
-            ));
-        }
-    }
-    let bundle = open_bundle(
+fn open<T: serde::de::DeserializeOwned>(gate: &Gate, sealed: &Sealed) -> Result<T, GateError> {
+    open_message(
         &gate.provisioning.private,
         &gate.provisioning.public,
-        &sender,
-        &encapped,
-        &ciphertext,
+        &sealed.agent_id,
+        &sealed.sender,
+        &sealed.encapped,
+        &sealed.ciphertext,
     )
     .map_err(|e| match e {
         OpenError::NotFromSender => {
-            warn!("Refused a bundle not sealed by the key it names");
+            warn!(agent = %sealed.agent_id, "Refused a message not sealed by the key it names");
             GateError::new(StatusCode::FORBIDDEN, "not_from_sender", e.to_string())
         }
         OpenError::Malformed(_) => GateError::bad_request(e.to_string()),
-    })?;
+    })
+}
+
+fn not_the_owner(agent_id: &str) -> GateError {
+    warn!(agent = %agent_id, "Refused a message from a key that does not own this agent");
+    GateError::new(
+        StatusCode::FORBIDDEN,
+        "not_the_owner",
+        "this agent is claimed by another key",
+    )
+}
+
+async fn provision(
+    State(gate): State<Arc<Gate>>,
+    Json(request): Json<ProvisionRequest>,
+) -> Result<Json<ProvisionResponse>, GateError> {
+    let sealed = decode_sealed(&gate, request)?;
+
+    // Held to the end: a claim and the secrets it brings are one step, and a
+    // second first bundle waits, then finds the agent claimed.
+    let mut slots = gate.slots.lock().await;
+    let held = slots.iter().position(|s| {
+        s.claim
+            .as_ref()
+            .is_some_and(|c| c.agent_id == sealed.agent_id)
+    });
+    let index = match held {
+        Some(index) => {
+            if slots[index].claim.as_ref().map(|c| c.owner) != Some(sealed.sender) {
+                return Err(not_the_owner(&sealed.agent_id));
+            }
+            index
+        }
+        None => slots
+            .iter()
+            .position(|s| s.claim.is_none())
+            .ok_or_else(|| {
+                GateError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "no_free_slot",
+                    "every slot on this agent TD is taken; place the agent on another",
+                )
+            })?,
+    };
+    let bundle: SecretsBundle = open(&gate, &sealed)?;
     bundle.validate().map_err(GateError::bad_request)?;
 
     // The claim is durable before any secret is written: an owner told it
     // claimed the agent has, even if the gate dies next.
-    let claimed = owner.is_none();
+    let slot = &mut slots[index];
+    let claimed = held.is_none();
     if claimed {
-        let path = gate.owner_path.clone();
-        let share = gate.share;
-        blocking(move || store_owner(&path, share, &sender).map_err(|e| e.to_string())).await?;
-        *owner = Some(sender);
-        info!(owner = %BASE64.encode(sender), "Agent claimed");
+        slot.claim(&sealed.agent_id, &sealed.sender)
+            .map_err(|e| GateError::internal("write_failed", format!("{e:#}")))?;
+        info!(
+            agent = %sealed.agent_id,
+            slot = slot.number,
+            owner = %BASE64.encode(sealed.sender),
+            "Agent claimed"
+        );
     }
 
-    let secrets_dir = gate.secrets_dir.clone();
-    let share = gate.share;
-    let written = blocking(move || write_secrets(&secrets_dir, share, &bundle)).await?;
-    gate.provisioned.store(true, Ordering::Relaxed);
-    info!(secrets = ?written, "Provisioned secrets");
+    let written = write_secrets(&slot.secrets_dir(), slot.share, &bundle)
+        .map_err(|e| GateError::internal("write_failed", e))?;
+    slot.provisioned = true;
+    info!(agent = %sealed.agent_id, slot = slot.number, secrets = ?written, "Provisioned secrets");
     Ok(Json(ProvisionResponse { written, claimed }))
 }
 
-/// Run file I/O off the async workers; any failure is a 500.
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, GateError> {
-    let fail = |e: String| GateError::new(StatusCode::INTERNAL_SERVER_ERROR, "write_failed", e);
-    tokio::task::spawn_blocking(work)
+async fn release(
+    State(gate): State<Arc<Gate>>,
+    Json(request): Json<ProvisionRequest>,
+) -> Result<Json<ReleaseResponse>, GateError> {
+    let sealed = decode_sealed(&gate, request)?;
+    let mut slots = gate.slots.lock().await;
+    let index = slots
+        .iter()
+        .position(|s| {
+            s.claim
+                .as_ref()
+                .is_some_and(|c| c.agent_id == sealed.agent_id)
+        })
+        .ok_or_else(|| {
+            GateError::new(
+                StatusCode::NOT_FOUND,
+                "unknown_agent",
+                "no agent with this id on this TD",
+            )
+        })?;
+    if slots[index].claim.as_ref().map(|c| c.owner) != Some(sealed.sender) {
+        return Err(not_the_owner(&sealed.agent_id));
+    }
+    let order: ReleaseOrder = open(&gate, &sealed)?;
+    if !order.release {
+        return Err(GateError::bad_request(
+            "the message does not ask for a release",
+        ));
+    }
+
+    let number = slots[index].number;
+    // Stopped first: nothing of the agent's runs while its files go.
+    unit(&gate, number, false)
         .await
-        .map_err(|e| fail(e.to_string()))?
-        .map_err(fail)
+        .map_err(|e| GateError::internal("stop_failed", e))?;
+    slots[index]
+        .release()
+        .map_err(|e| GateError::internal("erase_failed", format!("{e:#}")))?;
+    info!(agent = %sealed.agent_id, slot = number, "Agent released; its slot is erased");
+    // Started again empty: it waits for the slot's next owner.
+    if let Err(e) = unit(&gate, number, true).await {
+        warn!(slot = number, "Could not start the freed slot's agent: {e}");
+    }
+    Ok(Json(ReleaseResponse {
+        released: sealed.agent_id,
+    }))
+}
+
+/// Stop or start slot `number`'s agent, off the async workers: a stop waits
+/// for the agent to exit.
+async fn unit(gate: &Gate, number: u32, start: bool) -> Result<(), String> {
+    let units = Arc::clone(&gate.units);
+    tokio::task::spawn_blocking(move || {
+        if start {
+            units.start(number)
+        } else {
+            units.stop(number)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Write each secret to `dir/<name>`, readable by the gate and the agent's
@@ -307,14 +461,15 @@ fn write_secrets(dir: &Path, share: Share, bundle: &SecretsBundle) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Mutex as StdMutex;
 
     use axum::body::Body;
     use axum::http::Request;
     use tower::util::ServiceExt;
 
     use super::*;
-    use crate::keys::load_owner;
-    use crate::protocol::{keypair_from_secret, seal_bundle};
+    use crate::protocol::{keypair_from_secret, seal_message};
+    use crate::slots::open_slots;
     use crate::test_util::TempDir;
 
     /// A quote that is just the report data, so tests can read it back.
@@ -325,6 +480,20 @@ mod tests {
         }
     }
 
+    /// Records what the gate asked of systemd.
+    #[derive(Default)]
+    struct RecordedUnits(StdMutex<Vec<String>>);
+    impl Units for RecordedUnits {
+        fn stop(&self, slot: u32) -> Result<(), String> {
+            self.0.lock().unwrap().push(format!("stop {slot}"));
+            Ok(())
+        }
+        fn start(&self, slot: u32) -> Result<(), String> {
+            self.0.lock().unwrap().push(format!("start {slot}"));
+            Ok(())
+        }
+    }
+
     const OWNER_SECRET: [u8; 32] = [0x22; 32];
     const OTHER_SECRET: [u8; 32] = [0x33; 32];
 
@@ -332,34 +501,38 @@ mod tests {
         keypair_from_secret(secret).unwrap().1
     }
 
-    /// A gate over `dir`, picking up a claim an earlier start recorded there.
-    fn gate(dir: &TempDir) -> Arc<Gate> {
-        let owner_path = dir.path().join("owner.x25519");
+    /// A gate with `count` slots over `dir`, picking up claims an earlier start
+    /// recorded there.
+    fn gate_with(dir: &TempDir, count: u32, units: Arc<dyn Units>) -> Arc<Gate> {
         Arc::new(Gate::new(
             Arc::new(EchoQuoter),
             ProvisioningKey::generate(),
-            [0x55; 32],
-            dir.path().join("secrets"),
-            Share::default(),
-            load_owner(&owner_path).unwrap(),
-            owner_path,
+            open_slots(&dir.path().join("agents"), count, "").unwrap(),
+            units,
         ))
     }
 
-    async fn post(
+    fn gate(dir: &TempDir) -> Arc<Gate> {
+        gate_with(dir, 2, Arc::new(NoUnits))
+    }
+
+    fn slot_dir(dir: &TempDir, slot: u32) -> std::path::PathBuf {
+        dir.path().join("agents").join(slot.to_string())
+    }
+
+    async fn call(
         gate: &Arc<Gate>,
+        method: &str,
         uri: &str,
-        body: serde_json::Value,
+        body: Option<serde_json::Value>,
     ) -> (StatusCode, serde_json::Value) {
-        let response = router(Arc::clone(gate))
-            .oneshot(
-                Request::post(uri)
-                    .header("content-type", "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
             .unwrap();
+        let response = router(Arc::clone(gate)).oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -367,21 +540,25 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
-    /// A bundle sealed by `sealed_by`, naming `named` as its sender.
-    fn request_naming(
+    async fn post(
+        gate: &Arc<Gate>,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        call(gate, "POST", uri, Some(body)).await
+    }
+
+    /// A message for `agent` sealed by `sealed_by`, naming `named` as its sender.
+    fn sealed<T: serde::Serialize>(
         gate: &Gate,
+        agent: &str,
         sealed_by: &[u8; 32],
         named: &[u8; 32],
-        pairs: &[(&str, &str)],
+        message: &T,
     ) -> serde_json::Value {
-        let bundle = SecretsBundle {
-            secrets: pairs
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-        };
-        let (enc, ct) = seal_bundle(&gate.provisioning.public, sealed_by, &bundle).unwrap();
+        let (enc, ct) = seal_message(&gate.provisioning.public, agent, sealed_by, message).unwrap();
         json!({
+            "agentId": agent,
             "provisioningPublicKeyB64": BASE64.encode(gate.provisioning.public),
             "senderPublicKeyB64": BASE64.encode(public(named)),
             "encappedKeyB64": BASE64.encode(enc),
@@ -389,49 +566,92 @@ mod tests {
         })
     }
 
-    fn request(gate: &Gate, sender: &[u8; 32], pairs: &[(&str, &str)]) -> serde_json::Value {
-        request_naming(gate, sender, sender, pairs)
+    fn bundle(pairs: &[(&str, &str)]) -> SecretsBundle {
+        SecretsBundle {
+            secrets: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        }
     }
 
-    async fn attest(gate: &Arc<Gate>) -> serde_json::Value {
-        let (status, body) = post(
-            gate,
-            "/attest",
-            json!({ "nonceB64": BASE64.encode([7u8; 32]) }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
+    fn request(
+        gate: &Gate,
+        agent: &str,
+        sender: &[u8; 32],
+        pairs: &[(&str, &str)],
+    ) -> serde_json::Value {
+        sealed(gate, agent, sender, sender, &bundle(pairs))
+    }
+
+    fn release_request(gate: &Gate, agent: &str, sender: &[u8; 32]) -> serde_json::Value {
+        sealed(gate, agent, sender, sender, &ReleaseOrder { release: true })
+    }
+
+    async fn attest(gate: &Arc<Gate>, agent: Option<&str>) -> serde_json::Value {
+        let mut body = json!({ "nonceB64": BASE64.encode([7u8; 32]) });
+        if let Some(agent) = agent {
+            body["agentId"] = json!(agent);
+        }
+        let (status, body) = post(gate, "/attest", body).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
         body
     }
 
+    fn quoted(body: &serde_json::Value) -> Vec<u8> {
+        BASE64.decode(body["quoteB64"].as_str().unwrap()).unwrap()
+    }
+
     #[tokio::test]
-    async fn an_unclaimed_quote_binds_no_owner() {
-        let dir = TempDir::new("attest");
+    async fn a_quote_without_an_agent_measures_the_td_alone() {
+        let dir = TempDir::new("attest-td");
         let gate = gate(&dir);
-        let body = attest(&gate).await;
-        let quote = BASE64.decode(body["quoteB64"].as_str().unwrap()).unwrap();
+        let body = attest(&gate, None).await;
         let expected = report_data(
             &[7; 32],
-            &key_binding(&gate.provisioning.public, &[0x55; 32], None),
+            &key_binding(&gate.provisioning.public, "", None, None),
         );
-        assert_eq!(quote, expected);
+        assert_eq!(quoted(&body), expected);
+        assert!(body.get("agentId").is_none());
+        assert!(body.get("signingPublicKeyB64").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unclaimed_agent_quote_binds_its_id_and_no_keys() {
+        let dir = TempDir::new("attest-unclaimed");
+        let gate = gate(&dir);
+        let body = attest(&gate, Some("ana")).await;
+        let expected = report_data(
+            &[7; 32],
+            &key_binding(&gate.provisioning.public, "ana", None, None),
+        );
+        assert_eq!(quoted(&body), expected);
+        assert_eq!(body["agentId"], "ana");
         assert!(body.get("ownerPublicKeyB64").is_none());
     }
 
     #[tokio::test]
-    async fn a_short_nonce_is_refused() {
-        let dir = TempDir::new("attest-nonce");
+    async fn bad_nonces_and_agent_ids_are_refused() {
+        let dir = TempDir::new("attest-bad");
+        let gate = gate(&dir);
         let (status, _) = post(
-            &gate(&dir),
+            &gate,
             "/attest",
             json!({ "nonceB64": BASE64.encode([7u8; 16]) }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = post(
+            &gate,
+            "/attest",
+            json!({ "nonceB64": BASE64.encode([7u8; 32]), "agentId": "../x" }),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
-    async fn the_first_bundle_claims_the_agent_and_the_quote_says_so() {
+    async fn the_first_bundle_claims_a_slot_and_the_agent_quote_says_so() {
         let dir = TempDir::new("claim");
         let gate = gate(&dir);
         let (status, body) = post(
@@ -439,6 +659,7 @@ mod tests {
             "/provision",
             request(
                 &gate,
+                "ana",
                 &OWNER_SECRET,
                 &[("API_KEY", "s3cret"), ("MODEL", "m")],
             ),
@@ -447,24 +668,131 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["written"], json!(["API_KEY", "MODEL"]));
         assert_eq!(body["claimed"], true);
-        let path = dir.path().join("secrets/API_KEY");
+        let path = slot_dir(&dir, 1).join("secrets/API_KEY");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "s3cret");
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+        assert_eq!(
+            std::fs::read_to_string(slot_dir(&dir, 1).join("id")).unwrap(),
+            "ana"
+        );
 
         let owner = public(&OWNER_SECRET);
-        let body = attest(&gate).await;
+        let body = attest(&gate, Some("ana")).await;
         assert_eq!(body["ownerPublicKeyB64"], BASE64.encode(owner));
-        let quote = BASE64.decode(body["quoteB64"].as_str().unwrap()).unwrap();
+        let signing = gate.slots.lock().await[0]
+            .claim
+            .clone()
+            .unwrap()
+            .signing_public;
+        assert_eq!(body["signingPublicKeyB64"], BASE64.encode(signing));
         assert_eq!(
-            quote,
+            quoted(&body),
             report_data(
                 &[7; 32],
-                &key_binding(&gate.provisioning.public, &[0x55; 32], Some(&owner))
+                &key_binding(
+                    &gate.provisioning.public,
+                    "ana",
+                    Some(&signing),
+                    Some(&owner)
+                )
             )
         );
+    }
+
+    #[tokio::test]
+    async fn two_owners_hold_two_slots_with_their_own_keys_and_secrets() {
+        let dir = TempDir::new("two-owners");
+        let gate = gate(&dir);
+        let (status, _) = post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("API_KEY", "ana-key")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, "bob", &OTHER_SECRET, &[("API_KEY", "bob-key")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["claimed"], true);
+        assert_eq!(
+            std::fs::read_to_string(slot_dir(&dir, 1).join("secrets/API_KEY")).unwrap(),
+            "ana-key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(slot_dir(&dir, 2).join("secrets/API_KEY")).unwrap(),
+            "bob-key"
+        );
+        let ana = attest(&gate, Some("ana")).await;
+        let bob = attest(&gate, Some("bob")).await;
+        assert_eq!(
+            ana["ownerPublicKeyB64"],
+            BASE64.encode(public(&OWNER_SECRET))
+        );
+        assert_eq!(
+            bob["ownerPublicKeyB64"],
+            BASE64.encode(public(&OTHER_SECRET))
+        );
+        assert_ne!(ana["signingPublicKeyB64"], bob["signingPublicKeyB64"]);
+
+        // Neither provisions the other's agent.
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OTHER_SECRET, &[("API_KEY", "evil")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "not_the_owner");
+        assert_eq!(
+            std::fs::read_to_string(slot_dir(&dir, 1).join("secrets/API_KEY")).unwrap(),
+            "ana-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_td_takes_no_new_agent_but_its_owners_still_provision() {
+        let dir = TempDir::new("full");
+        let gate = gate_with(&dir, 1, Arc::new(NoUnits));
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, "bob", &OTHER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "no_free_slot");
+        let (status, _) = post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "2")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_bundle_for_one_agent_cannot_be_replayed_to_another() {
+        let dir = TempDir::new("replay-agent");
+        let gate = gate(&dir);
+        let mut replayed = request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]);
+        replayed["agentId"] = json!("bob");
+        let (status, body) = post(&gate, "/provision", replayed).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "not_from_sender");
+        assert!(gate.slots.lock().await.iter().all(|s| s.claim.is_none()));
     }
 
     #[tokio::test]
@@ -474,44 +802,24 @@ mod tests {
         post(
             &gate,
             "/provision",
-            request(&gate, &OWNER_SECRET, &[("A", "1")]),
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
         )
         .await;
         let (status, body) = post(
             &gate,
             "/provision",
-            request(&gate, &OWNER_SECRET, &[("A", "2")]),
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "2")]),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["claimed"], false);
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("secrets/A")).unwrap(),
+            std::fs::read_to_string(slot_dir(&dir, 1).join("secrets/A")).unwrap(),
             "2"
         );
-    }
-
-    #[tokio::test]
-    async fn another_key_cannot_provision_a_claimed_agent() {
-        let dir = TempDir::new("claim-other");
-        let gate = gate(&dir);
-        post(
-            &gate,
-            "/provision",
-            request(&gate, &OWNER_SECRET, &[("API_KEY", "mine")]),
-        )
-        .await;
-        let (status, body) = post(
-            &gate,
-            "/provision",
-            request(&gate, &OTHER_SECRET, &[("API_KEY", "evil")]),
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(body["error"], "not_the_owner");
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("secrets/API_KEY")).unwrap(),
-            "mine"
+        assert!(
+            gate.slots.lock().await[1].claim.is_none(),
+            "one agent, one slot"
         );
     }
 
@@ -522,15 +830,21 @@ mod tests {
         post(
             &gate,
             "/provision",
-            request(&gate, &OWNER_SECRET, &[("API_KEY", "mine")]),
+            request(&gate, "ana", &OWNER_SECRET, &[("API_KEY", "mine")]),
         )
         .await;
-        let forged = request_naming(&gate, &OTHER_SECRET, &OWNER_SECRET, &[("API_KEY", "evil")]);
+        let forged = sealed(
+            &gate,
+            "ana",
+            &OTHER_SECRET,
+            &OWNER_SECRET,
+            &bundle(&[("API_KEY", "evil")]),
+        );
         let (status, body) = post(&gate, "/provision", forged).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body["error"], "not_from_sender");
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("secrets/API_KEY")).unwrap(),
+            std::fs::read_to_string(slot_dir(&dir, 1).join("secrets/API_KEY")).unwrap(),
             "mine"
         );
     }
@@ -539,11 +853,17 @@ mod tests {
     async fn a_forged_first_bundle_claims_nothing() {
         let dir = TempDir::new("claim-forged");
         let gate = gate(&dir);
-        let forged = request_naming(&gate, &OTHER_SECRET, &OWNER_SECRET, &[("A", "b")]);
+        let forged = sealed(
+            &gate,
+            "ana",
+            &OTHER_SECRET,
+            &OWNER_SECRET,
+            &bundle(&[("A", "b")]),
+        );
         let (status, _) = post(&gate, "/provision", forged).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
-        assert!(!dir.path().join("owner.x25519").exists());
-        assert!(gate.owner.lock().await.is_none());
+        assert!(!slot_dir(&dir, 1).join("id").exists());
+        assert!(gate.slots.lock().await.iter().all(|s| s.claim.is_none()));
     }
 
     #[tokio::test]
@@ -553,19 +873,21 @@ mod tests {
         post(
             &before,
             "/provision",
-            request(&before, &OWNER_SECRET, &[("A", "b")]),
+            request(&before, "ana", &OWNER_SECRET, &[("A", "b")]),
         )
         .await;
+        let signing_before = attest(&before, Some("ana")).await["signingPublicKeyB64"].clone();
         let after = gate(&dir);
-        let body = attest(&after).await;
+        let body = attest(&after, Some("ana")).await;
         assert_eq!(
             body["ownerPublicKeyB64"],
             BASE64.encode(public(&OWNER_SECRET))
         );
+        assert_eq!(body["signingPublicKeyB64"], signing_before);
         let (status, _) = post(
             &after,
             "/provision",
-            request(&after, &OTHER_SECRET, &[("A", "c")]),
+            request(&after, "ana", &OTHER_SECRET, &[("A", "c")]),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
@@ -575,7 +897,7 @@ mod tests {
     async fn a_message_for_an_earlier_start_is_stale() {
         let dir = TempDir::new("provision-stale");
         let before_restart = gate(&dir);
-        let request = request(&before_restart, &OWNER_SECRET, &[("A", "b")]);
+        let request = request(&before_restart, "ana", &OWNER_SECRET, &[("A", "b")]);
         let after_restart = gate(&dir);
         let (status, body) = post(&after_restart, "/provision", request).await;
         assert_eq!(status, StatusCode::CONFLICT);
@@ -586,17 +908,138 @@ mod tests {
     async fn a_bad_name_writes_nothing_and_claims_nothing() {
         let dir = TempDir::new("provision-name");
         let gate = gate(&dir);
-        let request = request(&gate, &OWNER_SECRET, &[("GOOD", "x"), ("../escape", "y")]);
+        let request = request(
+            &gate,
+            "ana",
+            &OWNER_SECRET,
+            &[("GOOD", "x"), ("../escape", "y")],
+        );
         let (status, _) = post(&gate, "/provision", request).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
-            !dir.path().join("secrets/GOOD").exists(),
+            !slot_dir(&dir, 1).join("secrets/GOOD").exists(),
             "validated before any write"
         );
-        assert!(!dir.path().join("escape").exists());
         assert!(
-            gate.owner.lock().await.is_none(),
+            gate.slots.lock().await.iter().all(|s| s.claim.is_none()),
             "a refused bundle claims nothing"
         );
+    }
+
+    #[tokio::test]
+    async fn the_owner_releases_its_agent_and_the_slot_is_erased_for_the_next() {
+        let dir = TempDir::new("release");
+        let units = Arc::new(RecordedUnits::default());
+        let gate = gate_with(&dir, 1, units.clone());
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("API_KEY", "ana-key")]),
+        )
+        .await;
+        std::fs::write(slot_dir(&dir, 1).join("state/memory"), "ana's notes").unwrap();
+
+        // Nobody else releases it.
+        let (status, body) = post(
+            &gate,
+            "/release",
+            release_request(&gate, "ana", &OTHER_SECRET),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"], "not_the_owner");
+        assert!(units.0.lock().unwrap().is_empty());
+
+        let (status, body) = post(
+            &gate,
+            "/release",
+            release_request(&gate, "ana", &OWNER_SECRET),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["released"], "ana");
+        assert_eq!(*units.0.lock().unwrap(), vec!["stop 1", "start 1"]);
+        for sub in ["keys", "secrets", "state"] {
+            assert_eq!(
+                std::fs::read_dir(slot_dir(&dir, 1).join(sub))
+                    .unwrap()
+                    .count(),
+                0,
+                "{sub} left behind"
+            );
+        }
+        let body = attest(&gate, Some("ana")).await;
+        assert!(body.get("ownerPublicKeyB64").is_none());
+
+        // The slot takes the next owner, who gets a signing key of its own.
+        let (status, body) = post(
+            &gate,
+            "/provision",
+            request(&gate, "bob", &OTHER_SECRET, &[("API_KEY", "bob-key")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            std::fs::read_to_string(slot_dir(&dir, 1).join("secrets/API_KEY")).unwrap(),
+            "bob-key"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_release_needs_a_known_agent_and_a_release_order() {
+        let dir = TempDir::new("release-bad");
+        let gate = gate(&dir);
+        let (status, body) = post(
+            &gate,
+            "/release",
+            release_request(&gate, "ana", &OWNER_SECRET),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "unknown_agent");
+
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let no = sealed(
+            &gate,
+            "ana",
+            &OWNER_SECRET,
+            &OWNER_SECRET,
+            &ReleaseOrder { release: false },
+        );
+        let (status, _) = post(&gate, "/release", no).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // A secrets bundle is not a release order.
+        let (status, _) = post(
+            &gate,
+            "/release",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(gate.slots.lock().await[0].claim.is_some());
+    }
+
+    #[tokio::test]
+    async fn health_counts_slots_and_names_no_agent() {
+        let dir = TempDir::new("health");
+        let gate = gate(&dir);
+        post(
+            &gate,
+            "/provision",
+            request(&gate, "ana", &OWNER_SECRET, &[("A", "1")]),
+        )
+        .await;
+        let (status, body) = call(&gate, "GET", "/health", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!({ "status": "ok", "slots": 2, "claimed": 1, "free": 1, "provisioned": 1 })
+        );
+        assert!(!body.to_string().contains("ana"));
     }
 }

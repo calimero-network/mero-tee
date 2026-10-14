@@ -31,7 +31,8 @@ chmod 0755 "$LOG_DIR"
 BIN_DIR="/usr/local/bin"
 IMAGE_PROFILE="{{ lockdown_profile }}"
 IMAGE_ROLE="agent"
-AGENT_USER="{{ mero_agent_user }}"
+AGENT_USER_PREFIX="{{ mero_agent_user_prefix }}"
+AGENT_SLOTS="{{ mero_agent_slots }}"
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 
 log() { echo "[mero-agent-init] $*" | tee -a "$LOG"; }
@@ -542,19 +543,23 @@ else
 fi
 
 # --- Agent environment --------------------------------------------------------
-# The gate (root) writes the signing key and secrets; the agent reads them
-# through its group and keeps its own state, which only it can write, beside
-# them. Nobody else enters the disk.
-chown "root:$AGENT_USER" "$DATA_MOUNT"
-chmod 0750 "$DATA_MOUNT"
-install -d -o root -g "$AGENT_USER" -m 0750 "$DATA_MOUNT/secrets" "$DATA_MOUNT/keys"
-install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$DATA_MOUNT/state"
+# One slot per agent the TD hosts (mero-agent-gate's slots): the gate (root)
+# writes slot n's signing key and secrets, readable by slot n's group only, and
+# slot n's agent keeps its own state beside them, which only it can write. Each
+# user passes through agents/ to its own slot and lists no other.
+chown root:root "$DATA_MOUNT"
+chmod 0711 "$DATA_MOUNT"
+install -d -o root -g root -m 0711 "$DATA_MOUNT/agents"
+for slot in $(seq 1 "$AGENT_SLOTS"); do
+  user="${AGENT_USER_PREFIX}${slot}"
+  dir="$DATA_MOUNT/agents/$slot"
+  install -d -o root -g "$user" -m 0750 "$dir" "$dir/keys" "$dir/secrets"
+  install -d -o "$user" -g "$user" -m 0700 "$dir/state"
+done
 {
   echo "MERO_AGENT_RELAY_URL=${RELAY_URL}"
-  echo "MERO_AGENT_STATE_DIR=${DATA_MOUNT}/state"
-  echo "MERO_AGENT_SECRETS_DIR=${DATA_MOUNT}/secrets"
-  echo "MERO_AGENT_SIGNING_KEY=${DATA_MOUNT}/keys/signing.ed25519"
+  echo "MERO_AGENT_DATA_DIR=${DATA_MOUNT}"
   echo "MERO_AGENT_PROFILE=${IMAGE_PROFILE}"
 } > "${LOG_DIR}/agent.env"
 chmod 0644 "${LOG_DIR}/agent.env"
-log "Agent environment: relay=${RELAY_URL} state=${DATA_MOUNT}"
+log "Agent environment: relay=${RELAY_URL} slots=${AGENT_SLOTS} data=${DATA_MOUNT}"

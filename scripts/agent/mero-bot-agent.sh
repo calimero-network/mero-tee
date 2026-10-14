@@ -2,12 +2,14 @@
 # The agent image's /usr/local/bin/mero-agent when it runs mero-bot
 # (calimero-network/mero-bot, baked at /opt/mero-bot with Node at /opt/node).
 #
-# It waits until the owner has provisioned the agent's secrets through
-# mero-agent-gate. Then it runs mero-bot headless, on the owner's Hyperfeed,
-# with model calls only to attested providers (--attested-only). It restarts
-# mero-bot when the owner provisions again.
+# One runs per slot (mero-agent@<n>.service, as user mero-agent-<n>): an agent
+# TD hosts several owners' agents, each in its own slot. It waits until its
+# slot's owner has provisioned the agent's secrets through mero-agent-gate.
+# Then it runs mero-bot headless, on that owner's Hyperfeed, with model calls
+# only to attested providers (--attested-only). It restarts mero-bot when the
+# owner provisions again; the gate stops it before a release erases the slot.
 #
-# Secrets (files in MERO_AGENT_SECRETS_DIR, by NAME):
+# Secrets (files in the slot's secrets directory, by NAME):
 #   MERO_AGENTS_JSON      required: mero-bot's agents.json. Every agent a turn
 #                         can reach must be attested ("attest": "near").
 #   CALIMERO_NODE_URL     required: the owner's node.
@@ -17,12 +19,19 @@
 #   HYPERFEED_CONTEXT     optional: pins the feed.
 # Any other name is ignored: only these reach mero-bot's environment.
 #
-# Environment (from /run/mero-agent/agent.env, written by agent-init):
-#   MERO_AGENT_SECRETS_DIR, MERO_AGENT_STATE_DIR
+# Environment: MERO_AGENT_DATA_DIR (from /run/mero-agent/agent.env, written by
+# agent-init) and MERO_AGENT_SLOT (the unit's instance). The slot's secrets are
+# in $MERO_AGENT_DATA_DIR/agents/<slot>/secrets and its state beside them;
+# MERO_AGENT_SECRETS_DIR and MERO_AGENT_STATE_DIR override both, for tests.
 set -euo pipefail
 
-SECRETS="${MERO_AGENT_SECRETS_DIR:?}"
-STATE="${MERO_AGENT_STATE_DIR:?}"
+if [[ -z "${MERO_AGENT_SECRETS_DIR:-}" || -z "${MERO_AGENT_STATE_DIR:-}" ]]; then
+  SLOT="${MERO_AGENT_SLOT:?}"
+  [[ "$SLOT" =~ ^[1-9][0-9]*$ ]] || { echo "mero-agent: bad slot '$SLOT'" >&2; exit 1; }
+  SLOT_DIR="${MERO_AGENT_DATA_DIR:?}/agents/$SLOT"
+fi
+SECRETS="${MERO_AGENT_SECRETS_DIR:-$SLOT_DIR/secrets}"
+STATE="${MERO_AGENT_STATE_DIR:-$SLOT_DIR/state}"
 BOT="${MERO_BOT_DIR:-/opt/mero-bot}"
 NODE="${MERO_BOT_NODE:-/opt/node/bin/node}"
 POLL_SECONDS="${MERO_BOT_POLL_SECONDS:-10}"

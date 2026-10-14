@@ -10,17 +10,18 @@ Nobody but the agent can read its secrets, signing key or state, and anyone can 
 which build runs. The rationale, the trust that remains and the open decisions are in
 the [design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md).
 
-The image holds three programs:
+The image holds three programs. One TD hosts several owners' agents, each in its own
+slot (see [Agents on one TD](#agents-on-one-td)):
 
 - **`agent-init`** (boot): extends RTMR3 with
   `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, then opens the encrypted data disk
   with a key from mero-kms. Its role string is what the KMS's agent policy entry
   matches.
-- **`mero-agent-gate`**: serves `/attest` and `/provision`. It holds the agent's
-  signing key and takes the agent's secrets, so the agent itself can be any program,
-  open or closed.
-- **`mero-agent`**: the agent. It reads its secrets from files and signs warrants with
-  the attested key.
+- **`mero-agent-gate`**: serves `/attest`, `/provision` and `/release`. It holds each
+  agent's signing key and takes each agent's secrets, so an agent itself can be any
+  program, open or closed.
+- **`mero-agent`**: the agent, one per slot. It reads its slot's secrets from files and
+  signs warrants with its attested key.
 
 ## Boot and the disk key
 
@@ -45,28 +46,48 @@ Instance metadata carries addresses only:
 | `ephemeral-store` | `true`: state in TD memory (a tmpfs), no KMS. For the release pipeline's measurement VM. |
 | `logs-endpoint`, `metrics-endpoint`, `observability-token` | As on the KMS. The agent's own unit is not shipped. |
 
+## Agents on one TD
+
+One agent TD hosts several owners' agents, one per slot. Each agent has an
+**agent id** (`[a-z0-9][a-z0-9-]{0,62}`), chosen by whoever places it (mdma), and is
+claimed by its own owner. The image bakes the number of slots (`mero_agent_slots`).
+Slot `n` has:
+
+- its own Unix user and group, `mero-agent-<n>`, and its own unit, `mero-agent@<n>.service`;
+- its own directory on the encrypted disk, `/mnt/agent/agents/<n>/`, holding its
+  claim, signing key and secrets (readable by the gate and that slot's group only) and
+  its state (writable by that slot's user only).
+
+A slot's unit writes only its own state and sees no other process
+(`ProtectProc=invisible`). The gate never hands one agent another's key. What remains
+shared is the TD's kernel: an agent that escapes its sandbox reaches the others on
+the same TD. An owner who wants that isolation too runs their agent on its own TD.
+
 ## Attestation
 
 ```text
-POST /attest  {"nonceB64": <32 bytes>}
-→ {"quoteB64", "reportDataHex", "provisioningPublicKeyB64", "signingPublicKeyB64",
-   "ownerPublicKeyB64"}
+POST /attest  {"nonceB64": <32 bytes>, "agentId": "<id>"}
+→ {"quoteB64", "reportDataHex", "provisioningPublicKeyB64", "agentId",
+   "signingPublicKeyB64", "ownerPublicKeyB64"}
 
-report_data = nonce ‖ SHA-256("mero-agent-gate/attest/v2"
-                              ‖ provisioning_pub ‖ signing_pub ‖ owner_pub)
+report_data = nonce ‖ SHA-256("mero-agent-gate/attest/v3" ‖ provisioning_pub
+                              ‖ len(agent_id) ‖ agent_id ‖ signing_pub ‖ owner_pub)
 ```
 
-The **provisioning key** (X25519) is generated in memory at every start of the gate.
-The **signing key** (Ed25519) is generated on the agent's first boot and kept on the
-encrypted disk. The **owner key** is the X25519 key that claimed the agent (see
-below), or 32 zero bytes while it is unclaimed. One quote proves all three belong to
-a TD running the measured image.
+The **provisioning key** (X25519) is generated in memory at every start of the gate,
+and shared by the TD's agents. The agent's **signing key** (Ed25519) is generated when
+the agent is claimed, and kept in its slot on the encrypted disk. Its **owner key** is
+the X25519 key that claimed it (see below). While the agent is unclaimed, both are 32
+zero bytes and absent from the response. One quote proves which signing key and owner
+that agent id has, on a TD running the measured image. Without `agentId`, the quote
+names no agent: the release pipeline measures the TD that way.
 
 Before authorizing the signing key as the agent's device, an account owner runs
-`mero-agent-provision attest --gate <url> --policy <agent-policy.json>`, or uses the
-**Agent** tab of the attestation verifier. Both verify the quote, the nonce, the key
-binding and the registers against the agent policy, and only then show the key and
-its owner. Authorize the signing key only when the owner shown is your own key.
+`mero-agent-provision attest --gate <url> --policy <agent-policy.json> --agent <id>`,
+or uses the **Agent** tab of the attestation verifier. Both verify the quote, the
+nonce, the agent id and key binding, and the registers against the agent policy, and
+only then show the key and its owner. Authorize the signing key only when the owner
+shown is your own key.
 
 ## Provisioning secrets
 
@@ -75,30 +96,46 @@ The image is public, so it holds no secrets. They arrive sealed to the TD:
 ```text
 mero-agent-provision keygen --out owner.key     # once; the key stays with the owner
 mero-agent-provision provision --gate <url> --policy <agent-policy.json> \
-                               --key owner.key --secrets secrets.json
+                               --agent <id> --key owner.key --secrets secrets.json
 ```
 
-1. The CLI verifies the gate's quote as above, and refuses an agent whose quote
-   binds another owner. Nothing is sent before both pass.
+1. The CLI verifies the gate's quote for that agent as above, and refuses an agent
+   whose quote binds another owner. Nothing is sent before both pass.
 2. It seals `{"secrets": {"NAME": "value"}}` with RFC 9180 HPKE
    (DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305) to the provisioning
    key. It uses **Auth** mode under the owner's X25519 key.
-3. An unclaimed gate is claimed by the first valid bundle: it stores the sender's key
-   at `/mnt/agent/keys/owner.x25519` before writing any secret. A claimed gate opens
-   bundles from that key only (`403` otherwise). It writes each secret to
-   `/mnt/agent/secrets/<NAME>`, readable by the gate (root) and the agent's group only.
+3. The first valid bundle for an unknown agent id claims a free slot for it: the gate
+   makes the agent's signing key and stores the sender's key in the slot before
+   writing any secret (`503 no_free_slot` if every slot is taken). A claimed agent
+   takes bundles from its owner's key only (`403` otherwise). The gate writes each
+   secret to `/mnt/agent/agents/<n>/secrets/<NAME>`, readable by the gate (root) and
+   that slot's group only.
 4. The CLI attests again and checks the fresh quote binds its key as the owner.
 
-The HPKE `info` binds the message to the recipient key. A message cannot be replayed to
-another agent or after the gate restarts; a provisioner whose `/attest` predates a
-restart gets `409 stale_provisioning_key` and attests again.
+The HPKE `info` binds the message to the recipient key and the agent id. A message
+cannot be replayed to another TD, to another agent, or after the gate restarts; a
+provisioner whose `/attest` predates a restart gets `409 stale_provisioning_key` and
+attests again.
 
 No provisioner is baked into the image. Neither Calimero, which builds and runs it,
 nor anyone else chooses who sets an agent's secrets: its first owner does. The claim
-lives on the encrypted disk, so it survives reboots and ends with the disk. Whoever
-reaches a fresh agent first can claim it, but that is never silent: the claimant's key
-is in every quote, so the real owner sees "not yours", sends nothing and replaces the
-VM. Launch an agent and claim it in one step.
+lives on the encrypted disk, so it survives reboots and ends with the disk or a
+release. Whoever reaches a fresh agent id first can claim it, but that is never
+silent: the claimant's key is in every quote for that agent, so the real owner sees
+"not yours", sends nothing and is placed again. Claim an agent as soon as it is
+placed.
+
+## Releasing an agent
+
+```text
+mero-agent-provision release --gate <url> --policy <agent-policy.json> \
+                             --agent <id> --key owner.key
+```
+
+The owner seals `{"release": true}` for the agent, in the same way. The gate stops the
+slot's unit, erases the slot's claim, signing key, secrets and state, and starts the
+unit again, empty, for the slot's next owner. The CLI attests again and checks the
+quote binds no owner. Any other key gets `403`.
 
 ## Measuring and releasing an agent image
 
@@ -113,7 +150,7 @@ is built with (`kms_agent_policy_file`).
   runs the whole chain on the release
   ([release pipeline](/operate/release-pipeline/#agents-in-the-kms-release)).
 - **Before merging.** `kms-tdx-image-probe.yaml` with `with_agent` runs the same
-  measurement from a branch, claims the VM with a throwaway owner key, provisions a
+  measurement from a branch, claims an agent on it with a throwaway owner key, provisions a
   throwaway secret, checks a second key is refused, and probes a KMS that serves the
   agent.
 
