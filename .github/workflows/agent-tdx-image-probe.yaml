@@ -12,9 +12,9 @@ run-name: Agent TDX image probe (${{ inputs.profile }}, ${{ inputs.agent }})
 #
 # Its artifact `agent-attestation-policy.<profile>.json` is what a KMS image
 # serving agents is built with (`kms_agent_policy_file`). Publishes nothing, and
-# deletes its image, VM and firewall rule at the end. The release workflow that
-# publishes an agent image and its signed policy waits on where the agent
-# binary comes from (the design's open decisions).
+# deletes its image, VM and firewall rule at the end. `Release mero-kms`
+# (agent-image) builds and measures the same image for a release; run this
+# first to check a release's agent will build.
 
 on:
   workflow_dispatch:
