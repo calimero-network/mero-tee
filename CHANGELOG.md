@@ -47,6 +47,14 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Security
 
+- **rustls 0.23.46.** Fixes RUSTSEC-2026-0346 to 0349, which cover:
+  - unbounded Brotli certificate decompression before authentication;
+  - TLS secrets in `Debug` output;
+  - data sent after an ECH rejection;
+  - a ServerHello downgrade to classical key exchange.
+
+  mero-kms and mero-agent-gate both link it, so the agent image's measurements change.
+
 - **Logs and metrics leave a non-debug image only over https.**
   - **The problem.** `configure_vector.sh` and `configure_vmagent.sh` accepted a plain `http://` `logs-endpoint` or `metrics-endpoint`. Each request carries the observability bearer token and every shipped line or sample, and instance metadata sets the URL, so a plain-http endpoint handed both to anyone on the path.
   - **Now.** Both scripts refuse a non-https URL unless the image profile is `debug` or `debug-read-only`. An unknown or missing profile counts as production, so it is refused too.
