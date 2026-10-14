@@ -283,7 +283,9 @@ check_cadence() {
 import sys
 ts = [float(l) for l in open(sys.argv[1]) if l.strip()]
 gaps = [b - a for a, b in zip(ts, ts[1:])]
-if gaps and min(gaps) < 2.5:
+# The sidecar counts the interval in whole seconds (date +%s), so 3s of it can
+# pass in just over 2s: refreshes at x.99 and x+3.00. Under 1.5s would be per poll.
+if gaps and min(gaps) < 1.5:
     sys.exit(f"two refreshes {min(gaps):.2f}s apart under a 3s interval")
 ' "${SB}/ns-calls" || fail "refreshes ran faster than the interval"
   echo "ok: cadence"
