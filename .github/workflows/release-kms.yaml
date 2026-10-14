@@ -267,7 +267,8 @@ jobs:
           version: v1.11.2
 
       # The release agent image: kept, so the post-release agent e2e boots the
-      # image this KMS serves. mdma never resolves the merotee-agent- prefix.
+      # image this KMS serves, and mdma boots it by this exact name
+      # (merotee-agent-<profile>-<version>) for its agent hosts.
       - name: Build the agent image
         id: build_image
         working-directory: mero-tee
