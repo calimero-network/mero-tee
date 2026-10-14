@@ -15,6 +15,9 @@
 #   scripts/release/pin-build-inputs.sh             # rewrite the lock
 #   scripts/release/pin-build-inputs.sh --check     # exit 1 if it would change
 #   scripts/release/pin-build-inputs.sh --download  # also hash each archive
+#   scripts/release/pin-build-inputs.sh --check --skip-private
+#       # keep private components' (mero-bot's) entries as they are: for a
+#       # check with no token for them, where nothing built uses them
 #
 # Run from the repository root (or pass --root). Needs curl and python3, and
 # gh logged in with read access to calimero-network/mero-bot (a private repo)
@@ -24,19 +27,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODE="write"
 DOWNLOAD="false"
+SKIP_PRIVATE="false"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) MODE="check"; shift ;;
     --download) DOWNLOAD="true"; shift ;;
+    --skip-private) SKIP_PRIVATE="true"; shift ;;
     --root) ROOT="$2"; shift 2 ;;
-    *) echo "usage: $0 [--check] [--download] [--root DIR]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--check] [--download] [--skip-private] [--root DIR]" >&2; exit 2 ;;
   esac
 done
 
 command -v curl >/dev/null || { echo "FATAL: curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "FATAL: python3 is required" >&2; exit 1; }
 
-python3 - "$ROOT" "$MODE" "$DOWNLOAD" <<'PY'
+python3 - "$ROOT" "$MODE" "$DOWNLOAD" "$SKIP_PRIVATE" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -44,6 +49,7 @@ import subprocess
 import sys
 
 root, mode, download = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "true"
+skip_private = sys.argv[4] == "true"
 versions_path = root / "mero-tee/versions.json"
 lock_path = root / "mero-tee/build-inputs.lock.json"
 versions = json.loads(versions_path.read_text())
@@ -134,6 +140,7 @@ def parse_sums(text):
     return table
 
 
+current_lock = json.loads(lock_path.read_text()) if lock_path.exists() else {}
 lock = {}
 for name, c in COMPONENTS.items():
     version = versions.get(c["key"], "")
@@ -141,6 +148,14 @@ for name, c in COMPONENTS.items():
         continue
     if not version:
         sys.exit(f"FATAL: {versions_path} has no {c['key']}")
+    if "gh" in c and skip_private:
+        # Not fetched: kept as pinned, if it is pinned for this version at all.
+        kept = current_lock.get(name)
+        if not kept or kept.get("version") != version:
+            sys.exit(f"FATAL: {name} {version} is not pinned in {lock_path}; run scripts/release/pin-build-inputs.sh")
+        lock[name] = kept
+        print(f"{name} {version}: not checked against its publisher (private, --skip-private)")
+        continue
     if "gh" in c:
         tag = c["tag"].format(v=version)
         base = f"{c['gh']} {tag}"
