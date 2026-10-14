@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **Release 2.3.115: the agent image runs mero-bot 0.1.1.** Bumps `mero-kms` and `imageVersion` to 2.3.115, so `Release mero-kms` builds and measures a new agent image (`merotee-agent-<profile>-2-3-115`) with mero-bot 0.1.1 and publishes each profile's signed `kms-agent-attestation-policy.<profile>.json` for it. 0.1.1 bundles mero-mcp 2.8.0, so the agent can find an app in the registry (`search_registry`, `list_registry_versions`) and install it. 2.3.114 was cut before the 0.1.1 pin (#474) and runs 0.1.0. No change to the node image beyond its version.
+
 - **mero-bot 0.1.1 is pinned for the release after 2.3.114** (`meroBotVersion`, its bundle's sha256 in `build-inputs.lock.json`). 0.1.1 bundles mero-mcp 2.8.0, whose `search_registry` and `list_registry_versions` let the agent find an app to install. 2.3.114's agent image keeps 0.1.0.
 
 - **Release 2.3.114: the first with private agents.** Bumps `mero-kms` and `imageVersion` to 2.3.114, so `Release mero-kms` builds and measures the agent image (`merotee-agent-<profile>-2-3-114`, running mero-bot 0.1.0 under the multi-tenant mero-agent-gate) and publishes each profile's signed `kms-agent-attestation-policy.<profile>.json`, the allowlist mdma's console verifies a customer's agent against (calimero-network/mdma#467). Every release since agents landed (#456, #469, #471, #472) reused 2.3.113's tag, so none built an agent image. No change to the node image beyond its version.
@@ -32,6 +34,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
   - **Not yet on.** The image stays the stub until `versions.json` names a mero-bot release.
   - **Tests.** `scripts/ci/tests/mero-bot-agent-launcher-test.sh`; the pin test covers `node` and `meroBot`.
   - **Design.** `docs/design/private-agents.md`, "The agent: mero-bot on NEAR AI Cloud".
+
+### Fixed
+
+- **`Release mero-kms` no longer fails verifying its own agent policies.** `verify-generated-signatures.sh` globbed `kms-agent-attestation-policy.*.json` after signing, which also matched the `<policy>.json.bundle.json` files cosign writes beside each policy, and failed looking for a certificate for them. Every release that measures an agent image hit it, starting with 2.3.114's Release Metadata job. It now skips the `.bundle.json` files.
 
 ### Security
 
