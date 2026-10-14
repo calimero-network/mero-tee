@@ -122,7 +122,7 @@ jobs:
         run: bash scripts/release/kms/wait-for-node-release.sh
 
       - name: Upload node policy
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: node-policy
           path: node-policy/published-mrtds.json
@@ -152,7 +152,7 @@ jobs:
           tar -czf "artifacts/mero-kms_${BINARY_TARGET}.tar.gz" -C target/release mero-kms
 
       - name: Upload binary archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mero-kms-binary
           path: artifacts/*.tar.gz
@@ -306,7 +306,7 @@ jobs:
             | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/agent-image.json
 
       - name: Upload the agent policy
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: agent-policy-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
           path: |
@@ -501,7 +501,7 @@ jobs:
 
       - name: Upload probe artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kms-probe-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
           path: probe/
