@@ -18,8 +18,8 @@ signed_assets=(
   release-assets/kms-compatibility-map.json
   release-assets/kms-rekor-index.json
 )
-# The agent allowlists, not the `.bundle.json` signing wrote beside each: the
-# glob matches both, and a bundle has no .sig or .pem of its own.
+# Signing writes <policy>.json.bundle.json beside each agent policy, which the
+# glob also matches: those are signing outputs, not signed assets.
 shopt -s nullglob
 for policy in release-assets/kms-agent-attestation-policy.*.json; do
   [[ "${policy}" == *.bundle.json ]] || signed_assets+=("${policy}")
