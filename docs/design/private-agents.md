@@ -162,9 +162,9 @@ The GPU TD of our own that this design once planned is parked.
 
 1. Set `meroBotVersion` in `versions.json`.
 2. Run `scripts/release/pin-build-inputs.sh`, with `gh` logged in, since mero-bot is a private repo.
-3. Build with `MERO_BOT_BUNDLE`. `agent-tdx-image-probe.yaml` does this with `agent: mero-bot`, and needs the `MERO_BOT_RELEASE_TOKEN` secret.
+3. Add the `MERO_BOT_RELEASE_TOKEN` secret to this repository: a token with read access to calimero-network/mero-bot's releases.
 
-Without `meroBotVersion`, the image stays the stub.
+`Release mero-kms` then builds the release's agent image with mero-bot, and `agent-tdx-image-probe.yaml` does the same from a branch with `agent: mero-bot`. Without `meroBotVersion`, the image stays the stub. A pin without the secret fails the release's agent build, which leaves its KMS images node-only.
 
 ## Acting in Calimero: warrants through relays
 

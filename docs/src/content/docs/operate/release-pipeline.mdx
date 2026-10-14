@@ -116,8 +116,12 @@ release's jobs instead, which keeps the original push event.
 
 [Private agents](/flows/private-agents/) ride the KMS release, best effort.
 Alongside the node-policy wait, `agent-image` builds the reference agent image
-for each profile: `mero-agent-gate` plus the stub agent, named
-`merotee-agent-<profile>-<version>`. It boots that image once with
+for each profile: `mero-agent-gate` plus the reference agent, named
+`merotee-agent-<profile>-<version>`. The reference agent is mero-bot when
+`versions.json` pins `meroBotVersion`: the job downloads that release's bundle
+with the `MERO_BOT_RELEASE_TOKEN` secret (mero-bot is a private repository) and
+checks it against its sha256 in `build-inputs.lock.json`. Without a pin, it is
+the stub agent. It boots that image once with
 `ephemeral-store=true` and has Intel Trust Authority measure it. A measured
 profile's KMS image then also bakes that agent allowlist (`kms_agent_policy_file`,
 with the node allowlist's TCB statuses). Release-metadata publishes it as
