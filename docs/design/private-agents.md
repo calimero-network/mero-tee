@@ -149,8 +149,21 @@ The GPU TD of our own that this design once planned is parked.
 | `MERO_AGENTS_JSON` | mero-bot's `agents.json`: NEAR profiles only (`"attest": "near"`), and the model to use |
 | `CALIMERO_NODE_URL` | the owner's node |
 | `CALIMERO_AUTH_TOKEN` + `CALIMERO_REFRESH_TOKEN`, or `CALIMERO_USERNAME` + `CALIMERO_PASSWORD` | the node login |
-| `NEAR_AI_API_KEY` | the key the profile's `apiKeyEnv` names |
+| `NEAR_AI_API_KEY` | optional: the key the profile's `apiKeyEnv` names, when the owner pays NEAR itself. Otherwise the operator's is used (below) |
 | `HYPERFEED_CONTEXT` | optional: pins the feed |
+
+**The secret the operator provisions.** mdma pays for each agent's model calls,
+so it gives the agent a NEAR AI key of its own: one from its pool, sealed
+straight to the gate after the owner claims the agent, so the key never passes
+through the owner's browser. The gate's `/operator` takes it only from the key
+the VM's `operator-key` metadata names, only for a claimed agent, only under
+the names in `OPERATOR_SECRETS` (`NEAR_AI_API_KEY`), and only into the slot's
+`operator/` directory, apart from the owner's `secrets/`. The operator cannot
+claim or release an agent or touch the owner's secrets, and a release erases
+what it wrote. What it can do is choose which NEAR key the agent pays with; a
+NEAR key reaches NEAR's attested gateway like any other and reads nothing the
+agent sends. mdma checks the gate's quote itself before sealing, so a fake gate
+cannot collect a key.
 
 **What this step does not do yet**
 
@@ -175,10 +188,19 @@ the context, method and arguments (`fleet_delegated_access`; the `/intents`
 routes in `traefik-routing.yml.j2`; `/sealed/v2` for sealed transport).
 
 - The agent's signing key is generated in the TD and never leaves it.
-- An account owner authorizes that key as a device of the account the agent
-  acts for, after checking that the agent's quote binds the key (`/attest`,
-  with the signing key in `report_data`). The owner trusts a measured build,
-  not an operator.
+- That key is the root of **the agent's own account**. The agent does not act
+  as its owner: it is a member of the contexts its owner invites it to, and
+  what it does there carries its own name. Its role caps what it can do, and
+  removing it is removing a member. Because the quote binds the key (`/attest`,
+  with the signing key in `report_data`), the owner's console derives the
+  agent's account id from a verified quote, so nobody relaying it can swap in
+  another account to be invited instead. The owner trusts a measured build, not
+  an operator.
+- The owner invites that account like anyone else, and seals each invitation
+  to the agent as an owner secret (`MERO_INVITATION.<name>`); mero-bot joins
+  each once. To work the owner's Hyperfeed it must also be added there as an
+  agent (Settings → Agents → Cloud agents). It drafts what should come from the
+  owner, which the owner's own client sends when approved.
 - The agent seals its intents to a relay over `/sealed/v2`, so the relay
   operator does not see the arguments in transit.
 
@@ -230,8 +252,8 @@ The KMS change above supports both models:
 Either way, a new release means a new root, so the previous release's agent
 disk can never be reopened. The disk is a cache: anything that must outlive a
 release lives in Calimero (written through warrants) or is re-provisioned. A
-new agent has a new signing key, which the account owner authorizes again; old
-keys are revoked when old agents are deleted.
+new agent has a new signing key and so a new account, which the owner invites
+again; an old agent's account is removed from the contexts it was in.
 
 ## Prerequisites
 
@@ -240,9 +262,10 @@ keys are revoked when old agents are deleted.
    agents. A first deployment can use `gcloud` from a release script with the
    image name and `kms-url` metadata; mdma support follows if agents run as a
    fleet.
-3. **Device authorization for an attested key.** The owner's client must
-   verify an agent quote before adding its key as a device. If Core's
-   device-add API cannot carry that check, it lives in the client.
+3. **An account for an attested key.** The owner's client derives the
+   agent's account id from a verified quote and invites it. No Core change:
+   a keyholder's join by invitation and its writes through a relay already
+   exist.
 
 ## Trust that remains and risks
 

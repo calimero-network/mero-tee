@@ -53,6 +53,15 @@ pub const ATTEST_DOMAIN: &[u8] = b"mero-agent-gate/attest/v3";
 /// HPKE `info` prefix; the recipient's public key and the agent id follow it.
 /// v2: v1 named no agent.
 pub const PROVISION_INFO_DOMAIN: &[u8] = b"mero-agent-gate/provision/v2";
+/// HPKE `info` prefix of what the operator seals (`/operator`): a separate
+/// domain, so an owner's message can never be taken for the operator's or the
+/// other way round, even under one key.
+pub const OPERATOR_INFO_DOMAIN: &[u8] = b"mero-agent-gate/operator/v1";
+
+/// The only secrets the operator may write: what the operator pays for and
+/// the agent cannot run without. Never the owner's (`secrets/`), and never
+/// anything that decides where the agent sends its data.
+pub const OPERATOR_SECRETS: &[&str] = &["NEAR_AI_API_KEY"];
 
 /// At most this many bytes in an agent id.
 pub const MAX_AGENT_ID_LEN: usize = 63;
@@ -217,6 +226,20 @@ impl std::fmt::Debug for SecretsBundle {
 
 impl SecretsBundle {
     /// Every name a plain file name the agent can find, every value bounded.
+    /// [`Self::validate`], and every name one the operator may write.
+    pub fn validate_operator(&self) -> Result<(), String> {
+        self.validate()?;
+        for name in self.secrets.keys() {
+            if !OPERATOR_SECRETS.contains(&name.as_str()) {
+                return Err(format!(
+                    "the operator may write only {}, not '{name}'",
+                    OPERATOR_SECRETS.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.secrets.is_empty() {
             return Err("the bundle holds no secrets".to_owned());
@@ -253,8 +276,8 @@ pub fn validate_secret_name(name: &str) -> Result<(), String> {
 }
 
 /// HPKE `info`: the domain, the recipient key and the agent id.
-fn info(recipient_public: &[u8; 32], agent_id: &str) -> Vec<u8> {
-    let mut info = PROVISION_INFO_DOMAIN.to_vec();
+fn info(domain: &[u8], recipient_public: &[u8; 32], agent_id: &str) -> Vec<u8> {
+    let mut info = domain.to_vec();
     info.extend_from_slice(recipient_public);
     info.extend_from_slice(&agent_id_bytes(agent_id));
     info
@@ -287,6 +310,38 @@ pub fn seal_message<T: Serialize>(
     sender_secret: &[u8; 32],
     message: &T,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
+    seal_in(
+        PROVISION_INFO_DOMAIN,
+        recipient_public,
+        agent_id,
+        sender_secret,
+        message,
+    )
+}
+
+/// Seal operator secrets for `agent_id` as the operator ([`OPERATOR_INFO_DOMAIN`]).
+pub fn seal_operator_message(
+    recipient_public: &[u8; 32],
+    agent_id: &str,
+    operator_secret: &[u8; 32],
+    bundle: &SecretsBundle,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    seal_in(
+        OPERATOR_INFO_DOMAIN,
+        recipient_public,
+        agent_id,
+        operator_secret,
+        bundle,
+    )
+}
+
+fn seal_in<T: Serialize>(
+    domain: &[u8],
+    recipient_public: &[u8; 32],
+    agent_id: &str,
+    sender_secret: &[u8; 32],
+    message: &T,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
     let recipient = public_from_bytes(recipient_public)?;
     let plaintext = Zeroizing::new(
         serde_json::to_vec(message).map_err(|e| format!("could not encode the message: {e}"))?,
@@ -296,7 +351,7 @@ pub fn seal_message<T: Serialize>(
     let (encapped, ciphertext) = hpke::single_shot_seal::<Aead, Kdf, Kem, _>(
         &mode,
         &recipient,
-        &info(recipient_public, agent_id),
+        &info(domain, recipient_public, agent_id),
         &plaintext,
         &[],
         &mut os_rng(),
@@ -326,6 +381,46 @@ pub fn open_message<T: DeserializeOwned>(
     encapped_key: &[u8],
     ciphertext: &[u8],
 ) -> Result<T, OpenError> {
+    open_in(
+        PROVISION_INFO_DOMAIN,
+        recipient,
+        recipient_public,
+        agent_id,
+        sender,
+        encapped_key,
+        ciphertext,
+    )
+}
+
+/// Open what the operator sealed for `agent_id` ([`OPERATOR_INFO_DOMAIN`]).
+pub fn open_operator_message(
+    recipient: &PrivateKey,
+    recipient_public: &[u8; 32],
+    agent_id: &str,
+    operator: &[u8; 32],
+    encapped_key: &[u8],
+    ciphertext: &[u8],
+) -> Result<SecretsBundle, OpenError> {
+    open_in(
+        OPERATOR_INFO_DOMAIN,
+        recipient,
+        recipient_public,
+        agent_id,
+        operator,
+        encapped_key,
+        ciphertext,
+    )
+}
+
+fn open_in<T: DeserializeOwned>(
+    domain: &[u8],
+    recipient: &PrivateKey,
+    recipient_public: &[u8; 32],
+    agent_id: &str,
+    sender: &[u8; 32],
+    encapped_key: &[u8],
+    ciphertext: &[u8],
+) -> Result<T, OpenError> {
     let encapped = EncappedKey::from_bytes(encapped_key)
         .map_err(|e| OpenError::Malformed(format!("encapsulated key: {e}")))?;
     let sender_key = public_from_bytes(sender).map_err(OpenError::Malformed)?;
@@ -334,7 +429,7 @@ pub fn open_message<T: DeserializeOwned>(
             &OpModeR::Auth(sender_key),
             recipient,
             &encapped,
-            &info(recipient_public, agent_id),
+            &info(domain, recipient_public, agent_id),
             ciphertext,
             &[],
         )
@@ -497,6 +592,41 @@ mod tests {
             open(&second, &second_public, "ana", &sender, &enc, &ct).unwrap_err(),
             OpenError::NotFromSender
         );
+    }
+
+    #[test]
+    fn an_owner_message_never_opens_as_the_operator_s_or_back() {
+        // Same keys, same agent: only the domain differs, and it is enough.
+        let (gate, gate_public) = keypair_from_secret(&[0x11; 32]).unwrap();
+        let (_, sender) = keypair_from_secret(&[0x22; 32]).unwrap();
+        let near = bundle(&[("NEAR_AI_API_KEY", "k")]);
+        let (enc, ct) = seal_message(&gate_public, "ana", &[0x22; 32], &near).unwrap();
+        assert_eq!(
+            open_operator_message(&gate, &gate_public, "ana", &sender, &enc, &ct).unwrap_err(),
+            OpenError::NotFromSender
+        );
+        let (enc, ct) = seal_operator_message(&gate_public, "ana", &[0x22; 32], &near).unwrap();
+        assert_eq!(
+            open(&gate, &gate_public, "ana", &sender, &enc, &ct).unwrap_err(),
+            OpenError::NotFromSender
+        );
+        let opened = open_operator_message(&gate, &gate_public, "ana", &sender, &enc, &ct).unwrap();
+        assert_eq!(opened.secrets["NEAR_AI_API_KEY"], "k");
+    }
+
+    #[test]
+    fn the_operator_writes_only_its_own_names() {
+        bundle(&[("NEAR_AI_API_KEY", "k")])
+            .validate_operator()
+            .unwrap();
+        for name in ["MERO_AGENTS_JSON", "CALIMERO_NODE_URL", "OTHER"] {
+            assert!(
+                bundle(&[("NEAR_AI_API_KEY", "k"), (name, "v")])
+                    .validate_operator()
+                    .is_err(),
+                "{name} accepted from the operator"
+            );
+        }
     }
 
     #[test]
