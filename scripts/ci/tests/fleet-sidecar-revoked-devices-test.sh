@@ -238,7 +238,7 @@ check_missing() {
     ns_list "$(ns 1)" > "${SB}/ns-list"
     rev_answer "$(ns 1)" "[\"$(dev 11)\"]"
     # shellcheck disable=SC2016  # evaluated by run_sidecar
-    run_sidecar sidecar-60.sh 8 'for _ in $(seq 50); do [[ -s "${SB}/fleet-revoked-devices.json" ]] && break; sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
+    run_sidecar sidecar-60.sh 8 'for _ in $(seq 50); do grep -q revoked_devices "${SB}/bodies" && break; sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
     rev_per_poll | grep -q "$(ns 1)" || fail "no poll carried the map before '${bad}' replaced it"
     [[ "$(last_rev)" == "-" ]] || fail "invalid file '${bad}' was sent: $(last_rev)"
   done
