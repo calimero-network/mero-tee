@@ -21,7 +21,8 @@ system extends at runtime. Neither comes from the image.
       Print the expected events and registers; write them as JSON.
   compute_rtmr.py compare COMPUTED_JSON EVIDENCE_JSON
       Compare them, event by event, with a booted TD's replayed CCEL log and
-      its quote (evidence.json from uki_probe_evidence.py). Prints Markdown;
+      its quote (evidence.json from uki_probe_evidence.py: quoteB64 and
+      eventLogB64; without eventLogB64, the registers only). Prints Markdown;
       exits 1 on any difference.
 """
 
@@ -122,7 +123,10 @@ def compare(args):
     with open(args.computed) as f:
         computed = json.load(f)
     with open(args.evidence) as f:
-        log = list(parse(base64.b64decode(json.load(f)["eventLogB64"])))
+        encoded_log = json.load(f).get("eventLogB64")
+    # Without the event log (a node whose merod predates core#4591 returns only
+    # the quote) only the registers are compared.
+    log = list(parse(base64.b64decode(encoded_log))) if encoded_log else None
     quoted = quote_rtmrs(args.evidence)
     ok = True
 
@@ -133,6 +137,10 @@ def compare(args):
         same = computed["registers"][register] == quoted[register]
         ok &= same
         print(f"| {register} | `{computed['registers'][register][:24]}…` | `{quoted[register][:24]}…` | {'matches' if same else '**differs**'} |")
+
+    if log is None:
+        print("\nNo event log in the evidence: compared the registers only.")
+        return 0 if ok else 1
 
     for register in ("RTMR1", "RTMR2"):
         measured = [e for e in log if e["mr"] == MR_INDEX[register] and e["type"] != 0x00000003]

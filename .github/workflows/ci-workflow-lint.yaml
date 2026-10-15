@@ -9,6 +9,7 @@ on:
       - "scripts/attestation/**"
       - "scripts/ci/**"
       - "scripts/agent/**"
+      - "scripts/image/**"
       - "mero-tee/**"
   push:
     branches:
@@ -20,6 +21,7 @@ on:
       - "scripts/attestation/**"
       - "scripts/ci/**"
       - "scripts/agent/**"
+      - "scripts/image/**"
       - "mero-tee/**"
   workflow_dispatch:
 
@@ -55,7 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh mero-tee/**/*.sh)
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh mero-tee/**/*.sh
+                       mero-tee/mkosi-*/mkosi.postinst mero-tee/mkosi-*/mkosi.finalize)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
             exit 0
@@ -266,6 +269,16 @@ jobs:
         id: compute_rtmr_test
         shell: bash
         run: scripts/ci/tests/compute-rtmr-test.sh
+
+      # render_role_tree.py gives the mkosi images the files the Ansible roles
+      # write; it must do what Ansible does, and render every node role.
+      - name: Check the role renderer
+        id: render_role_tree_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q python3-jinja2 python3-yaml >/dev/null
+          scripts/ci/tests/render-role-tree-test.sh
 
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
@@ -621,6 +634,7 @@ jobs:
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
+            --checks-line "- role renderer test: ${{ steps.render_role_tree_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
             --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \

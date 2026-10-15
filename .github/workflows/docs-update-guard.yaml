@@ -9,6 +9,7 @@ on:
       - "scripts/attestation/**"
       - "scripts/kms/**"
       - "scripts/ci/**"
+      - "scripts/image/**"
       - "mero-tee/**"
       - "docs/**"
       - "README.md"
@@ -76,7 +77,7 @@ jobs:
               else
                 requires_docs_update="true"
               fi
-            elif [[ "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == mero-tee/* ]]; then
+            elif [[ "${file}" == scripts/release/* || "${file}" == scripts/policy/* || "${file}" == scripts/attestation/* || "${file}" == scripts/kms/* || "${file}" == scripts/ci/* || "${file}" == scripts/image/* || "${file}" == mero-tee/* ]]; then
               requires_docs_update="true"
             fi
 

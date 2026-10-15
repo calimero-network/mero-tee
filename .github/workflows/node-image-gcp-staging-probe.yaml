@@ -93,6 +93,108 @@ on:
           - debug
         default: compact
 
+  # Also callable, so a workflow that builds an image (node-image-mkosi.yaml)
+  # can boot and check it with the same steps. Same inputs; a choice is a string.
+  workflow_call:
+    inputs:
+      probe_label:
+        description: "Optional unique label for dispatch/run correlation"
+        required: false
+        type: string
+        default: ""
+      deployment_name:
+        description: "Optional deterministic instance name override"
+        required: false
+        type: string
+        default: ""
+      profile:
+        description: "Node profile cohort"
+        required: true
+        type: string
+      image_name:
+        description: "GCP image name to boot"
+        required: true
+        type: string
+      image_project:
+        description: "GCP project that hosts image_name"
+        required: true
+        type: string
+      vm_project:
+        description: "Optional GCP project where the probe VM is created (defaults to image_project)"
+        required: false
+        type: string
+        default: ""
+      vm_zone:
+        description: "Optional probe VM zone override"
+        required: false
+        type: string
+        default: ""
+      vm_subnetwork:
+        description: "Optional probe VM subnet override"
+        required: false
+        type: string
+        default: ""
+      vm_machine_type:
+        description: "Optional probe VM machine type override"
+        required: false
+        type: string
+        default: ""
+      admin_api_port:
+        description: "Node admin API port"
+        required: false
+        type: string
+        default: "80"
+      wait_timeout_minutes:
+        description: "Health/attest readiness timeout"
+        required: false
+        type: string
+        default: "20"
+      ita_appraisal_url:
+        description: "Intel Trust Authority appraisal endpoint"
+        required: false
+        type: string
+        default: "https://api.trustauthority.intel.com/appraisal/v2/attest"
+      ita_policy_ids:
+        description: "Optional comma-separated ITA policy UUIDs"
+        required: false
+        type: string
+        default: ""
+      ita_policy_must_match:
+        description: "Require policy match when ITA policy IDs are supplied"
+        required: false
+        type: boolean
+        default: true
+      merod_version:
+        description: "Optional merod version metadata value"
+        required: false
+        type: string
+        default: ""
+      kms_probe_url:
+        description: "Optional KMS URL for runtime node->KMS probe"
+        required: false
+        type: string
+        default: ""
+      kms_probe_expected_outcome:
+        description: "Runtime KMS probe expectation: skip|success|failure"
+        required: false
+        type: string
+        default: "skip"
+      kms_probe_expected_codes:
+        description: "Optional comma-separated acceptable probe result codes"
+        required: false
+        type: string
+        default: ""
+      log_auth_check:
+        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it"
+        required: false
+        type: boolean
+        default: false
+      log_verbosity:
+        description: "Logging verbosity: compact (default) or debug"
+        required: false
+        type: string
+        default: "compact"
+
 permissions:
   contents: read
 

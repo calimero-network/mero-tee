@@ -329,6 +329,55 @@ Payload lines that stop short of their `-sha256` line, followed by a login
 prompt, mean a getty hung up the console mid-output; the image masks
 `serial-getty@ttyS0` and orders the evidence service ahead of any getty.
 
+Every package comes from the snapshot, but apt also downloads the live
+archive's index files when a source has a `Snapshot:` field (for
+`archive.ubuntu.com` and `security.ubuntu.com`). It does not install from
+them; `apt-cache policy` lists the snapshot as the only package source. A
+build therefore still needs those two hosts reachable over plain HTTP.
+
+## Build the node image with mkosi (Phase 1)
+
+`node-image-mkosi.yaml` builds the `locked-read-only` node image with mkosi
+instead of Packer (mdma#480, Phase 1). It publishes nothing; it is how the
+mkosi image is brought to parity before any release uses it.
+
+The build (`mero-tee/mkosi-node/build.sh`) takes its files from the same Ansible
+roles as the Packer build. `scripts/image/render_role_tree.py` reads
+`mero-tee/playbook.yml` and does what its `copy`, `template`, `file`,
+`get_url` and `unarchive` tasks do into a directory. The release binaries come
+from a download cache and are checked against `build-inputs.lock.json`. The
+renderer records the roles' packages and the units they enable and mask in a
+manifest. It lists every task it does not run, such as probes, asserts and GRUB
+edits, so none disappears silently. `build.sh` adds the packages to the image,
+`mkosi.postinst` applies the enable and mask lists and locks root, and
+`mkosi.finalize` makes the lockdown checks `merotee-conformance` makes on the
+Packer image. After mkosi, `build.sh` checks that none of the removed packages
+(ssh, crash reporters, cloud agents) is installed.
+
+The image differs from the Packer one in how it boots and seals:
+
+- **Boot:** it boots as a UKI from the ESP, with no GRUB and no shim.
+- **Root:** the root is EROFS behind dm-verity, laid out by systemd-repart
+  (`mkosi.repart`), with a tmpfs overlay (`systemd.volatile=overlay`).
+- **Command line:** mkosi puts the verity root hash on the UKI's command line
+  as `roothash=`, so RTMR2 covers every byte of the root. `calimero.role` and
+  `calimero.profile` are there too.
+- **Network:** systemd-networkd's DHCP (`80-gce.network`) replaces netplan and
+  the guest agent.
+
+The run:
+
+1. builds the image, checks the UKI's command line (`roothash=`, role, profile,
+   no `console=`), and computes RTMR1 and RTMR2 from the disk and UKI;
+2. creates a GCE image through the `GCP_IMAGE_UPLOAD_BUCKET` bucket and runs
+   the node staging probe on it (`node-image-gcp-staging-probe.yaml`, now also
+   callable as a reusable workflow);
+3. compares the quote's RTMR1 and RTMR2 with the computed values. It compares
+   event by event when the node returns its event log (merod with core#4591),
+   and the registers only otherwise.
+
+The image is deleted at the end unless `keep_image` is set.
+
 ## Verify release assets
 
 Before trusting any release, run the matching verifier (all under

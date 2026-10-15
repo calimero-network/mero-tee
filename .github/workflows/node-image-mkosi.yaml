@@ -1,0 +1,274 @@
+name: Node image (mkosi)
+run-name: Node image (mkosi, locked-read-only)
+
+# Phase 1 of moving the node image from Packer + Ansible to mkosi (mdma#480).
+# Builds mero-tee/mkosi-node (locked-read-only) from the pinned archive
+# snapshot and the same role files the Packer build uses, then:
+#   1. computes RTMR1 and RTMR2 from the disk and UKI before anything boots;
+#   2. boots the image and runs the node staging probe on it, the checks a
+#      Packer image gets (admin API, quote, ITA appraisal, policy candidates);
+#   3. compares the quote's RTMR1 and RTMR2 with the computed ones.
+# Manual only; it publishes nothing, and the image is deleted afterwards unless
+# keep_image is set.
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_image:
+        description: "Keep the GCE image after the run (for booting it again by hand)"
+        required: false
+        type: boolean
+        default: false
+      log_verbosity:
+        description: "Staging probe logging verbosity"
+        required: false
+        type: choice
+        options:
+          - compact
+          - debug
+        default: compact
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the image and compute RTMR1 and RTMR2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+      GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+      UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
+      MKOSI_OUT: ${{ github.workspace }}/mkosi-out
+      EVIDENCE_DIR: ${{ github.workspace }}/node-mkosi-evidence
+    outputs:
+      image: ${{ steps.params.outputs.image }}
+      project: ${{ steps.params.outputs.project }}
+      merod_version: ${{ steps.params.outputs.merod_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mkosi
+        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+
+      - name: Install the render and packaging tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q >/dev/null
+          sudo apt-get install -y -q python3-jinja2 python3-yaml gdisk >/dev/null
+
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          mkdir -p "${EVIDENCE_DIR}"
+          mero-tee/mkosi-node/build.sh "${MKOSI_OUT}"
+          ls -la "${MKOSI_OUT}"
+          cp "${MKOSI_OUT}/merotee-node.efi" "${MKOSI_OUT}/merotee-node.manifest" \
+             "${MKOSI_OUT}/merotee-node.rendered.json" "${EVIDENCE_DIR}/"
+          sha256sum "${EVIDENCE_DIR}/merotee-node.efi" | tee "${EVIDENCE_DIR}/uki.sha256"
+
+      # What RTMR2 measures: the dm-verity root hash (and so the whole root),
+      # role and profile, and no console (lockdown R2).
+      - name: Check the UKI command line
+        run: |
+          set -euo pipefail
+          python3 - "${EVIDENCE_DIR}/merotee-node.efi" <<'PY' | tee "${EVIDENCE_DIR}/cmdline.txt"
+          import re, sys
+          sys.path.insert(0, "scripts/attestation/shared")
+          from compute_rtmr import pe_sections
+          cmdline = pe_sections(open(sys.argv[1], "rb").read())[".cmdline"].rstrip(b"\0").decode().split()
+          print(" ".join(cmdline))
+          problems = []
+          if not any(re.fullmatch(r"roothash=[0-9a-f]{64}", w) for w in cmdline):
+              problems.append("no roothash=")
+          for want in ("calimero.role=node", "calimero.profile=locked-read-only", "systemd.volatile=overlay"):
+              if want not in cmdline:
+                  problems.append(f"no {want}")
+          if any(w.startswith("console=") for w in cmdline):
+              problems.append("console= is set")
+          if problems:
+              sys.exit("UKI command line: " + "; ".join(problems))
+          PY
+
+      # GCE imports a raw disk named disk.raw, a whole number of GiB, in a
+      # sparse oldgnu tarball. Growing the file leaves the backup GPT header
+      # short of the end, so it is moved there.
+      - name: Package the image for GCE
+        run: |
+          set -euo pipefail
+          cp --sparse=always "${MKOSI_OUT}/merotee-node.raw" "${MKOSI_OUT}/disk.raw"
+          truncate -s %1G "${MKOSI_OUT}/disk.raw"
+          sgdisk --move-second-header "${MKOSI_OUT}/disk.raw" >/dev/null
+          tar --format=oldgnu -Sczf "${MKOSI_OUT}/merotee-node.tar.gz" -C "${MKOSI_OUT}" disk.raw
+          ls -la "${MKOSI_OUT}/merotee-node.tar.gz"
+
+      - name: Compute RTMR1 and RTMR2 from the build output
+        run: |
+          set -euo pipefail
+          python3 scripts/attestation/shared/compute_rtmr.py compute \
+            --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-node.efi" \
+            --out "${EVIDENCE_DIR}/computed.json"
+
+      - name: Upload the build evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-mkosi-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}/
+          retention-days: 14
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+        run: |
+          mode="key"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode != 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Prepare image parameters
+        id: params
+        run: |
+          set -euo pipefail
+          if [[ -z "${UPLOAD_BUCKET}" ]]; then
+            echo "::error::The GCP_IMAGE_UPLOAD_BUCKET repo variable must name the upload bucket."
+            exit 1
+          fi
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "project=${GCP_ATTESTATION_PROJECT_ID}"
+            echo "bucket=${UPLOAD_BUCKET#gs://}"
+            echo "object=merotee-node-mkosi-${suffix}.tar.gz"
+            echo "image=merotee-node-mkosi-${suffix}"
+            echo "merod_version=$(jq -r .merodVersion mero-tee/versions.json)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload and create the GCE image
+        env:
+          PROJECT: ${{ steps.params.outputs.project }}
+          BUCKET: ${{ steps.params.outputs.bucket }}
+          OBJECT: ${{ steps.params.outputs.object }}
+          IMAGE: ${{ steps.params.outputs.image }}
+        run: |
+          set -euo pipefail
+          gcloud storage cp "${MKOSI_OUT}/merotee-node.tar.gz" "gs://${BUCKET}/${OBJECT}"
+          gcloud compute images create "${IMAGE}" --project "${PROJECT}" \
+            --source-uri "gs://${BUCKET}/${OBJECT}" \
+            --guest-os-features "UEFI_COMPATIBLE,TDX_CAPABLE,GVNIC"
+          # The bucket's lifecycle rule would remove it within a day anyway.
+          gcloud storage rm "gs://${BUCKET}/${OBJECT}" || true
+
+  probe:
+    name: Boot and probe the image
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/node-image-gcp-staging-probe.yaml
+    with:
+      profile: locked-read-only
+      image_name: ${{ needs.build.outputs.image }}
+      image_project: ${{ needs.build.outputs.project }}
+      merod_version: ${{ needs.build.outputs.merod_version }}
+      log_verbosity: ${{ inputs.log_verbosity }}
+    secrets: inherit
+
+  compare:
+    name: Compare the quote with the computed registers
+    needs: [build, probe]
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT: ${{ needs.build.outputs.project }}
+      IMAGE: ${{ needs.build.outputs.image }}
+      KEEP_IMAGE: ${{ inputs.keep_image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the build and probe evidence
+        if: ${{ needs.probe.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: evidence
+
+      - name: Compare the quote's RTMR1 and RTMR2 with the computed ones
+        if: ${{ needs.probe.result == 'success' }}
+        run: |
+          set -euo pipefail
+          build="$(echo evidence/node-mkosi-build-*)"
+          probe="$(echo evidence/node-gcp-staging-probe-*)"
+          # The node's /admin-api/tee/attest response, as compute_rtmr.py reads
+          # evidence: quoteB64, and eventLogB64 when the node returns it.
+          jq '(.data // .) | {quoteB64, eventLogB64}' "${probe}/tee-attest-response.json" > evidence/node-evidence.json
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${build}/computed.json" evidence/node-evidence.json | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        if: ${{ always() }}
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+        run: |
+          mode="key"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ always() && steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ always() && steps.auth_mode.outputs.mode != 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        if: ${{ always() }}
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Delete the image
+        if: ${{ always() && inputs.keep_image != true }}
+        run: gcloud compute images delete "${IMAGE}" --project "${PROJECT}" --quiet || true
