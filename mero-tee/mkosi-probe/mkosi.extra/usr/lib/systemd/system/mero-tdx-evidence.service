@@ -1,6 +1,9 @@
 [Unit]
 Description=Print this TD's event log and a TDX quote on the serial console
 After=sys-kernel-config.mount systemd-modules-load.service
+# A getty hangs up the TTY it takes over, which kills whatever is writing to it
+# with SIGHUP. Finish first (serial-getty@ttyS0 is also masked in this image).
+Before=getty.target serial-getty@ttyS0.service
 
 [Service]
 Type=oneshot

@@ -6,6 +6,8 @@
 # and systemd's lines, and the checksum is what says a payload arrived whole.
 # scripts/attestation/shared/uki_probe_evidence.py reads them back.
 set -uo pipefail
+# A hangup on the console must not cut a payload short.
+trap '' HUP
 
 work=/run/mero-evidence
 mkdir -p "$work"
