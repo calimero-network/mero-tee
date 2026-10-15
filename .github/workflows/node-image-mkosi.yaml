@@ -19,6 +19,11 @@ on:
         required: false
         type: boolean
         default: false
+      serial_console:
+        description: "Diagnostic build: kernel and journal on the serial console (console=ttyS0). Not a locked-read-only measurement: it changes RTMR2"
+        required: false
+        type: boolean
+        default: false
       log_verbosity:
         description: "Staging probe logging verbosity"
         required: false
@@ -45,6 +50,7 @@ jobs:
       UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
       MKOSI_OUT: ${{ github.workspace }}/mkosi-out
       EVIDENCE_DIR: ${{ github.workspace }}/node-mkosi-evidence
+      SERIAL_CONSOLE: ${{ inputs.serial_console }}
     outputs:
       image: ${{ steps.params.outputs.image }}
       project: ${{ steps.params.outputs.project }}
@@ -66,7 +72,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${EVIDENCE_DIR}"
-          mero-tee/mkosi-node/build.sh "${MKOSI_OUT}"
+          extra=()
+          if [[ "${SERIAL_CONSOLE}" == "true" ]]; then
+            # Appended to mkosi.conf's KernelCommandLine=. The journal goes to
+            # the console too, so calimero-init's own log is in the serial output.
+            extra=(--kernel-command-line="console=ttyS0,115200 systemd.journald.forward_to_console=1")
+          fi
+          mero-tee/mkosi-node/build.sh "${MKOSI_OUT}" -- "${extra[@]}"
           ls -la "${MKOSI_OUT}"
           cp "${MKOSI_OUT}/merotee-node.efi" "${MKOSI_OUT}/merotee-node.manifest" \
              "${MKOSI_OUT}/merotee-node.rendered.json" "${EVIDENCE_DIR}/"
@@ -78,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - "${EVIDENCE_DIR}/merotee-node.efi" <<'PY' | tee "${EVIDENCE_DIR}/cmdline.txt"
-          import re, sys
+          import os, re, sys
           sys.path.insert(0, "scripts/attestation/shared")
           from compute_rtmr import pe_sections
           cmdline = pe_sections(open(sys.argv[1], "rb").read())[".cmdline"].rstrip(b"\0").decode().split()
@@ -89,7 +101,7 @@ jobs:
           for want in ("calimero.role=node", "calimero.profile=locked-read-only", "systemd.volatile=overlay"):
               if want not in cmdline:
                   problems.append(f"no {want}")
-          if any(w.startswith("console=") for w in cmdline):
+          if any(w.startswith("console=") for w in cmdline) and os.environ["SERIAL_CONSOLE"] != "true":
               problems.append("console= is set")
           if problems:
               sys.exit("UKI command line: " + "; ".join(problems))

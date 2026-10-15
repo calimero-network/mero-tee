@@ -378,6 +378,15 @@ The run:
 
 The image is deleted at the end unless `keep_image` is set.
 
+A `locked-read-only` image writes nothing to the serial console, because it has
+no `console=`. When the admin API never comes up, run the workflow with
+`serial_console` set. This appends `console=ttyS0,115200
+systemd.journald.forward_to_console=1`, so the kernel, systemd and
+calimero-init's journal reach the serial port. The staging probe prints the
+last lines of the serial port whenever the health wait times out. A diagnostic
+build measures differently (RTMR2 covers the command line), so its registers
+are not the image's.
+
 ## Verify release assets
 
 Before trusting any release, run the matching verifier (all under
