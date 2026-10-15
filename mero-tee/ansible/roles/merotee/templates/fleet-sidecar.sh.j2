@@ -1120,7 +1120,7 @@ except Exception:
 if isinstance(revoked, dict):
   # Smallest namespace first, each taking an equal share of what is left of REVOKED_DEVICES_PER_POLL and
   # resuming after the last id it sent, so a namespace with many ids never delays another.
-  names = [n for n, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", n) and isinstance(ids, list) and ids]
+  names = [n for n, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", n) and isinstance(ids, list)]
   names.sort(key=lambda n: (len(revoked[n]), n))
   room = int(sys.argv[11])
   try:
@@ -1133,7 +1133,9 @@ if isinstance(revoked, dict):
     ids, share = revoked[ns], max(1, room // (len(names) - left))
     start = bisect.bisect_right(ids, sent[ns]) if isinstance(sent.get(ns), str) else 0
     chunk = ids[start:start + share] or ids[:share]
-    if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in chunk):
+    if not chunk:
+      picked[ns] = []
+    elif all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in chunk):
       picked[ns], last[ns] = sorted(set(chunk)), chunk[-1]
       room -= len(chunk)
   try:
