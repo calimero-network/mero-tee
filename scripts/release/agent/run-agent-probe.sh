@@ -131,11 +131,15 @@ python3 "${repo_root}/scripts/attestation/shared/verify_tdx_quote_ita.py" \
   --output-dir "${OUT_DIR}/agent-ita" \
   --ita-url "${ITA_APPRAISAL_URL}" \
   --ita-api-key "${ITA_API_KEY}"
+# --keep-outofdate: since 2026-10-15 the probe hosts report UpToDate, but the
+# fleet's hosts are being patched in place and some may still report OutOfDate.
+# Drop it (and outofdate from DEFAULT_ALLOWED_TCB_STATUSES) once they all do.
 python3 "${repo_root}/scripts/attestation/shared/extract_tdx_policy_candidates.py" \
   --claims "${OUT_DIR}/agent-ita/external-attestation-token-claims.json" \
   --attest-response "${OUT_DIR}/agent-attest.json" \
   --output-json "${OUT_DIR}/agent-measurements.json" \
-  --allow-missing-tcb
+  --allow-missing-tcb \
+  --keep-outofdate
 
 policy="${OUT_DIR}/agent-attestation-policy.${PROFILE}.json"
 jq --arg profile "${PROFILE}" --arg tcb "${AGENT_ALLOWED_TCB_STATUSES}" '{
