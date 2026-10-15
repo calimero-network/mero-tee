@@ -13,14 +13,40 @@ ships new nodes with new keys; nothing re-keys an existing node.
 
 ## Why not dstack
 
-A node's key is derived from the KMS's dstack **app** key. dstack gives that
-key to whatever code the app's owner approves, so the owner can always read
-node keys by approving code that prints them. An on-chain allowlist makes that
-public, and a multisig makes it harder, but neither makes it impossible.
-Freezing the app (add one compose hash, `disableUpgrades()`, give up
-ownership) is the only way to close it on dstack, and `DstackApp` is designed
-to refuse that (`renounceOwnership()` reverts; dstack#1293). Phala also stays
-in the trust base as the owner of dstack's root KMS and platform contract.
+A node's key was derived from the KMS's dstack **app** key. With on-chain
+authorization (auth-eth), dstack's KMS releases an app key to a CVM only when
+two owner-controlled contracts allow its boot (`DstackKms.isAppAllowed`, which
+calls the app's own `isAppAllowed`):
+
+- **The app's `DstackApp`.** Its owner adds the compose hashes the app may boot
+  (`addComposeHash`, `onlyOwner`).
+- **The KMS's `DstackKms`.** Its owner adds the OS images any app may boot
+  (`addOsImageHash`), the KMS instances that may receive the KMS root
+  (`addKmsAggregatedMr`), and can upgrade the contract (`_authorizeUpgrade`), all
+  `onlyOwner`.
+
+Whoever holds either owner key can approve code that reads node keys. An
+on-chain allowlist makes that public, and a multisig makes it harder, but
+neither makes it impossible. With auth-simple instead of the contracts, the
+same decisions live in a JSON file the auth webhook re-reads on every request,
+so whoever can edit that file holds them.
+
+Freezing is possible, but it is not the default. An app can be frozen:
+`disableUpgrades()` followed by `renounceOwnership()` leaves its compose-hash
+list fixed for good (dstack#1293, which proposes making `renounceOwnership()`
+revert to prevent exactly that). Neither contract
+overrides `renounceOwnership()` (both are `Ownable2StepUpgradeable`), so
+`DstackKms` could be renounced as well. We did not evaluate that set-up: who
+chooses the contract address and the Ethereum RPC endpoint the KMS reads, and
+what a renounced `DstackKms` means for OS patches across every app on it.
+mero-kms makes the same guarantee without an owner to give up: there is no
+allowlist to change after the image is built.
+
+_Checked against dstack `master` on 2026-10-15:
+`dstack/kms/auth-eth/contracts/DstackApp.sol` (sha256 `fca32467…6bf66`) and
+`DstackKms.sol` (sha256 `2e106598…bd7aba3546`). An earlier version of this
+section said `renounceOwnership()` reverts on `DstackApp`; it does not, and
+dstack#1293 describes the freeze it allows._
 
 ## Design
 
@@ -210,8 +236,10 @@ modified KMS that still attests as genuine would be handed the root:
 
 - **dstack with an on-chain allowlist and a multisig owner.** The owner can
   still approve code that prints node keys.
-- **A frozen dstack app.** `DstackApp` refuses it (`renounceOwnership()`
-  reverts), and Phala stays in the trust base.
+- **A frozen dstack app alone.** Possible (`disableUpgrades()` then
+  `renounceOwnership()`), but every app boot also passes the `DstackKms` OS-image
+  allowlist, whose owner can still approve an OS image that reads app keys.
+- **dstack with both contracts renounced.** Not evaluated; see "Why not dstack".
 - **Confidential Space with Cloud KMS.** GCP project and org admins can change
   the key-release policy.
 - **Nodes sharing the release root among themselves, with no KMS.** More copies,
@@ -237,6 +265,10 @@ modified KMS that still attests as genuine would be handed the root:
 
 Made:
 
+- The KMS stays fully frozen: once an image is built, no party, Calimero
+  included, can change which code receives the root or a node's keys. Any
+  replacement for mero-kms has to meet the same bar (2026-10-15; for dstack see
+  "Why not dstack").
 - No backup of the root. Losing every replica costs node replacements, and
   admin-readable context backups (mdma#365) cover the loss of every copy of the
   data.
