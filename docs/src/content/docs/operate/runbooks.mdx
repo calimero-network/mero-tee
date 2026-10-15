@@ -296,6 +296,11 @@ Ubuntu `resolute` (26.04) in the staging probe's project and zone. With no
 temporary bucket and deletes it afterwards, which needs `storage.buckets.create`
 on the service account.
 
+The image pins mkosi's `Seed=` and `SourceDateEpoch=`. RTMR1 measures the disk's
+GPT (GUIDs included) and the UKI's Authenticode hash, and RTMR2 the UKI's
+sections, so without them two builds of the same content measure differently.
+Two runs of the same commit should report the same RTMR1 and RTMR2.
+
 The run passes only when both hold:
 
 1. replaying the CCEL event log reproduces the quote's RTMR0–3, and
