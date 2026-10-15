@@ -94,7 +94,7 @@ cat > "${SB}/bin/curl" <<'STUB'
 body=""
 prev=""
 for a in "$@"; do
-  [[ "${prev}" == "-d" ]] && body="${a}"
+  if [[ "${prev}" == "-d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); fi
   prev="${a}"
 done
 for a in "$@"; do

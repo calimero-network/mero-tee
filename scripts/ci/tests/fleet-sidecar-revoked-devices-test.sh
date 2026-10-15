@@ -7,13 +7,15 @@
 #
 # Checks (each runs the whole rendered sidecar with only curl and meroctl
 # stubbed, and reads the bodies it actually POSTs to should-join):
-#   reports   the devices merod reports revoked per held namespace arrive as
-#             `revoked_devices`, sorted and deduplicated.
+#   reports   the devices merod reports revoked, and the withdrawn slots, per held
+#             namespace arrive as `revoked_devices`, sorted and deduplicated.
 #   partial   a namespace whose read fails is omitted (never `[]`), the others
 #             stay, malformed device ids are dropped, and the omission is logged.
 #   cap       more than 1024 ids in a namespace: the first 1024 sorted, logged.
 #   missing   no held list, or a file that is not a valid map, omits the field.
-#   keep      a pass that runs out of budget keeps the previous map.
+#   budget    a pass that runs out of budget sends the namespaces it did read.
+#   large     a map bigger than one argv string is sent in slices of at most 2048 ids,
+#             each beside held_namespaces, and every namespace is reached.
 #   restart   a map written by an earlier sidecar process is never sent.
 #
 # FLEET_SIDECAR_TEMPLATE runs the checks against another template (a negative
@@ -24,7 +26,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEMPLATE="${FLEET_SIDECAR_TEMPLATE:-${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2}"
-CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial cap missing keep restart}"
+CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial cap missing budget large restart}"
 
 SB="$(mktemp -d)"
 # Kill a process and everything under it.
@@ -99,7 +101,7 @@ cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body="" next=""
 for a in "$@"; do
-  if [[ "${next}" == "d" ]]; then body="${a}"; next=""; continue; fi
+  if [[ "${next}" == "d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); next=""; continue; fi
   [[ "${a}" == "-d" ]] && next="d"
 done
 for a in "$@"; do
@@ -128,7 +130,7 @@ ns_list() {
 }
 
 reset_state() {
-  rm -f "${SB}"/fleet-*.json "${SB}"/fleet-*.json.tmp "${SB}/ns-calls" "${SB}/polls" \
+  rm -f "${SB}"/fleet-*.json "${SB}"/fleet-*.json.tmp "${SB}"/fleet-*.cursor "${SB}/ns-calls" "${SB}/polls" \
     "${SB}/bodies" "${SB}/ns-mode" "${SB}/ns-list" "${SB}/fleet-join.result" "${SB}"/rev-*
   : > "${SB}/fleet.log"
   : > "${SB}/polls"
@@ -165,7 +167,7 @@ for line in open(sys.argv[1]):
     print(json.dumps(body["revoked_devices"], sort_keys=True) if "revoked_devices" in body else "-")
 ' "${SB}/bodies"
 }
-rev_answer() { printf '{"revokedDevices": %s}\n' "$2" > "${SB}/rev-$1"; }
+rev_answer() { printf '{"revokedDevices": %s, "withdrawnSlots": %s}\n' "$2" "${3:-[]}" > "${SB}/rev-$1"; }
 last_rev() { rev_per_poll | tail -1; }
 count_lines() { if [[ -f "$1" ]]; then grep -c . "$1" || true; else echo 0; fi; }
 
@@ -175,14 +177,14 @@ dev() { printf '%064x' "$1"; }
 # --- reports -----------------------------------------------------------------
 check_reports() {
   reset_state
-  local n1 n2 d1 d2
-  n1=$(ns 1); n2=$(ns 2); d1=$(dev 11); d2=$(dev 12)
+  local n1 n2 d1 d2 s1
+  n1=$(ns 1); n2=$(ns 2); d1=$(dev 11); d2=$(dev 12); s1=$(dev 13)
   ns_list "$n1" "$n2" > "${SB}/ns-list"
-  rev_answer "$n1" "[\"$d2\", \"$d1\", \"$d2\"]"
+  rev_answer "$n1" "[\"$d2\", \"$d1\", \"$d2\"]" "[\"$s1\"]"
   rev_answer "$n2" '[]'
   run_sidecar sidecar-60.sh 6
   local want
-  want=$(sorted_map "{\"$n1\": [\"$d1\", \"$d2\"], \"$n2\": []}")
+  want=$(sorted_map "{\"$n1\": [\"$d1\", \"$d2\", \"$s1\"], \"$n2\": []}")
   [[ "$(last_rev)" == "$want" ]] || fail "last poll carried $(last_rev), want ${want}"
   echo "ok: reports"
 }
@@ -198,7 +200,7 @@ check_partial() {
   local want
   want=$(sorted_map "{\"$n1\": [\"$d1\"]}")
   [[ "$(last_rev)" == "$want" ]] || fail "unreadable namespace not omitted / bad ids not dropped: $(last_rev)"
-  grep -q "revoked devices of namespace ${n2} not read" "${SB}/fleet.log" || fail "the omission is not logged"
+  grep -q "revoked devices of 1 namespaces not read, omitted from revoked_devices: ${n2}" "${SB}/fleet.log" || fail "the omission is not logged"
   echo "ok: partial"
 }
 
@@ -232,28 +234,59 @@ check_missing() {
     reset_state
     ns_list "$(ns 1)" > "${SB}/ns-list"
     # shellcheck disable=SC2016  # evaluated by run_sidecar
-    run_sidecar sidecar-60.sh 6 'printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 3
+    run_sidecar sidecar-60.sh 6 'until [[ -s "${SB}/fleet-revoked-devices.json" ]]; do sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
     [[ "$(last_rev)" == "-" ]] || fail "invalid file '${bad}' was sent: $(last_rev)"
   done
   echo "ok: missing"
 }
 
-# --- keep --------------------------------------------------------------------
-check_keep() {
+# --- budget ------------------------------------------------------------------
+check_budget() {
   reset_state
   local n1 n2 n3 d1
   n1=$(ns 1); n2=$(ns 2); n3=$(ns 3); d1=$(dev 11)
   ns_list "$n1" "$n2" "$n3" > "${SB}/ns-list"
   rev_answer "$n1" "[\"$d1\"]"
-  rev_answer "$n2" '[]'
-  rev_answer "$n3" '[]'
-  local want
-  want=$(sorted_map "{\"$n1\": [\"$d1\"], \"$n2\": [], \"$n3\": []}")
-  # shellcheck disable=SC2016  # evaluated by run_sidecar
-  run_sidecar sidecar-3.sh 12 'echo 3 > "${SB}/rev-delay"' 3
-  [[ "$(last_rev)" == "$want" ]] || fail "a pass that ran out of budget replaced the map: $(last_rev)"
-  grep -q "ran out of budget" "${SB}/fleet.log" || fail "the failed pass is not logged"
-  echo "ok: keep"
+  rev_answer "$n2" "[\"$d1\"]"
+  rev_answer "$n3" "[\"$d1\"]"
+  echo 3 > "${SB}/rev-delay"
+  run_sidecar sidecar-60.sh 10
+  python3 -c '
+import json, sys
+got = json.loads(sys.argv[1])
+if len(got) != 1 or list(got.values()) != [[sys.argv[2]]]:
+    sys.exit(f"got {got}")
+' "$(last_rev)" "$d1" || fail "a pass cut by the budget did not send what it read: $(last_rev)"
+  grep -q "ran out of budget" "${SB}/fleet.log" || fail "the cut pass is not logged"
+  echo "ok: budget"
+}
+
+# --- large -------------------------------------------------------------------
+check_large() {
+  reset_state
+  local n i
+  for i in 1 2 3; do
+    n=$(ns "$i")
+    python3 -c 'import json; print(json.dumps({"revokedDevices": [f"{i:064x}" for i in range(1024)]}))' > "${SB}/rev-${n}"
+  done
+  ns_list "$(ns 1)" "$(ns 2)" "$(ns 3)" > "${SB}/ns-list"
+  run_sidecar sidecar-60.sh 8
+  python3 -c '
+import json, sys
+seen = set()
+for line in open(sys.argv[1]):
+    if not line.strip():
+        continue
+    body = json.loads(line)
+    if "revoked_devices" not in body:
+        continue
+    if sum(map(len, body["revoked_devices"].values())) > 2048 or len(body.get("held_namespaces", [])) != 3:
+        sys.exit("a poll carried more than 2048 ids or lost held_namespaces")
+    seen |= set(body["revoked_devices"])
+if len(seen) != 3:
+    sys.exit(f"only {len(seen)} namespaces were ever sent")
+' "${SB}/bodies" || fail "a 3072-id map was not sent in bounded slices reaching every namespace"
+  echo "ok: large"
 }
 
 # --- restart -----------------------------------------------------------------
