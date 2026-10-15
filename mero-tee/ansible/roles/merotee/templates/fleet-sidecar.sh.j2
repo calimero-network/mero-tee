@@ -842,6 +842,101 @@ refresh_held_namespaces() {
   HELD_PID=$!
 }
 
+# Revoked device ids and withdrawn account-device slots per held namespace, sent as `revoked_devices`
+# so mdma refuses their proofs.
+# An unread namespace is omitted, never `[]`; mdma never un-revokes, so a partial map is safe.
+REVOKED_DEVICES_FILE="/mnt/data/fleet/fleet-revoked-devices.json"
+REVOKED_DEVICES_MAX=100000  # per namespace: mdma records no more from one node (fleet.py REVOKED_ROWS_MAX)
+REVOKED_DEVICES_PER_POLL=2048
+REVOKED_DEVICES_CURSOR="/mnt/data/fleet/fleet-revoked-devices.cursor"
+REVOKED_DEVICES_CURL_TIMEOUT=5
+REVOKED_DEVICES_BUDGET=$MEROCTL_READ_TIMEOUT
+REVOKED_DEVICES_WATCHDOG=$(( REVOKED_DEVICES_BUDGET + REVOKED_DEVICES_CURL_TIMEOUT + 10 ))
+REVOKED_PID=""
+REVOKED_STARTED=0
+REVOKED_LAST_START=0
+
+# Prints the map as JSON on the first line, then notes to log; returns 1 when the held list is unusable.
+read_revoked_devices() {
+  SERVER_PORT="${SERVER_PORT:-2428}" HELD_FILE="$HELD_NAMESPACES_FILE" MAX="$REVOKED_DEVICES_MAX" \
+    CURL_TIMEOUT="$REVOKED_DEVICES_CURL_TIMEOUT" BUDGET="$REVOKED_DEVICES_BUDGET" python3 -c '
+import json, os, random, re, subprocess, sys, time
+HEX = re.compile(r"[0-9a-f]{64}")
+cap = int(os.environ["MAX"])
+deadline = time.monotonic() + int(os.environ["BUDGET"])
+try:
+    held = json.load(open(os.environ["HELD_FILE"]))
+except Exception as exc:
+    print(f"sidecar: unreadable held namespaces file: {exc}", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(held, list):
+    sys.exit(1)
+result, notes, unread = {}, [], []
+# Random order, so a pass cut short by the budget still reaches every namespace over time.
+random.shuffle(held)
+for ns in held:
+    if not isinstance(ns, str) or not HEX.fullmatch(ns):
+        continue
+    if time.monotonic() >= deadline:
+        notes.append("revoked-devices read ran out of budget; the unread namespaces are omitted this pass")
+        break
+    url = "http://127.0.0.1:" + str(int(os.environ["SERVER_PORT"])) + "/admin-api/namespaces/" + ns + "/revoked-devices"
+    try:
+        proc = subprocess.run(["curl", "-sf", "--max-time", os.environ["CURL_TIMEOUT"], url],
+                              capture_output=True, text=True, timeout=int(os.environ["CURL_TIMEOUT"]) + 5)
+        answer = json.loads(proc.stdout) if proc.returncode == 0 else {}
+        rows = answer["revokedDevices"] + answer.get("withdrawnSlots", [])
+    except Exception:
+        rows = None
+    if not isinstance(rows, list):
+        unread.append(ns)
+        continue
+    ids = sorted({d for d in rows if isinstance(d, str) and HEX.fullmatch(d)})
+    if len(ids) > cap:
+        notes.append(f"namespace {ns} has {len(ids)} revoked devices; revoked_devices reports the first {cap}")
+        ids = ids[:cap]
+    result[ns] = ids
+if unread:
+    sample = " ".join(unread[:3])
+    notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {sample}")
+print(json.dumps(result))
+for note in notes:
+    print(note)
+' 2>>"$LOG"
+}
+
+# Same lifecycle as `refresh_held_namespaces`: reaps, watchdogs and restarts the
+# background read from the loop's own shell, never waiting on it.
+refresh_revoked_devices() {
+  local now
+  now=$(date +%s)
+  if [[ -n "$REVOKED_PID" ]]; then
+    if background_job_running "$REVOKED_PID"; then
+      (( now - REVOKED_STARTED >= REVOKED_DEVICES_WATCHDOG )) || return 0
+      log "ERROR: revoked-devices refresher still running after ${REVOKED_DEVICES_WATCHDOG}s; killing it, keeping the previous report"
+      kill_tree "$REVOKED_PID"
+    fi
+    wait "$REVOKED_PID" 2>/dev/null || true
+    REVOKED_PID=""
+  fi
+  (( now - REVOKED_LAST_START >= HELD_NAMESPACES_INTERVAL )) || return 0
+  [[ -s "$HELD_NAMESPACES_FILE" ]] || return 0
+  REVOKED_LAST_START="$now"
+  REVOKED_STARTED="$now"
+  (
+    tmp="${REVOKED_DEVICES_FILE}.tmp"
+    if parsed=$(read_revoked_devices) && [[ -n "$parsed" ]]; then
+      head -n 1 <<<"$parsed" > "$tmp" && mv -f "$tmp" "$REVOKED_DEVICES_FILE"
+      while IFS= read -r note; do
+        if [[ -n "$note" ]]; then log "$note"; fi
+      done < <(tail -n +2 <<<"$parsed")
+    else
+      rm -f "$tmp"
+    fi
+  ) &
+  REVOKED_PID=$!
+}
+
 # Whether the bundled meroctl can pass `--admitter-addr` to fleet-join. Probed
 # once: an image baking a merod that predates direct admission would otherwise
 # fail EVERY fleet-join on an unknown flag, which is strictly worse than the
@@ -999,9 +1094,10 @@ poll_mdma() {
   # `refresh_held_namespaces`), checked again here, and omitted -- never sent
   # as `[]` -- when there is none: absent is "no report", empty is "holds
   # nothing". The fallback body below omits it for the same reason.
+  # `revoked_devices` follows the same rule; read by path, as it can outgrow one argv string.
   local body rc response
   body=$(python3 -c '
-import json, re, sys
+import bisect, json, re, sys
 body = dict(
   peer_id=sys.argv[1],
   mrtd=sys.argv[2],
@@ -1017,10 +1113,43 @@ except Exception:
   held = None
 if isinstance(held, list) and all(isinstance(n, str) and re.fullmatch(r"[0-9a-f]{64}", n) for n in held):
   body["held_namespaces"] = sorted(set(held))[:int(sys.argv[9])]
-print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+try:
+  revoked = json.load(open(sys.argv[10]))
+except Exception:
+  revoked = None
+if isinstance(revoked, dict):
+  # Smallest namespace first, each taking an equal share of what is left of REVOKED_DEVICES_PER_POLL and
+  # resuming after the last id it sent, so a namespace with many ids never delays another.
+  names = [n for n, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", n) and isinstance(ids, list)]
+  names.sort(key=lambda n: (len(revoked[n]), n))
+  room = int(sys.argv[11])
+  try:
+    sent = json.load(open(sys.argv[12]))
+    sent = sent if isinstance(sent, dict) else {}
+  except Exception:
+    sent = {}
+  picked, last = {}, {}
+  for left, ns in enumerate(names):
+    ids, share = revoked[ns], max(1, room // (len(names) - left))
+    start = bisect.bisect_right(ids, sent[ns]) if isinstance(sent.get(ns), str) else 0
+    chunk = ids[start:start + share] or ids[:share]
+    if not chunk:
+      picked[ns] = []
+    elif all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in chunk):
+      picked[ns], last[ns] = sorted(set(chunk)), chunk[-1]
+      room -= len(chunk)
+  try:
+    with open(sys.argv[12], "w") as cursor:
+      json.dump(last, cursor)
+  except OSError as exc:
+    print(f"sidecar: revoked-devices cursor not saved: {exc}", file=sys.stderr)
+  if picked:
+    body["revoked_devices"] = picked
+print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" "$REVOKED_DEVICES_FILE" "$REVOKED_DEVICES_PER_POLL" "$REVOKED_DEVICES_CURSOR" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
-  response=$(curl -sf --max-time 10 "${headers[@]}" \
-    -d "$body" \
+  # On stdin: a body with revoked devices can outgrow one argv string (128 KiB on Linux).
+  response=$(printf '%s' "$body" | curl -sf --max-time 10 "${headers[@]}" \
+    -d @- \
     "${MDMA_URL}/api/fleet/should-join" 2>>"$LOG")
   rc=$?
 
@@ -3568,7 +3697,7 @@ seed_admitted_from_confirmed
 
 # Never report a list read by an earlier process: until this one's first
 # refresh lands, the poll omits `held_namespaces`.
-rm -f "$HELD_NAMESPACES_FILE" "${HELD_NAMESPACES_FILE}.tmp"
+rm -f "$HELD_NAMESPACES_FILE" "${HELD_NAMESPACES_FILE}.tmp" "$REVOKED_DEVICES_FILE" "${REVOKED_DEVICES_FILE}.tmp" "$REVOKED_DEVICES_CURSOR"
 
 while true; do
   # SAFETY-CRITICAL GATE: only mutate state on a SUCCESSFUL poll.
@@ -3606,6 +3735,7 @@ while true; do
   # Starts or reaps the background `namespace ls`; never waits on it, so the
   # poll below keeps its cadence whatever meroctl does.
   refresh_held_namespaces
+  refresh_revoked_devices
 
   if ! response=$(poll_mdma "$PEER_ID" "$MRTD"); then
     # Edge-triggered, because this runs at 1 Hz. Says WHICH of the two shapes

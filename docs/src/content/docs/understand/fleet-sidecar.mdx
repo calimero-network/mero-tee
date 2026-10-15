@@ -573,6 +573,22 @@ Covered by `scripts/ci/tests/fleet-sidecar-held-namespaces-test.sh`, which runs
 the whole sidecar against stubbed `meroctl` and `curl` and reads the bodies it
 POSTs.
 
+### The devices revoked in each held namespace
+
+Every poll can also carry `revoked_devices`: `{namespace: [id, ...]}`, per namespace merod holds, the devices it holds a revocation tombstone for and the `sha256(account || device)` slots of devices an account withdrew there without one.
+MDMA records them for the namespaces it has this node active in, and refuses device proofs signed by them there.
+
+- **Source.** `GET /admin-api/namespaces/{namespace_id}/revoked-devices` on merod's loopback port, once per namespace in the held list.
+- **Shape.** Lowercase 64-hex ids, deduplicated and sorted, at most 100000 per namespace (`REVOKED_DEVICES_MAX`, MDMA's per-node budget; the first that many in sorted order, logged when cut).
+- **Absent is not empty.** A namespace whose read fails (an older merod without the route, not a member, a timeout) is left out of the map, never sent as `[]`.
+  MDMA never un-revokes, so a map that omits a namespace changes nothing there.
+- **Never in the poll's way.** A background refresher reads the routes on the held-namespaces cadence and leaves the map in `/mnt/data/fleet/fleet-revoked-devices.json`.
+  It visits namespaces in random order within `MEROCTL_READ_TIMEOUT`, so a pass cut short still reaches every namespace over time; a pass that reads none writes `{}`.
+  Each poll carries at most 2048 ids (`REVOKED_DEVICES_PER_POLL`), shared so that each namespace resumes after the last id it sent and a namespace with few ids is sent whole every poll; a namespace with n ids is fully sent within about n / (2048 / namespaces) polls, whatever the others hold.
+  The file is removed at startup.
+
+Covered by `scripts/ci/tests/fleet-sidecar-revoked-devices-test.sh`.
+
 ### Joining a namespace
 
 `join_group()` runs:
@@ -1385,7 +1401,7 @@ out of `confirmed` and is simply retried next cycle instead of being lost.
 
 | Item | Value |
 | --- | --- |
-| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join` — body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after", "held_namespaces"?}`; `held_namespaces` is optional (see [The namespaces merod holds](#the-namespaces-merod-holds)); response may carry `tls_certificate` and `retain` (namespaces to keep, not join) |
+| Poll (should-join) | `POST {MDMA_URL}/api/fleet/should-join`, body `{"peer_id", "mrtd", "executor_account", "relay_url", "tls_cert_not_after", "held_namespaces"?, "revoked_devices"?}`; `held_namespaces` and `revoked_devices` are optional (see [The namespaces merod holds](#the-namespaces-merod-holds) and [The devices revoked in each held namespace](#the-devices-revoked-in-each-held-namespace)); the body is sent on stdin; response may carry `tls_certificate` and `retain` (namespaces to keep, not join) |
 | Confirm | `POST {MDMA_URL}/api/fleet/confirm` — body `{"peer_id", "group_id", "authorship_ready", "tee_role"}`; `tee_role` is `"RelayTee"`, `"ReadOnlyTee"` or `null`, and `authorship_ready` is `true` only for `RelayTee` |
 | Join command | `meroctl … tee fleet-join <GROUP_ID> [--admitter-addr <MULTIADDR>]…` (positional group id) |
 | Leave command | `meroctl … namespace leave <HEX_NAMESPACE_ID>` |

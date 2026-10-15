@@ -143,7 +143,7 @@ prev=""
 url=""
 method=""
 for a in "$@"; do
-  [[ "${prev}" == "-d" ]] && body="${a}"
+  if [[ "${prev}" == "-d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); fi
   [[ "${prev}" == "-X" ]] && method="${a}"
   [[ "${a}" == https://* ]] && url="${a}"
   prev="${a}"

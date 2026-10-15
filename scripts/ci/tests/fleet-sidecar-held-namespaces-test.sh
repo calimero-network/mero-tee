@@ -108,7 +108,7 @@ cat > "${SB}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 body="" next=""
 for a in "$@"; do
-  if [[ "${next}" == "d" ]]; then body="${a}"; next=""; continue; fi
+  if [[ "${next}" == "d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); next=""; continue; fi
   [[ "${a}" == "-d" ]] && next="d"
 done
 for a in "$@"; do

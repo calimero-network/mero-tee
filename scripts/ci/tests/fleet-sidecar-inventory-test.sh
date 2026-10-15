@@ -166,7 +166,7 @@ for a in "$@"; do
     printf '{"members":[{"identity":"4d4d4d","role":"%s"}]}\n' "$(cat "${SB}/tee-role")"
     exit 0
   fi
-  [[ "${prev}" == "-d" ]] && body="${a}"
+  if [[ "${prev}" == "-d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); fi
   prev="${a}"
 done
 [[ -f "${SB}/post-fails" ]] && exit 22

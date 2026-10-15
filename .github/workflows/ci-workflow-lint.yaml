@@ -317,6 +317,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-held-namespaces-test.sh
 
+      # should-join also reports the devices merod holds revoked per namespace;
+      # a namespace whose read fails is omitted from the map, never sent as [].
+      - name: Check should-join reports revoked devices, or nothing
+        id: revoked_devices_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-revoked-devices-test.sh
+
       # The sidecar's python helpers take their inputs as argv, so a value with
       # a quote in it cannot break them, and poll_mdma checks the shape of every
       # group id before the loop acts on it.
@@ -620,6 +627,7 @@ jobs:
             --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \
             --checks-line "- fleet-join worker handshake: ${{ steps.join_worker_test.outcome }}" \
             --checks-line "- should-join reports held namespaces: ${{ steps.held_namespaces_test.outcome }}" \
+            --checks-line "- should-join reports revoked devices: ${{ steps.revoked_devices_test.outcome }}" \
             --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \

@@ -57,7 +57,7 @@ url=""
 body=""
 prev=""
 for a in "$@"; do
-  [[ "${prev}" == "-d" ]] && body="${a}"
+  if [[ "${prev}" == "-d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); fi
   [[ "${a}" == http* ]] && url="${a}"
   prev="${a}"
 done
