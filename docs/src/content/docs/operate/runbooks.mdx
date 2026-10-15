@@ -307,6 +307,9 @@ log, `ccel.bin`, `quote.bin` and `evidence.json` (readable by
 `scripts/attestation/shared/tdx_event_log.py show`). A run that never prints
 `MEROEV done` failed to boot or to reach the evidence service: the last
 serial lines are in the log of the collect step and in the artifact.
+An interactive prompt among them (such as systemd-firstboot's "Please
+configure the system!") means a unit is waiting for console input and holding
+the boot short of multi-user; the image masks the first-boot prompts for this.
 
 ## Verify release assets
 
