@@ -564,8 +564,11 @@ jobs:
       # attestation that fails to verify is exactly when the boot log matters, and
       # the next step deletes the instance (see #251, where the probe had been
       # failing for two releases with no record of why).
+      # Also when the admin API never came up: then the serial console is the
+      # only view of the boot (mkosi images built with serial_console=true send
+      # the kernel and the journal there).
       - name: Capture serial console on probe failure
-        if: ${{ failure() && steps.verify_anti_fake.outcome == 'failure' }}
+        if: ${{ failure() && (steps.verify_anti_fake.outcome == 'failure' || steps.endpoint.outcome == 'failure') }}
         continue-on-error: true
         env:
           ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
@@ -600,8 +603,8 @@ jobs:
           grep -inE 'Failed to start|failed with result|dependency failed' "${out}" | tail -30 \
             || echo "  (no systemd unit failures reported)"
 
-          echo "--- serial console: last 40 lines ---"
-          tail -n 40 "${out}"
+          echo "--- serial console: last 150 lines ---"
+          tail -n 150 "${out}"
 
       - name: Probe node-to-KMS runtime flow (optional)
         id: runtime_probe

@@ -45,4 +45,15 @@ for path in /usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_
   [[ -e "${root}${path}" ]] || fail "${path} is missing"
 done
 
+# Every library the baked binaries link must be in the image. The first boot
+# on GCP found merod without libstdc++.so.6: calimero-init stopped and the admin
+# API never came up. ldd runs in the image, against its own libraries.
+while IFS= read -r -d '' binary; do
+  path="${binary#"${root}"}"
+  head -c 4 "${binary}" | grep -q $'\x7fELF' || continue
+  if missing="$(mkosi-chroot ldd "${path}" 2>/dev/null | grep 'not found')"; then
+    fail "${path} links a library the image lacks: $(echo "${missing}" | tr -s ' \t\n' ' ')"
+  fi
+done < <(find "${root}/usr/local/bin" "${root}/usr/local/sbin" "${root}/opt" -type f -perm -u+x -print0 2>/dev/null)
+
 exit "${failed}"
