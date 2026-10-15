@@ -22,7 +22,18 @@
 # system: GRUB still reads the kernel, initrd and grub.cfg from it, and all three
 # are measured (RTMR1, RTMR2). Changing them changes the measurements.
 #
-# Usage: seal-root.sh [--remove-user NAME] [--require PATH]...
+# The identifiers the two tools would otherwise pick at random (the EROFS
+# filesystem UUID, the verity salt and the verity UUID) are derived from --seed,
+# so sealing identical files with the same seed gives the same partitions and
+# the same root hash. Left random, the root hash, and with it the cmdline and
+# RTMR2, differed on every build of identical files (docs: reproducible images).
+#
+# Usage: seal-root.sh --seed SEED [--remove-user NAME] [--require PATH]...
+#
+#   --seed         Names this image, e.g. "<image_version>:<role>:<profile>".
+#                  Required: one seed per release, role and profile, so two
+#                  images never share identifiers and one image always gets the
+#                  same ones.
 #
 # SEAL_SYSROOT (default /) seals a root mounted elsewhere. It exists for the
 # test in scripts/ci/tests/seal-root-test.sh, which runs this against a disk
@@ -56,9 +67,14 @@ die() {
 }
 
 remove_user=""
+seed=""
 required=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --seed)
+      seed="${2:?--seed needs a value}"
+      shift 2
+      ;;
     --remove-user)
       remove_user="${2:?--remove-user needs a name}"
       shift 2
@@ -71,10 +87,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ -n "$seed" ]] || die "--seed is required (for example <image_version>:<role>:<profile>)"
 [[ "$(id -u)" == 0 ]] || die "must run as root"
-for tool in mkfs.erofs dump.erofs veritysetup sgdisk partprobe blkid dracut update-grub findmnt lsblk; do
+for tool in mkfs.erofs dump.erofs veritysetup sgdisk partprobe blkid blkdiscard dracut update-grub findmnt lsblk sha256sum; do
   command -v "$tool" >/dev/null || die "missing tool: $tool"
 done
+
+# 64 hex characters derived from the seed, separated per use by a label.
+derive() { printf 'calimero-seal-root/%s:%s' "$1" "$seed" | sha256sum | cut -c1-64; }
+# The first 32 hex characters of a derived value, as a UUID.
+derive_uuid() {
+  local h
+  h="$(derive "$1")"
+  echo "${h:0:8}-${h:8:4}-${h:12:4}-${h:16:4}-${h:20:12}"
+}
+erofs_uuid="$(derive_uuid erofs-uuid)"
+verity_uuid="$(derive_uuid verity-uuid)"
+verity_salt="$(derive verity-salt)"
+log "Identifiers derived from seed '$seed'"
 
 if [[ -n "$remove_user" ]]; then
   userdel --force --remove "$remove_user" || true
@@ -151,6 +181,14 @@ root_part="$(partition_labelled "$ROOT_LABEL")"
 verity_part="$(partition_labelled "$VERITY_LABEL")"
 [[ -b "$root_part" && -b "$verity_part" ]] || die "new partitions did not appear"
 log "Data partition $root_part, hash partition $verity_part"
+# The free space they were cut from is not empty: the base image's backup GPT,
+# with its random disk and partition GUIDs, still sits where the base image
+# ended. dm-verity hashes the whole data partition, so whatever mkfs.erofs leaves
+# untouched is in the root hash. Zeroed, both partitions hold only what this
+# script writes.
+blkdiscard --zeroout "$root_part"
+blkdiscard --zeroout "$verity_part"
+log "Zeroed both partitions"
 
 # --- The root, as the booted system will see it ------------------------------
 # The base root stays mounted and in use by this build session, so the copy is
@@ -170,7 +208,7 @@ exclude=()
 for path in proc sys dev run tmp var/tmp var/log lost+found boot/efi root/.ansible; do
   exclude+=(--exclude-regex="^${path}/.")
 done
-mkfs.erofs -zlz4hc -T0 "${exclude[@]}" "$root_part" "$ROOT_DIR"
+mkfs.erofs -zlz4hc -T0 -U "$erofs_uuid" "${exclude[@]}" "$root_part" "$ROOT_DIR"
 # Put the base fstab back: the build host still runs from the base root.
 cat "$fstab_base" > "$FSTAB"
 rm -f "$fstab_base"
@@ -186,7 +224,8 @@ for path in ${required[@]+"${required[@]}"}; do
 done
 
 roothash_file="$(mktemp)"
-veritysetup format "$root_part" "$verity_part" --root-hash-file="$roothash_file" >/dev/null
+veritysetup format "$root_part" "$verity_part" --root-hash-file="$roothash_file" \
+  --salt="$verity_salt" --uuid="$verity_uuid" >/dev/null
 roothash="$(tr -d '[:space:]' < "$roothash_file")"
 rm -f "$roothash_file"
 [[ "$roothash" =~ ^[0-9a-f]{64}$ ]] || die "veritysetup printed no usable root hash"

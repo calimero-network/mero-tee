@@ -81,6 +81,7 @@ EOF
 chmod +x "$stubs/dracut" "$stubs/update-grub"
 
 SEAL_SYSROOT="$r" PATH="$stubs:$PATH" bash ${SEAL_TRACE:+-x} "$script" \
+  --seed "test:node:locked-read-only" \
   --require /usr/lib/udev/rules.d/65-gce-disk-naming.rules | tee "$work/seal.log"
 grep -q "Sealed root holds /usr/lib/udev/rules.d/65-gce-disk-naming.rules" "$work/seal.log" \
   || fail "the seal did not check a --require path inside the image"
@@ -119,9 +120,17 @@ if veritysetup verify "$root_part" "$verity_part" "$roothash" 2>/dev/null; then
   fail "verity accepted a changed root"
 fi
 
-# Sealing twice is refused.
-if SEAL_SYSROOT="$r" PATH="$stubs:$PATH" bash "$script" >/dev/null 2>&1; then
+# Sealing twice is refused, for that reason and not another.
+if SEAL_SYSROOT="$r" PATH="$stubs:$PATH" bash "$script" --seed "test:node:locked-read-only" \
+  >"$work/second.log" 2>&1; then
   fail "a second seal was not refused"
 fi
+grep -q "a root is sealed once" "$work/second.log" || fail "a second seal failed for another reason: $(cat "$work/second.log")"
+
+# Without a seed the identifiers would be random again, so it is refused.
+if bash "$script" >"$work/noseed.log" 2>&1; then
+  fail "a seal without --seed was not refused"
+fi
+grep -q -- "--seed is required" "$work/noseed.log" || fail "a seal without --seed failed for another reason"
 
 echo "PASS: seal-root"

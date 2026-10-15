@@ -198,6 +198,11 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
      the sealed EROFS image after it (`seal-root.sh --require`). Today that is
      GCE's disk-naming rule and `google_nvme_id`, which name the data disk
      `/dev/disk/by-id/google-data`; a missing one fails the build.
+     The seal is deterministic: `seal-root.sh --seed <imageVersion>:<role>:<profile>`
+     derives the EROFS UUID and the dm-verity salt and UUID from the seed, and
+     zeroes both new partitions first, so the same files give the same dm-verity
+     root hash, and so the same `roothash=` on the kernel cmdline that RTMR2
+     measures. `scripts/ci/tests/seal-root-reproducible-test.sh` checks it.
    - Create an ephemeral firewall rule and a **`c3-standard-4` Intel TDX** VM
      from the new image, with the same **200 GB `pd-balanced` data disk (device
      name `data`)** mdma attaches to every node at creation. The disk is part of
