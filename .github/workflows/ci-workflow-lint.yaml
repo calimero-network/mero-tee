@@ -259,6 +259,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/uki-probe-evidence-test.sh
 
+      # compute_rtmr.py predicts a UKI image's RTMR1 and RTMR2 from its build
+      # output; its fixed events and section names are pinned to what a GCP
+      # TDX VM measured.
+      - name: Check the RTMR calculator
+        id: compute_rtmr_test
+        shell: bash
+        run: scripts/ci/tests/compute-rtmr-test.sh
+
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
         shell: bash
@@ -612,6 +620,7 @@ jobs:
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
+            --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
             --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \
