@@ -1116,32 +1116,38 @@ try:
   revoked = json.load(open(sys.argv[10]))
 except Exception:
   revoked = None
-if isinstance(revoked, dict) and all(
-    re.fullmatch(r"[0-9a-f]{64}", ns) and isinstance(ids, list)
-    and all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in ids)
-    for ns, ids in revoked.items()):
+def valid_ids(ids):
+  return isinstance(ids, list) and all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in ids)
+if isinstance(revoked, dict):
   # A rotating slice of at most REVOKED_DEVICES_PER_POLL ids; mdma keeps what each slice adds.
-  names, picked, room = sorted(revoked), {}, int(sys.argv[12])
+  names, picked, room = sorted(n for n in revoked if re.fullmatch(r"[0-9a-f]{64}", n)), {}, int(sys.argv[12])
   try:
     start = int(open(sys.argv[13]).read()) % len(names)
   except Exception:
     start = 0
+  taken = 0
   for i in range(len(names)):
     ns = names[(start + i) % len(names)]
+    if not valid_ids(revoked[ns]):
+      taken += 1
+      continue
     ids = sorted(set(revoked[ns]))[:int(sys.argv[11])]
     if picked and len(ids) > room:
       break
-    picked[ns], room = ids, room - len(ids)
-  if names:
+    picked[ns], room, taken = ids, room - len(ids), taken + 1
+  try:
     with open(sys.argv[13], "w") as cursor:
-      cursor.write(str((start + len(picked)) % len(names)))
-  body["revoked_devices"] = picked
+      cursor.write(str((start + taken) % len(names)) if names else "0")
+  except OSError:
+    pass
+  if picked:
+    body["revoked_devices"] = picked
 print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" "$REVOKED_DEVICES_FILE" "$REVOKED_DEVICES_MAX" "$REVOKED_DEVICES_PER_POLL" "$REVOKED_DEVICES_CURSOR" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   # On stdin: a body with revoked devices can outgrow one argv string (128 KiB on Linux).
-  response=$(curl -sf --max-time 10 "${headers[@]}" \
+  response=$(printf '%s' "$body" | curl -sf --max-time 10 "${headers[@]}" \
     -d @- \
-    "${MDMA_URL}/api/fleet/should-join" <<<"$body" 2>>"$LOG")
+    "${MDMA_URL}/api/fleet/should-join" 2>>"$LOG")
   rc=$?
 
   if [[ $rc -ne 0 ]]; then

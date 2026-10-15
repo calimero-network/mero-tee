@@ -234,7 +234,7 @@ check_missing() {
     reset_state
     ns_list "$(ns 1)" > "${SB}/ns-list"
     # shellcheck disable=SC2016  # evaluated by run_sidecar
-    run_sidecar sidecar-60.sh 6 'until [[ -s "${SB}/fleet-revoked-devices.json" ]]; do sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
+    run_sidecar sidecar-60.sh 8 'for _ in $(seq 50); do [[ -s "${SB}/fleet-revoked-devices.json" ]] && break; sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
     [[ "$(last_rev)" == "-" ]] || fail "invalid file '${bad}' was sent: $(last_rev)"
   done
   echo "ok: missing"
@@ -250,7 +250,7 @@ check_budget() {
   rev_answer "$n2" "[\"$d1\"]"
   rev_answer "$n3" "[\"$d1\"]"
   echo 3 > "${SB}/rev-delay"
-  run_sidecar sidecar-60.sh 10
+  run_sidecar sidecar-60.sh 12
   python3 -c '
 import json, sys
 got = json.loads(sys.argv[1])
