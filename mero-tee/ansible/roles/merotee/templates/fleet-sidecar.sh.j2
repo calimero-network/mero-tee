@@ -897,7 +897,7 @@ for ns in held:
         ids = ids[:cap]
     result[ns] = ids
 if unread:
-    notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {' '.join(unread[:3])}")
+    notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {" ".join(unread[:3])}")
 print(json.dumps(result))
 for note in notes:
     print(note)
