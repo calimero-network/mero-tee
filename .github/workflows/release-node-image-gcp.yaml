@@ -631,11 +631,16 @@ jobs:
             echo "::error::Missing external attestation claims file: ${claims_file}"
             exit 1
           fi
+          # --keep-outofdate: since 2026-10-15 the probe hosts report UpToDate, but
+          # the fleet's hosts are being patched in place and some may still report
+          # OutOfDate. Drop it (and outofdate from DEFAULT_ALLOWED_TCB_STATUSES)
+          # once they all report UpToDate.
           python3 scripts/attestation/shared/extract_tdx_policy_candidates.py \
             --claims "${claims_file}" \
             --attest-response "${artifacts_dir}/tee-attest-response.json" \
             --output-json "${artifacts_dir}/measurement-policy-candidates.json" \
-            --allow-missing-tcb
+            --allow-missing-tcb \
+            --keep-outofdate
 
           mrtd="$(jq -r '.mrtd // empty' "${artifacts_dir}/mrtd.json" | tr '[:upper:]' '[:lower:]')"
           mrtd="${mrtd#0x}"

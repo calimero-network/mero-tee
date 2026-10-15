@@ -88,8 +88,12 @@ release's jobs instead, which keeps the original push event.
    `--allowed-tcb-status` (default `uptodate,outofdate`), never from what the probe
    reported. `outofdate` is in the default as a deliberate, reviewable decision —
    both images run on GCP Confidential VMs, whose host firmware Calimero cannot
-   patch, and they currently report `OutOfDate`. Drop it once the probes report
-   `uptodate`. Deriving them from the probe is how releases 2.3.48–2.3.52 each
+   patch, and they reported `OutOfDate`. Drop it once the probes report
+   `uptodate`. Since 2026-10-15 the probe hosts report `UpToDate` (Intel TCB date
+   2026-08-12). The fleet's hosts are patched in place, though, and some may still
+   report `OutOfDate`. Until all of them report `UpToDate`, every probe call site
+   passes `--keep-outofdate`, which lets a release keep accepting `outofdate` past
+   the check that otherwise stops it. Deriving them from the probe is how releases 2.3.48–2.3.52 each
    shipped `allowed_tcb_statuses: ["outofdate"]` — a policy that accepted only a
    stale host and would have rejected every patched one, so the fleet would have
    broken on being updated. When the probe's own status falls outside the allowed
