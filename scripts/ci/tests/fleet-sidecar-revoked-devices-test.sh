@@ -11,6 +11,8 @@
 #             namespace arrive as `revoked_devices`, sorted and deduplicated.
 #   partial   a namespace whose read fails is omitted (never `[]`), the others
 #             stay, malformed device ids are dropped, and the omission is logged.
+#   cap       past REVOKED_DEVICES_MAX ids in a namespace (mdma's per-node budget): the
+#             first that many sorted, logged.
 #   missing   no held list, or a file that is not a valid map, omits the field.
 #   budget    a pass that runs out of budget sends the namespaces it did read.
 #   large     a map bigger than one argv string, with one namespace past 2048 ids, is sent
@@ -25,7 +27,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEMPLATE="${FLEET_SIDECAR_TEMPLATE:-${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2}"
-CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial missing budget large restart}"
+CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial cap missing budget large restart}"
 
 SB="$(mktemp -d)"
 # Kill a process and everything under it.
@@ -72,6 +74,7 @@ grep -q '^HELD_NAMESPACES_INTERVAL=60$' "${SB}/rendered.sh" \
 # The image's interval, and a short one so a run sees several refreshes.
 cp "${SB}/rendered.sh" "${SB}/sidecar-60.sh"
 sed -e 's/^HELD_NAMESPACES_INTERVAL=.*/HELD_NAMESPACES_INTERVAL=3/' "${SB}/rendered.sh" > "${SB}/sidecar-3.sh"
+sed -e 's/^REVOKED_DEVICES_MAX=.*/REVOKED_DEVICES_MAX=5/' "${SB}/rendered.sh" > "${SB}/sidecar-cap.sh"
 printf '[identity]\npeer_id = "12D3KooWHeldTest"\n' > "${SB}/calimero/default/config.toml"
 
 PATH="${SB}/bin:${PATH}"
@@ -201,6 +204,24 @@ check_partial() {
   [[ "$(last_rev)" == "$want" ]] || fail "unreadable namespace not omitted / bad ids not dropped: $(last_rev)"
   grep -q "revoked devices of 1 namespaces not read, omitted from revoked_devices: ${n2}" "${SB}/fleet.log" || fail "the omission is not logged"
   echo "ok: partial"
+}
+
+# --- cap ---------------------------------------------------------------------
+check_cap() {
+  reset_state
+  local n1
+  n1=$(ns 1)
+  ns_list "$n1" > "${SB}/ns-list"
+  python3 -c 'import json; print(json.dumps({"revokedDevices": [f"{i:064x}" for i in range(8)]}))' > "${SB}/rev-${n1}"
+  run_sidecar sidecar-cap.sh 6
+  python3 -c '
+import json, sys
+got = json.loads(sys.argv[2])[sys.argv[1]]
+if got != [f"{i:064x}" for i in range(5)]:
+    sys.exit(f"got {len(got)} ids")
+' "$n1" "$(last_rev)" || fail "8 ids are not cut to the first 5 sorted"
+  grep -q "has 8 revoked devices; revoked_devices reports the first 5" "${SB}/fleet.log" || fail "the cut is not logged"
+  echo "ok: cap"
 }
 
 # --- missing -----------------------------------------------------------------

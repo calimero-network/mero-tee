@@ -846,6 +846,7 @@ refresh_held_namespaces() {
 # so mdma refuses their proofs.
 # An unread namespace is omitted, never `[]`; mdma never un-revokes, so a partial map is safe.
 REVOKED_DEVICES_FILE="/mnt/data/fleet/fleet-revoked-devices.json"
+REVOKED_DEVICES_MAX=100000  # per namespace: mdma records no more from one node (fleet.py REVOKED_ROWS_MAX)
 REVOKED_DEVICES_PER_POLL=2048
 REVOKED_DEVICES_CURSOR="/mnt/data/fleet/fleet-revoked-devices.cursor"
 REVOKED_DEVICES_CURL_TIMEOUT=5
@@ -857,10 +858,11 @@ REVOKED_LAST_START=0
 
 # Prints the map as JSON on the first line, then notes to log; returns 1 when the held list is unusable.
 read_revoked_devices() {
-  SERVER_PORT="${SERVER_PORT:-2428}" HELD_FILE="$HELD_NAMESPACES_FILE" \
+  SERVER_PORT="${SERVER_PORT:-2428}" HELD_FILE="$HELD_NAMESPACES_FILE" MAX="$REVOKED_DEVICES_MAX" \
     CURL_TIMEOUT="$REVOKED_DEVICES_CURL_TIMEOUT" BUDGET="$REVOKED_DEVICES_BUDGET" python3 -c '
 import json, os, random, re, subprocess, sys, time
 HEX = re.compile(r"[0-9a-f]{64}")
+cap = int(os.environ["MAX"])
 deadline = time.monotonic() + int(os.environ["BUDGET"])
 try:
     held = json.load(open(os.environ["HELD_FILE"]))
@@ -889,7 +891,11 @@ for ns in held:
     if not isinstance(rows, list):
         unread.append(ns)
         continue
-    result[ns] = sorted({d for d in rows if isinstance(d, str) and HEX.fullmatch(d)})
+    ids = sorted({d for d in rows if isinstance(d, str) and HEX.fullmatch(d)})
+    if len(ids) > cap:
+        notes.append(f"namespace {ns} has {len(ids)} revoked devices; revoked_devices reports the first {cap}")
+        ids = ids[:cap]
+    result[ns] = ids
 if unread:
     sample = " ".join(unread[:3])
     notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {sample}")
