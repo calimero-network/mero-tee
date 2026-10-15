@@ -1097,7 +1097,7 @@ poll_mdma() {
   # `revoked_devices` follows the same rule; read by path, as it can outgrow one argv string.
   local body rc response
   body=$(python3 -c '
-import json, re, sys
+import bisect, json, re, sys
 body = dict(
   peer_id=sys.argv[1],
   mrtd=sys.argv[2],
@@ -1118,24 +1118,31 @@ try:
 except Exception:
   revoked = None
 if isinstance(revoked, dict):
-  # Every id, a rotating slice of at most REVOKED_DEVICES_PER_POLL per poll; mdma keeps what each slice adds.
-  pairs = sorted((ns, d) for ns, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", ns) and isinstance(ids, list)
-                 for d in set(ids) if isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d))
-  per_poll = int(sys.argv[11])
+  # Smallest namespace first, each taking an equal share of what is left of REVOKED_DEVICES_PER_POLL and
+  # resuming after the last id it sent, so a namespace with many ids never delays another.
+  names = [n for n, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", n) and isinstance(ids, list) and ids]
+  names.sort(key=lambda n: (len(revoked[n]), n))
+  room = int(sys.argv[11])
   try:
-    start = int(open(sys.argv[12]).read()) % len(pairs)
+    sent = json.load(open(sys.argv[12]))
+    sent = sent if isinstance(sent, dict) else {}
   except Exception:
-    start = 0
-  picked = {}
-  for ns, d in (pairs[start:] + pairs[:start])[:per_poll]:
-    picked.setdefault(ns, []).append(d)
+    sent = {}
+  picked, last = {}, {}
+  for left, ns in enumerate(names):
+    ids, share = revoked[ns], max(1, room // (len(names) - left))
+    start = bisect.bisect_right(ids, sent[ns]) if isinstance(sent.get(ns), str) else 0
+    chunk = ids[start:start + share] or ids[:share]
+    if all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in chunk):
+      picked[ns], last[ns] = sorted(set(chunk)), chunk[-1]
+      room -= len(chunk)
   try:
     with open(sys.argv[12], "w") as cursor:
-      cursor.write(str((start + per_poll) % len(pairs)) if pairs else "0")
+      json.dump(last, cursor)
   except OSError as exc:
     print(f"sidecar: revoked-devices cursor not saved: {exc}", file=sys.stderr)
   if picked:
-    body["revoked_devices"] = {ns: sorted(ids) for ns, ids in picked.items()}
+    body["revoked_devices"] = picked
 print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" "$REVOKED_DEVICES_FILE" "$REVOKED_DEVICES_PER_POLL" "$REVOKED_DEVICES_CURSOR" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   # On stdin: a body with revoked devices can outgrow one argv string (128 KiB on Linux).

@@ -584,7 +584,7 @@ MDMA records them for the namespaces it has this node active in, and refuses dev
   MDMA never un-revokes, so a map that omits a namespace changes nothing there.
 - **Never in the poll's way.** A background refresher reads the routes on the held-namespaces cadence and leaves the map in `/mnt/data/fleet/fleet-revoked-devices.json`.
   It visits namespaces in random order within `MEROCTL_READ_TIMEOUT`, so a pass cut short still reaches every namespace over time; a pass that reads none writes `{}`.
-  Each poll carries a rotating slice of at most 2048 ids (`REVOKED_DEVICES_PER_POLL`) across all namespaces, so the body stays bounded and every id is sent within a few polls.
+  Each poll carries at most 2048 ids (`REVOKED_DEVICES_PER_POLL`), shared so that each namespace resumes after the last id it sent and a namespace with few ids is sent whole every poll; a namespace with n ids is fully sent within about n / (2048 / namespaces) polls, whatever the others hold.
   The file is removed at startup.
 
 Covered by `scripts/ci/tests/fleet-sidecar-revoked-devices-test.sh`.

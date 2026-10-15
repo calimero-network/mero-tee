@@ -16,7 +16,8 @@
 #   missing   no held list, or a file that is not a valid map, omits the field.
 #   budget    a pass that runs out of budget sends the namespaces it did read.
 #   large     a map bigger than one argv string, with one namespace past 2048 ids, is sent
-#             in slices of at most 2048 ids beside held_namespaces, and every id is reached.
+#             in slices of at most 2048 ids beside held_namespaces, every id is reached, and
+#             the small namespaces arrive whole on the first poll.
 #   restart   a map written by an earlier sidecar process is never sent.
 #
 # FLEET_SIDECAR_TEMPLATE runs the checks against another template (a negative
@@ -278,7 +279,7 @@ check_large() {
   run_sidecar sidecar-60.sh 10
   python3 -c '
 import json, sys
-seen = set()
+seen, first = set(), None
 for line in open(sys.argv[1]):
     if not line.strip():
         continue
@@ -287,7 +288,10 @@ for line in open(sys.argv[1]):
         continue
     if sum(map(len, body["revoked_devices"].values())) > 2048 or len(body.get("held_namespaces", [])) != 3:
         sys.exit("a poll carried more than 2048 ids or lost held_namespaces")
+    first = first or body["revoked_devices"]
     seen |= {(ns, d) for ns, ids in body["revoked_devices"].items() for d in ids}
+if sorted(len(first.get(f"{i:064x}", [])) for i in (2, 3)) != [10, 10]:
+    sys.exit("the small namespaces waited behind the large one")
 if len(seen) != 5020:
     sys.exit(f"only {len(seen)} of 5020 ids were ever sent")
 ' "${SB}/bodies" || fail "a 5020-id map was not sent in bounded slices reaching every id"
