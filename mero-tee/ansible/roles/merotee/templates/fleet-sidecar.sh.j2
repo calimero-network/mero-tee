@@ -846,7 +846,6 @@ refresh_held_namespaces() {
 # so mdma refuses their proofs.
 # An unread namespace is omitted, never `[]`; mdma never un-revokes, so a partial map is safe.
 REVOKED_DEVICES_FILE="/mnt/data/fleet/fleet-revoked-devices.json"
-REVOKED_DEVICES_MAX=1024  # mdma refuses every proof in a namespace reported at this size (fleet.py REVOKED_DEVICES_MAX)
 REVOKED_DEVICES_PER_POLL=2048
 REVOKED_DEVICES_CURSOR="/mnt/data/fleet/fleet-revoked-devices.cursor"
 REVOKED_DEVICES_CURL_TIMEOUT=5
@@ -858,11 +857,10 @@ REVOKED_LAST_START=0
 
 # Prints the map as JSON on the first line, then notes to log; returns 1 when the held list is unusable.
 read_revoked_devices() {
-  SERVER_PORT="${SERVER_PORT:-2428}" HELD_FILE="$HELD_NAMESPACES_FILE" MAX="$REVOKED_DEVICES_MAX" \
+  SERVER_PORT="${SERVER_PORT:-2428}" HELD_FILE="$HELD_NAMESPACES_FILE" \
     CURL_TIMEOUT="$REVOKED_DEVICES_CURL_TIMEOUT" BUDGET="$REVOKED_DEVICES_BUDGET" python3 -c '
 import json, os, random, re, subprocess, sys, time
 HEX = re.compile(r"[0-9a-f]{64}")
-cap = int(os.environ["MAX"])
 deadline = time.monotonic() + int(os.environ["BUDGET"])
 try:
     held = json.load(open(os.environ["HELD_FILE"]))
@@ -891,13 +889,10 @@ for ns in held:
     if not isinstance(rows, list):
         unread.append(ns)
         continue
-    ids = sorted({d for d in rows if isinstance(d, str) and HEX.fullmatch(d)})
-    if len(ids) > cap:
-        notes.append(f"namespace {ns} has {len(ids)} revoked devices; revoked_devices reports the first {cap} in sorted order")
-        ids = ids[:cap]
-    result[ns] = ids
+    result[ns] = sorted({d for d in rows if isinstance(d, str) and HEX.fullmatch(d)})
 if unread:
-    notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {" ".join(unread[:3])}")
+    sample = " ".join(unread[:3])
+    notes.append(f"revoked devices of {len(unread)} namespaces not read, omitted from revoked_devices: {sample}")
 print(json.dumps(result))
 for note in notes:
     print(note)
@@ -1116,33 +1111,26 @@ try:
   revoked = json.load(open(sys.argv[10]))
 except Exception:
   revoked = None
-def valid_ids(ids):
-  return isinstance(ids, list) and all(isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d) for d in ids)
 if isinstance(revoked, dict):
-  # A rotating slice of at most REVOKED_DEVICES_PER_POLL ids; mdma keeps what each slice adds.
-  names, picked, room = sorted(n for n in revoked if re.fullmatch(r"[0-9a-f]{64}", n)), {}, int(sys.argv[12])
+  # Every id, a rotating slice of at most REVOKED_DEVICES_PER_POLL per poll; mdma keeps what each slice adds.
+  pairs = sorted((ns, d) for ns, ids in revoked.items() if re.fullmatch(r"[0-9a-f]{64}", ns) and isinstance(ids, list)
+                 for d in set(ids) if isinstance(d, str) and re.fullmatch(r"[0-9a-f]{64}", d))
+  per_poll = int(sys.argv[11])
   try:
-    start = int(open(sys.argv[13]).read()) % len(names)
+    start = int(open(sys.argv[12]).read()) % len(pairs)
   except Exception:
     start = 0
-  taken = 0
-  for i in range(len(names)):
-    ns = names[(start + i) % len(names)]
-    if not valid_ids(revoked[ns]):
-      taken += 1
-      continue
-    ids = sorted(set(revoked[ns]))[:int(sys.argv[11])]
-    if picked and len(ids) > room:
-      break
-    picked[ns], room, taken = ids, room - len(ids), taken + 1
+  picked = {}
+  for ns, d in (pairs[start:] + pairs[:start])[:per_poll]:
+    picked.setdefault(ns, []).append(d)
   try:
-    with open(sys.argv[13], "w") as cursor:
-      cursor.write(str((start + taken) % len(names)) if names else "0")
-  except OSError:
-    pass
+    with open(sys.argv[12], "w") as cursor:
+      cursor.write(str((start + per_poll) % len(pairs)) if pairs else "0")
+  except OSError as exc:
+    print(f"sidecar: revoked-devices cursor not saved: {exc}", file=sys.stderr)
   if picked:
-    body["revoked_devices"] = picked
-print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" "$REVOKED_DEVICES_FILE" "$REVOKED_DEVICES_MAX" "$REVOKED_DEVICES_PER_POLL" "$REVOKED_DEVICES_CURSOR" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
+    body["revoked_devices"] = {ns: sorted(ids) for ns, ids in picked.items()}
+print(json.dumps(body))' "$peer_id" "$mrtd" "${EXECUTOR_ACCOUNT:-}" "${RELAY_URL:-}" "$(cached_cert_not_after)" "$(cached_logs_token_fp)" "$(cached_swarm_addrs)" "$(cat "$HELD_NAMESPACES_FILE" 2>/dev/null || true)" "$HELD_NAMESPACES_MAX" "$REVOKED_DEVICES_FILE" "$REVOKED_DEVICES_PER_POLL" "$REVOKED_DEVICES_CURSOR" 2>>"$LOG") || body="{\"peer_id\":\"$peer_id\",\"mrtd\":\"$mrtd\"}"
 
   # On stdin: a body with revoked devices can outgrow one argv string (128 KiB on Linux).
   response=$(printf '%s' "$body" | curl -sf --max-time 10 "${headers[@]}" \

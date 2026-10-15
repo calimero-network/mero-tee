@@ -579,12 +579,12 @@ Every poll can also carry `revoked_devices`: `{namespace: [id, ...]}`, per names
 MDMA records them for the namespaces it has this node active in, and refuses device proofs signed by them there.
 
 - **Source.** `GET /admin-api/namespaces/{namespace_id}/revoked-devices` on merod's loopback port, once per namespace in the held list.
-- **Shape.** Lowercase 64-hex ids, deduplicated, sorted, at most 1024 per namespace (the first 1024 in sorted order, logged when cut; MDMA then refuses every device proof in that namespace).
+- **Shape.** Lowercase 64-hex ids, deduplicated and sorted; none is cut, since any member can add ids and a cut would hide a revocation.
 - **Absent is not empty.** A namespace whose read fails (an older merod without the route, not a member, a timeout) is left out of the map, never sent as `[]`.
   MDMA never un-revokes, so a map that omits a namespace changes nothing there.
 - **Never in the poll's way.** A background refresher reads the routes on the held-namespaces cadence and leaves the map in `/mnt/data/fleet/fleet-revoked-devices.json`.
   It visits namespaces in random order within `MEROCTL_READ_TIMEOUT`, so a pass cut short still reaches every namespace over time; a pass that reads none writes `{}`.
-  Each poll carries a rotating slice of at most 2048 ids (`REVOKED_DEVICES_PER_POLL`), so the body stays bounded however many namespaces the node holds.
+  Each poll carries a rotating slice of at most 2048 ids (`REVOKED_DEVICES_PER_POLL`) across all namespaces, so the body stays bounded and every id is sent within a few polls.
   The file is removed at startup.
 
 Covered by `scripts/ci/tests/fleet-sidecar-revoked-devices-test.sh`.

@@ -11,11 +11,10 @@
 #             namespace arrive as `revoked_devices`, sorted and deduplicated.
 #   partial   a namespace whose read fails is omitted (never `[]`), the others
 #             stay, malformed device ids are dropped, and the omission is logged.
-#   cap       more than 1024 ids in a namespace: the first 1024 sorted, logged.
 #   missing   no held list, or a file that is not a valid map, omits the field.
 #   budget    a pass that runs out of budget sends the namespaces it did read.
-#   large     a map bigger than one argv string is sent in slices of at most 2048 ids,
-#             each beside held_namespaces, and every namespace is reached.
+#   large     a map bigger than one argv string, with one namespace past 2048 ids, is sent
+#             in slices of at most 2048 ids beside held_namespaces, and every id is reached.
 #   restart   a map written by an earlier sidecar process is never sent.
 #
 # FLEET_SIDECAR_TEMPLATE runs the checks against another template (a negative
@@ -26,7 +25,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEMPLATE="${FLEET_SIDECAR_TEMPLATE:-${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2}"
-CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial cap missing budget large restart}"
+CHECKS="${FLEET_SIDECAR_CHECKS:-reports partial missing budget large restart}"
 
 SB="$(mktemp -d)"
 # Kill a process and everything under it.
@@ -204,24 +203,6 @@ check_partial() {
   echo "ok: partial"
 }
 
-# --- cap ---------------------------------------------------------------------
-check_cap() {
-  reset_state
-  local n1
-  n1=$(ns 1)
-  ns_list "$n1" > "${SB}/ns-list"
-  python3 -c 'import json; print(json.dumps({"revokedDevices": [f"{i:064x}" for i in range(1030)]}))' > "${SB}/rev-${n1}"
-  run_sidecar sidecar-60.sh 6
-  python3 -c '
-import json, sys
-got = json.loads(sys.argv[2])[sys.argv[1]]
-if got != [f"{i:064x}" for i in range(1024)]:
-    sys.exit(f"got {len(got)} ids")
-' "$n1" "$(last_rev)" || fail "1030 ids are not cut to the first 1024 sorted"
-  grep -q "has 1030 revoked devices; revoked_devices reports the first 1024" "${SB}/fleet.log" || fail "the cut is not logged"
-  echo "ok: cap"
-}
-
 # --- missing -----------------------------------------------------------------
 check_missing() {
   reset_state
@@ -233,8 +214,10 @@ check_missing() {
   for bad in 'not json' '[]' '{"x": []}' "{\"$(ns 1)\": \"nope\"}" "{\"$(ns 1)\": [\"zz\"]}"; do
     reset_state
     ns_list "$(ns 1)" > "${SB}/ns-list"
+    rev_answer "$(ns 1)" "[\"$(dev 11)\"]"
     # shellcheck disable=SC2016  # evaluated by run_sidecar
     run_sidecar sidecar-60.sh 8 'for _ in $(seq 50); do [[ -s "${SB}/fleet-revoked-devices.json" ]] && break; sleep 0.2; done; printf "%s\n" "$bad" > "${SB}/fleet-revoked-devices.json"' 1
+    rev_per_poll | grep -q "$(ns 1)" || fail "no poll carried the map before '${bad}' replaced it"
     [[ "$(last_rev)" == "-" ]] || fail "invalid file '${bad}' was sent: $(last_rev)"
   done
   echo "ok: missing"
@@ -267,10 +250,11 @@ check_large() {
   local n i
   for i in 1 2 3; do
     n=$(ns "$i")
-    python3 -c 'import json; print(json.dumps({"revokedDevices": [f"{i:064x}" for i in range(1024)]}))' > "${SB}/rev-${n}"
+    python3 -c 'import json, sys; print(json.dumps({"revokedDevices": [f"{i:064x}" for i in range(int(sys.argv[1]))]}))' \
+      "$(( i == 1 ? 5000 : 10 ))" > "${SB}/rev-${n}"
   done
   ns_list "$(ns 1)" "$(ns 2)" "$(ns 3)" > "${SB}/ns-list"
-  run_sidecar sidecar-60.sh 8
+  run_sidecar sidecar-60.sh 10
   python3 -c '
 import json, sys
 seen = set()
@@ -282,10 +266,10 @@ for line in open(sys.argv[1]):
         continue
     if sum(map(len, body["revoked_devices"].values())) > 2048 or len(body.get("held_namespaces", [])) != 3:
         sys.exit("a poll carried more than 2048 ids or lost held_namespaces")
-    seen |= set(body["revoked_devices"])
-if len(seen) != 3:
-    sys.exit(f"only {len(seen)} namespaces were ever sent")
-' "${SB}/bodies" || fail "a 3072-id map was not sent in bounded slices reaching every namespace"
+    seen |= {(ns, d) for ns, ids in body["revoked_devices"].items() for d in ids}
+if len(seen) != 5020:
+    sys.exit(f"only {len(seen)} of 5020 ids were ever sent")
+' "${SB}/bodies" || fail "a 5020-id map was not sent in bounded slices reaching every id"
   echo "ok: large"
 }
 
