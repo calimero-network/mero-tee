@@ -8,7 +8,8 @@
 #   - sections are measured in systemd-stub's order, as name then contents,
 #     at their in-memory size (zero-filled past the raw data);
 #   - the GPT event counts and carries only the entries in use;
-#   - compare passes for a log that matches and fails for one that does not.
+#   - compare passes for a log that matches and fails for one that does not,
+#     and does the same from the quote's registers alone when there is no log.
 #
 # Usage: scripts/ci/tests/compute-rtmr-test.sh
 set -euo pipefail
@@ -145,5 +146,16 @@ if out="$(python3 "${TOOL}" compare "${work}/computed.json" "${work}/bad.json")"
   fail "compare passed a log with a different initrd"
 fi
 grep -q 'section .initrd.*\*\*differs\*\*' <<< "${out}" || fail "compare does not name the differing event: ${out}"
+
+# Without an event log (a node that returns only its quote), the registers alone.
+for name in good bad; do
+  python3 -c 'import json, sys; e = json.load(open(sys.argv[1])); del e["eventLogB64"]; json.dump(e, open(sys.argv[2], "w"))' \
+    "${work}/${name}.json" "${work}/${name}-quote-only.json"
+done
+python3 "${TOOL}" compare "${work}/computed.json" "${work}/good-quote-only.json" >/dev/null \
+  || fail "compare refused a quote whose registers match"
+if python3 "${TOOL}" compare "${work}/computed.json" "${work}/bad-quote-only.json" >/dev/null; then
+  fail "compare passed a quote whose RTMR2 differs"
+fi
 
 echo "PASS: compute rtmr"
