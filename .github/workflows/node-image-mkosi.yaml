@@ -4,10 +4,11 @@ run-name: Node image (mkosi, locked-read-only)
 # Phase 1 of moving the node image from Packer + Ansible to mkosi (mdma#480).
 # Builds mero-tee/mkosi-node (locked-read-only) from the pinned archive
 # snapshot and the same role files the Packer build uses, then:
-#   1. computes RTMR1 and RTMR2 from the disk and UKI before anything boots;
+#   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
+#      boots (RTMR3: the init script's v3 event, naming the UKI's roothash=);
 #   2. boots the image and runs the node staging probe on it, the checks a
 #      Packer image gets (admin API, quote, ITA appraisal, policy candidates);
-#   3. compares the quote's RTMR1 and RTMR2 with the computed ones.
+#   3. compares the quote's RTMR1-3 with the computed ones.
 # Manual only; it publishes nothing, and the image is deleted afterwards unless
 # keep_image is set.
 
@@ -124,6 +125,7 @@ jobs:
           set -euo pipefail
           python3 scripts/attestation/shared/compute_rtmr.py compute \
             --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-node.efi" \
+            --role node --profile locked-read-only \
             --out "${EVIDENCE_DIR}/computed.json"
 
       - name: Upload the build evidence

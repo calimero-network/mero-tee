@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute a UKI image's RTMR1 and RTMR2 from its build output, before it boots.
+"""Compute a UKI image's RTMR1 and RTMR2 (and RTMR3) from its build output, before it boots.
 
 On a GCP TDX VM booting a unified kernel image directly (no shim, no boot
 menu), the CCEL event log shows these two registers depend only on the disk
@@ -14,10 +14,14 @@ image and the UKI:
   RTMR2  for each UKI section systemd-stub measures, in its order:
          the section name with its NUL, then the section's contents
 
-RTMR0 is Google's firmware and the machine shape; RTMR3 is what the booted
-system extends at runtime. Neither comes from the image.
+RTMR0 is Google's firmware and the machine shape, and does not come from the
+image. RTMR3 is what the booted system extends: the init scripts extend it
+once, with SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>"), roothash
+being the dm-verity root hash on the UKI's command line. Given --role and
+--profile, RTMR3 is computed too.
 
-  compute_rtmr.py compute --disk DISK --uki UKI [--out COMPUTED_JSON]
+  compute_rtmr.py compute --disk DISK --uki UKI [--role ROLE --profile PROFILE]
+                          [--out COMPUTED_JSON]
       Print the expected events and registers; write them as JSON.
   compute_rtmr.py compare COMPUTED_JSON EVIDENCE_JSON
       Compare them, event by event, with a booted TD's replayed CCEL log and
@@ -45,6 +49,7 @@ STUB_SECTIONS = (
     ".uname", ".sbat", ".pcrpkey", ".profile", ".dtbauto", ".hwids", ".efifw",
 )
 MR_INDEX = {"RTMR1": 2, "RTMR2": 3}
+RTMR3_FORMAT = "calimero-rtmr3-v3:{role}:{profile}:{roothash}"
 
 
 def sha384(data):
@@ -103,6 +108,16 @@ def compute(args):
             events["RTMR2"].append((f"section name {name}", sha384(name.encode() + b"\0")))
             events["RTMR2"].append((f"section {name} ({len(sections[name])} bytes)", sha384(sections[name])))
 
+    if args.role or args.profile:
+        if not (args.role and args.profile):
+            raise SystemExit("--role and --profile go together")
+        cmdline = sections.get(".cmdline", b"").rstrip(b"\0").decode().split()
+        roothash = [w.split("=", 1)[1] for w in cmdline if w.startswith("roothash=")]
+        if len(roothash) != 1 or len(roothash[0]) != 64:
+            raise SystemExit(f"the UKI's command line has no single roothash=: {' '.join(cmdline)}")
+        event = RTMR3_FORMAT.format(role=args.role, profile=args.profile, roothash=roothash[0])
+        events["RTMR3"] = [(event, sha384(event.encode()))]
+
     result = {"events": {}, "registers": {}}
     for register, items in events.items():
         value = bytes(48)
@@ -133,7 +148,9 @@ def compare(args):
     print("## Computed from the build vs measured on the TD\n")
     print("| Register | Computed before boot | Quote | |")
     print("| --- | --- | --- | --- |")
-    for register in ("RTMR1", "RTMR2"):
+    # RTMR3's one event is extended from user space, so it is in no firmware
+    # event log; it is compared as a register only.
+    for register in [r for r in ("RTMR1", "RTMR2", "RTMR3") if r in computed["registers"]]:
         same = computed["registers"][register] == quoted[register]
         ok &= same
         print(f"| {register} | `{computed['registers'][register][:24]}…` | `{quoted[register][:24]}…` | {'matches' if same else '**differs**'} |")
@@ -170,6 +187,8 @@ def main():
     compute_parser.add_argument("--disk", required=True)
     compute_parser.add_argument("--uki", required=True)
     compute_parser.add_argument("--out")
+    compute_parser.add_argument("--role", help="node, kms or agent: also compute RTMR3")
+    compute_parser.add_argument("--profile", help="the image profile, with --role")
     compare_parser = sub.add_parser("compare")
     compare_parser.add_argument("computed")
     compare_parser.add_argument("evidence")

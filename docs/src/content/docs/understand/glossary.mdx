@@ -185,8 +185,9 @@ as `nonce ‖ binding`: for `/get-key` the binding is `SHA-256(peerId)`; for
 **RTMR (Runtime Measurement Register)** — one of four extend-only registers
 (RTMR0–3) that record measurements across the VM lifecycle. RTMR0 ≈ firmware,
 RTMR1 ≈ kernel/boot, RTMR2 ≈ application/kernel-cmdline, RTMR3 ≈ post-boot runtime
-events. In Mero TEE, RTMR2 carries the injected `calimero.root_hash` and RTMR3
-carries the profile/role separation.
+events. In Mero TEE, RTMR2 carries the kernel command line with the dm-verity
+`roothash=`, and RTMR3 the init script's event naming role, profile and that
+root hash.
 
 ## S
 

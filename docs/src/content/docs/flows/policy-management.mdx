@@ -133,7 +133,7 @@ entry; the KMS releases it keys under that entry's role (`merod/storage/…` for
 quote combining a node's MRTD..RTMR2 with an agent's RTMR3 matches nothing. RTMR3 is
 also the role discriminator: the agent image (see the
 [private agents design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md))
-extends it with `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, which no node image
+extends it with `calimero-rtmr3-v3:agent:<profile>:<roothash>`, which no node image
 produces.
 
 merod does the mirror image on the KMS's `/attest` quote before every key fetch: not a

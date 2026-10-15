@@ -57,7 +57,7 @@ The agent image is built by the same template as the node and KMS
 
 **Boot (`agent-init`)**
 
-1. Extend RTMR3 with `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, fatal on
+1. Extend RTMR3 with `calimero-rtmr3-v3:agent:<profile>:<roothash>` (the dm-verity root hash), fatal on
    `locked-read-only`. The role string is what tells an agent quote from a node
    quote.
 2. Generate an identity key inside the TD, fetch the data-disk key from the KMS

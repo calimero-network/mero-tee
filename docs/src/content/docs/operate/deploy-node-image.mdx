@@ -267,14 +267,17 @@ the boot disk. The script
 
 <Steps>
 
-1. **Extend RTMR3 for attestation.** It reads `calimero.root_hash` from
-   `/proc/cmdline`, computes an SHA-384 digest of
-   `calimero-rtmr3-v2:<role>:<profile>:<root_hash>`, and writes the 48-byte
+1. **Extend RTMR3 for attestation.** It reads the dm-verity root hash
+   (`roothash=`) from `/proc/cmdline`, computes an SHA-384 digest of
+   `calimero-rtmr3-v3:<role>:<profile>:<roothash>`, and writes the 48-byte
    digest into the TDX guest sysfs
    (`/sys/class/misc/tdx_guest/measurements/rtmr3:sha384`, falling back to
-   `.../mr/rtmr3:sha384`). This makes each image's runtime measurement unique
-   and unforgeable. It is best-effort: if the sysfs node is unavailable the
-   node still boots, logging a warning.
+   `.../mr/rtmr3:sha384`). Every block of the root filesystem is checked
+   against that hash, so RTMR3 names the image's whole root, its role and its
+   profile. On `locked-read-only` a missing `roothash=` or RTMR3 interface
+   stops the boot; the debug profiles log a warning and go on. (Releases up to
+   2.3.118 extended `calimero-rtmr3-v2:...` with `calimero.root_hash`, a
+   build-time hash of a few directories.)
 
 2. **Disable observability by default** (stops/disables `vmagent` and
    `vector`), then reads the metadata whitelist above.
