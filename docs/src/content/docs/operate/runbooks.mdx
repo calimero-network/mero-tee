@@ -310,6 +310,9 @@ serial lines are in the log of the collect step and in the artifact.
 An interactive prompt among them (such as systemd-firstboot's "Please
 configure the system!") means a unit is waiting for console input and holding
 the boot short of multi-user; the image masks the first-boot prompts for this.
+Payload lines that stop short of their `-sha256` line, followed by a login
+prompt, mean a getty hung up the console mid-output; the image masks
+`serial-getty@ttyS0` and orders the evidence service ahead of any getty.
 
 ## Verify release assets
 
