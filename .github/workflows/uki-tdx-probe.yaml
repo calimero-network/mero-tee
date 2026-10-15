@@ -5,10 +5,11 @@ run-name: UKI TDX probe (${{ inputs.ubuntu_release }})
 # that boots as a unified kernel image (mero-tee/mkosi-probe), boots it once on
 # the same TDX machine shape as a node, and records what the firmware measured:
 # the CCEL event log, a quote, and the UKI itself. The run passes only if
-#   1. replaying the event log reproduces the quote's RTMR0-3, and
-#   2. the UKI's Authenticode SHA-384 is a boot-application event in RTMR1,
-# which are the two facts computing an image's measurements from its build
-# output depends on. Manual only; it publishes nothing.
+#   1. replaying the event log reproduces the quote's RTMR0-3,
+#   2. the UKI's Authenticode SHA-384 is a boot-application event in RTMR1, and
+#   3. RTMR1 and RTMR2 computed from the disk image and UKI before boot
+#      (compute_rtmr.py) equal the quote's, event by event.
+# Manual only; it publishes nothing.
 
 on:
   workflow_dispatch:
@@ -96,6 +97,15 @@ jobs:
           sgdisk --move-second-header "${MKOSI_OUT}/disk.raw" >/dev/null
           tar --format=oldgnu -Sczf "${MKOSI_OUT}/merotee-uki-probe.tar.gz" -C "${MKOSI_OUT}" disk.raw
           ls -la "${MKOSI_OUT}/merotee-uki-probe.tar.gz"
+
+      # Before anything boots: RTMR1 and RTMR2 from the disk GCE will boot and
+      # the UKI on it. Compared with what the TD measured further down.
+      - name: Compute RTMR1 and RTMR2 from the build output
+        run: |
+          set -euo pipefail
+          python3 scripts/attestation/shared/compute_rtmr.py compute \
+            --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-uki-probe.efi" \
+            --out "${EVIDENCE_DIR}/computed.json"
 
       - name: Determine GCP auth mode
         id: auth_mode
@@ -247,6 +257,19 @@ jobs:
           set -e
           cat "${EVIDENCE_DIR}/report.md" >> "${GITHUB_STEP_SUMMARY}"
           cat "${EVIDENCE_DIR}/report.md"
+          exit "${status}"
+
+      - name: Compare the computed registers with the measured ones
+        run: |
+          set -euo pipefail
+          set +e
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${EVIDENCE_DIR}/computed.json" "${EVIDENCE_DIR}/evidence.json" \
+            > "${EVIDENCE_DIR}/computed-vs-measured.md"
+          status=$?
+          set -e
+          cat "${EVIDENCE_DIR}/computed-vs-measured.md" >> "${GITHUB_STEP_SUMMARY}"
+          cat "${EVIDENCE_DIR}/computed-vs-measured.md"
           exit "${status}"
 
       - name: Upload the evidence
