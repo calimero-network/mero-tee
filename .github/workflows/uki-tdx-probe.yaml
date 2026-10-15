@@ -1,0 +1,280 @@
+name: UKI TDX probe
+run-name: UKI TDX probe (${{ inputs.ubuntu_release }})
+
+# Phase 0 of the reproducible-image work (mdma#480). Builds the smallest image
+# that boots as a unified kernel image (mero-tee/mkosi-probe), boots it once on
+# the same TDX machine shape as a node, and records what the firmware measured:
+# the CCEL event log, a quote, and the UKI itself. The run passes only if
+#   1. replaying the event log reproduces the quote's RTMR0-3, and
+#   2. the UKI's Authenticode SHA-384 is a boot-application event in RTMR1,
+# which are the two facts computing an image's measurements from its build
+# output depends on. Manual only; it publishes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu_release:
+        description: "Ubuntu release the probe image is built from"
+        required: true
+        default: "resolute"
+      upload_bucket:
+        description: "Optional existing GCS bucket for the image upload (else a temporary one is created and deleted)"
+        required: false
+        default: ""
+      vm_zone:
+        description: "Optional probe VM zone override"
+        required: false
+        default: ""
+      vm_subnetwork:
+        description: "Optional probe VM subnet override"
+        required: false
+        default: ""
+      wait_minutes:
+        description: "How long to wait for the evidence on the serial console"
+        required: true
+        default: "15"
+      keep_image:
+        description: "Keep the GCE image after the run (for booting it again by hand)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Build, boot and measure the UKI probe image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      # Same defaults as the node staging probe, overridable via repo Variables.
+      GCP_ATTESTATION_PROJECT_ID: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+      GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+      GCP_ATTESTATION_SUBNETWORK: ${{ vars.GCP_ATTESTATION_SUBNETWORK }}
+      UPLOAD_BUCKET_INPUT: ${{ inputs.upload_bucket != '' && inputs.upload_bucket || vars.GCP_IMAGE_UPLOAD_BUCKET }}
+      UBUNTU_RELEASE: ${{ inputs.ubuntu_release }}
+      VM_ZONE_INPUT: ${{ inputs.vm_zone }}
+      VM_SUBNETWORK_INPUT: ${{ inputs.vm_subnetwork }}
+      WAIT_MINUTES: ${{ inputs.wait_minutes }}
+      KEEP_IMAGE: ${{ inputs.keep_image }}
+      MKOSI_OUT: ${{ github.workspace }}/mkosi-out
+      EVIDENCE_DIR: ${{ github.workspace }}/uki-probe-evidence
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up mkosi
+        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+
+      - name: Build the probe image
+        run: |
+          set -euo pipefail
+          if [[ ! "${UBUNTU_RELEASE}" =~ ^[a-z]+$ ]]; then
+            echo "::error::ubuntu_release must be an Ubuntu codename, got '${UBUNTU_RELEASE}'."
+            exit 1
+          fi
+          mkdir -p "${MKOSI_OUT}" "${EVIDENCE_DIR}"
+          mkosi --directory mero-tee/mkosi-probe --release "${UBUNTU_RELEASE}" \
+            --output-directory "${MKOSI_OUT}" build
+          ls -la "${MKOSI_OUT}"
+          cp "${MKOSI_OUT}/merotee-uki-probe.efi" "${MKOSI_OUT}/merotee-uki-probe.manifest" "${EVIDENCE_DIR}/"
+          sha256sum "${EVIDENCE_DIR}/merotee-uki-probe.efi" | tee "${EVIDENCE_DIR}/uki.sha256"
+
+      # GCE imports a raw disk named disk.raw, a whole number of GiB, in a
+      # sparse oldgnu tarball. Growing the file leaves the backup GPT header
+      # short of the end, so it is moved there.
+      - name: Package the image for GCE
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q gdisk >/dev/null
+          cp --sparse=always "${MKOSI_OUT}/merotee-uki-probe.raw" "${MKOSI_OUT}/disk.raw"
+          truncate -s %1G "${MKOSI_OUT}/disk.raw"
+          sgdisk --move-second-header "${MKOSI_OUT}/disk.raw" >/dev/null
+          tar --format=oldgnu -Sczf "${MKOSI_OUT}/merotee-uki-probe.tar.gz" -C "${MKOSI_OUT}" disk.raw
+          ls -la "${MKOSI_OUT}/merotee-uki-probe.tar.gz"
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+        run: |
+          mode="key"
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            mode="wif"
+          fi
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode != 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Prepare probe parameters
+        id: params
+        run: |
+          set -euo pipefail
+          project="${GCP_ATTESTATION_PROJECT_ID}"
+          zone="${VM_ZONE_INPUT:-${GCP_ATTESTATION_ZONE}}"
+          region="${zone%-*}"
+          subnetwork="${VM_SUBNETWORK_INPUT:-${GCP_ATTESTATION_SUBNETWORK:-}}"
+          if [[ -z "${subnetwork}" ]]; then
+            subnetwork="$(gcloud compute networks subnets list --project "${project}" \
+              --regions "${region}" --format="value(name)" --limit=1)"
+          fi
+          if [[ -z "${subnetwork}" ]]; then
+            echo "::error::Could not resolve a subnet in project=${project}, region=${region}."
+            exit 1
+          fi
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bucket="${UPLOAD_BUCKET_INPUT}"
+          temporary_bucket=false
+          if [[ -z "${bucket}" ]]; then
+            bucket="${project}-uki-probe-${suffix}"
+            temporary_bucket=true
+          fi
+          {
+            echo "project=${project}"
+            echo "zone=${zone}"
+            echo "region=${region}"
+            echo "subnetwork=${subnetwork}"
+            echo "bucket=${bucket#gs://}"
+            echo "temporary_bucket=${temporary_bucket}"
+            echo "object=merotee-uki-probe-${suffix}.tar.gz"
+            echo "image=merotee-uki-probe-${suffix}"
+            echo "instance=uki-probe-${suffix}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload and create the GCE image
+        env:
+          PROJECT: ${{ steps.params.outputs.project }}
+          REGION: ${{ steps.params.outputs.region }}
+          BUCKET: ${{ steps.params.outputs.bucket }}
+          TEMPORARY_BUCKET: ${{ steps.params.outputs.temporary_bucket }}
+          OBJECT: ${{ steps.params.outputs.object }}
+          IMAGE: ${{ steps.params.outputs.image }}
+        run: |
+          set -euo pipefail
+          if [[ "${TEMPORARY_BUCKET}" == "true" ]]; then
+            gcloud storage buckets create "gs://${BUCKET}" --project "${PROJECT}" \
+              --location "${REGION}" --uniform-bucket-level-access
+          fi
+          gcloud storage cp "${MKOSI_OUT}/merotee-uki-probe.tar.gz" "gs://${BUCKET}/${OBJECT}"
+          gcloud compute images create "${IMAGE}" --project "${PROJECT}" \
+            --source-uri "gs://${BUCKET}/${OBJECT}" \
+            --guest-os-features "UEFI_COMPATIBLE,TDX_CAPABLE,GVNIC"
+
+      # The same machine shape as a node, data disk included: RTMR0 measures
+      # the virtual hardware, so a VM without the disk would not be comparable.
+      # No external address and no service account: the evidence leaves through
+      # the serial console.
+      - name: Boot the probe VM
+        env:
+          PROJECT: ${{ steps.params.outputs.project }}
+          ZONE: ${{ steps.params.outputs.zone }}
+          SUBNETWORK: ${{ steps.params.outputs.subnetwork }}
+          IMAGE: ${{ steps.params.outputs.image }}
+          INSTANCE: ${{ steps.params.outputs.instance }}
+        run: |
+          set -euo pipefail
+          gcloud compute instances create "${INSTANCE}" \
+            --project "${PROJECT}" \
+            --zone "${ZONE}" \
+            --machine-type "c3-standard-4" \
+            --confidential-compute-type "TDX" \
+            --maintenance-policy "TERMINATE" \
+            --min-cpu-platform "Intel Sapphire Rapids" \
+            --no-service-account \
+            --no-scopes \
+            --image "${IMAGE}" \
+            --image-project "${PROJECT}" \
+            --network-interface "nic-type=GVNIC,subnet=${SUBNETWORK},no-address" \
+            --create-disk "size=200GB,type=pd-balanced,device-name=data,auto-delete=yes"
+
+      - name: Collect the evidence from the serial console
+        env:
+          PROJECT: ${{ steps.params.outputs.project }}
+          ZONE: ${{ steps.params.outputs.zone }}
+          INSTANCE: ${{ steps.params.outputs.instance }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WAIT_MINUTES}" =~ ^[0-9]+$ ]]; then
+            echo "::error::wait_minutes must be a number."
+            exit 1
+          fi
+          deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+          serial="${EVIDENCE_DIR}/serial.log"
+          until gcloud compute instances get-serial-port-output "${INSTANCE}" \
+              --project "${PROJECT}" --zone "${ZONE}" --port 1 > "${serial}" 2>/dev/null \
+              && grep -q 'MEROEV done' "${serial}"; do
+            if (( $(date +%s) >= deadline )); then
+              echo "::error::No 'MEROEV done' on the serial console within ${WAIT_MINUTES} minutes."
+              tail -n 60 "${serial}" || true
+              exit 1
+            fi
+            sleep 15
+          done
+          grep -E 'MEROEV (kernel|error|done)' "${serial}" || true
+          python3 scripts/attestation/shared/uki_probe_evidence.py extract "${serial}" "${EVIDENCE_DIR}"
+
+      - name: Replay the log and look for the UKI in it
+        run: |
+          set -euo pipefail
+          set +e
+          python3 scripts/attestation/shared/uki_probe_evidence.py report \
+            "${EVIDENCE_DIR}/evidence.json" --efi "${EVIDENCE_DIR}/merotee-uki-probe.efi" \
+            > "${EVIDENCE_DIR}/report.md"
+          status=$?
+          set -e
+          cat "${EVIDENCE_DIR}/report.md" >> "${GITHUB_STEP_SUMMARY}"
+          cat "${EVIDENCE_DIR}/report.md"
+          exit "${status}"
+
+      - name: Upload the evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: uki-tdx-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Clean up
+        if: ${{ always() && steps.params.outcome == 'success' }}
+        env:
+          PROJECT: ${{ steps.params.outputs.project }}
+          ZONE: ${{ steps.params.outputs.zone }}
+          BUCKET: ${{ steps.params.outputs.bucket }}
+          TEMPORARY_BUCKET: ${{ steps.params.outputs.temporary_bucket }}
+          OBJECT: ${{ steps.params.outputs.object }}
+          IMAGE: ${{ steps.params.outputs.image }}
+          INSTANCE: ${{ steps.params.outputs.instance }}
+        run: |
+          set -uo pipefail
+          gcloud compute instances delete "${INSTANCE}" --project "${PROJECT}" --zone "${ZONE}" --quiet || true
+          if [[ "${KEEP_IMAGE}" != "true" ]]; then
+            gcloud compute images delete "${IMAGE}" --project "${PROJECT}" --quiet || true
+          fi
+          gcloud storage rm "gs://${BUCKET}/${OBJECT}" || true
+          if [[ "${TEMPORARY_BUCKET}" == "true" ]]; then
+            gcloud storage buckets delete "gs://${BUCKET}" --quiet || true
+          fi
