@@ -5,6 +5,8 @@ Shared tooling for verifying TDX quotes and turning them into measurement allowl
 | Path | Purpose |
 |------|---------|
 | **`shared/`** | Dual-shape attest JSON (merod `data.quoteB64` and mero-kms `/attest` top-level `quoteB64`): Intel Trust Authority verification (`verify_tdx_quote_ita.py`) and policy candidate extraction (`extract_tdx_policy_candidates.py`). Used by **both** the node-image-gcp and the mero-kms (GCP TDX) release workflows. |
+| **`shared/tdx_event_log.py`** | Lists, replays and diffs a TD's CCEL event log against a quote's RTMRs. |
+| **`shared/uki_probe_evidence.py`** | Reads the UKI TDX probe's evidence off its serial console and checks the firmware measured the UKI the build produced, by Authenticode SHA-384 ([`uki-tdx-probe.yaml`](../../.github/workflows/uki-tdx-probe.yaml)). |
 
 **Node-image release automation** (GCP image, published MRTDs, signatures) lives under `scripts/release/node-image-gcp/`, not here.
 

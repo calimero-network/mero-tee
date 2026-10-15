@@ -66,6 +66,7 @@
     - name: Seal the root filesystem behind dm-verity
       command: >-
         /usr/local/sbin/calimero-seal-root
+        --seed "{{ image_version }}:kms:{{ lockdown_profile | default('locked-read-only') }}"
         {{ '--remove-user ubuntu' if lockdown_profile == 'locked-read-only' else '' }}
       changed_when: true
       register: seal_result

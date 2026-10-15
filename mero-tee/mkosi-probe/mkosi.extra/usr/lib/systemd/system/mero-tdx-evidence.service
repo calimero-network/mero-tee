@@ -1,0 +1,14 @@
+[Unit]
+Description=Print this TD's event log and a TDX quote on the serial console
+After=sys-kernel-config.mount systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mero-tdx-evidence.sh
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+
+[Install]
+WantedBy=multi-user.target

@@ -281,6 +281,33 @@ attestation checks. On failure the reason code names what the receiver saw:
 </TabItem>
 </Tabs>
 
+## Probe a UKI image's measurements (prototype)
+
+`uki-tdx-probe.yaml` is Phase 0 of moving the images to reproducible builds
+with measurements computed from the build output (mdma#480). It builds
+`mero-tee/mkosi-probe` with mkosi v26 as a single unified kernel image, boots
+it once on a `c3-standard-4` TDX VM with the node's 200 GB `data` disk, and
+reads the evidence the image prints on its serial console. It needs no merod
+and no network on the VM, and it publishes nothing.
+
+Run it from **Actions → UKI TDX probe → Run workflow**. Defaults build from
+Ubuntu `resolute` (26.04) in the staging probe's project and zone. With no
+`upload_bucket` (input or the `GCP_IMAGE_UPLOAD_BUCKET` variable) it creates a
+temporary bucket and deletes it afterwards, which needs `storage.buckets.create`
+on the service account.
+
+The run passes only when both hold:
+
+1. replaying the CCEL event log reproduces the quote's RTMR0–3, and
+2. the UKI's Authenticode SHA-384 is a boot-application event in RTMR1.
+
+The job summary shows both checks and every event; the
+`uki-tdx-probe-<run>` artifact keeps the UKI, the mkosi manifest, the serial
+log, `ccel.bin`, `quote.bin` and `evidence.json` (readable by
+`scripts/attestation/shared/tdx_event_log.py show`). A run that never prints
+`MEROEV done` failed to boot or to reach the evidence service: the last
+serial lines are in the log of the collect step and in the artifact.
+
 ## Verify release assets
 
 Before trusting any release, run the matching verifier (all under

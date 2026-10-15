@@ -251,6 +251,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tdx-event-log-test.sh
 
+      # The UKI TDX probe (uki-tdx-probe.yaml) reads its evidence back from a
+      # serial console and checks the firmware measured the UKI it built, by
+      # Authenticode hash; the tool must reassemble, replay and find it.
+      - name: Check the UKI probe evidence tool
+        id: uki_probe_evidence_test
+        shell: bash
+        run: scripts/ci/tests/uki-probe-evidence-test.sh
+
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
         shell: bash
@@ -414,6 +422,14 @@ jobs:
         run: |
           sudo apt-get install -y -q erofs-utils cryptsetup-bin gdisk parted >/dev/null
           sudo scripts/ci/tests/seal-root-test.sh
+
+      # The same files sealed with the same --seed give the same dm-verity root
+      # hash, and so the same kernel cmdline RTMR2 measures; a different seed
+      # does not. Runs after the step above, which installs the tools.
+      - name: Check the sealed root is reproducible
+        id: seal_root_reproducible_test
+        shell: bash
+        run: sudo scripts/ci/tests/seal-root-reproducible-test.sh
 
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and
@@ -588,6 +604,7 @@ jobs:
             --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \
             --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
+            --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
             --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \
