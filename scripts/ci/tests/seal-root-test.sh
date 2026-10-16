@@ -43,6 +43,11 @@ sgdisk --new=1:0:+400M --change-name=1:cloudimg-rootfs "$work/disk.img" >/dev/nu
 truncate -s 2G "$work/disk.img"
 loop="$(losetup -P --show -f "$work/disk.img")"
 partprobe "$loop" 2>/dev/null || true
+# udev makes the partition's node after partprobe returns: waiting for it
+# keeps mkfs from racing it ("/dev/loop1p1 does not exist", mero-tee#506).
+udevadm settle 2>/dev/null || true
+for _ in $(seq 100); do [[ -b "${loop}p1" ]] && break; sleep 0.1; done
+[[ -b "${loop}p1" ]] || fail "${loop}p1 never appeared"
 mkfs.ext4 -q -L cloudimg-rootfs "${loop}p1"
 mkdir -p "$work/root"
 mount "${loop}p1" "$work/root"

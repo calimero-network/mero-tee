@@ -1,0 +1,39 @@
+#!/bin/bash
+# Runs in the image after its packages and file trees are in. Enables what the
+# roles enable (build.sh lists it from the render manifest; the image's presets
+# say the same), creates the users they create, and locks root. The masks are applied in mkosi.finalize: mkosi
+# runs `systemctl preset-all` after this script, and disabling a template
+# (getty@.service) there removes its masked instances.
+set -euo pipefail
+
+while read -r unit; do
+  if [[ -n "${unit}" ]]; then systemctl --root="${BUILDROOT}" enable "${unit}"; fi
+done < "${SRCDIR}/rendered/enable.list"
+
+# What the Ubuntu cloud image's netplan did: DHCP on the NIC (80-gce.network),
+# DNS through the metadata server, time from it.
+systemctl --root="${BUILDROOT}" enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
+
+# What the roles' `user` tasks do (build.sh lists them from the render
+# manifest): the agent's slot users, baked in because the root is read-only.
+# Made in the roles' order on every build, so they get the same ids each time.
+# (mkosi-chroot gets /dev/null as stdin, so nothing it runs can read the list.)
+while read -r name options; do
+  # root is locked below, once: a second usermod --lock would rewrite
+  # /etc/shadow- (the backup then holds the locked entry) and change the root.
+  [[ -z "${name}" || "${name}" == root ]] && continue
+  declare -A opt=()
+  for pair in ${options}; do opt["${pair%%=*}"]="${pair#*=}"; done
+  if ! mkosi-chroot getent passwd "${name}" </dev/null >/dev/null; then
+    args=(--user-group)
+    if [[ "${opt[system]:-false}" == "true" ]]; then args+=(--system); fi
+    if [[ -n "${opt[shell]:-}" ]]; then args+=(--shell "${opt[shell]}"); fi
+    if [[ "${opt[create_home]:-true}" == "false" ]]; then args+=(--no-create-home); else args+=(--create-home); fi
+    mkosi-chroot useradd "${args[@]}" "${name}" </dev/null
+  fi
+  if [[ "${opt[password_lock]:-false}" == "true" ]]; then mkosi-chroot usermod --lock "${name}" </dev/null; fi
+  unset opt
+done < "${SRCDIR}/rendered/users.list"
+
+# merod-lockdown R4: lock root (on every profile).
+mkosi-chroot usermod --lock root

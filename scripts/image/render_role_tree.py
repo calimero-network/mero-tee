@@ -9,12 +9,13 @@ same thing into OUT:
 
   copy (content: or src:), template, file (directory, link, touch, absent),
   get_url + unarchive (from a download cache, sha256-checked against the task's
-  checksum)
+  checksum), set_fact (with lookup('file', ...)), and assert, which fails the
+  render as it would fail the Packer build
 
 Everything else is reported, not run: systemd enable/mask go to the manifest
-for mkosi's postinst, paths a `file: state=absent` removes go to it as well
+for mkosi's postinst, as do the users `user` tasks create or lock, paths a `file: state=absent` removes go to it as well
 (the image build removes them from the packages' files too), apt/package names to its package list, and commands,
-asserts, GRUB edits and the like are listed as skipped so none disappears
+GRUB edits and the like are listed as skipped so none disappears
 silently. `when:` conditions and `loop:`/`with_items:` are evaluated with the
 playbook's vars and each role's defaults.
 
@@ -23,6 +24,7 @@ playbook's vars and each role's defaults.
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -37,8 +39,8 @@ import jinja2
 import yaml
 
 SKIPPED_MODULES = {
-    "command", "shell", "assert", "slurp", "stat", "find", "package_facts",
-    "lineinfile", "replace", "user", "debug", "set_fact", "fail", "wait_for",
+    "command", "shell", "slurp", "stat", "find", "package_facts",
+    "lineinfile", "replace", "debug", "fail", "wait_for",
 }
 TEMPLATE_STRINGS = (
     "comment_start_string", "comment_end_string", "variable_start_string",
@@ -66,14 +68,26 @@ class Renderer:
             basename=os.path.basename,
             to_json=json.dumps,
             from_json=json.loads,
+            b64decode=lambda v: base64.b64decode(str(v)).decode(),
         )
+        self.env.tests.update(
+            search=lambda v, pattern: re.search(pattern, str(v)) is not None,
+            match=lambda v, pattern: re.match(pattern, str(v)) is not None,
+        )
+        # lookup('file', path): a file on the build host, relative to the playbook.
+        self.env.globals["lookup"] = self.lookup
         self.vars = {
             "playbook_dir": str(self.base),
             "build_inputs": json.loads((self.base / "build-inputs.lock.json").read_text()),
         }
         self.extra = extra_vars
         self.registered = set()
-        self.manifest = {"packages": [], "enable": [], "mask": [], "removed": [], "skipped": [], "written": []}
+        # set_fact results: they outlive the role that sets them, as in Ansible.
+        self.facts = {}
+        # get_url dest -> the cache file it names (an archive may be saved
+        # under another name than the URL's).
+        self.fetched = {}
+        self.manifest = {"packages": [], "enable": [], "mask": [], "removed": [], "users": [], "skipped": [], "written": []}
 
     # --- templating -----------------------------------------------------------
     def render(self, value, scope):
@@ -104,6 +118,7 @@ class Renderer:
         scope = {}
         for layer in layers:
             scope.update(layer or {})
+        scope.update(self.facts)
         scope.update(self.extra)
         scope.update(self.vars)
         for _ in range(8):
@@ -131,6 +146,12 @@ class Renderer:
             if not self.env.compile_expression(str(c))(**scope):
                 return False
         return True
+
+    def lookup(self, kind, path):
+        if kind != "file":
+            raise ValueError(f"no rendering for lookup({kind!r})")
+        path = Path(path)
+        return (path if path.is_absolute() else self.base / path).read_text().rstrip("\n")
 
     # --- paths ------------------------------------------------------------------
     def target(self, path):
@@ -226,10 +247,20 @@ class Renderer:
             self.cache.mkdir(parents=True, exist_ok=True)
             subprocess.run(["curl", "-fsSL", "--retry", "4", "-o", str(self.cache / name), args["url"]], check=True)
         self.cached(name, checksum.split(":", 1)[1])
+        if "dest" in args:
+            self.fetched[str(args["dest"])] = name
         self.manifest.setdefault("downloads", []).append({"url": args["url"], "sha256": checksum.split(":", 1)[1]})
 
-    def do_unarchive(self, args):
-        archive = self.cached(Path(args["src"]).name)
+    def do_unarchive(self, args, role_dir):
+        src = str(args["src"])
+        if args.get("remote_src"):
+            # What a get_url task put on the VM: from the download cache.
+            archive = self.cached(self.fetched.get(src, Path(src).name))
+        else:
+            # A file on the build host, as Ansible copies it over.
+            archive = Path(src) if Path(src).is_absolute() else role_dir / "files" / src
+            if not archive.exists():
+                raise FileNotFoundError(f"unarchive: {src} does not exist on the build host")
         dest = self.target(args["dest"])
         dest.mkdir(parents=True, exist_ok=True)
         options = args.get("extra_opts") or []
@@ -288,6 +319,35 @@ class Renderer:
                         self.manifest["skipped"].append({"role": role, "task": task.get("name"), "why": f"condition: {error}"})
                         continue
                 args = task[modules[0]]
+                if module == "assert":
+                    # The build's own checks hold here too; one on a registered
+                    # result (a probe we skip) is skipped with it.
+                    try:
+                        held = self.condition(args["that"], local)
+                    except jinja2.UndefinedError as error:
+                        # Or on the build host's facts (package_facts and the
+                        # like), which build.sh checks from mkosi's manifest.
+                        if not (any(f"'{name}'" in str(error) for name in self.registered)
+                                or re.match(r"'ansible_\w+' is undefined", str(error))):
+                            raise
+                        self.manifest["skipped"].append({"role": role, "task": task.get("name"), "why": f"assert: {error}"})
+                        continue
+                    if not held:
+                        raise ValueError(f"{role}: {task.get('name')}: {self.render(args.get('fail_msg', 'assertion failed'), local)}")
+                    continue
+                if module == "set_fact":
+                    facts = {k: self.render(v, local) for k, v in args.items() if k != "cacheable"}
+                    self.facts.update(facts)
+                    scope.update(facts)
+                    continue
+                if module == "stat" and task.get("delegate_to") == "localhost" and "register" in task:
+                    # A file on the build host: stat it here, so the asserts on it hold.
+                    path = Path(self.render(args["path"], local))
+                    result = {"exists": path.exists()}
+                    if path.is_file():
+                        result["checksum"] = hashlib.new(args.get("checksum_algorithm", "sha1"), path.read_bytes()).hexdigest()
+                    self.facts[task["register"]] = scope[task["register"]] = {"stat": result}
+                    continue
                 if module in SKIPPED_MODULES:
                     self.manifest["skipped"].append({"role": role, "task": task.get("name"), "module": module})
                     continue
@@ -314,9 +374,13 @@ class Renderer:
                 elif module == "get_url":
                     self.do_get_url(args)
                 elif module == "unarchive":
-                    self.do_unarchive(args)
+                    self.do_unarchive(args, role_dir)
                 elif module in ("systemd", "systemd_service", "service"):
                     self.do_systemd(args)
+                elif module == "user":
+                    # For mkosi.postinst: users are made in the image, not here.
+                    self.manifest["users"].append(
+                        {k: args[k] for k in ("name", "system", "shell", "create_home", "password_lock", "state") if k in args})
                 else:
                     raise ValueError(f"{role}: no rendering for module {module!r} (task {task.get('name')!r})")
 

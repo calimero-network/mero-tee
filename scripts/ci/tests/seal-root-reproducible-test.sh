@@ -63,6 +63,11 @@ seal_fresh() {
   loop="$(losetup -P --show -f "$dir/disk.img")"
   loops+=("$loop")
   partprobe "$loop" 2>/dev/null || true
+  # udev makes the partition's node after partprobe returns: waiting for it
+  # keeps mkfs from racing it ("/dev/loop1p1 does not exist", mero-tee#506).
+  udevadm settle 2>/dev/null || true
+  for _ in $(seq 100); do [[ -b "${loop}p1" ]] && break; sleep 0.1; done
+  [[ -b "${loop}p1" ]] || fail "${loop}p1 never appeared"
   mkfs.ext4 -q -L cloudimg-rootfs "${loop}p1"
   mount "${loop}p1" "$dir/root"
   mounts+=("$dir/root")

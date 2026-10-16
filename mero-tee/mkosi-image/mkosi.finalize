@@ -1,0 +1,111 @@
+#!/bin/bash
+# Applies the roles' unit masks, then checks this root just before it is sealed
+# into EROFS: the units, the libraries, and on locked-read-only the lockdown
+# checks merotee-conformance makes on the Packer image. (Package checks are in build.sh, from mkosi's manifest: dpkg's
+# database is gone by now, CleanPackageMetadata=yes.)
+set -euo pipefail
+root="${BUILDROOT}"
+
+# The roles' masks (lockdown R2/R3/R5/R8/R9 among them), after mkosi's
+# preset-all, which would otherwise remove masked template instances. Plus the
+# first-boot prompts: an empty machine-id makes the first boot ask for
+# configuration on the console and wait there (mkosi-probe hit this).
+while read -r unit; do
+  if [[ -n "${unit}" ]]; then systemctl --root="${root}" mask "${unit}"; fi
+done < "${SRCDIR}/rendered/mask.list"
+systemctl --root="${root}" mask systemd-firstboot.service systemd-homed-firstboot.service
+
+failed=0
+fail() { echo "conformance: $*" >&2; failed=1; }
+
+while read -r unit; do
+  [[ -z "${unit}" ]] && continue
+  target="$(readlink "${root}/etc/systemd/system/${unit}" || true)"
+  [[ "${target}" == "/dev/null" ]] || fail "${unit} is not masked ($(ls -la "${root}/etc/systemd/system/${unit}" 2>&1))"
+done < "${SRCDIR}/rendered/mask.list"
+
+while read -r unit; do
+  [[ -z "${unit}" ]] && continue
+  compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null || fail "${unit} is not enabled"
+done < "${SRCDIR}/rendered/enable.list"
+
+profile="$(cat "${SRCDIR}/rendered/profile")"
+role="$(cat "${SRCDIR}/rendered/role")"
+
+# What each role must ship, and what its init script starts itself, never at
+# boot by itself (R7: observability is off until the init finds an endpoint).
+# The GCE disk-naming rule and helper are what the node and agent find their
+# data disk by.
+case "${role}" in
+  node)
+    required=(/usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_nvme_id /usr/sbin/nvme
+              /usr/local/bin/merod /usr/local/bin/meroctl /usr/local/bin/mero-auth /usr/local/lib/calimero/init.sh)
+    not_at_boot=(merod.service mero-auth.service traefik.service node_exporter.service vmagent.service vector.service) ;;
+  kms)
+    required=(/usr/local/bin/mero-kms /usr/local/lib/mero-kms/init.sh /etc/mero-kms/kms.env /etc/mero-kms/image-profile)
+    not_at_boot=(node_exporter.service vmagent.service vector.service) ;;
+  agent)
+    required=(/usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_nvme_id /usr/sbin/nvme /usr/sbin/cryptsetup
+              /usr/local/bin/merod /usr/local/bin/mero-agent /usr/local/bin/mero-agent-gate
+              /usr/local/lib/mero-agent/init.sh /etc/mero-agent/gate.env /etc/mero-agent/image-profile)
+    not_at_boot=(node_exporter.service vmagent.service vector.service) ;;
+esac
+for unit in "${not_at_boot[@]}"; do
+  if compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null; then fail "${unit} is enabled"; fi
+done
+for path in "${required[@]}"; do
+  [[ -e "${root}${path}" ]] || fail "${path} is missing"
+done
+
+# The users the roles create (users.list): in the image, each with its group.
+while read -r name _; do
+  [[ -z "${name}" || "${name}" == root ]] && continue
+  grep -q "^${name}:" "${root}/etc/passwd" || fail "user ${name} is missing"
+  grep -q "^${name}:" "${root}/etc/group" || fail "group ${name} is missing"
+done < "${SRCDIR}/rendered/users.list"
+
+# Lockdown (merod-lockdown and merotee-conformance run on locked-read-only only).
+if [[ "${profile}" == "locked-read-only" ]]; then
+  if [[ -e "${root}/etc/ssh" ]]; then fail "/etc/ssh exists (R1): $(find "${root}/etc/ssh" | sed "s|^${root}||" | tr '\n' ' ')"; fi
+  if [[ -s "${root}/etc/securetty" ]]; then fail "/etc/securetty is not empty (R4)"; fi
+else
+  [[ -x "${root}/usr/sbin/sshd" ]] || fail "a ${profile} image has no sshd"
+fi
+[[ "$(awk -F: '$1 == "root" { print substr($2, 1, 1) }' "${root}/etc/shadow")" == "!" ]] || fail "root is not locked (R4)"
+if [[ "${role}" == node ]]; then
+  # The merotee role's; the KMS and agent journals are in the tmpfs overlay.
+  grep -qs '^Storage=volatile' "${root}/etc/systemd/journald.conf.d/60-calimero-volatile.conf" || fail "the journal is not volatile"
+fi
+if [[ -n "$(find "${root}" -xdev -maxdepth 2 -name 'swap*' -type f -print -quit)" ]]; then fail "a swap file ships in the image"; fi
+
+# Every library the baked binaries link must be in the image. The first boot
+# on GCP found merod without libstdc++.so.6: calimero-init stopped and the admin
+# API never came up. ldd runs in the image, against its own libraries.
+while IFS= read -r -d '' binary; do
+  path="${binary#"${root}"}"
+  head -c 4 "${binary}" | grep -q $'\x7fELF' || continue
+  if missing="$(mkosi-chroot ldd "${path}" </dev/null 2>/dev/null | grep 'not found')"; then
+    fail "${path} links a library the image lacks: $(echo "${missing}" | tr -s ' \t\n' ' ')"
+  fi
+done < <(find "${root}/usr/local/bin" "${root}/usr/local/sbin" "${root}/opt" -type f -perm -u+x -print0 2>/dev/null)
+
+# The agent role's own probes, which the renderer skips (they run commands on
+# the VM in Packer): the baked merod can fetch a data-disk key, the kernel can
+# open a LUKS2 volume with integrity, and mero-bot, when baked, starts on the
+# baked Node.
+if [[ "${role}" == agent ]]; then
+  help="$(mkosi-chroot /usr/local/bin/merod kms disk-key --help </dev/null 2>&1)" || fail "merod kms disk-key --help failed: ${help}"
+  for flag in --key-out --create-identity; do
+    grep -q -- "${flag}" <<<"${help}" || fail "the baked merod's kms disk-key has no ${flag}"
+  done
+  kver="$(find "${root}/usr/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -n 1)"
+  for module in dm_crypt dm_integrity; do
+    mkosi-chroot modinfo -k "${kver}" "${module}" </dev/null >/dev/null 2>&1 || fail "kernel ${kver} has no ${module}"
+  done
+  if [[ -e "${root}/opt/mero-bot" ]]; then
+    bot="$(mkosi-chroot /opt/node/bin/node /opt/mero-bot/dist/cli.js --help </dev/null 2>&1)" || fail "mero-bot does not start on the baked Node: ${bot}"
+    grep -q -- '--attested-only' <<<"${bot}" || fail "the baked mero-bot has no --attested-only"
+  fi
+fi
+
+exit "${failed}"

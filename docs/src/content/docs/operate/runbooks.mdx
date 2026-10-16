@@ -335,42 +335,80 @@ archive's index files when a source has a `Snapshot:` field (for
 them; `apt-cache policy` lists the snapshot as the only package source. A
 build therefore still needs those two hosts reachable over plain HTTP.
 
-## Build the node image with mkosi
+## Build the images with mkosi
 
-`node-image-mkosi.yaml` builds a node image with mkosi instead of Packer
-(mdma#480), for the profile chosen by its `profile` input: `locked-read-only`
-(Phase 1), `debug-read-only` or `debug` (Phase 2). It publishes nothing; it is
-how the mkosi images are brought to parity before any release uses them.
+`node-image-mkosi.yaml` (named for the image it began with) builds a node,
+KMS or agent image with mkosi instead of Packer (mdma#480). Its `role` input
+picks the image and its `profile` input the profile: `locked-read-only`,
+`debug-read-only` or `debug`. The node image came first (Phase 1 and 2), and
+the KMS and agent images followed (Phase 3). The workflow publishes nothing; it
+is how the mkosi images are brought to parity before any release uses them.
+
+The roles take what their Packer build takes, from the same environment
+variables `build-and-release.sh` reads:
+
+- **node:** nothing beyond `versions.json`.
+- **kms:** `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE` and optionally
+  `KMS_AGENT_POLICY_FILE`. The workflow builds mero-kms from the commit and
+  takes the node allowlist from the `node_release_tag` release's
+  `published-mrtds.json`, as `kms-tdx-image-probe.yaml` does.
+- **agent:** `MERO_AGENT_GATE_BINARY`, and `MERO_AGENT_BINARY` or
+  `MERO_BOT_BUNDLE`. The workflow builds mero-agent-gate from the commit and
+  bakes the stub agent (`scripts/agent/stub-mero-agent.py`).
 
 The profiles differ as the Packer ones do:
 
 - **Roles:** the renderer evaluates the roles' own `when:` conditions. Lockdown
-  and conformance run on `locked-read-only` only, and the fleet sidecar on the
-  read-only profiles.
+  runs on `locked-read-only` only. On the node, conformance runs there too, and
+  the fleet sidecar on the read-only profiles.
 - **Access:** on the debug profiles, `build.sh` also installs `openssh-server`
   and `google-compute-engine` (the guest agent and OS Login, so SSH keys come
   from instance metadata) and adds `console=ttyS0,115200`. The Packer debug
-  images get the same from the Ubuntu cloud image.
+  images get the same from the Ubuntu cloud image. Only `locked-read-only`
+  boots `quiet`; the debug profiles show the kernel and systemd on the serial
+  console, where the KMS probe looks for `roothash=` and the verity setup.
 - **Checks:** `mkosi.finalize` makes the lockdown checks, and `build.sh` refuses
-  the cloud agents, on `locked-read-only` only. The unit, library and journal
+  the cloud agents, on `locked-read-only` only. The unit, library and per-role
   checks run on every profile.
-- **Measurements:** `calimero.profile=` is on each image's command line, so
-  RTMR2 and RTMR3 differ per profile.
+- **Measurements:** `calimero.role=` and `calimero.profile=` are on each
+  image's command line, so RTMR2 and RTMR3 differ per role and profile.
 
-Locally: `PROFILE=debug mero-tee/mkosi-node/build.sh OUT`.
+Locally: `ROLE=kms PROFILE=debug MERO_KMS_BINARY=... KMS_NODE_POLICY_FILE=...
+mero-tee/mkosi-image/build.sh OUT`. `ROLE` defaults to `node` and `PROFILE` to
+`locked-read-only`.
 
-The build (`mero-tee/mkosi-node/build.sh`) takes its files from the same Ansible
-roles as the Packer build. `scripts/image/render_role_tree.py` reads
-`mero-tee/playbook.yml` and does what its `copy`, `template`, `file`,
-`get_url` and `unarchive` tasks do into a directory. The release binaries come
-from a download cache and are checked against `build-inputs.lock.json`. The
-renderer records the roles' packages and the units they enable and mask in a
-manifest. It lists every task it does not run, such as probes, asserts and GRUB
-edits, so none disappears silently. `build.sh` adds the packages to the image,
-`mkosi.postinst` applies the enable and mask lists and locks root, and
-`mkosi.finalize` makes the lockdown checks `merotee-conformance` makes on the
-Packer image. After mkosi, `build.sh` checks that none of the removed packages
-(ssh, crash reporters, cloud agents) is installed.
+The build (`mero-tee/mkosi-image/build.sh`) takes its files from the same
+Ansible roles as the Packer build. `scripts/image/render_role_tree.py` reads the
+role's playbook (`playbook.yml`, `playbook-kms.yml` or `playbook-agent.yml`) and
+does what its `copy`, `template`, `file`, `get_url`, `unarchive` and `set_fact`
+tasks do into a directory. The release binaries come from a download cache and
+are checked against `build-inputs.lock.json`. It also evaluates the roles'
+asserts, so a KMS with an empty allowlist or an agent bundle that is not the
+pinned one fails here as it fails in Packer. It skips an assert only when it
+checks a probe of the VM or the VM's facts. The renderer records the roles'
+packages, users and the units they enable and mask in a manifest. It lists
+every task it does not run, such as probes and GRUB edits, so none disappears
+silently.
+
+`build.sh` adds the packages to the image. `mkosi.postinst` applies the enable
+list, creates the roles' users (the agent's slot users, baked in because the
+root is read-only) and locks root. `mkosi.finalize` applies the mask list and
+makes the lockdown checks `merotee-conformance` makes on the Packer image, plus
+each role's own:
+
+- **node:** merod, meroctl, mero-auth and calimero-init are present, and the
+  journal is volatile.
+- **kms:** mero-kms, kms-init and `kms.env` are present.
+- **agent:** the gate, the agent, merod and cryptsetup are present. finalize
+  also runs the probes the Packer build runs on the VM: merod has
+  `kms disk-key`, the kernel has `dm_crypt` and `dm_integrity`, and a baked
+  mero-bot starts on the baked Node.
+
+On the node and the agent, the GCE disk naming files their data disk needs
+are checked too. On every role, the services the init script starts are
+checked not to start at boot. After
+mkosi, `build.sh` checks that none of the removed packages (ssh, crash
+reporters, cloud agents) is installed.
 
 The image differs from the Packer one in how it boots and seals:
 
@@ -386,24 +424,38 @@ The image differs from the Packer one in how it boots and seals:
 The run:
 
 1. builds the image, checks the UKI's command line (`roothash=`, role, profile,
-   no `console=`), and computes RTMR1 and RTMR2 from the disk and UKI;
+   no `console=` on `locked-read-only`), and computes RTMR1, RTMR2 and RTMR3
+   from the disk and UKI;
 2. creates a GCE image through the `GCP_IMAGE_UPLOAD_BUCKET` bucket and runs
-   the node staging probe on it (`node-image-gcp-staging-probe.yaml`, now also
-   callable as a reusable workflow);
-3. compares the quote's RTMR1 and RTMR2 with the computed values. It compares
-   event by event when the node returns its event log (merod with core#4591),
-   and the registers only otherwise.
+   the probe a Packer image of that role gets:
+   - node: the node staging probe (`node-image-gcp-staging-probe.yaml`, also
+     callable as a reusable workflow);
+   - kms: a two-replica cluster (`scripts/release/kms/run-cluster-probe.sh`);
+   - agent: ITA, then a throwaway secret provisioned to the stub agent
+     (`scripts/release/agent/run-agent-probe.sh`);
+3. compares the quote's RTMR1-3 with the computed values. It compares event
+   by event when the image returns its event log, and the registers only
+   otherwise.
 
 The image is deleted at the end unless `keep_image` is set.
 
+Two builds of one commit give the same root and so the same RTMR1-3: checked
+for the node image, a CI build against a local one. Two things stood in the way. The build leaves out what differed
+on every build: nvme-cli's random host NQN and host id, `alternatives.log`
+and ldconfig's aux cache. It also runs mkosi as root, because as an
+unprivileged user mkosi's user namespace gave every file root as its owner,
+and the run fails when no file in the root is owned by anyone else. To find
+what differs between two builds, the run logs per-directory digests of the
+root and the initrd (`scripts/image/image_digest.py`); run the same on the
+other build and diff the two. Build locally as root, as CI does.
+
 A `locked-read-only` image writes nothing to the serial console, because it has
-no `console=`. When the admin API never comes up, run the workflow with
-`serial_console` set. This appends `console=ttyS0,115200
-systemd.journald.forward_to_console=1`, so the kernel, systemd and
-calimero-init's journal reach the serial port. The staging probe prints the
-last lines of the serial port whenever the health wait times out. A diagnostic
-build measures differently (RTMR2 covers the command line), so its registers
-are not the image's.
+no `console=`. When it never comes up, run the workflow with `serial_console`
+set. This appends `console=ttyS0,115200 systemd.journald.forward_to_console=1`,
+so the kernel, systemd and the init script's journal reach the serial port. The
+probes print the last lines of the serial port whenever their wait times out. A
+diagnostic build measures differently (RTMR2 covers the command line), so its
+registers are not the image's.
 
 ## Verify release assets
 
