@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# Build the mkosi node image for one profile.
+# Build one mkosi image: a role (node, kms or agent) in one profile.
 #
-#   PROFILE=locked-read-only|debug-read-only|debug \
-#     mero-tee/mkosi-node/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
+#   ROLE=node|kms|agent PROFILE=locked-read-only|debug-read-only|debug \
+#     mero-tee/mkosi-image/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
 #
-# PROFILE defaults to locked-read-only. The debug profiles also get what the
-# Packer debug images have from the Ubuntu cloud image: openssh-server and the
-# GCE guest environment (SSH keys from instance metadata, OS Login), and the
-# serial console. The roles themselves differ per profile (lockdown and
-# conformance run on locked-read-only only, the fleet sidecar on the
-# read-only profiles), which the renderer takes from their when: conditions.
+# ROLE defaults to node, PROFILE to locked-read-only. The output is
+# OUTPUT_DIR/merotee-<role>.{raw,efi,manifest,rendered.json}.
+#
+# What the Packer build takes as variables (build-and-release.sh), this takes
+# from the same environment variables:
+#   kms:   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, optional KMS_AGENT_POLICY_FILE
+#   agent: MERO_AGENT_GATE_BINARY, and MERO_AGENT_BINARY or MERO_BOT_BUNDLE
+#          (then the agent is scripts/agent/mero-bot-agent.sh)
+# The roles' own asserts refuse a build without them, as in Packer.
+#
+# The debug profiles also get what the Packer debug images have from the
+# Ubuntu cloud image: openssh-server and the GCE guest environment (SSH keys
+# from instance metadata, OS Login), and the serial console. The roles
+# themselves differ per profile (lockdown and conformance run on
+# locked-read-only only, the node's fleet sidecar on the read-only profiles),
+# which the renderer takes from their when: conditions.
 #
 # 1. Copies this directory to a work directory.
-# 2. Renders the node playbook's roles into it (scripts/image/render_role_tree.py)
+# 2. Renders the role's playbook into it (scripts/image/render_role_tree.py)
 #    with the versions in mero-tee/versions.json: the same templates, files and
 #    sha256-pinned release binaries the Packer build puts in place. Downloads
 #    go to $DOWNLOAD_CACHE (default OUTPUT_DIR/downloads) and are checked
 #    against build-inputs.lock.json before use.
-# 3. Adds the roles' packages and the units they enable and mask.
+# 3. Adds the roles' packages, users and the units they enable and mask.
 # 4. Runs mkosi (with any MKOSI_OPTIONs, e.g. --proxy-url), then checks mkosi's package manifest for what lockdown removes.
 #
 # Needs mkosi (v26), python3 with jinja2 and PyYAML, curl and tar.
@@ -35,6 +45,35 @@ case "${profile}" in
   locked-read-only | debug-read-only | debug) ;;
   *) echo "build.sh: PROFILE must be locked-read-only, debug-read-only or debug, not '${profile}'" >&2; exit 2 ;;
 esac
+role="${ROLE:-node}"
+case "${role}" in
+  node) playbook="playbook.yml" ;;
+  kms) playbook="playbook-kms.yml" ;;
+  agent) playbook="playbook-agent.yml" ;;
+  *) echo "build.sh: ROLE must be node, kms or agent, not '${role}'" >&2; exit 2 ;;
+esac
+# An input given is a file on this host; empty is "not given" (the role decides).
+input() {
+  if [[ -z "${2}" ]]; then return 0; fi
+  [[ -f "${2}" ]] || { echo "build.sh: ${1}=${2} does not exist" >&2; exit 2; }
+  realpath "${2}"
+}
+# (Assignments, so set -e stops the build on a missing file.)
+mero_kms_binary="$(input MERO_KMS_BINARY "${MERO_KMS_BINARY:-}")"
+kms_node_policy_file="$(input KMS_NODE_POLICY_FILE "${KMS_NODE_POLICY_FILE:-}")"
+kms_agent_policy_file="$(input KMS_AGENT_POLICY_FILE "${KMS_AGENT_POLICY_FILE:-}")"
+mero_agent_gate_binary="$(input MERO_AGENT_GATE_BINARY "${MERO_AGENT_GATE_BINARY:-}")"
+mero_bot_bundle="$(input MERO_BOT_BUNDLE "${MERO_BOT_BUNDLE:-}")"
+mero_agent_binary="$(input MERO_AGENT_BINARY "${MERO_AGENT_BINARY:-}")"
+if [[ -n "${mero_bot_bundle}" ]]; then
+  # As build-and-release.sh: with mero-bot, the agent is the launcher.
+  launcher="$(realpath "${repo}/scripts/agent/mero-bot-agent.sh")"
+  if [[ -n "${mero_agent_binary}" && "${mero_agent_binary}" != "${launcher}" ]]; then
+    echo "build.sh: with MERO_BOT_BUNDLE the agent is ${launcher}; unset MERO_AGENT_BINARY" >&2
+    exit 2
+  fi
+  mero_agent_binary="${launcher}"
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
@@ -44,7 +83,7 @@ mkdir -p "${work}/rendered" "${work}/mkosi.conf.d"
 
 version() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${here}/../versions.json" "$1"; }
 
-python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../playbook.yml" \
+python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../${playbook}" \
   --out "${work}/rendered/tree" --manifest "${work}/rendered/manifest.json" --cache "${cache}" --fetch \
   -e cpu_architecture=amd64 \
   -e "lockdown_profile=${profile}" \
@@ -53,7 +92,13 @@ python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../playbook.yml" \
   -e "traefik_version=$(version traefikVersion)" \
   -e "node_exporter_version=$(version nodeExporterVersion)" \
   -e "vmagent_version=$(version vmagentVersion)" \
-  -e "vector_version=$(version vectorVersion)"
+  -e "vector_version=$(version vectorVersion)" \
+  -e "mero_kms_binary=${mero_kms_binary}" \
+  -e "kms_node_policy_file=${kms_node_policy_file}" \
+  -e "kms_agent_policy_file=${kms_agent_policy_file}" \
+  -e "mero_agent_binary=${mero_agent_binary}" \
+  -e "mero_agent_gate_binary=${mero_agent_gate_binary}" \
+  -e "mero_bot_bundle=${mero_bot_bundle}"
 
 # Packer-only: the GRUB drop-in (here role and profile are in mkosi.conf's
 # KernelCommandLine) and the script that seals a running VM's root (here
@@ -63,10 +108,11 @@ rm -f "${work}/rendered/tree/etc/default/grub.d/50-calimero-profile.cfg" \
 find "${work}/rendered/tree" -depth -type d -empty -delete
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"
+printf '%s\n' "${role}" > "${work}/rendered/role"
 
-python3 - "${work}" "${profile}" <<'PY'
+python3 - "${work}" "${role}" "${profile}" <<'PY'
 import json, sys
-work, profile = sys.argv[1], sys.argv[2]
+work, role, profile = sys.argv[1], sys.argv[2], sys.argv[3]
 manifest = json.load(open(f"{work}/rendered/manifest.json"))
 # erofs-utils is what calimero-seal-root formats the root with; here
 # systemd-repart does that from mkosi's tools tree.
@@ -76,18 +122,27 @@ for entry in manifest["packages"]:
     names = [n for n in entry["names"] if n not in BUILD_ONLY]
     (absent if entry["state"] == "absent" else present).extend(names)
 with open(f"{work}/mkosi.conf.d/50-rendered.conf", "w") as f:
-    f.write("# Written by build.sh from the render manifest.\n[Content]\n")
+    f.write(f"# Written by build.sh from the render manifest.\n[Output]\nImageId=merotee-{role}\n[Content]\n")
     f.write(f"ExtraTrees={work}/rendered/tree:/\n")
+    # A list setting with no entries is left out: an empty assignment clears
+    # what mkosi.conf set (an empty Packages= dropped every base package).
+    def setting(key, values):
+        if values:
+            f.write(f"{key}=\n" + "".join(f"        {v}\n" for v in values))
     # What the roles delete, from whatever package put it there (/etc/ssh,
     # which systemd's ssh_config.d drop-in creates, among them).
-    f.write("RemoveFiles=\n" + "".join(f"        {p}\n" for p in manifest["removed"] if not p.startswith("/tmp/")))
-    cmdline = [f"calimero.profile={profile}"]
+    setting("RemoveFiles", [p for p in manifest["removed"] if not p.startswith("/tmp/")])
+    # In this order, locked-read-only's is the one the node image has had since
+    # it was first measured. The debug profiles leave out quiet: the KMS probe
+    # reads the kernel command line and the verity setup off the serial console.
+    cmdline = ["quiet"] if profile == "locked-read-only" else []
+    cmdline += ["systemd.volatile=overlay", f"calimero.role={role}", f"calimero.profile={profile}"]
     if profile != "locked-read-only":
         # What the Packer debug images keep from the Ubuntu cloud image.
         present += ["openssh-server", "google-compute-engine"]
         cmdline.append("console=ttyS0,115200")
-    f.write("KernelCommandLine=\n" + "".join(f"        {w}\n" for w in cmdline))
-    f.write("Packages=\n" + "".join(f"        {n}\n" for n in sorted(set(present))))
+    setting("KernelCommandLine", cmdline)
+    setting("Packages", sorted(set(present)))
 # mkosi runs `systemctl preset-all` after mkosi.postinst. With no preset for
 # them, systemd enables the roles' own units (merod, traefik, node_exporter...)
 # that the Packer image leaves to calimero-init, and it fails on a masked
@@ -107,6 +162,13 @@ preset.parent.mkdir(parents=True, exist_ok=True)
 preset.write_text("\n".join(dict.fromkeys(lines)) + "\n")
 open(f"{work}/rendered/mask.list", "w").write("".join(f"{u}\n" for u in manifest["mask"]))
 open(f"{work}/rendered/enable.list", "w").write("".join(f"{u}\n" for u in manifest["enable"]))
+# The users the roles create (the agent's slot users) or lock, for mkosi.postinst:
+# name, then system/shell/create_home/password_lock as key=value.
+with open(f"{work}/rendered/users.list", "w") as f:
+    for user in manifest["users"]:
+        if user.get("state", "present") != "present":
+            raise SystemExit(f"build.sh: a role removes user {user['name']}; nothing renders that")
+        f.write(" ".join([user["name"]] + [f"{k}={str(v).lower()}" for k, v in user.items() if k not in ("name", "state")]) + "\n")
 open(f"{work}/rendered/absent.list", "w").write("".join(f"{n}\n" for n in sorted(set(absent))))
 PY
 cat "${work}/mkosi.conf.d/50-rendered.conf"
@@ -115,7 +177,7 @@ mkosi --directory "${work}" --output-directory "${out}" "$@" build
 
 # What the roles purge (lockdown R1, crash reporters, unattended upgrades) and,
 # on locked-read-only, the cloud agents lockdown masks must not be installed.
-python3 - "${out}/merotee-node.manifest" "${work}/rendered/absent.list" "${profile}" <<'PY'
+python3 - "${out}/merotee-${role}.manifest" "${work}/rendered/absent.list" "${profile}" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
 installed = {p["name"] for p in manifest.get("packages", [])}
@@ -127,4 +189,4 @@ if found:
     sys.exit(f"conformance: installed but must not be: {' '.join(found)}")
 print(f"{len(installed)} packages; none of {len(forbidden)} forbidden ones installed")
 PY
-cp "${work}/rendered/manifest.json" "${out}/merotee-node.rendered.json"
+cp "${work}/rendered/manifest.json" "${out}/merotee-${role}.rendered.json"

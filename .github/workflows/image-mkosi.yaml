@@ -1,14 +1,19 @@
-name: Node image (mkosi)
-run-name: Node image (mkosi, ${{ inputs.profile }})
+name: Image (mkosi)
+run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }})
 
-# Moving the node image from Packer + Ansible to mkosi (mdma#480). Builds
-# mero-tee/mkosi-node for one profile (locked-read-only, debug-read-only or
-# debug) from the pinned archive snapshot and the same role files the Packer
-# build uses, then:
+# Moving the TEE images from Packer + Ansible to mkosi (mdma#480). Builds
+# mero-tee/mkosi-image for one role (node, kms or agent) and profile
+# (locked-read-only, debug-read-only or debug) from the pinned archive snapshot
+# and the same role files the Packer build uses, then:
 #   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
 #      boots (RTMR3: the init script's v3 event, naming the UKI's roothash=);
-#   2. boots the image and runs the node staging probe on it, the checks a
-#      Packer image gets (admin API, quote, ITA appraisal, policy candidates);
+#   2. boots the image and runs the probe a Packer image of that role gets:
+#      node: the staging probe (admin API, quote, ITA appraisal, policy
+#        candidates);
+#      kms: a two-replica cluster (scripts/release/kms/run-cluster-probe.sh),
+#        serving the node allowlist of node_release_tag;
+#      agent: ITA, then a throwaway secret provisioned to the stub agent
+#        (scripts/release/agent/run-agent-probe.sh);
 #   3. compares the quote's RTMR1-3 with the computed ones.
 # Manual only; it publishes nothing, and the image is deleted afterwards unless
 # keep_image is set.
@@ -16,8 +21,17 @@ run-name: Node image (mkosi, ${{ inputs.profile }})
 on:
   workflow_dispatch:
     inputs:
+      role:
+        description: "Image to build and probe"
+        required: true
+        type: choice
+        options:
+          - node
+          - kms
+          - agent
+        default: node
       profile:
-        description: "Node profile to build and probe"
+        description: "Profile to build and probe"
         required: true
         type: choice
         options:
@@ -25,6 +39,10 @@ on:
           - debug-read-only
           - debug
         default: locked-read-only
+      node_release_tag:
+        description: "kms only: the node release whose allowlist the KMS serves (mero-tee-v<version>)"
+        required: false
+        default: "mero-tee-v2.3.118"
       keep_image:
         description: "Keep the GCE image after the run (for booting it again by hand)"
         required: false
@@ -35,8 +53,12 @@ on:
         required: false
         type: boolean
         default: false
+      wait_timeout_minutes:
+        description: "kms and agent: how long to wait for the replicas or the gate"
+        required: false
+        default: "15"
       log_verbosity:
-        description: "Staging probe logging verbosity"
+        description: "node: staging probe logging verbosity"
         required: false
         type: choice
         options:
@@ -60,9 +82,10 @@ jobs:
       GCP_ATTESTATION_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
       UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
       MKOSI_OUT: ${{ github.workspace }}/mkosi-out
-      EVIDENCE_DIR: ${{ github.workspace }}/node-mkosi-evidence
+      EVIDENCE_DIR: ${{ github.workspace }}/mkosi-evidence
       SERIAL_CONSOLE: ${{ inputs.serial_console }}
       PROFILE: ${{ inputs.profile }}
+      ROLE: ${{ inputs.role }}
     outputs:
       image: ${{ steps.params.outputs.image }}
       project: ${{ steps.params.outputs.project }}
@@ -73,6 +96,62 @@ jobs:
 
       - name: Set up mkosi
         uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+
+      - name: Setup rust cache
+        if: ${{ inputs.role != 'node' }}
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: image-mkosi-${{ inputs.role }}
+
+      # What build-and-release.sh bakes into a KMS or agent image, as the TDX
+      # image probes build it: the binaries from this commit, the stub agent.
+      - name: Build mero-kms
+        if: ${{ inputs.role == 'kms' }}
+        run: |
+          set -euo pipefail
+          cargo build -p mero-kms --release --locked
+          mkdir -p inputs
+          cp target/release/mero-kms inputs/
+          echo "MERO_KMS_BINARY=${PWD}/inputs/mero-kms" >> "${GITHUB_ENV}"
+
+      - name: Fetch the node allowlist the KMS serves
+        if: ${{ inputs.role == 'kms' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NODE_TAG: ${{ inputs.node_release_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern "published-mrtds.json" --dir inputs
+          jq --arg p "${PROFILE}" '.profiles[$p] | {
+              allowed_tcb_statuses, allowed_mrtd,
+              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
+            }' inputs/published-mrtds.json > inputs/node-allowlist.json
+          jq -e 'all(.[]; type == "array" and length > 0)' inputs/node-allowlist.json >/dev/null \
+            || { echo "::error::${NODE_TAG} has no complete ${PROFILE} node allowlist"; exit 1; }
+          echo "KMS_NODE_POLICY_FILE=${PWD}/inputs/node-allowlist.json" >> "${GITHUB_ENV}"
+
+      - name: Build mero-agent-gate and stage the stub agent
+        if: ${{ inputs.role == 'agent' }}
+        run: |
+          set -euo pipefail
+          cargo build -p mero-agent-gate --release --locked
+          mkdir -p inputs agent-tools
+          cp target/release/mero-agent-gate inputs/
+          cp scripts/agent/stub-mero-agent.py inputs/mero-agent
+          cp target/release/mero-agent-provision agent-tools/
+          {
+            echo "MERO_AGENT_GATE_BINARY=${PWD}/inputs/mero-agent-gate"
+            echo "MERO_AGENT_BINARY=${PWD}/inputs/mero-agent"
+          } >> "${GITHUB_ENV}"
+
+      - name: Upload the agent probe's provisioning client
+        if: ${{ inputs.role == 'agent' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mkosi-agent-tools-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agent-tools/
+          retention-days: 3
 
       - name: Install the render and packaging tools
         run: |
@@ -90,18 +169,21 @@ jobs:
             # the console too, so calimero-init's own log is in the serial output.
             extra=(--kernel-command-line="console=ttyS0,115200 systemd.journald.forward_to_console=1")
           fi
-          mero-tee/mkosi-node/build.sh "${MKOSI_OUT}" -- "${extra[@]}"
+          mero-tee/mkosi-image/build.sh "${MKOSI_OUT}" -- "${extra[@]}"
           ls -la "${MKOSI_OUT}"
-          cp "${MKOSI_OUT}/merotee-node.efi" "${MKOSI_OUT}/merotee-node.manifest" \
-             "${MKOSI_OUT}/merotee-node.rendered.json" "${EVIDENCE_DIR}/"
-          sha256sum "${EVIDENCE_DIR}/merotee-node.efi" | tee "${EVIDENCE_DIR}/uki.sha256"
+          cp "${MKOSI_OUT}/merotee-${ROLE}.efi" "${MKOSI_OUT}/merotee-${ROLE}.manifest" \
+             "${MKOSI_OUT}/merotee-${ROLE}.rendered.json" "${EVIDENCE_DIR}/"
+          if [[ -n "${MERO_KMS_BINARY:-}${MERO_AGENT_GATE_BINARY:-}" ]]; then
+            sha256sum inputs/* | tee "${EVIDENCE_DIR}/inputs.sha256"
+          fi
+          sha256sum "${EVIDENCE_DIR}/merotee-${ROLE}.efi" | tee "${EVIDENCE_DIR}/uki.sha256"
 
       # What RTMR2 measures: the dm-verity root hash (and so the whole root),
       # role and profile, and on locked-read-only no console (lockdown R2).
       - name: Check the UKI command line
         run: |
           set -euo pipefail
-          python3 - "${EVIDENCE_DIR}/merotee-node.efi" <<'PY' | tee "${EVIDENCE_DIR}/cmdline.txt"
+          python3 - "${EVIDENCE_DIR}/merotee-${ROLE}.efi" <<'PY' | tee "${EVIDENCE_DIR}/cmdline.txt"
           import os, re, sys
           sys.path.insert(0, "scripts/attestation/shared")
           from compute_rtmr import pe_sections
@@ -111,7 +193,7 @@ jobs:
           if not any(re.fullmatch(r"roothash=[0-9a-f]{64}", w) for w in cmdline):
               problems.append("no roothash=")
           profile = os.environ["PROFILE"]
-          for want in ("calimero.role=node", f"calimero.profile={profile}", "systemd.volatile=overlay"):
+          for want in (f"calimero.role={os.environ['ROLE']}", f"calimero.profile={profile}", "systemd.volatile=overlay"):
               if want not in cmdline:
                   problems.append(f"no {want}")
           console = any(w.startswith("console=") for w in cmdline)
@@ -129,24 +211,24 @@ jobs:
       - name: Package the image for GCE
         run: |
           set -euo pipefail
-          cp --sparse=always "${MKOSI_OUT}/merotee-node.raw" "${MKOSI_OUT}/disk.raw"
+          cp --sparse=always "${MKOSI_OUT}/merotee-${ROLE}.raw" "${MKOSI_OUT}/disk.raw"
           truncate -s %1G "${MKOSI_OUT}/disk.raw"
           sgdisk --move-second-header "${MKOSI_OUT}/disk.raw" >/dev/null
-          tar --format=oldgnu -Sczf "${MKOSI_OUT}/merotee-node.tar.gz" -C "${MKOSI_OUT}" disk.raw
-          ls -la "${MKOSI_OUT}/merotee-node.tar.gz"
+          tar --format=oldgnu -Sczf "${MKOSI_OUT}/merotee-${ROLE}.tar.gz" -C "${MKOSI_OUT}" disk.raw
+          ls -la "${MKOSI_OUT}/merotee-${ROLE}.tar.gz"
 
       - name: Compute RTMR1 and RTMR2 from the build output
         run: |
           set -euo pipefail
           python3 scripts/attestation/shared/compute_rtmr.py compute \
-            --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-node.efi" \
-            --role node --profile "${PROFILE}" \
+            --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-${ROLE}.efi" \
+            --role "${ROLE}" --profile "${PROFILE}" \
             --out "${EVIDENCE_DIR}/computed.json"
 
       - name: Upload the build evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: node-mkosi-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: mkosi-build-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_DIR }}/
           retention-days: 14
 
@@ -194,8 +276,8 @@ jobs:
           {
             echo "project=${GCP_ATTESTATION_PROJECT_ID}"
             echo "bucket=${UPLOAD_BUCKET#gs://}"
-            echo "object=merotee-node-mkosi-${PROFILE}-${suffix}.tar.gz"
-            echo "image=merotee-node-mkosi-${PROFILE}-${suffix}"
+            echo "object=merotee-${ROLE}-mkosi-${PROFILE}-${suffix}.tar.gz"
+            echo "image=merotee-${ROLE}-mkosi-${PROFILE}-${suffix}"
             echo "merod_version=$(jq -r .merodVersion mero-tee/versions.json)"
           } >> "${GITHUB_OUTPUT}"
 
@@ -207,7 +289,7 @@ jobs:
           IMAGE: ${{ steps.params.outputs.image }}
         run: |
           set -euo pipefail
-          gcloud storage cp "${MKOSI_OUT}/merotee-node.tar.gz" "gs://${BUCKET}/${OBJECT}"
+          gcloud storage cp "${MKOSI_OUT}/merotee-${ROLE}.tar.gz" "gs://${BUCKET}/${OBJECT}"
           gcloud compute images create "${IMAGE}" --project "${PROJECT}" \
             --source-uri "gs://${BUCKET}/${OBJECT}" \
             --guest-os-features "UEFI_COMPATIBLE,TDX_CAPABLE,GVNIC"
@@ -215,8 +297,9 @@ jobs:
           gcloud storage rm "gs://${BUCKET}/${OBJECT}" || true
 
   probe:
-    name: Boot and probe the image
+    name: Boot and probe the node image
     needs: build
+    if: ${{ inputs.role == 'node' }}
     permissions:
       contents: read
       id-token: write
@@ -229,9 +312,73 @@ jobs:
       log_verbosity: ${{ inputs.log_verbosity }}
     secrets: inherit
 
+  probe-tdx:
+    name: Boot and probe the ${{ inputs.role }} image
+    needs: build
+    if: ${{ inputs.role != 'node' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      IMAGE: ${{ needs.build.outputs.image }}
+      IMAGE_PROJECT: ${{ needs.build.outputs.project }}
+      PROFILE: ${{ inputs.profile }}
+      VM_PROJECT: ${{ vars.GCP_ATTESTATION_PROJECT_ID != '' && vars.GCP_ATTESTATION_PROJECT_ID || 'cloud-486420' }}
+      VM_ZONE: ${{ vars.GCP_ATTESTATION_ZONE != '' && vars.GCP_ATTESTATION_ZONE || 'europe-west4-a' }}
+      VM_MACHINE_TYPE: ${{ vars.GCP_ATTESTATION_MACHINE_TYPE != '' && vars.GCP_ATTESTATION_MACHINE_TYPE || 'c3-standard-4' }}
+      ITA_APPRAISAL_URL: ${{ vars.ITA_APPRAISAL_URL }}
+      ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+      WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
+      PROBE_NAME: ${{ inputs.role }}-mkosi-${{ github.run_number }}-${{ github.run_attempt }}
+      OUT_DIR: ${{ github.workspace }}/probe
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the agent probe's provisioning client
+        if: ${{ inputs.role == 'agent' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mkosi-agent-tools-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agent-tools
+
+      # The same credentials the TDX image probes boot their VMs with.
+      - name: Authenticate to GCP via service account key
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Run the two-replica cluster and verify both quotes
+        if: ${{ inputs.role == 'kms' }}
+        env:
+          KMS_PORT: "8080"
+        run: bash scripts/release/kms/run-cluster-probe.sh
+
+      - name: Boot, measure and provision the agent
+        if: ${{ inputs.role == 'agent' }}
+        run: |
+          set -euo pipefail
+          chmod +x agent-tools/mero-agent-provision
+          PROVISION_BIN="${PWD}/agent-tools/mero-agent-provision" bash scripts/release/agent/run-agent-probe.sh
+
+      - name: Upload the probe evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mkosi-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: probe/
+          if-no-files-found: ignore
+          retention-days: 14
+
   compare:
     name: Compare the quote with the computed registers
-    needs: [build, probe]
+    needs: [build, probe, probe-tdx]
     if: ${{ always() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -247,22 +394,30 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download the build and probe evidence
-        if: ${{ needs.probe.result == 'success' }}
+        if: ${{ needs.probe.result == 'success' || needs.probe-tdx.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: evidence
 
-      - name: Compare the quote's RTMR1 and RTMR2 with the computed ones
-        if: ${{ needs.probe.result == 'success' }}
+      - name: Compare the quote's RTMR1-3 with the computed ones
+        if: ${{ needs.probe.result == 'success' || needs.probe-tdx.result == 'success' }}
+        env:
+          ROLE: ${{ inputs.role }}
         run: |
           set -euo pipefail
-          build="$(echo evidence/node-mkosi-build-*)"
-          probe="$(echo evidence/node-gcp-staging-probe-*)"
-          # The node's /admin-api/tee/attest response, as compute_rtmr.py reads
-          # evidence: quoteB64, and eventLogB64 when the node returns it.
-          jq '(.data // .) | {quoteB64, eventLogB64}' "${probe}/tee-attest-response.json" > evidence/node-evidence.json
+          build="$(echo evidence/mkosi-build-*)"
+          # The attest response of the booted image, as compute_rtmr.py reads
+          # evidence: quoteB64, and eventLogB64 when it returns one. The node's
+          # /admin-api/tee/attest, the bootstrap KMS replica's /attest, the
+          # agent gate's /attest.
+          case "${ROLE}" in
+            node) attest="$(echo evidence/node-gcp-staging-probe-*)/tee-attest-response.json" ;;
+            kms) attest="$(echo evidence/mkosi-probe-*)/bootstrap-attest.json" ;;
+            agent) attest="$(echo evidence/mkosi-probe-*)/agent-attest.json" ;;
+          esac
+          jq '(.data // .) | {quoteB64, eventLogB64}' "${attest}" > evidence/evidence.json
           python3 scripts/attestation/shared/compute_rtmr.py compare \
-            "${build}/computed.json" evidence/node-evidence.json | tee -a "${GITHUB_STEP_SUMMARY}"
+            "${build}/computed.json" evidence/evidence.json | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Determine GCP auth mode
         id: auth_mode
