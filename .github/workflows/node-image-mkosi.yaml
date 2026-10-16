@@ -231,7 +231,8 @@ jobs:
       - name: Digest the root and the initrd
         run: |
           set -euo pipefail
-          sudo apt-get install -y -q erofs-utils python3-zstandard >/dev/null
+          sudo apt-get install -y -q erofs-utils >/dev/null
+          sudo python3 -m pip install --quiet --break-system-packages zstandard==0.25.0
           python3 - "${MKOSI_OUT}/merotee-${ROLE}.raw" "${RUNNER_TEMP}/root.erofs" <<'PY'
           import struct, sys, uuid
           disk = open(sys.argv[1], "rb"); disk.seek(512)

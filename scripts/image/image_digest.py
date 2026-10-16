@@ -15,9 +15,11 @@ Each line is `<digest12> <entries> <path>`: the digest covers every entry
 below the directory (name, type, mode, owner, size, content or link target;
 not a directory's own size, which is the extracting filesystem's), so a
 parent differs whenever any child does. `--files-under DIR` also lists every
-entry below DIR, once the differing directory is known.
+entry below DIR (mode, uid, gid, size, content digest), once the differing
+directory is known.
 
-The initrd needs the zstandard module (pip install zstandard).
+The initrd needs the zstandard module (pip install zstandard; 0.25.0 reads a
+UKI initrd's several frames, where Ubuntu 24.04's python3-zstandard may not).
 """
 
 import argparse
@@ -131,7 +133,8 @@ def main():
         print(f"## {prefix}")
         for path, line in entries:
             if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
-                print(f"{hashlib.sha256(line.encode()).hexdigest()[:12]} {path}")
+                _, mode, uid, gid, size, content = line.rstrip("\n").split("\0")
+                print(f"{mode:>7} {uid:>5} {gid:>5} {size:>9} {content[:12]} {path}")
     return 0
 
 
