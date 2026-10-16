@@ -169,7 +169,13 @@ jobs:
             # the console too, so calimero-init's own log is in the serial output.
             extra=(--kernel-command-line="console=ttyS0,115200 systemd.journald.forward_to_console=1")
           fi
-          mero-tee/mkosi-image/build.sh "${MKOSI_OUT}" -- "${extra[@]}"
+          # As root. Run as the runner user, mkosi's user namespace maps every
+          # other id to root, and the image came out with every file root's:
+          # /etc/shadow not group shadow, dbus's launch helper not group
+          # messagebus, /var/lib/systemd/network not systemd-network's.
+          sudo --preserve-env=PROFILE,ROLE,MERO_KMS_BINARY,KMS_NODE_POLICY_FILE,KMS_AGENT_POLICY_FILE,MERO_AGENT_GATE_BINARY,MERO_AGENT_BINARY,MERO_BOT_BUNDLE \
+            env "PATH=${PATH}" mero-tee/mkosi-image/build.sh "${MKOSI_OUT}" -- "${extra[@]}"
+          sudo chown -R "$(id -u):$(id -g)" "${MKOSI_OUT}"
           ls -la "${MKOSI_OUT}"
           cp "${MKOSI_OUT}/merotee-${ROLE}.efi" "${MKOSI_OUT}/merotee-${ROLE}.manifest" \
              "${MKOSI_OUT}/merotee-${ROLE}.rendered.json" "${EVIDENCE_DIR}/"
@@ -228,7 +234,7 @@ jobs:
       # Per-directory digests of the root and the initrd, in the log, so two
       # builds that should match (CI and a rebuild elsewhere) can be diffed
       # down to the directory that differs (scripts/image/image_digest.py).
-      - name: Digest the root and the initrd
+      - name: Check ownership, digest the root and the initrd
         run: |
           set -euo pipefail
           sudo apt-get install -y -q erofs-utils >/dev/null
@@ -250,6 +256,12 @@ jobs:
               sys.exit("no root partition")
           PY
           sudo fsck.erofs --extract="${RUNNER_TEMP}/root" "${RUNNER_TEMP}/root.erofs" >/dev/null
+          # A root in which every file is root's lost its ownership in the build
+          # (see the build step); the packages own files as shadow, utmp, mail...
+          if [[ -z "$(sudo find "${RUNNER_TEMP}/root" \( ! -uid 0 -o ! -gid 0 \) -print -quit)" ]]; then
+            echo "::error::every file in the root is owned by root:root; the build lost the packages' ownership"
+            exit 1
+          fi
           echo "::group::root digests"
           sudo python3 scripts/image/image_digest.py root "${RUNNER_TEMP}/root" \
             --files-under /etc --files-under /var --files-under /usr/lib/dbus-1.0 | tee "${EVIDENCE_DIR}/root.digest"
