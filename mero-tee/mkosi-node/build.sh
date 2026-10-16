@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Build the mkosi node image (locked-read-only).
+# Build the mkosi node image for one profile.
 #
-#   mero-tee/mkosi-node/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
+#   PROFILE=locked-read-only|debug-read-only|debug \
+#     mero-tee/mkosi-node/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
+#
+# PROFILE defaults to locked-read-only. The debug profiles also get what the
+# Packer debug images have from the Ubuntu cloud image: openssh-server and the
+# GCE guest environment (SSH keys from instance metadata, OS Login), and the
+# serial console. The roles themselves differ per profile (lockdown and
+# conformance run on locked-read-only only, the fleet sidecar on the
+# read-only profiles), which the renderer takes from their when: conditions.
 #
 # 1. Copies this directory to a work directory.
 # 2. Renders the node playbook's roles into it (scripts/image/render_role_tree.py)
@@ -22,7 +30,11 @@ out="$(mkdir -p "$1" && cd "$1" && pwd)"
 shift
 [[ "${1:-}" == "--" ]] && shift
 cache="${DOWNLOAD_CACHE:-${out}/downloads}"
-profile=locked-read-only
+profile="${PROFILE:-locked-read-only}"
+case "${profile}" in
+  locked-read-only | debug-read-only | debug) ;;
+  *) echo "build.sh: PROFILE must be locked-read-only, debug-read-only or debug, not '${profile}'" >&2; exit 2 ;;
+esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
@@ -50,9 +62,11 @@ rm -f "${work}/rendered/tree/etc/default/grub.d/50-calimero-profile.cfg" \
       "${work}/rendered/tree/usr/local/sbin/calimero-seal-root"
 find "${work}/rendered/tree" -depth -type d -empty -delete
 
-python3 - "${work}" <<'PY'
+printf '%s\n' "${profile}" > "${work}/rendered/profile"
+
+python3 - "${work}" "${profile}" <<'PY'
 import json, sys
-work = sys.argv[1]
+work, profile = sys.argv[1], sys.argv[2]
 manifest = json.load(open(f"{work}/rendered/manifest.json"))
 # erofs-utils is what calimero-seal-root formats the root with; here
 # systemd-repart does that from mkosi's tools tree.
@@ -67,6 +81,12 @@ with open(f"{work}/mkosi.conf.d/50-rendered.conf", "w") as f:
     # What the roles delete, from whatever package put it there (/etc/ssh,
     # which systemd's ssh_config.d drop-in creates, among them).
     f.write("RemoveFiles=\n" + "".join(f"        {p}\n" for p in manifest["removed"] if not p.startswith("/tmp/")))
+    cmdline = [f"calimero.profile={profile}"]
+    if profile != "locked-read-only":
+        # What the Packer debug images keep from the Ubuntu cloud image.
+        present += ["openssh-server", "google-compute-engine"]
+        cmdline.append("console=ttyS0,115200")
+    f.write("KernelCommandLine=\n" + "".join(f"        {w}\n" for w in cmdline))
     f.write("Packages=\n" + "".join(f"        {n}\n" for n in sorted(set(present))))
 # mkosi runs `systemctl preset-all` after mkosi.postinst. With no preset for
 # them, systemd enables the roles' own units (merod, traefik, node_exporter...)
@@ -93,15 +113,15 @@ cat "${work}/mkosi.conf.d/50-rendered.conf"
 
 mkosi --directory "${work}" --output-directory "${out}" "$@" build
 
-# What the roles purge (lockdown R1, crash reporters, unattended upgrades) and
-# the cloud agents lockdown masks must not be installed at all.
-python3 - "${out}/merotee-node.manifest" "${work}/rendered/absent.list" <<'PY'
+# What the roles purge (lockdown R1, crash reporters, unattended upgrades) and,
+# on locked-read-only, the cloud agents lockdown masks must not be installed.
+python3 - "${out}/merotee-node.manifest" "${work}/rendered/absent.list" "${profile}" <<'PY'
 import json, sys
 manifest = json.load(open(sys.argv[1]))
 installed = {p["name"] for p in manifest.get("packages", [])}
-forbidden = set(open(sys.argv[2]).read().split()) | {
-    "cloud-init", "snapd", "google-guest-agent", "google-compute-engine", "google-osconfig-agent",
-}
+forbidden = set(open(sys.argv[2]).read().split())
+if sys.argv[3] == "locked-read-only":
+    forbidden |= {"cloud-init", "snapd", "google-guest-agent", "google-compute-engine", "google-osconfig-agent"}
 found = sorted(installed & forbidden)
 if found:
     sys.exit(f"conformance: installed but must not be: {' '.join(found)}")

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Applies the roles' unit masks, then makes the lockdown checks
-# merotee-conformance makes on the Packer image, on this root just before it is
-# sealed into EROFS. (Package checks are in build.sh, from mkosi's manifest: dpkg's
+# Applies the roles' unit masks, then checks this root just before it is sealed
+# into EROFS: the units, the libraries, and on locked-read-only the lockdown
+# checks merotee-conformance makes on the Packer image. (Package checks are in build.sh, from mkosi's manifest: dpkg's
 # database is gone by now, CleanPackageMetadata=yes.)
 set -euo pipefail
 root="${BUILDROOT}"
@@ -29,14 +29,21 @@ while read -r unit; do
   compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null || fail "${unit} is not enabled"
 done < "${SRCDIR}/rendered/enable.list"
 
+profile="$(cat "${SRCDIR}/rendered/profile")"
+
 # Started by calimero-init once the data disk is up, never at boot by themselves;
 # R7: observability is off by default.
 for unit in merod.service mero-auth.service traefik.service node_exporter.service vmagent.service vector.service; do
   if compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null; then fail "${unit} is enabled"; fi
 done
 
-if [[ -e "${root}/etc/ssh" ]]; then fail "/etc/ssh exists (R1): $(find "${root}/etc/ssh" | sed "s|^${root}||" | tr '\n' ' ')"; fi
-if [[ -s "${root}/etc/securetty" ]]; then fail "/etc/securetty is not empty (R4)"; fi
+# Lockdown (merod-lockdown and merotee-conformance run on locked-read-only only).
+if [[ "${profile}" == "locked-read-only" ]]; then
+  if [[ -e "${root}/etc/ssh" ]]; then fail "/etc/ssh exists (R1): $(find "${root}/etc/ssh" | sed "s|^${root}||" | tr '\n' ' ')"; fi
+  if [[ -s "${root}/etc/securetty" ]]; then fail "/etc/securetty is not empty (R4)"; fi
+else
+  [[ -x "${root}/usr/sbin/sshd" ]] || fail "a ${profile} image has no sshd"
+fi
 [[ "$(awk -F: '$1 == "root" { print substr($2, 1, 1) }' "${root}/etc/shadow")" == "!" ]] || fail "root is not locked (R4)"
 grep -qs '^Storage=volatile' "${root}/etc/systemd/journald.conf.d/60-calimero-volatile.conf" || fail "the journal is not volatile"
 if [[ -n "$(find "${root}" -xdev -maxdepth 2 -name 'swap*' -type f -print -quit)" ]]; then fail "a swap file ships in the image"; fi

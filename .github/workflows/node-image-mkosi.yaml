@@ -1,9 +1,10 @@
 name: Node image (mkosi)
-run-name: Node image (mkosi, locked-read-only)
+run-name: Node image (mkosi, ${{ inputs.profile }})
 
-# Phase 1 of moving the node image from Packer + Ansible to mkosi (mdma#480).
-# Builds mero-tee/mkosi-node (locked-read-only) from the pinned archive
-# snapshot and the same role files the Packer build uses, then:
+# Moving the node image from Packer + Ansible to mkosi (mdma#480). Builds
+# mero-tee/mkosi-node for one profile (locked-read-only, debug-read-only or
+# debug) from the pinned archive snapshot and the same role files the Packer
+# build uses, then:
 #   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
 #      boots (RTMR3: the init script's v3 event, naming the UKI's roothash=);
 #   2. boots the image and runs the node staging probe on it, the checks a
@@ -15,13 +16,22 @@ run-name: Node image (mkosi, locked-read-only)
 on:
   workflow_dispatch:
     inputs:
+      profile:
+        description: "Node profile to build and probe"
+        required: true
+        type: choice
+        options:
+          - locked-read-only
+          - debug-read-only
+          - debug
+        default: locked-read-only
       keep_image:
         description: "Keep the GCE image after the run (for booting it again by hand)"
         required: false
         type: boolean
         default: false
       serial_console:
-        description: "Diagnostic build: kernel and journal on the serial console (console=ttyS0). Not a locked-read-only measurement: it changes RTMR2"
+        description: "Diagnostic build: kernel and journal on the serial console (console=ttyS0). Not the profile's measurement: it changes RTMR2"
         required: false
         type: boolean
         default: false
@@ -52,6 +62,7 @@ jobs:
       MKOSI_OUT: ${{ github.workspace }}/mkosi-out
       EVIDENCE_DIR: ${{ github.workspace }}/node-mkosi-evidence
       SERIAL_CONSOLE: ${{ inputs.serial_console }}
+      PROFILE: ${{ inputs.profile }}
     outputs:
       image: ${{ steps.params.outputs.image }}
       project: ${{ steps.params.outputs.project }}
@@ -86,7 +97,7 @@ jobs:
           sha256sum "${EVIDENCE_DIR}/merotee-node.efi" | tee "${EVIDENCE_DIR}/uki.sha256"
 
       # What RTMR2 measures: the dm-verity root hash (and so the whole root),
-      # role and profile, and no console (lockdown R2).
+      # role and profile, and on locked-read-only no console (lockdown R2).
       - name: Check the UKI command line
         run: |
           set -euo pipefail
@@ -99,11 +110,15 @@ jobs:
           problems = []
           if not any(re.fullmatch(r"roothash=[0-9a-f]{64}", w) for w in cmdline):
               problems.append("no roothash=")
-          for want in ("calimero.role=node", "calimero.profile=locked-read-only", "systemd.volatile=overlay"):
+          profile = os.environ["PROFILE"]
+          for want in ("calimero.role=node", f"calimero.profile={profile}", "systemd.volatile=overlay"):
               if want not in cmdline:
                   problems.append(f"no {want}")
-          if any(w.startswith("console=") for w in cmdline) and os.environ["SERIAL_CONSOLE"] != "true":
+          console = any(w.startswith("console=") for w in cmdline)
+          if profile == "locked-read-only" and console and os.environ["SERIAL_CONSOLE"] != "true":
               problems.append("console= is set")
+          if profile != "locked-read-only" and not console:
+              problems.append(f"no console= on {profile}")
           if problems:
               sys.exit("UKI command line: " + "; ".join(problems))
           PY
@@ -125,7 +140,7 @@ jobs:
           set -euo pipefail
           python3 scripts/attestation/shared/compute_rtmr.py compute \
             --disk "${MKOSI_OUT}/disk.raw" --uki "${EVIDENCE_DIR}/merotee-node.efi" \
-            --role node --profile locked-read-only \
+            --role node --profile "${PROFILE}" \
             --out "${EVIDENCE_DIR}/computed.json"
 
       - name: Upload the build evidence
@@ -179,8 +194,8 @@ jobs:
           {
             echo "project=${GCP_ATTESTATION_PROJECT_ID}"
             echo "bucket=${UPLOAD_BUCKET#gs://}"
-            echo "object=merotee-node-mkosi-${suffix}.tar.gz"
-            echo "image=merotee-node-mkosi-${suffix}"
+            echo "object=merotee-node-mkosi-${PROFILE}-${suffix}.tar.gz"
+            echo "image=merotee-node-mkosi-${PROFILE}-${suffix}"
             echo "merod_version=$(jq -r .merodVersion mero-tee/versions.json)"
           } >> "${GITHUB_OUTPUT}"
 
@@ -207,7 +222,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/node-image-gcp-staging-probe.yaml
     with:
-      profile: locked-read-only
+      profile: ${{ inputs.profile }}
       image_name: ${{ needs.build.outputs.image }}
       image_project: ${{ needs.build.outputs.project }}
       merod_version: ${{ needs.build.outputs.merod_version }}

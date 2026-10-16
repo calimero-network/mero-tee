@@ -335,11 +335,29 @@ archive's index files when a source has a `Snapshot:` field (for
 them; `apt-cache policy` lists the snapshot as the only package source. A
 build therefore still needs those two hosts reachable over plain HTTP.
 
-## Build the node image with mkosi (Phase 1)
+## Build the node image with mkosi
 
-`node-image-mkosi.yaml` builds the `locked-read-only` node image with mkosi
-instead of Packer (mdma#480, Phase 1). It publishes nothing; it is how the
-mkosi image is brought to parity before any release uses it.
+`node-image-mkosi.yaml` builds a node image with mkosi instead of Packer
+(mdma#480), for the profile chosen by its `profile` input: `locked-read-only`
+(Phase 1), `debug-read-only` or `debug` (Phase 2). It publishes nothing; it is
+how the mkosi images are brought to parity before any release uses them.
+
+The profiles differ as the Packer ones do:
+
+- **Roles:** the renderer evaluates the roles' own `when:` conditions. Lockdown
+  and conformance run on `locked-read-only` only, and the fleet sidecar on the
+  read-only profiles.
+- **Access:** on the debug profiles, `build.sh` also installs `openssh-server`
+  and `google-compute-engine` (the guest agent and OS Login, so SSH keys come
+  from instance metadata) and adds `console=ttyS0,115200`. The Packer debug
+  images get the same from the Ubuntu cloud image.
+- **Checks:** `mkosi.finalize` makes the lockdown checks, and `build.sh` refuses
+  the cloud agents, on `locked-read-only` only. The unit, library and journal
+  checks run on every profile.
+- **Measurements:** `calimero.profile=` is on each image's command line, so
+  RTMR2 and RTMR3 differ per profile.
+
+Locally: `PROFILE=debug mero-tee/mkosi-node/build.sh OUT`.
 
 The build (`mero-tee/mkosi-node/build.sh`) takes its files from the same Ansible
 roles as the Packer build. `scripts/image/render_role_tree.py` reads
