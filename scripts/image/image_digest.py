@@ -12,17 +12,18 @@ differing file.
   image_digest.py uki FILE        the .initrd section of a UKI
 
 Each line is `<digest12> <entries> <path>`: the digest covers every entry
-below the directory (name, type, mode, owner, size, content or link target),
-so a parent differs whenever any child does. `--files DIR` also lists the
-entries directly in that directory, once the differing directory is known.
+below the directory (name, type, mode, owner, size, content or link target;
+not a directory's own size, which is the extracting filesystem's), so a
+parent differs whenever any child does. `--files-under DIR` also lists every
+entry below DIR, once the differing directory is known.
+
+The initrd needs the zstandard module (pip install zstandard).
 """
 
 import argparse
 import hashlib
 import os
-import shutil
 import stat
-import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -40,35 +41,22 @@ def walk_root(root):
         for name in sorted(dirnames + filenames):
             path = Path(dirpath) / name
             st = path.lstat()
+            size = st.st_size
             if stat.S_ISLNK(st.st_mode):
                 payload = os.readlink(path).encode()
             elif stat.S_ISREG(st.st_mode):
                 payload = path.read_bytes()
             else:
-                payload = b""
+                payload, size = b"", 0
             rel = "/" + str(path.relative_to(root))
-            yield rel, entry_line(name, st.st_mode, st.st_uid, st.st_gid, st.st_size, payload)
+            yield rel, entry_line(name, st.st_mode, st.st_uid, st.st_gid, size, payload)
 
 
 def decompress(data):
-    """The initrd as plain cpio: zstd frames decompressed, the rest kept."""
+    """The initrd as plain cpio: each zstd frame decompressed in place, the
+    uncompressed archives between them kept."""
+    import zstandard
     magic = b"\x28\xb5\x2f\xfd"
-    if magic not in data:
-        return data
-    if shutil.which("zstd"):
-        out, pos = bytearray(), 0
-        while pos < len(data):
-            start = data.find(magic, pos)
-            if start < 0:
-                out += data[pos:]
-                break
-            out += data[pos:start]
-            # zstd -dc reads every frame from here on; a cpio after them is not
-            # expected in a UKI initrd, whose last archive is the compressed one.
-            out += subprocess.run(["zstd", "-dc"], input=data[start:], capture_output=True, check=True).stdout
-            break
-        return bytes(out)
-    import zstandard  # pip install zstandard, where there is no zstd binary
     out, pos = bytearray(), 0
     while pos < len(data):
         if data[pos:pos + 4] == magic:
@@ -109,24 +97,23 @@ def walk_cpio(data):
 
 def digest(entries):
     """Per-directory digests over everything below each directory."""
-    hashes, counts, own = defaultdict(hashlib.sha256), defaultdict(int), defaultdict(list)
+    hashes, counts = defaultdict(hashlib.sha256), defaultdict(int)
     for path, line in entries:
-        parent = path.rsplit("/", 1)[0] or "/"
-        own[parent].append((path, line))
         # The entry counts towards every ancestor.
         parts = path.split("/")[1:-1]
         for depth in range(len(parts) + 1):
             ancestor = "/" + "/".join(parts[:depth])
             hashes[ancestor].update(line.encode())
             counts[ancestor] += 1
-    return hashes, counts, own
+    return hashes, counts
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("kind", choices=["root", "initrd", "uki"])
     parser.add_argument("path")
-    parser.add_argument("--files", action="append", default=[], help="also list this directory's own entries")
+    parser.add_argument("--files-under", action="append", default=[], metavar="DIR",
+                        help="also list every entry below DIR")
     args = parser.parse_args()
     if args.kind == "root":
         entries = list(walk_root(args.path))
@@ -137,13 +124,14 @@ def main():
             from compute_rtmr import pe_sections
             data = pe_sections(data)[".initrd"]
         entries = list(walk_cpio(decompress(data)))
-    hashes, counts, own = digest(entries)
+    hashes, counts = digest(entries)
     for directory in sorted(hashes):
         print(f"{hashes[directory].hexdigest()[:12]} {counts[directory]:6d} {directory}")
-    for directory in args.files:
-        print(f"## {directory}")
-        for path, line in own.get(directory, []):
-            print(f"{hashlib.sha256(line.encode()).hexdigest()[:12]} {path}")
+    for prefix in args.files_under:
+        print(f"## {prefix}")
+        for path, line in entries:
+            if path == prefix or path.startswith(prefix.rstrip("/") + "/"):
+                print(f"{hashlib.sha256(line.encode()).hexdigest()[:12]} {path}")
     return 0
 
 

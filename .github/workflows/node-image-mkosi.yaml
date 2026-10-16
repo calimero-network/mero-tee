@@ -231,7 +231,7 @@ jobs:
       - name: Digest the root and the initrd
         run: |
           set -euo pipefail
-          sudo apt-get install -y -q erofs-utils zstd >/dev/null
+          sudo apt-get install -y -q erofs-utils python3-zstandard >/dev/null
           python3 - "${MKOSI_OUT}/merotee-${ROLE}.raw" "${RUNNER_TEMP}/root.erofs" <<'PY'
           import struct, sys, uuid
           disk = open(sys.argv[1], "rb"); disk.seek(512)
@@ -250,10 +250,12 @@ jobs:
           PY
           sudo fsck.erofs --extract="${RUNNER_TEMP}/root" "${RUNNER_TEMP}/root.erofs" >/dev/null
           echo "::group::root digests"
-          sudo python3 scripts/image/image_digest.py root "${RUNNER_TEMP}/root" | tee "${EVIDENCE_DIR}/root.digest"
+          sudo python3 scripts/image/image_digest.py root "${RUNNER_TEMP}/root" \
+            --files-under /etc --files-under /var --files-under /usr/lib/dbus-1.0 | tee "${EVIDENCE_DIR}/root.digest"
           echo "::endgroup::"
           echo "::group::initrd digests"
-          python3 scripts/image/image_digest.py uki "${EVIDENCE_DIR}/merotee-${ROLE}.efi" | tee "${EVIDENCE_DIR}/initrd.digest"
+          python3 scripts/image/image_digest.py uki "${EVIDENCE_DIR}/merotee-${ROLE}.efi" \
+            --files-under /etc | tee "${EVIDENCE_DIR}/initrd.digest"
           echo "::endgroup::"
           sudo rm -rf "${RUNNER_TEMP}/root" "${RUNNER_TEMP}/root.erofs"
 
