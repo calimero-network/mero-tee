@@ -19,7 +19,9 @@ systemctl --root="${BUILDROOT}" enable systemd-networkd.service systemd-resolved
 # Made in the roles' order on every build, so they get the same ids each time.
 # (mkosi-chroot gets /dev/null as stdin, so nothing it runs can read the list.)
 while read -r name options; do
-  [[ -z "${name}" ]] && continue
+  # root is locked below, once: a second usermod --lock would rewrite
+  # /etc/shadow- (the backup then holds the locked entry) and change the root.
+  [[ -z "${name}" || "${name}" == root ]] && continue
   declare -A opt=()
   for pair in ${options}; do opt["${pair%%=*}"]="${pair#*=}"; done
   if ! mkosi-chroot getent passwd "${name}" </dev/null >/dev/null; then
