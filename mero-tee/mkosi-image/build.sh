@@ -153,8 +153,17 @@ import pathlib, re
 tree = pathlib.Path(f"{work}/rendered/tree")
 installed = sorted(p.name for p in (tree / "etc/systemd/system").glob("*") if p.suffix in (".service", ".socket", ".timer", ".target"))
 lines = ["# Written by build.sh from the render manifest (see there)."]
-lines += [f"enable {u}" for u in manifest["enable"] + ["systemd-networkd.service", "systemd-resolved.service", "systemd-timesyncd.service"]]
-lines += [f"disable {u}" for u in installed if u not in manifest["enable"]]
+# An enabled template instance (the agent's mero-agent@<slot>.service) is
+# enabled through its template's preset, with the instances listed: a plain
+# `disable` of the template would remove them.
+instances = {}
+for u in manifest["enable"]:
+    if m := re.fullmatch(r"(.+@)([^.]+)(\.\w+)", u):
+        instances.setdefault(m.group(1) + m.group(3), []).append(m.group(2))
+lines += [f"enable {u}" for u in manifest["enable"] + ["systemd-networkd.service", "systemd-resolved.service", "systemd-timesyncd.service"]
+          if not re.fullmatch(r".+@[^.]+\.\w+", u)]
+lines += [f"enable {t} {' '.join(i)}" for t, i in instances.items()]
+lines += [f"disable {u}" for u in installed if u not in manifest["enable"] and u not in instances]
 masked = manifest["mask"] + ["systemd-firstboot.service", "systemd-homed-firstboot.service"]
 lines += [f"disable {re.sub(r'@[^.]+', '@', u)}" for u in masked]
 preset = tree / "etc/systemd/system-preset/00-merotee.preset"
