@@ -225,6 +225,38 @@ jobs:
             --role "${ROLE}" --profile "${PROFILE}" \
             --out "${EVIDENCE_DIR}/computed.json"
 
+      # Per-directory digests of the root and the initrd, in the log, so two
+      # builds that should match (CI and a rebuild elsewhere) can be diffed
+      # down to the directory that differs (scripts/image/image_digest.py).
+      - name: Digest the root and the initrd
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -q erofs-utils zstd >/dev/null
+          python3 - "${MKOSI_OUT}/merotee-${ROLE}.raw" "${RUNNER_TEMP}/root.erofs" <<'PY'
+          import struct, sys, uuid
+          disk = open(sys.argv[1], "rb"); disk.seek(512)
+          lba, count, size = struct.unpack_from("<QII", disk.read(92), 72)
+          disk.seek(lba * 512)
+          root = uuid.UUID("4f68bce3-e8cd-4db1-96e7-fbcaf984b709")  # x86-64 root
+          for _ in range(count):
+              entry = disk.read(size)
+              if uuid.UUID(bytes_le=entry[:16]) == root:
+                  first, last = struct.unpack_from("<QQ", entry, 32)
+                  disk.seek(first * 512)
+                  open(sys.argv[2], "wb").write(disk.read((last - first + 1) * 512))
+                  break
+          else:
+              sys.exit("no root partition")
+          PY
+          sudo fsck.erofs --extract="${RUNNER_TEMP}/root" "${RUNNER_TEMP}/root.erofs" >/dev/null
+          echo "::group::root digests"
+          sudo python3 scripts/image/image_digest.py root "${RUNNER_TEMP}/root" | tee "${EVIDENCE_DIR}/root.digest"
+          echo "::endgroup::"
+          echo "::group::initrd digests"
+          python3 scripts/image/image_digest.py uki "${EVIDENCE_DIR}/merotee-${ROLE}.efi" | tee "${EVIDENCE_DIR}/initrd.digest"
+          echo "::endgroup::"
+          sudo rm -rf "${RUNNER_TEMP}/root" "${RUNNER_TEMP}/root.erofs"
+
       - name: Upload the build evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
