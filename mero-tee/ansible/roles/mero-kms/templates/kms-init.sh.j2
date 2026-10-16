@@ -31,8 +31,20 @@ get_meta() {
 }
 
 # --- RTMR3 --------------------------------------------------------------------
-# Fatal on locked-read-only: a quote from an unextended RTMR3 does not name the
-# image, and mero-kms refuses to hold a root in that state anyway.
+# rtmr3-v3 begin -- the same in calimero-init, kms-init and agent-init
+# (scripts/ci/tests/init-rtmr3-test.sh checks the three copies are identical).
+#
+# Extends RTMR3 with SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>").
+# <roothash> is the dm-verity root hash the initrd opened / with: `roothash=` on
+# the kernel command line, which RTMR2 also measures. Every block of the root is
+# checked against it, so the event names the root filesystem as a whole. (v2
+# named `calimero.root_hash`, a build-time hash of a few directories.) The role
+# tells a node, a KMS and an agent quote apart: the KMS releases each one's keys
+# only to a quote matching its own policy entry.
+#
+# Fatal on locked-read-only: an unextended RTMR3 does not name the image, so a
+# quote from it would not say which image is running. The debug profiles warn,
+# so a kernel without the sysfs interface can still be debugged.
 rtmr3_problem() {
   if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
     fatal "RTMR3 not extended: $*"
@@ -40,7 +52,7 @@ rtmr3_problem() {
   log "WARN: RTMR3 not extended: $*"
 }
 
-ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
+ROOT_HASH="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^roothash=\([0-9a-f]\{64\}\)$/\1/p' | head -n 1)"
 modprobe tdx_guest 2>/dev/null || true
 rtmr3_sysfs=""
 for candidate in \
@@ -51,21 +63,24 @@ for candidate in \
     break
   fi
 done
-if [[ -z "$rtmr3_sysfs" ]]; then
+if [[ -z "$ROOT_HASH" ]]; then
+  rtmr3_problem "no dm-verity roothash= on the kernel command line"
+elif [[ -z "$rtmr3_sysfs" ]]; then
   rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/"
 else
   extend="$(mktemp)"
-  printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
+  printf 'calimero-rtmr3-v3:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
     | openssl dgst -sha384 -binary > "$extend"
   if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
     rtmr3_problem "extend input is not 48 bytes"
   elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
     rtmr3_problem "write failed ($rtmr3_sysfs)"
   else
-    log "Extended RTMR3 (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}...)"
+    log "Extended RTMR3 (v3, role=$IMAGE_ROLE profile=$IMAGE_PROFILE roothash=${ROOT_HASH:0:16}...)"
   fi
   rm -f "$extend"
 fi
+# rtmr3-v3 end
 
 # --- Cluster metadata ------------------------------------------------------
 bootstrap="$(get_meta kms-bootstrap | tr -d '\r\n' | tr '[:upper:]' '[:lower:]')"

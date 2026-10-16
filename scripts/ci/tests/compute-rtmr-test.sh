@@ -9,7 +9,9 @@
 #     at their in-memory size (zero-filled past the raw data);
 #   - the GPT event counts and carries only the entries in use;
 #   - compare passes for a log that matches and fails for one that does not,
-#     and does the same from the quote's registers alone when there is no log.
+#     and does the same from the quote's registers alone when there is no log;
+#   - with --role/--profile, RTMR3 is one extend of the v3 event naming the
+#     UKI's roothash=, and compare checks it as a register.
 #
 # Usage: scripts/ci/tests/compute-rtmr-test.sh
 set -euo pipefail
@@ -49,7 +51,7 @@ sections = [  # name, contents, virtual size
     (b".sbat", b"sbat,1\n", 7),
     (b".uname", b"7.0.0", 5),
     (b".initrd", b"initrd", 6),
-    (b".cmdline", b"console=ttyS0", 13),
+    (b".cmdline", b"quiet roothash=" + b"ab" * 32 + b" calimero.role=node", 98),
     (b".osrel", b"ID=ubuntu\n", 16),  # 6 zero bytes past the raw data
     (b".linux", b"kernel", 6),
     (b".text", b"\x90" * 16, 16),  # not a UKI section: never measured
@@ -156,6 +158,41 @@ python3 "${TOOL}" compare "${work}/computed.json" "${work}/good-quote-only.json"
   || fail "compare refused a quote whose registers match"
 if python3 "${TOOL}" compare "${work}/computed.json" "${work}/bad-quote-only.json" >/dev/null; then
   fail "compare passed a quote whose RTMR2 differs"
+fi
+
+# RTMR3: one extend of SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>"),
+# the root hash read from the UKI's command line; compared as a register.
+python3 "${TOOL}" compute --disk "${work}/disk.raw" --uki "${work}/uki.efi" \
+  --role node --profile locked-read-only --out "${work}/computed3.json" >/dev/null \
+  || fail "compute --role/--profile failed"
+python3 - "${work}" <<'PY' || fail "RTMR3 is not one extend of the v3 event"
+import hashlib, json, sys
+work = sys.argv[1]
+computed = json.load(open(f"{work}/computed3.json"))
+event = "calimero-rtmr3-v3:node:locked-read-only:" + "ab" * 32
+digest = hashlib.sha384(event.encode()).digest()
+assert computed["events"]["RTMR3"] == [{"what": event, "digest": digest.hex()}], computed["events"]["RTMR3"]
+assert computed["registers"]["RTMR3"] == hashlib.sha384(bytes(48) + digest).hexdigest()
+PY
+python3 - "${work}" <<'PY'
+import base64, json, sys
+work = sys.argv[1]
+computed = json.load(open(f"{work}/computed3.json"))
+for name, rtmr3 in (("good3", computed["registers"]["RTMR3"]), ("bad3", "00" * 48)):
+    evidence = json.load(open(f"{work}/good.json"))
+    quote = bytearray(base64.b64decode(evidence["quoteB64"]))
+    quote[48 + 328 + 48 * 3 : 48 + 328 + 48 * 4] = bytes.fromhex(rtmr3)
+    evidence["quoteB64"] = base64.b64encode(bytes(quote)).decode()
+    json.dump(evidence, open(f"{work}/{name}.json", "w"))
+PY
+python3 "${TOOL}" compare "${work}/computed3.json" "${work}/good3.json" >/dev/null \
+  || fail "compare refused a quote whose RTMR3 matches"
+if out="$(python3 "${TOOL}" compare "${work}/computed3.json" "${work}/bad3.json")"; then
+  fail "compare passed a quote whose RTMR3 differs"
+fi
+grep -q '| RTMR3 |.*\*\*differs\*\*' <<< "${out}" || fail "compare does not name RTMR3: ${out}"
+if python3 "${TOOL}" compute --disk "${work}/disk.raw" --uki "${work}/uki.efi" --role node >/dev/null 2>&1; then
+  fail "--role without --profile was accepted"
 fi
 
 echo "PASS: compute rtmr"

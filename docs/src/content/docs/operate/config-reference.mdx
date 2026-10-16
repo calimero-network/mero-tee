@@ -188,10 +188,12 @@ no key material (see "Logging" in `mero-kms/README.md`).
 | `/etc/mero-kms/image-profile` | Plain-text file containing the profile name (`debug`, `debug-read-only`, or `locked-read-only`). When present, any `MERO_KMS_PROFILE` env override **must match** it or startup is refused; an empty file also refuses startup. When absent (a local build), the profile comes from `MERO_KMS_PROFILE`. |
 
 At boot `kms-init` extends **RTMR3** with
-`calimero-rtmr3-v2:kms:<profile>:<root hash>`, the same scheme the node image's
-`calimero-init` uses with role `node`. It is fatal on `locked-read-only`, so a
-quote always names the role, profile and build, and the KMS and node images can
-never measure alike.
+`calimero-rtmr3-v3:kms:<profile>:<roothash>`, the same scheme the node image's
+`calimero-init` uses with role `node`. `<roothash>` is the dm-verity root hash
+on the kernel command line (`roothash=`), so the event names the whole root
+filesystem. It is fatal on `locked-read-only`, so a quote always names the
+role, profile and root, and the KMS and node images can never measure alike.
+Releases up to 2.3.118 extended `calimero-rtmr3-v2:...:<calimero.root_hash>`.
 
 ## merod's KMS client (`[tee.kms]`)
 

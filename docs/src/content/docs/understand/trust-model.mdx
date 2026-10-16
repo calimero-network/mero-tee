@@ -152,7 +152,7 @@ admitting everything.
 | `RTMR0` | Firmware (TDVF) measurement | Extended during early boot. |
 | `RTMR1` | OS kernel / boot measurement | Extended during kernel boot. |
 | `RTMR2` | Application / kernel-cmdline measurement | The node image injects `calimero.root_hash` (a hash of `/etc/calimero`, baked binaries, and grub config) into the kernel cmdline, measured here (`mero-tee/playbook.yml`). It is computed at build time and measured as a **string**, so it names the build. The cmdline also carries the **dm-verity root hash**: the root filesystem is a read-only EROFS image sealed as the build's last step, and every block the booted system reads is checked against that hash, so an offline edit of the boot disk is a read error, not different code ([#334](https://github.com/calimero-network/mero-tee/issues/334); `verity-root` role). |
-| `RTMR3` | Runtime events after boot | Carries the profile/role separation: `kms-init` (KMS image) and `calimero-init` (node image) each extend it with role + profile + root hash, fatally on `locked-read-only`. |
+| `RTMR3` | Runtime events after boot | Carries the profile/role separation: `calimero-init` (node), `kms-init` (KMS) and `agent-init` (agent) each extend it once with `calimero-rtmr3-v3:<role>:<profile>:<roothash>`, the dm-verity root hash, fatally on `locked-read-only`. `scripts/attestation/shared/compute_rtmr.py --role --profile` computes it from a UKI build. |
 
 ### RTMR3 profile cohort separation
 

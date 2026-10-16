@@ -407,16 +407,18 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
-      # The agent image's boot (docs/design/private-agents.md). Its RTMR3
-      # extend is what the KMS's agent policy entry matches, so the role string
-      # is executed and checked byte for byte. Its data disk is the node's
-      # encrypted-disk logic narrowed: only ever LUKS2 with integrity, keyed
-      # from the KMS, never plain, never reformatted, never on a downgraded
-      # release.
-      - name: Check agent-init extends RTMR3 as an agent
-        id: agent_rtmr3_test
+      # Each image's RTMR3 extend is what its KMS policy entry matches, so the
+      # node, KMS and agent init scripts' one shared block is executed and the
+      # v3 event (role, profile, dm-verity roothash) checked byte for byte.
+      - name: Check calimero-init, kms-init and agent-init extend RTMR3 (v3)
+        id: init_rtmr3_test
         shell: bash
-        run: scripts/ci/tests/agent-init-rtmr3-test.sh
+        run: scripts/ci/tests/init-rtmr3-test.sh
+
+      # The agent image's data disk (docs/design/private-agents.md) is the
+      # node's encrypted-disk logic narrowed: only ever LUKS2 with integrity,
+      # keyed from the KMS, never plain, never reformatted, never on a
+      # downgraded release.
 
       - name: Check the agent's data disk is encrypted and never reformatted
         id: agent_data_disk_test
@@ -641,7 +643,7 @@ jobs:
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
-            --checks-line "- agent-init extends RTMR3 as an agent: ${{ steps.agent_rtmr3_test.outcome }}" \
+            --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \
             --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
             --checks-line "- agent slots isolated per user: ${{ steps.agent_slots_test.outcome }}" \
             --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \

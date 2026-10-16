@@ -45,12 +45,20 @@ fatal() {
 
 log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
 
-# --- Extend RTMR3 (user-defined) for attestation; different per image, cannot be faked ---
-# RTMR3 is empty by default; extending with role+profile+root_hash makes each image unique.
-# Newer kernels (e.g. 6.17+ GCP) expose RTMR under tdx_guest/measurements/; older use tdx_guest/mr/.
+# --- RTMR3 --------------------------------------------------------------------
+# rtmr3-v3 begin -- the same in calimero-init, kms-init and agent-init
+# (scripts/ci/tests/init-rtmr3-test.sh checks the three copies are identical).
 #
-# Fatal on locked-read-only: an unextended RTMR3 no longer names this image, so a
-# quote from it would not say which image is running. The debug profiles only warn,
+# Extends RTMR3 with SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>").
+# <roothash> is the dm-verity root hash the initrd opened / with: `roothash=` on
+# the kernel command line, which RTMR2 also measures. Every block of the root is
+# checked against it, so the event names the root filesystem as a whole. (v2
+# named `calimero.root_hash`, a build-time hash of a few directories.) The role
+# tells a node, a KMS and an agent quote apart: the KMS releases each one's keys
+# only to a quote matching its own policy entry.
+#
+# Fatal on locked-read-only: an unextended RTMR3 does not name the image, so a
+# quote from it would not say which image is running. The debug profiles warn,
 # so a kernel without the sysfs interface can still be debugged.
 rtmr3_problem() {
   if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
@@ -58,38 +66,36 @@ rtmr3_problem() {
   fi
   log "WARN: RTMR3 not extended: $*"
 }
-ROOT_HASH=$(grep -oE 'calimero\.root_hash=[^ ]+' /proc/cmdline 2>/dev/null | cut -d= -f2 || echo "none")
-RTMR3_EXTEND_FILE="$(mktemp)"
-if printf 'calimero-rtmr3-v2:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "${ROOT_HASH}" | openssl dgst -sha384 -binary > "$RTMR3_EXTEND_FILE" 2>/dev/null; then
-  # shellcheck disable=SC2002
-  RTMR3_EXTEND_SIZE="$(cat "$RTMR3_EXTEND_FILE" | wc -c | tr -d '[:space:]')"
-  if [[ "${RTMR3_EXTEND_SIZE}" == "48" ]]; then
-    modprobe tdx_guest 2>/dev/null || true
-    RTMR3_SYSFS=""
-    for candidate in \
-      "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
-      "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
-      if [[ -e "${candidate}" ]] && [[ -w "${candidate}" ]]; then
-        RTMR3_SYSFS="${candidate}"
-        break
-      fi
-    done
-    if [[ -n "${RTMR3_SYSFS}" ]]; then
-      if cat "$RTMR3_EXTEND_FILE" > "${RTMR3_SYSFS}" 2>/dev/null; then
-        log "Extended RTMR3 for attestation (role=$IMAGE_ROLE profile=$IMAGE_PROFILE root_hash=${ROOT_HASH:0:16}... via ${RTMR3_SYSFS})"
-      else
-        rtmr3_problem "write failed (${RTMR3_SYSFS})"
-      fi
-    else
-      rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/measurements/ or .../mr/"
-    fi
-  else
-    rtmr3_problem "extend input has unexpected size (${RTMR3_EXTEND_SIZE}, expected 48)"
+
+ROOT_HASH="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^roothash=\([0-9a-f]\{64\}\)$/\1/p' | head -n 1)"
+modprobe tdx_guest 2>/dev/null || true
+rtmr3_sysfs=""
+for candidate in \
+  "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
+  "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
+  if [[ -w "$candidate" ]]; then
+    rtmr3_sysfs="$candidate"
+    break
   fi
+done
+if [[ -z "$ROOT_HASH" ]]; then
+  rtmr3_problem "no dm-verity roothash= on the kernel command line"
+elif [[ -z "$rtmr3_sysfs" ]]; then
+  rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/"
 else
-  rtmr3_problem "failed to generate the extend input digest"
+  extend="$(mktemp)"
+  printf 'calimero-rtmr3-v3:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
+    | openssl dgst -sha384 -binary > "$extend"
+  if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
+    rtmr3_problem "extend input is not 48 bytes"
+  elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
+    rtmr3_problem "write failed ($rtmr3_sysfs)"
+  else
+    log "Extended RTMR3 (v3, role=$IMAGE_ROLE profile=$IMAGE_PROFILE roothash=${ROOT_HASH:0:16}...)"
+  fi
+  rm -f "$extend"
 fi
-rm -f "$RTMR3_EXTEND_FILE"
+# rtmr3-v3 end
 
 # --- R7: observability off by default; enable only if endpoint set ---
 systemctl stop vmagent vector 2>/dev/null || true

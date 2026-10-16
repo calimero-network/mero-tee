@@ -14,7 +14,7 @@ The image holds three programs. One TD hosts several owners' agents, each in its
 slot (see [Agents on one TD](#agents-on-one-td)):
 
 - **`agent-init`** (boot): extends RTMR3 with
-  `calimero-rtmr3-v2:agent:<profile>:<root_hash>`, then opens the encrypted data disk
+  `calimero-rtmr3-v3:agent:<profile>:<roothash>` (the dm-verity root hash), then opens the encrypted data disk
   with a key from mero-kms. Its role string is what the KMS's agent policy entry
   matches.
 - **`mero-agent-gate`**: serves `/attest`, `/provision` and `/release`. It holds each

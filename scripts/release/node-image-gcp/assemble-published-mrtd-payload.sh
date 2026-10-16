@@ -178,7 +178,8 @@ jq -n \
     measurement_markers: {
       role: "calimero.role=node",
       profile_key: "calimero.profile",
-      root_hash_key: "calimero.root_hash"
+      root_hash_key: "calimero.root_hash",
+      rtmr3_event: "calimero-rtmr3-v3:<role>:<profile>:<roothash>"
     },
     profiles: {
       debug: (

@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Changed
+
+- **RTMR3 names the image's dm-verity root (`calimero-rtmr3-v3`).** calimero-init, kms-init and agent-init extend RTMR3 with SHA-384(`calimero-rtmr3-v3:<role>:<profile>:<roothash>`), `<roothash>` being the dm-verity root hash on the kernel command line, which the initrd opened `/` with. v2 named `calimero.root_hash`, a build-time hash of a few directories; the verity root hash covers every block of the root. On `locked-read-only`, a command line without `roothash=` stops the boot. The three scripts share one block (`# rtmr3-v3 begin` .. `end`), and `init-rtmr3-test.sh` (replacing `agent-init-rtmr3-test.sh`) checks the copies are identical and executes each against a fake sysfs. `compute_rtmr.py compute --role --profile` computes RTMR3 from a UKI build, and `node-image-mkosi.yaml` compares it with the quote. Every image's RTMR3 changes with this, and so does each release's published RTMR3. Policies are per release, so earlier releases keep their v2 values.
+
 ### Added
 
 - **Release 2.3.116: the agent image runs mero-bot 0.2.0, a cloud agent as an account of its own.** Bumps `mero-kms` and `imageVersion` to 2.3.116 and pins mero-bot 0.2.0 (`meroBotVersion`, its bundle's sha256 in `build-inputs.lock.json`), so `Release mero-kms` builds and measures `merotee-agent-<profile>-2-3-116` with the account-mode launcher and the operator-sealed NEAR key above. 0.2.0 runs as its own account, joins from `MERO_INVITATION.*`, drafts messages for its owner to send, and bundles mero-mcp 2.9.1, which signs as the same account from a device of its own. No change to the node image beyond its version.
