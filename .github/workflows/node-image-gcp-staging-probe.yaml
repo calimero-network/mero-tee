@@ -93,7 +93,7 @@ on:
           - debug
         default: compact
 
-  # Also callable, so a workflow that builds an image (image-mkosi.yaml)
+  # Also callable, so a workflow that builds an image (node-image-mkosi.yaml)
   # can boot and check it with the same steps. Same inputs; a choice is a string.
   workflow_call:
     inputs:

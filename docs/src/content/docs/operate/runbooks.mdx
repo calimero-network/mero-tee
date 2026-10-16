@@ -337,8 +337,8 @@ build therefore still needs those two hosts reachable over plain HTTP.
 
 ## Build the images with mkosi
 
-`image-mkosi.yaml` builds a node, KMS or agent image with mkosi instead of
-Packer (mdma#480). Its `role` input picks the image and its `profile` input the
+`node-image-mkosi.yaml` (named for the image it began with) builds a node,
+KMS or agent image with mkosi instead of Packer (mdma#480). Its `role` input picks the image and its `profile` input the
 profile: `locked-read-only`, `debug-read-only` or `debug`. The node image came
 first (Phase 1 and 2), and the KMS and agent images followed (Phase 3). The
 workflow publishes nothing; it is how the mkosi images are brought to parity
