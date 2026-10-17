@@ -280,6 +280,13 @@ jobs:
           sudo apt-get install -y -q python3-jinja2 python3-yaml >/dev/null
           scripts/ci/tests/render-role-tree-test.sh
 
+      # The release names its mkosi images; mdma and the rest of the release
+      # find them by the names they build themselves.
+      - name: Check the release image names
+        id: release_image_name_test
+        shell: bash
+        run: scripts/ci/tests/release-image-name-test.sh
+
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
         shell: bash
@@ -637,6 +644,7 @@ jobs:
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
             --checks-line "- role renderer test: ${{ steps.render_role_tree_test.outcome }}" \
+            --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
             --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \

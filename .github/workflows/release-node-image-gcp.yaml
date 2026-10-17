@@ -43,7 +43,7 @@ env:
   CI_LOG_VERBOSITY: ${{ github.event_name == 'workflow_dispatch' && inputs.log_verbosity || 'compact' }}
   # Off master, images are named apart and put in a "-dev" family, so a branch
   # build can neither replace a released image nor be booted by mdma. See
-  # `image_suffix` in mero-tee/ubuntu.pkr.hcl.
+  # scripts/release/mkosi/release-image-name.sh.
   # Short on purpose: GCP image names stop at 63 characters, and the longest
   # released name is 53.
   IMAGE_SUFFIX: ${{ github.ref != 'refs/heads/master' && format('-d{0}-{1}', github.run_number, github.run_attempt) || '' }}
@@ -63,10 +63,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Validate packer helper scripts
+      - name: Validate the release scripts
         run: |
-          bash -n mero-tee/init.sh
-          bash -n mero-tee/build-and-release.sh
+          bash -n mero-tee/mkosi-image/build.sh
+          bash -n scripts/release/mkosi/install-tools.sh
+          bash -n scripts/release/mkosi/build-image.sh
+          bash -n scripts/release/mkosi/create-gce-image.sh
+          bash -n scripts/release/mkosi/release-image-name.sh
           bash -n scripts/release/verify-node-image-gcp-release-assets.sh
           bash -n scripts/release/node-image-gcp/resolve-release-gate.sh
           bash -n scripts/release/node-image-gcp/resolve-image-vm-parameters.sh
@@ -127,7 +130,7 @@ jobs:
 
   profile_pipeline:
     name: Build and attest (${{ matrix.profile }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_pipeline == 'true' }}
     env:
@@ -171,11 +174,16 @@ jobs:
           echo "  - GCP_SERVICE_ACCOUNT_KEY"
           exit 1
 
-      - name: Setup packer
+      # The image is built with mkosi (mero-tee/mkosi-image, mdma#480): from the
+      # pinned archive snapshot, reproducibly, and with RTMR1-3 computed before
+      # it boots (checked against the quote below).
+      - name: Set up mkosi
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
-        with:
-          version: v1.11.2
+        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+
+      - name: Install the build tools
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
+        run: scripts/release/mkosi/install-tools.sh
 
       - name: Authenticate to GCP via workload identity
         if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
@@ -251,86 +259,70 @@ jobs:
             exit 1
           fi
 
-      - name: Validate Packer source image
-        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        run: |
-          set -euo pipefail
-          # Read the pin out of ubuntu.pkr.hcl instead of repeating it here. This
-          # step used to hardcode the family a second time, so the gate and the
-          # build could disagree about what is being checked -- and the gate is
-          # the thing that is supposed to catch a bad pin.
-          pkr="mero-tee/ubuntu.pkr.hcl"
-          if [[ ! -f "${pkr}" ]]; then
-            # Checked before the reads below, which would otherwise die on sed's
-            # own error under `set -e` and never reach the annotation.
-            echo "::error::${pkr} not found (run from the repository root). Cannot verify the pinned base image."
-            exit 1
-          fi
-          family="$(sed -n 's/^[[:space:]]*source_image_family[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "${pkr}" | head -n1)"
-          project="$(sed -n 's/^[[:space:]]*source_image_project_id[[:space:]]*=[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' "${pkr}" | head -n1)"
-          if [[ -z "${family}" || -z "${project}" ]]; then
-            echo "::error::Could not read source_image_family / source_image_project_id from ${pkr}. Packer would build from an unknown base; refusing."
-            exit 1
-          fi
-          echo "Checking source image family ${family} in ${project} (pinned in ${pkr})..."
-          if gcloud compute images describe-from-family "${family}" --project "${project}" >/dev/null 2>&1; then
-            echo "Source image family ${family} is available."
-            exit 0
-          fi
-          # This fires on the calendar, not on a code change: Canonical delists an
-          # EOL Ubuntu from its image project, so a pin on an interim release
-          # breaks roughly nine months after that release ships. Print what is
-          # actually published, so the failure names its own fix rather than a
-          # command for someone to go and run.
-          echo "::error::Source image family ${family} not found in ${project}. If that release reached EOL it has been delisted; move the pin in ${pkr} to a supported release (prefer an LTS)."
-          echo "Families currently published by ${project}:"
-          gcloud compute images list --project "${project}" --format="value(family)" 2>/dev/null | sort -u | sed 's/^/  /' \
-            || echo "  (could not list images in ${project})"
-          exit 1
-
       - name: Show tool versions
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
-          packer --version
-          ansible --version
+          mkosi --version
           gcloud --version
           jq --version
 
-      - name: Build profile image from node-image-gcp
+      - name: Build the profile image
         id: build_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
-        working-directory: mero-tee
         env:
-          PACKER_LOG: 1
+          ROLE: node
+          PROFILE: ${{ matrix.profile }}
+          MKOSI_OUT: ${{ runner.temp }}/mkosi-out
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
         run: |
           set -euo pipefail
-          # Only a release may replace an existing image of the same name.
-          if [[ -z "${IMAGE_SUFFIX}" ]]; then
-            export PACKER_FORCE_BUILD=true
+          scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-build.log
+
+      # The name, family and description the Packer build published: mdma finds
+      # images by them. Only a release may replace an existing image of that name.
+      - name: Create the GCE image
+        id: create_image
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          ROLE: node
+          MKOSI_OUT: ${{ runner.temp }}/mkosi-out
+          UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
+          IMAGE_VERSION: ${{ needs.preflight.outputs.image_version }}
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${UPLOAD_BUCKET}" ]]; then
+            echo "::error::The GCP_IMAGE_UPLOAD_BUCKET repo variable must name the image upload bucket."
+            exit 1
           fi
-          echo "Running init.sh..."
-          ./init.sh
-          echo "Running build-and-release.sh for profile=${{ matrix.profile }}..."
-          ./build-and-release.sh "${{ matrix.profile }}" 2>&1 | tee /tmp/packer-build.log
-          echo "Packer build completed successfully."
+          names="$(scripts/release/mkosi/release-image-name.sh node "${PROFILE}" "${IMAGE_VERSION}" "${IMAGE_SUFFIX}")"
+          IMAGE_NAME="$(sed -n 's/^name=//p' <<< "${names}")"
+          IMAGE_FAMILY="$(sed -n 's/^family=//p' <<< "${names}")"
+          IMAGE_DESCRIPTION="$(sed -n 's/^description=//p' <<< "${names}")"
+          IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID}"
+          export IMAGE_NAME IMAGE_FAMILY IMAGE_DESCRIPTION IMAGE_PROJECT
+          if [[ -z "${IMAGE_SUFFIX}" ]]; then
+            export REPLACE=true
+          fi
+          scripts/release/mkosi/create-gce-image.sh
 
       - name: Show build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
         run: |
-          echo "::error::Packer build failed. Last 150 lines of output:"
-          tail -150 /tmp/packer-build.log 2>/dev/null || echo "(no log captured)"
+          echo "::error::The image build failed. Last 150 lines of output:"
+          tail -150 /tmp/mkosi-build.log 2>/dev/null || echo "(no log captured)"
           echo ""
-          echo "## Packer build failure (profile: ${{ matrix.profile }})" >> "${GITHUB_STEP_SUMMARY}"
+          echo "## Image build failure (profile: ${{ matrix.profile }})" >> "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
-          tail -80 /tmp/packer-build.log 2>/dev/null >> "${GITHUB_STEP_SUMMARY}" || echo "(no log)" >> "${GITHUB_STEP_SUMMARY}"
+          tail -80 /tmp/mkosi-build.log 2>/dev/null >> "${GITHUB_STEP_SUMMARY}" || echo "(no log)" >> "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload packer build log on failure
+      - name: Upload the build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: packer-build-log-${{ matrix.profile }}-${{ github.run_id }}
-          path: /tmp/packer-build.log
+          name: mkosi-build-log-${{ matrix.profile }}-${{ github.run_id }}
+          path: /tmp/mkosi-build.log
           if-no-files-found: ignore
 
       - name: Resolve image and VM parameters
@@ -677,6 +669,26 @@ jobs:
               fi
             done
           } >> "${artifacts_dir}/artifacts-index.txt"
+
+      # mdma#480: RTMR1-3 are computed from the build, before it boots, and the
+      # release's quote must match them. The build evidence (manifests, command
+      # line, computed registers, root and initrd digests) goes out with the
+      # attestation artifacts.
+      - name: Compare the quote's RTMR1-3 with the computed ones
+        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+        run: |
+          set -euo pipefail
+          artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
+          profile="${{ steps.params.outputs.profile }}"
+          mkdir -p "${artifacts_dir}/build"
+          cp "${EVIDENCE_DIR}"/{computed.json,cmdline.txt,uki.sha256,root.digest,initrd.digest} \
+             "${EVIDENCE_DIR}"/merotee-node.manifest "${EVIDENCE_DIR}"/merotee-node.rendered.json "${artifacts_dir}/build/"
+          cp "${EVIDENCE_DIR}/computed.json" "${artifacts_dir}/computed-rtmrs-${profile}.json"
+          jq '(.data // .) | {quoteB64, eventLogB64}' "${artifacts_dir}/tee-attest-response.json" > "${RUNNER_TEMP}/evidence.json"
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${EVIDENCE_DIR}/computed.json" "${RUNNER_TEMP}/evidence.json" | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Build per-profile provenance record
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
