@@ -419,7 +419,17 @@ The image differs from the Packer one in how it boots and seals:
   as `roothash=`, so RTMR2 covers every byte of the root. `calimero.role` and
   `calimero.profile` are there too.
 - **Network:** systemd-networkd's DHCP (`80-gce.network`) replaces netplan and
-  the guest agent.
+  the guest agent. networkd does not set the hostname (it would need polkit);
+  `merotee-hostname.service` sets it as root from the metadata server's
+  `instance/hostname`, before the role's init, so vmagent's `instance_name`
+  and Vector's `hostname` name the instance.
+- **Initrd:** it carries mkosi-initrd's default module set plus `dm-verity`,
+  `erofs`, `overlay` and `autofs4` (`KernelInitrdModules=` in `mkosi.conf`),
+  not every module of the kernel. The rest stay in the root. A boot that stops
+  in the initrd for want of a driver needs it added there.
+- **TPM:** the seven `systemd-pcrlock-*` units are disabled. Nothing seals to a
+  TPM policy: a node is trusted by its TDX quote, and its disk key comes from
+  the KMS.
 
 The run:
 
