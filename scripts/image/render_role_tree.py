@@ -288,12 +288,26 @@ class Renderer:
             self.manifest["enable"].append(name)
 
     # --- driver -----------------------------------------------------------------
+    def task_vars(self, task, scope):
+        """The scope with a task's or block's own `vars:`, which hold for it
+        alone (the agent role's bundle pin names its bundle this way)."""
+        if not task.get("vars"):
+            return scope
+        local = dict(scope)
+        for key, value in task["vars"].items():
+            local[key] = self.render(value, local)
+        return local
+
     def run_tasks(self, tasks, role, role_dir, scope):
         for task in tasks or []:
             if "block" in task:
-                if "when" in task and not self.condition(task["when"], scope):
+                inner = self.task_vars(task, scope)
+                if "when" in task and not self.condition(task["when"], inner):
                     continue
-                self.run_tasks(task["block"], role, role_dir, scope)
+                before = dict(self.facts)
+                self.run_tasks(task["block"], role, role_dir, inner)
+                # What the block's set_facts set holds after it, as in Ansible.
+                scope.update({k: v for k, v in self.facts.items() if k not in before or before[k] is not v})
                 continue
             if "register" in task:
                 self.registered.add(task["register"])
@@ -309,7 +323,7 @@ class Renderer:
                 self.manifest["skipped"].append({"role": role, "task": task.get("name"), "why": f"loop: {error}"})
                 continue
             for item in items:
-                local = dict(scope, item=item) if item is not None else scope
+                local = self.task_vars(task, dict(scope, item=item) if item is not None else scope)
                 if "when" in task:
                     try:
                         if not self.condition(task["when"], local):
