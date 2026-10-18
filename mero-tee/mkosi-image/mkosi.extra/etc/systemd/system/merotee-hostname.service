@@ -1,0 +1,17 @@
+# The instance's name as the hostname, before the role's init runs. vmagent
+# labels every sample with `hostname` (instance_name) and Vector every log line
+# (hostname): with the image's default name, every node in the fleet reports
+# the same one, and their series interleave.
+[Unit]
+Description=Set the hostname from the GCE metadata server
+Wants=systemd-networkd-wait-online.service
+After=systemd-networkd-wait-online.service
+Before=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/merotee-hostname
+
+[Install]
+WantedBy=network-online.target

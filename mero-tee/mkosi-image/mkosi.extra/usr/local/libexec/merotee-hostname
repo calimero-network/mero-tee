@@ -1,0 +1,17 @@
+#!/bin/sh
+# Sets the transient (kernel) hostname to the instance's: the first label of
+# the metadata server's instance/hostname, as cloud-init and the guest agent do
+# on the Ubuntu cloud image. Only labels telemetry; nothing trusts it. On any
+# failure the boot goes on with the name it has.
+set -eu
+fqdn="$(curl -fsS --max-time 5 --retry 5 --retry-connrefused --retry-delay 1 \
+  -H 'Metadata-Flavor: Google' \
+  http://169.254.169.254/computeMetadata/v1/instance/hostname)"
+name="${fqdn%%.*}"
+# The metadata server is not trusted: a plain hostname label or nothing.
+if ! printf '%s' "${name}" | grep -Eqx '[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'; then
+  echo "merotee-hostname: not a hostname label, keeping $(cat /proc/sys/kernel/hostname): ${name}" >&2
+  exit 1
+fi
+printf '%s' "${name}" > /proc/sys/kernel/hostname
+echo "merotee-hostname: ${name}"
