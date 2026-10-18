@@ -162,7 +162,7 @@ jobs:
     name: Build and measure agent image (${{ matrix.profile }})
     needs: prepare
     if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     # Best effort: see the header. kms-image does not depend on this job's result.
     continue-on-error: true
@@ -261,32 +261,40 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Setup packer
-        uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
-        with:
-          version: v1.11.2
+      # Built with mkosi (mero-tee/mkosi-image, mdma#480), named as the Packer
+      # build named it. The release agent image: kept, so the post-release agent
+      # e2e boots the image this KMS serves, and mdma boots it by this exact
+      # name (merotee-agent-<profile>-<version>) for its agent hosts.
+      - name: Set up mkosi
+        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
 
-      # The release agent image: kept, so the post-release agent e2e boots the
-      # image this KMS serves, and mdma boots it by this exact name
-      # (merotee-agent-<profile>-<version>) for its agent hosts.
+      - name: Install the build tools
+        run: scripts/release/mkosi/install-tools.sh
+
       - name: Build the agent image
         id: build_image
-        working-directory: mero-tee
         env:
-          IMAGE_ROLE: agent
-          MERO_AGENT_GATE_BINARY: ../agent/mero-agent-gate
-          PACKER_FORCE_BUILD: "true"
-          PACKER_LOG: 1
+          ROLE: agent
+          MKOSI_OUT: ${{ runner.temp }}/mkosi-out
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+          UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
         run: |
           set -euo pipefail
-          # With MERO_BOT_BUNDLE, build-and-release.sh bakes the mero-bot launcher instead.
-          [[ -n "${MERO_BOT_BUNDLE:-}" ]] || export MERO_AGENT_BINARY=../agent/mero-agent
-          ./init.sh
-          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-agent-build.log
+          export MERO_AGENT_GATE_BINARY="${PWD}/agent/mero-agent-gate"
+          # With MERO_BOT_BUNDLE, build.sh bakes the mero-bot launcher instead.
+          [[ -n "${MERO_BOT_BUNDLE:-}" ]] || export MERO_AGENT_BINARY="${PWD}/agent/mero-agent"
+          scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-agent-build.log
+          names="$(scripts/release/mkosi/release-image-name.sh agent "${PROFILE}" "${VERSION}")"
+          IMAGE_NAME="$(sed -n 's/^name=//p' <<< "${names}")"
+          IMAGE_FAMILY="$(sed -n 's/^family=//p' <<< "${names}")"
+          IMAGE_DESCRIPTION="$(sed -n 's/^description=//p' <<< "${names}")"
+          IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          export IMAGE_NAME IMAGE_FAMILY IMAGE_DESCRIPTION IMAGE_PROJECT REPLACE=true
+          scripts/release/mkosi/create-gce-image.sh
 
       - name: Show build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
-        run: tail -200 /tmp/packer-agent-build.log 2>/dev/null || true
+        run: tail -200 /tmp/mkosi-agent-build.log 2>/dev/null || true
 
       # Measures only, on an ephemeral store: the measurement VM is never
       # claimed. Provisioning is checked end to end by the post-release agent
@@ -305,6 +313,17 @@ jobs:
           gcloud compute images describe "${IMAGE}" --project "${IMAGE_PROJECT}" --format=json \
             | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/agent-image.json
 
+      # mdma#480: the quote's RTMR1-3 must be the ones computed from the build.
+      - name: Compare the quote's RTMR1-3 with the computed ones
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+        run: |
+          set -euo pipefail
+          cp "${EVIDENCE_DIR}/computed.json" "probe/agent-computed-rtmrs.${PROFILE}.json"
+          jq '{quoteB64, eventLogB64}' probe/agent-attest.json > "${RUNNER_TEMP}/evidence.json"
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${EVIDENCE_DIR}/computed.json" "${RUNNER_TEMP}/evidence.json" | tee -a "${GITHUB_STEP_SUMMARY}"
+
       - name: Upload the agent policy
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -313,6 +332,7 @@ jobs:
             probe/agent-attestation-policy.${{ matrix.profile }}.json
             probe/agent-image.json
             probe/agent-binaries.sha256
+            probe/agent-computed-rtmrs.${{ matrix.profile }}.json
           retention-days: 7
 
       - name: Delete the agent image if it was not measured
@@ -329,7 +349,7 @@ jobs:
       ${{ !cancelled() && github.ref == 'refs/heads/master' &&
           needs.prepare.outputs.publish_release == 'true' &&
           needs.node-policy.result == 'success' && needs.build-binary.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -443,33 +463,44 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      - name: Setup packer
-        uses: hashicorp/setup-packer@ce93c3c08a6c2ff2275bf4b54ff0d9a75f6c9789 # v3.4.0
-        with:
-          version: v1.11.2
+      # Built with mkosi (mero-tee/mkosi-image, mdma#480), named as the Packer
+      # build named it. No IMAGE_SUFFIX: this is the release image mdma deploys.
+      # REPLACE lets a re-run replace an image a failed earlier attempt left
+      # behind; the release tag does not exist yet (publish_release), so nothing
+      # published refers to it.
+      - name: Set up mkosi
+        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
 
-      # No IMAGE_SUFFIX: this is the release image mdma deploys. -force lets a
-      # re-run replace an image a failed earlier attempt left behind; the
-      # release tag does not exist yet (publish_release), so nothing published
-      # refers to it.
+      - name: Install the build tools
+        run: scripts/release/mkosi/install-tools.sh
+
       - name: Build the KMS image
         id: build_image
-        working-directory: mero-tee
         env:
-          IMAGE_ROLE: kms
-          MERO_KMS_BINARY: ../build/mero-kms
-          KMS_NODE_POLICY_FILE: ../build/node-allowlist.json
-          KMS_AGENT_POLICY_FILE: ${{ steps.agent_allowlist.outputs.file }}
-          PACKER_FORCE_BUILD: "true"
-          PACKER_LOG: 1
+          ROLE: kms
+          MKOSI_OUT: ${{ runner.temp }}/mkosi-out
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+          UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
+          AGENT_ALLOWLIST: ${{ steps.agent_allowlist.outputs.file }}
         run: |
           set -euo pipefail
-          ./init.sh
-          ./build-and-release.sh "${PROFILE}" 2>&1 | tee /tmp/packer-build.log
+          export MERO_KMS_BINARY="${PWD}/build/mero-kms"
+          export KMS_NODE_POLICY_FILE="${PWD}/build/node-allowlist.json"
+          if [[ -n "${AGENT_ALLOWLIST}" ]]; then
+            export KMS_AGENT_POLICY_FILE="${PWD}/build/agent-allowlist.json"
+          fi
+          scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-build.log
+          names="$(scripts/release/mkosi/release-image-name.sh kms "${PROFILE}" "${VERSION}")"
+          IMAGE_NAME="$(sed -n 's/^name=//p' <<< "${names}")"
+          IMAGE_FAMILY="$(sed -n 's/^family=//p' <<< "${names}")"
+          IMAGE_DESCRIPTION="$(sed -n 's/^description=//p' <<< "${names}")"
+          IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          export IMAGE_NAME IMAGE_FAMILY IMAGE_DESCRIPTION IMAGE_PROJECT REPLACE=true
+          scripts/release/mkosi/create-gce-image.sh
 
       - name: Show build log on failure
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
-        run: tail -200 /tmp/packer-build.log 2>/dev/null || true
+        run: tail -200 /tmp/mkosi-build.log 2>/dev/null || true
 
       - name: Record the image
         id: image
@@ -498,6 +529,17 @@ jobs:
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
           OUT_DIR: probe
         run: bash scripts/release/kms/run-cluster-probe.sh
+
+      # mdma#480: the quote's RTMR1-3 must be the ones computed from the build.
+      - name: Compare the quote's RTMR1-3 with the computed ones
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+        run: |
+          set -euo pipefail
+          cp "${EVIDENCE_DIR}/computed.json" "probe/kms-computed-rtmrs.${PROFILE}.json"
+          jq '{quoteB64, eventLogB64}' probe/bootstrap-attest.json > "${RUNNER_TEMP}/evidence.json"
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${EVIDENCE_DIR}/computed.json" "${RUNNER_TEMP}/evidence.json" | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload probe artifacts
         if: ${{ always() }}

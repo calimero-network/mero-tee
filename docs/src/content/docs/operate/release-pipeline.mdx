@@ -58,21 +58,23 @@ release's jobs instead, which keeps the original push event.
 3. **`build-binary`** — build the `mero-kms` binary (`x86_64`) from the release
    commit.
 
-4. **`kms-image`** (matrix over the three profiles) — **build the KMS image.** Packer with `image_role = "kms"` runs
-   `mero-tee/playbook-kms.yml`: the binary, the profile's node allowlist from
-   `published-mrtds.json` baked into `/etc/mero-kms/kms.env`, the same lockdown
-   as the node image, and the dm-verity seal as the last step. The allowlist is
-   part of the image and so of its measurements. The image is
-   `merotee-kms-<profile>-<version>` in family `merotee-kms-<profile>`, and the
-   release keeps it.
+4. **`kms-image`** (matrix over the three profiles) — **build the KMS image**
+   with mkosi (`ROLE=kms`, `scripts/release/mkosi/build-image.sh`), from
+   `mero-tee/playbook-kms.yml`'s roles: the binary, the profile's node
+   allowlist from `published-mrtds.json` baked into `/etc/mero-kms/kms.env`,
+   the same lockdown as the node image, and an EROFS root behind dm-verity. The
+   allowlist is part of the image and so of its measurements. The image is
+   `merotee-kms-<profile>-<version>` in family `merotee-kms-<profile>`, the
+   names the Packer build used, and the release keeps it.
 
    Then **measure it** (`run-cluster-probe.sh`): boot it as a two-replica cluster
    on real TDX VMs (the same check as the
    [KMS TDX image probe](#kms-tdx-image-probe--kms-tdx-image-probeyaml)). The
    bootstrap replica generates a root, the second joins, both must report the same
    transport key, and Intel Trust Authority verifies both quotes. Their MRTD and
-   RTMR0–3 are the KMS measurements the release publishes. An image that is not
-   proven this way is deleted.
+   RTMR0–3 are the KMS measurements the release publishes. The bootstrap
+   replica's RTMR1–3 must also be the ones `compute_rtmr.py` computed from the
+   build before it booted. An image that is not proven this way is deleted.
 
    The probe measures each joiner before waiting on its join. Now and then a TD
    on GCE comes up with a different RTMR0 while MRTD and RTMR1–3 are equal, and
@@ -196,17 +198,16 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 2. **`profile_pipeline`** (matrix over the three profiles) — the measurement
    step, which **boots a real TDX VM**:
-   - Run `build-and-release.sh <profile>` (Packer + Ansible) to build the GCP
-     image. Its last step seals the root behind dm-verity, and it checks the files
-     the image must carry twice: on the build host before the seal, and inside
-     the sealed EROFS image after it (`seal-root.sh --require`). Today that is
-     GCE's disk-naming rule and `google_nvme_id`, which name the data disk
-     `/dev/disk/by-id/google-data`; a missing one fails the build.
-     The seal is deterministic: `seal-root.sh --seed <imageVersion>:<role>:<profile>`
-     derives the EROFS UUID and the dm-verity salt and UUID from the seed, and
-     zeroes both new partitions first, so the same files give the same dm-verity
-     root hash, and so the same `roothash=` on the kernel cmdline that RTMR2
-     measures. `scripts/ci/tests/seal-root-reproducible-test.sh` checks it.
+   - Build the image with mkosi (`mero-tee/mkosi-image`, mdma#480) through
+     `scripts/release/mkosi/build-image.sh`, as root: an EROFS root behind
+     dm-verity, booted as a UKI, from the pinned archive snapshot. The build
+     checks the UKI's command line, the image's files (GCE's disk-naming rule
+     and `google_nvme_id` among them) and that files keep their owners, and
+     computes RTMR1–3 from the disk and UKI before anything boots
+     (`compute_rtmr.py`). Two builds of one commit give the same image (see
+     [Build the images with mkosi](/operate/runbooks/#build-the-images-with-mkosi)).
+     `create-gce-image.sh` creates it under the name, family and description the
+     Packer build used (`release-image-name.sh`), which mdma finds images by.
    - Create an ephemeral firewall rule and a **`c3-standard-4` Intel TDX** VM
      from the new image, with the same **200 GB `pd-balanced` data disk (device
      name `data`)** mdma attaches to every node at creation. The disk is part of
@@ -215,6 +216,9 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
      probe, which the post-release check uses, boots the same shape.
    - Collect TEE info and a TDX quote from the node's admin API, then verify the
      quote externally against **Intel Trust Authority**.
+   - Compare the quote's RTMR1–3 with the computed ones; a difference fails the
+     release. The computed registers (`computed-rtmrs-<profile>.json`) and the
+     build evidence go out with the attestation artifacts.
    - Emit `mrtd-<profile>.json` (MRTD + RTMR0–3), a provenance record, and the
      attestation artifacts.
 
@@ -231,8 +235,8 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 **Dispatching from a branch builds and measures, and publishes nothing.**
 Publishing runs only on `master`. Off `master`, images are named
 `…-<version>-d<run number>-<attempt>` in a separate `merotee-ubuntu-questing-<profile>-dev`
-family (`image_suffix` in `mero-tee/ubuntu.pkr.hcl`). Packer never replaces an
-existing image for such a build, and the image is deleted at the end of the run.
+family (`release-image-name.sh`). Such a build never replaces an existing image,
+and the image is deleted at the end of the run.
 mdma's dispatcher resolves images by exact name and exact family, so it never
 boots a branch image. Before this, a branch dispatch at the current
 `imageVersion` replaced the released image of the same name.
