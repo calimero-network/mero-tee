@@ -9,6 +9,8 @@
 #   - keeps set_fact results (lookup('file') + from_json) for later roles,
 #     stats a build-host file for the asserts on it, fails the render on a
 #     failing assert, unpacks a build-host archive, and lists `user` tasks;
+#   - applies a task's and a block's own vars (the agent role's bundle pin),
+#     and keeps a fact set inside such a block;
 #   - refuses an unpinned download and one whose sha256 differs;
 #   - renders the real node and KMS playbooks' file-only roles, so a module a
 #     role starts using that it cannot render fails here, not in the image
@@ -132,6 +134,24 @@ cat > "${role}/tasks/main.yml" <<T
       - policy_stat.stat.exists
       - policy_stat.stat.checksum | length == 64
     fail_msg: "the policy is empty"
+- name: Assert with a task's own vars, as the agent role pins its bundle
+  vars:
+    first: "{{ policy.allowed[0] }}"
+  assert:
+    that:
+      - first == "x"
+    fail_msg: "first is {{ first }}"
+- name: A block with vars that sets a fact
+  vars:
+    second: "{{ policy.allowed[1] }}"
+  block:
+    - name: Set it
+      set_fact:
+        from_block: "{{ second }}"
+- name: The fact holds after the block
+  copy:
+    content: "{{ from_block }}\n"
+    dest: /etc/demo/from-block
 - name: Unpack a build-host archive
   unarchive:
     src: "{{ local_archive }}"
@@ -188,6 +208,7 @@ expected=$'#!/bin/bash\nFLAVOUR=vanilla\nCOUNT=${#items[@]}'
 [[ ! -e "${out}/etc/demo/probe" ]] || fail "a task on a registered result ran"
 [[ "$(cat "${out}/etc/demo/allowed")" == "x,y" ]] || fail "set_fact for a later role: $(cat "${out}/etc/demo/allowed" 2>&1)"
 [[ "$(cat "${out}/opt/local/demo")" == "binary" ]] || fail "unarchive of a build-host archive"
+[[ "$(cat "${out}/etc/demo/from-block")" == "y" ]] || fail "a block's vars or its set_fact: $(cat "${out}/etc/demo/from-block" 2>&1)"
 
 python3 - "${work}/manifest.json" <<'PY' || fail "manifest"
 import json, sys
