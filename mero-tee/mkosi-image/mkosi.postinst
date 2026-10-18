@@ -13,6 +13,8 @@ done < "${SRCDIR}/rendered/enable.list"
 # What the Ubuntu cloud image's netplan did: DHCP on the NIC (80-gce.network),
 # DNS through the metadata server, time from it.
 systemctl --root="${BUILDROOT}" enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
+# The instance's name as the hostname (mkosi.extra; networkd cannot set it).
+systemctl --root="${BUILDROOT}" enable merotee-hostname.service
 
 # What the roles' `user` tasks do (build.sh lists them from the render
 # manifest): the agent's slot users, baked in because the root is read-only.

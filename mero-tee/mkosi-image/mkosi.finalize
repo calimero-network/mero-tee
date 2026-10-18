@@ -29,6 +29,13 @@ while read -r unit; do
   compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null || fail "${unit} is not enabled"
 done < "${SRCDIR}/rendered/enable.list"
 
+for unit in merotee-hostname.service systemd-networkd.service; do
+  compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null || fail "${unit} is not enabled"
+done
+if compgen -G "${root}/etc/systemd/system/*.wants/systemd-pcrlock-*" >/dev/null; then
+  fail "a systemd-pcrlock unit is enabled: $(cd "${root}/etc/systemd/system" && echo */systemd-pcrlock-*)"
+fi
+
 profile="$(cat "${SRCDIR}/rendered/profile")"
 role="$(cat "${SRCDIR}/rendered/role")"
 

@@ -1,9 +1,16 @@
 # GCE's virtual NIC (gVNIC or virtio-net): DHCP gives the address, the MTU
-# (1460), the metadata server's DNS and NTP, and the hostname. The Ubuntu cloud
-# image did this with netplan and the guest agent; this image has neither.
+# (1460), and the metadata server's DNS and NTP. The Ubuntu cloud image did
+# this with netplan and the guest agent; this image has neither.
 [Match]
 Type=ether
 Kind=!*
 
 [Network]
 DHCP=ipv4
+
+[DHCPv4]
+# networkd runs as systemd-network and asks hostnamed to set the name, which
+# needs polkit, which the image does not have: every boot logged "Could not set
+# hostname: Access denied" and kept the default. merotee-hostname.service sets
+# it as root, from the metadata server.
+UseHostname=no

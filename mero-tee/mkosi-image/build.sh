@@ -160,12 +160,17 @@ instances = {}
 for u in manifest["enable"]:
     if m := re.fullmatch(r"(.+@)([^.]+)(\.\w+)", u):
         instances.setdefault(m.group(1) + m.group(3), []).append(m.group(2))
-lines += [f"enable {u}" for u in manifest["enable"] + ["systemd-networkd.service", "systemd-resolved.service", "systemd-timesyncd.service"]
+lines += [f"enable {u}" for u in manifest["enable"] + ["systemd-networkd.service", "systemd-resolved.service", "systemd-timesyncd.service",
+                                                        "merotee-hostname.service"]
           if not re.fullmatch(r".+@[^.]+\.\w+", u)]
 lines += [f"enable {t} {' '.join(i)}" for t, i in instances.items()]
 lines += [f"disable {u}" for u in installed if u not in manifest["enable"] and u not in instances]
 masked = manifest["mask"] + ["systemd-firstboot.service", "systemd-homed-firstboot.service"]
 lines += [f"disable {re.sub(r'@[^.]+', '@', u)}" for u in masked]
+# systemd's presets do not name the pcrlock units, so preset-all enables them,
+# and on GCP's vTPM they fail every boot. Nothing here seals to a TPM policy:
+# the node is trusted by its TDX quote, and its disk key comes from the KMS.
+lines.append("disable systemd-pcrlock-*.service")
 preset = tree / "etc/systemd/system-preset/00-merotee.preset"
 preset.parent.mkdir(parents=True, exist_ok=True)
 preset.write_text("\n".join(dict.fromkeys(lines)) + "\n")
