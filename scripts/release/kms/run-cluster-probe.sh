@@ -231,6 +231,9 @@ if [[ "${PROFILE}" == "debug" ]]; then
   grep -E 'veritysetup@root' <<< "${serial}" \
     || { echo "::error::the initrd never set up the dm-verity root"; exit 1; }
   grep -E 'mero-kms-init' <<< "${serial}" | tail -5 || true
+  # For the log only: the hostname unit (by its description), the hostname at
+  # the login prompt, and any unit that failed.
+  grep -E 'hostname from the GCE|merotee-hostname| login: |\[FAILED\]|Failed to start' <<< "${serial}" || true
 fi
 
 # The bootstrap gives the root only to a TD that measures exactly like itself,
