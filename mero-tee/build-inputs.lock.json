@@ -1,10 +1,10 @@
 {
   "merod": {
-    "version": "0.11.0-rc.89",
+    "version": "0.11.0-rc.90",
     "sha256": {
-      "merod_x86_64-unknown-linux-gnu.tar.gz": "dc8c151bf36f92c3d6ec429beb9dae96202fff9a5457b6caf0a03ce1d68c0401",
-      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "28599367233b1c8bddefd568306ee446b8be52d32e829d7a71acb04e03ff7f12",
-      "mero-auth_x86_64-unknown-linux-gnu.tar.gz": "e485ebfa34fd04649647d9dafbb6c2842f8c36ab50ea400ca80abbd076016f8d"
+      "merod_x86_64-unknown-linux-gnu.tar.gz": "465e6097027b27ab86a31ad83c63e993c4166f0c45cdc4e4cd1fac517e82400d",
+      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "6094858f98747cea2d1562aa93b5234982a4ac8bdce3739444f3fbeaae17cb32",
+      "mero-auth_x86_64-unknown-linux-gnu.tar.gz": "3f464cf97b519b8760ef6d7efd2a4cfbe23443278ac304cc854f83c49f00732f"
     }
   },
   "traefik": {
