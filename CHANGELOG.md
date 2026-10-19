@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Added
+
+- **Release 2.3.120: the first release built with mkosi (mdma#480).** Bumps `imageVersion` and `mero-kms` to 2.3.120, so `Release mero-tee` and `Release mero-kms` build every node, KMS and agent image with mkosi (a UKI and an EROFS root behind dm-verity) instead of Packer. Each image's RTMR1-3 are computed from the build and compared with its TD quote before anything is published, and every image measures differently from 2.3.119's Packer images. It carries the hostname, pcrlock and initrd fixes (#509) and the renderer fix (#510) that lets the agent image bake mero-bot. Image names, families and descriptions are the ones mdma looks up; the boot disk is about 2 GB, not 20 GB. Packer stays until this release has run in production.
+
 ### Fixed
 
 - **The mkosi agent image builds with the mero-bot bundle.** `render_role_tree.py` ignored a task's own `vars:`, and the mero-agent role's bundle pin ("Require the bundle to be the pinned one") names its bundle in one (`bundle_name`), so every release's agent build since #508 stopped with `'bundle_name' is undefined`. `node-image-mkosi.yaml` bakes the stub agent, which skips that block, so it never hit this. A task's and a block's `vars:` now hold for that task, rendered in its scope as Ansible does, and a fact set inside such a block still holds after it. `render-role-tree-test.sh` covers both.
