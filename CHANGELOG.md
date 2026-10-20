@@ -6,6 +6,16 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Removed
+
+- **The Packer image build.** 2.3.120 built every image with mkosi and its node, KMS and agent images run in production, so the Packer path is gone:
+  - **Build:** `ubuntu.pkr.hcl`, `ubuntu-x86.pkrvars.hcl`, `init.sh` and `build-and-release.sh`.
+  - **Probes:** `kms-tdx-image-probe.yaml` and `agent-tdx-image-probe.yaml`. `node-image-mkosi.yaml` does both (`role: kms`, `role: agent`), and gains `agent: mero-bot` to bake the pinned mero-bot bundle from a branch, as the release does (needs `MERO_BOT_RELEASE_TOKEN`). Building a KMS that serves an agent is now done by the release only.
+  - **Roles:** the `verity-root` role with `seal-root.sh` and its two tests; the GRUB drop-ins and `update-grub` in the `merotee`, `mero-kms`, `mero-agent` and `merod-lockdown` roles; and the playbooks' build-host `calimero.root_hash`, seal and pre-seal steps. mkosi puts role, profile and `roothash=` on the UKI's command line, and `build-image.sh` refuses a `console=` on `locked-read-only`.
+  - **Leftovers:** `resolve-image-vm-parameters.sh` no longer requires the Packer var-file, and the unused `PACKER_GITHUB_API_TOKEN` is gone from the release workflows.
+
+  Rendering every role and profile before and after gives the same files, modes and contents; the only manifest change is `erofs-utils`, which the build already left out of every image. So no image's content changes. The `GCP_PACKER_*` repository variables and secrets keep their names: they now only name the image project, zone and service account. Releases up to 2.3.119 are rebuildable only from their tags.
+
 ### Added
 
 - **Release 2.3.120: the first release built with mkosi (mdma#480).** Bumps `imageVersion` and `mero-kms` to 2.3.120, so `Release mero-tee` and `Release mero-kms` build every node, KMS and agent image with mkosi (a UKI and an EROFS root behind dm-verity) instead of Packer. Each image's RTMR1-3 are computed from the build and compared with its TD quote before anything is published, and every image measures differently from 2.3.119's Packer images. It carries the hostname, pcrlock and initrd fixes (#509) and the renderer fix (#510) that lets the agent image bake mero-bot. Image names, families and descriptions are the ones mdma looks up; the boot disk is about 2 GB, not 20 GB. Packer stays until this release has run in production.

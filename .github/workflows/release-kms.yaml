@@ -62,7 +62,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CI_LOG_VERBOSITY: ${{ github.event_name == 'workflow_dispatch' && inputs.log_verbosity || 'compact' }}
   BINARY_TARGET: x86_64-unknown-linux-gnu
-  PACKER_GITHUB_API_TOKEN: ${{ github.token }}
   PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
   PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
   PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
@@ -261,8 +260,8 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      # Built with mkosi (mero-tee/mkosi-image, mdma#480), named as the Packer
-      # build named it. The release agent image: kept, so the post-release agent
+      # Built with mkosi (mero-tee/mkosi-image, mdma#480), under the name mdma
+      # looks up (release-image-name.sh). The release agent image: kept, so the post-release agent
       # e2e boots the image this KMS serves, and mdma boots it by this exact
       # name (merotee-agent-<profile>-<version>) for its agent hosts.
       - name: Set up mkosi
@@ -463,8 +462,8 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      # Built with mkosi (mero-tee/mkosi-image, mdma#480), named as the Packer
-      # build named it. No IMAGE_SUFFIX: this is the release image mdma deploys.
+      # Built with mkosi (mero-tee/mkosi-image, mdma#480), under the name mdma
+      # looks up (release-image-name.sh). No IMAGE_SUFFIX: this is the release image mdma deploys.
       # REPLACE lets a re-run replace an image a failed earlier attempt left
       # behind; the release tag does not exist yet (publish_release), so nothing
       # published refers to it.

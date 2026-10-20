@@ -29,26 +29,8 @@
   ignore_errors: true
   when: ansible_kernel is defined
 
-# Inject profile into kernel cmdline so it is measured into RTMR[2] (GCP TDX).
-# This differentiates profiles at attestation time; cannot be faked without rebuilding.
-- name: Ensure grub.d exists for profile drop-in
-  file:
-    path: /etc/default/grub.d
-    state: directory
-    mode: "0755"
-
-- name: Add calimero.role and calimero.profile to kernel cmdline (measured into RTMR[2])
-  copy:
-    content: |
-      # Role/profile kernel params for TDX attestation (RTMR[2]).
-      # role differentiates node images from KMS role measurements.
-      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=node calimero.profile={{ lockdown_profile | default('locked-read-only') }}"
-    dest: /etc/default/grub.d/50-calimero-profile.cfg
-    mode: "0644"
-
-- name: Update GRUB with profile kernel param
-  command: update-grub
-  changed_when: true
+# calimero.role=node and calimero.profile are on the kernel command line
+# (RTMR[2]): mero-tee/mkosi-image/build.sh puts them there.
 
 # Directories and config
 - name: Create calimero base directory
@@ -72,8 +54,8 @@
 # so nothing older can be a legitimate choice, only a downgrade to an older
 # (validly signed) policy. Under /etc/calimero, so the root hash measures it.
 # calimero-init refuses a lower release and passes it to merod as
-# MERO_TEE_MIN_VERSION. `image_version` is packer's `version` (versions.json
-# `imageVersion`), passed by ubuntu.pkr.hcl.
+# MERO_TEE_MIN_VERSION. `image_version` is versions.json `imageVersion`, passed
+# by mero-tee/mkosi-image/build.sh.
 - name: Bake the minimum tee-release-version (this image's version)
   copy:
     content: "{{ image_version }}\n"
@@ -90,8 +72,8 @@
     fail_msg: >-
       image_version is not set, so this image would bake no minimum
       tee-release-version and any older signed release could be named in
-      instance metadata. Build through build-and-release.sh / ubuntu.pkr.hcl,
-      which pass versions.json imageVersion.
+      instance metadata. Build through mero-tee/mkosi-image/build.sh, which
+      passes versions.json imageVersion.
   when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
 
 - name: Render baked-in init script (R6)

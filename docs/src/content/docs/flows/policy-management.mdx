@@ -180,7 +180,7 @@ records its measurements; the KMS release boots each KMS image as a two-replica 
 and records its. Both are verified by Intel Trust Authority, signed, and published with
 the release, so every accepted measurement is traceable to a signed release and the run
 that produced it. Before a change reaches a release, the manual
-[KMS TDX image probe](/operate/release-pipeline/#kms-tdx-image-probe--kms-tdx-image-probeyaml)
-proves the image builds and forms a cluster. The
+[image build](/operate/runbooks/#build-the-images-with-mkosi) (`node-image-mkosi.yaml`,
+`role: kms`) proves the image builds and forms a cluster. The
 operational details of that pipeline live in the
 [release pipeline](/operate/release-pipeline/) and [runbooks](/operate/runbooks/).

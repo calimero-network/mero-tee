@@ -96,20 +96,8 @@
       - disk_crypto_probe.rc == 0
     fail_msg: "cryptsetup or dm_crypt/dm_integrity is missing: {{ disk_crypto_probe.stderr | default('') }}"
 
-- name: Ensure grub.d exists
-  file:
-    path: /etc/default/grub.d
-    state: directory
-    mode: "0755"
-
-- name: Add calimero.role=agent and the profile to the kernel cmdline (RTMR2)
-  copy:
-    content: |
-      # Role/profile kernel params for TDX attestation (RTMR[2]): an agent image
-      # never measures as a node or KMS image, or the other way round.
-      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=agent calimero.profile={{ lockdown_profile }}"
-    dest: /etc/default/grub.d/50-calimero-profile.cfg
-    mode: "0644"
+# calimero.role=agent and the profile are on the kernel command line (RTMR2):
+# mero-tee/mkosi-image/build.sh puts them there.
 
 - name: Require at least one agent slot
   assert:

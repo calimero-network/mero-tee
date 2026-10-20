@@ -64,20 +64,8 @@
   ignore_errors: true
   when: ansible_kernel is defined
 
-- name: Ensure grub.d exists
-  file:
-    path: /etc/default/grub.d
-    state: directory
-    mode: "0755"
-
-- name: Add calimero.role=kms and the profile to the kernel cmdline (RTMR2)
-  copy:
-    content: |
-      # Role/profile kernel params for TDX attestation (RTMR[2]): a KMS image
-      # never measures as a node image, or the other way round.
-      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.role=kms calimero.profile={{ lockdown_profile }}"
-    dest: /etc/default/grub.d/50-calimero-profile.cfg
-    mode: "0644"
+# calimero.role=kms and the profile are on the kernel command line (RTMR2):
+# mero-tee/mkosi-image/build.sh puts them there.
 
 - name: Create mero-kms directories
   file:

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Applies the roles' unit masks, then checks this root just before it is sealed
 # into EROFS: the units, the libraries, and on locked-read-only the lockdown
-# checks merotee-conformance makes on the Packer image. (Package checks are in build.sh, from mkosi's manifest: dpkg's
+# checks of merotee-conformance, which the renderer skips. (Package checks are in build.sh, from mkosi's manifest: dpkg's
 # database is gone by now, CleanPackageMetadata=yes.)
 set -euo pipefail
 root="${BUILDROOT}"
@@ -97,7 +97,7 @@ while IFS= read -r -d '' binary; do
 done < <(find "${root}/usr/local/bin" "${root}/usr/local/sbin" "${root}/opt" -type f -perm -u+x -print0 2>/dev/null)
 
 # The agent role's own probes, which the renderer skips (they run commands on
-# the VM in Packer): the baked merod can fetch a data-disk key, the kernel can
+# the build host): the baked merod can fetch a data-disk key, the kernel can
 # open a LUKS2 volume with integrity, and mero-bot, when baked, starts on the
 # baked Node.
 if [[ "${role}" == agent ]]; then

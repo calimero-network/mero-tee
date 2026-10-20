@@ -2,20 +2,20 @@
 """Render what an Ansible image playbook writes into a directory tree, without
 running Ansible against a VM.
 
-The mkosi image builds (mero-tee/mkosi-*) take their files from the same roles
-the Packer build runs, so the two cannot drift while both exist. This reads a
+The mkosi image builds (mero-tee/mkosi-*) take their files from the Ansible
+roles, so the roles stay the one source of what an image holds. This reads a
 playbook's roles and, for the tasks that only put files in place, does the
 same thing into OUT:
 
   copy (content: or src:), template, file (directory, link, touch, absent),
   get_url + unarchive (from a download cache, sha256-checked against the task's
   checksum), set_fact (with lookup('file', ...)), and assert, which fails the
-  render as it would fail the Packer build
+  render, and with it the image build
 
 Everything else is reported, not run: systemd enable/mask go to the manifest
 for mkosi's postinst, as do the users `user` tasks create or lock, paths a `file: state=absent` removes go to it as well
 (the image build removes them from the packages' files too), apt/package names to its package list, and commands,
-GRUB edits and the like are listed as skipped so none disappears
+probes of a running VM and the like are listed as skipped so none disappears
 silently. `when:` conditions and `loop:`/`with_items:` are evaluated with the
 playbook's vars and each role's defaults.
 

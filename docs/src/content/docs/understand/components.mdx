@@ -78,19 +78,19 @@ replaced by a new VM that joins. See the [runbooks](/operate/runbooks/).
 
 ## Node image build
 
-`mero-tee/` · Packer (`googlecompute`) + Ansible · builds GCP TDX Confidential
-VM images containing `merod`. The same template builds the KMS image with
-`image_role = "kms"` (`playbook-kms.yml`): the same base, lockdown and
-dm-verity seal, none of the node's services.
+`mero-tee/` · mkosi + Ansible roles · builds GCP TDX Confidential VM images
+containing `merod`. The same build makes the KMS image (`ROLE=kms`,
+`playbook-kms.yml`: the same base and lockdown, none of the node's services) and
+the private agent image (`ROLE=agent`, `playbook-agent.yml`).
 
-`ubuntu.pkr.hcl` provisions an Ubuntu 26.04 LTS (Resolute Raccoon) image — kernel
-6.17+ is required for RTMR3 sysfs support, and an LTS because an EOL release gets
-delisted from `ubuntu-os-cloud` and fails the build — from
-`ubuntu-2604-lts-amd64`, running the Ansible `playbook.yml`. The build host does
-not need TDX (`n2-standard-2`); the resulting image runs on TDX-capable hardware
-(e.g. `c3-standard-4`) at runtime. Output image family:
-`merotee-ubuntu-questing-<profile>` — a frozen identifier that mdma's dispatcher
-matches on, not a claim about the base release.
+`mero-tee/mkosi-image/build.sh` renders the role's playbook into a file tree
+(`scripts/image/render_role_tree.py`) and runs mkosi on Ubuntu 26.04 LTS (Resolute
+Raccoon) from a pinned archive snapshot. Kernel 6.17+ is required for RTMR3
+sysfs support. The result is a UKI on the ESP and an EROFS root behind dm-verity,
+and two builds of one commit give the same image. The build runs on a CI runner,
+with no build VM; the image runs on TDX-capable hardware (e.g. `c3-standard-4`).
+Output image family: `merotee-ubuntu-questing-<profile>`, a frozen identifier
+that mdma's dispatcher matches on, not a claim about the base release.
 
 ### What the image bakes
 
@@ -102,9 +102,10 @@ Driven by `playbook.yml` and `mero-tee/versions.json`:
   metrics/logs.
 - The **fleet HA sidecar** systemd service
   (`ansible/roles/merotee/templates/fleet-sidecar.sh.j2`).
-- A profile marker at `/etc/calimero/image-profile` and a `calimero.root_hash`
-  (a SHA-256 over `/etc/calimero`, the baked binaries, and grub config) injected
-  into the kernel cmdline so binary substitution changes the measurements.
+- A profile marker at `/etc/calimero/image-profile`. `calimero.role`,
+  `calimero.profile` and the dm-verity root hash (`roothash=`) are on the UKI's
+  kernel command line, so RTMR2 covers every byte of the root and binary
+  substitution changes the measurements.
 
 ### Profiles
 
@@ -112,7 +113,7 @@ Driven by `playbook.yml` and `mero-tee/versions.json`:
 | --- | --- |
 | `debug` | Development. SSH and read-write filesystem. |
 | `debug-read-only` | Integration / pre-production. Read-only root, SSH retained. |
-| `locked-read-only` | Production. The `merod-lockdown`, `merotee-conformance`, and ubuntu-user-removal steps run **only** for this profile, so its content — and therefore its MRTD/RTMR — differs from the others. |
+| `locked-read-only` | Production. The `merod-lockdown` and `merotee-conformance` roles run **only** for this profile, so its content — and therefore its MRTD/RTMR — differs from the others. |
 
 Each profile produces a distinct RTMR3 via `calimero-init`, giving the
 cryptographic cohort separation the [trust model](/understand/trust-model/)
@@ -121,12 +122,13 @@ relies on.
 ### Building
 
 ```bash
-packer build -var-file=ubuntu-x86.pkrvars.hcl ubuntu.pkr.hcl
+sudo ROLE=node PROFILE=locked-read-only mero-tee/mkosi-image/build.sh OUT
 ```
 
-Release builds go through `mero-tee/build-and-release.sh`, which reads versions
-from `versions.json` and can build one profile or all three. Requires Packer,
-Ansible, and GCP credentials.
+Versions come from `versions.json`. Release builds go through
+`scripts/release/mkosi/build-image.sh`, which also checks the command line and
+computes RTMR1–3 before the image boots. See
+[Build the images with mkosi](/operate/runbooks/#build-the-images-with-mkosi).
 
 ## Attestation verifier
 
