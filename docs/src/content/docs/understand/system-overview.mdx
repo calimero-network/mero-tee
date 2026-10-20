@@ -24,7 +24,7 @@ read, and whose software identity the CPU measures and signs into an attestation
 | Component | Repo path | What it is |
 | --- | --- | --- |
 | **mero-kms** | `mero-kms/`, `mero-tee/playbook-kms.yml` | A Rust/Axum HTTP service that validates a node's TDX attestation and releases a deterministic **storage encryption key**, HKDF'd from a root that exists only in the memory of its cluster. Runs as a frozen, dm-verity-sealed GCP TDX image, one 5-replica cluster per release. |
-| **Image builds** | `mero-tee/` | A Packer + Ansible pipeline that bakes `merod` (and its sidecars) into a GCP TDX Confidential VM image, in three security **profiles** — and, from the same template, the KMS image. |
+| **Image builds** | `mero-tee/` | An mkosi build that bakes `merod` (and its sidecars) into a GCP TDX Confidential VM image, in three security **profiles**, from Ansible roles — and, from the same build, the KMS and agent images. |
 | **attestation-verifier** | `attestation-verifier/` | A React single-page app plus Vercel serverless API that lets anyone independently verify a KMS **or** a node quote through Intel Trust Authority (ITA). |
 
 The [components reference](/understand/components/) maps each of these in detail.

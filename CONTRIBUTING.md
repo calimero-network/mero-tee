@@ -23,7 +23,7 @@ Some workflows/scripts also rely on:
 
 - `gh` (GitHub CLI)
 - `cosign` (for signature verification workflows)
-- `gcloud`, Packer and Ansible (for image builds and probe workflows)
+- `gcloud` and mkosi (for image builds and probe workflows)
 
 ### Build
 
@@ -65,7 +65,7 @@ Release and attestation workflows are security-sensitive. If you modify:
 
 - `.github/workflows/release-kms.yaml`
 - `.github/workflows/release-node-image-gcp.yaml`
-- `.github/workflows/kms-tdx-image-probe.yaml`
+- `.github/workflows/node-image-mkosi.yaml`
 - `mero-tee/playbook-kms.yml` and `mero-tee/ansible/roles/mero-kms/`
 - `scripts/policy/*.sh`
 

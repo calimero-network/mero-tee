@@ -9,8 +9,8 @@
 #                        removed once the image exists
 # Optional env:
 #   IMAGE_FAMILY, IMAGE_DESCRIPTION
-#   REPLACE=true         delete an existing image of that name first (what
-#                        Packer's -force did for a release re-run)
+#   REPLACE=true         delete an existing image of that name first (for a
+#                        release re-run)
 set -euo pipefail
 
 for var in ROLE MKOSI_OUT IMAGE_NAME IMAGE_PROJECT UPLOAD_BUCKET; do

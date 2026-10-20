@@ -4,12 +4,12 @@
 # Security-sensitive workflows
 /.github/workflows/release-kms.yaml @chefsale
 /.github/workflows/release-node-image-gcp.yaml @chefsale
-/.github/workflows/kms-tdx-image-probe.yaml @chefsale
+/.github/workflows/node-image-mkosi.yaml @chefsale
 
 # KMS package
 /mero-kms/ @chefsale
 
-# Node image infrastructure (Packer + Ansible)
+# Image builds (mkosi + Ansible roles)
 /mero-tee/ @chefsale
 
 # Attestation verifier web app

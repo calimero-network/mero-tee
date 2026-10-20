@@ -149,10 +149,10 @@ is built with (`kms_agent_policy_file`).
   `kms-agent-attestation-policy.<profile>.json`. **Post-release agent e2e** then
   runs the whole chain on the release
   ([release pipeline](/operate/release-pipeline/#agents-in-the-kms-release)).
-- **Before merging.** `kms-tdx-image-probe.yaml` with `with_agent` runs the same
-  measurement from a branch, claims an agent on it with a throwaway owner key, provisions a
-  throwaway secret, checks a second key is refused, and probes a KMS that serves the
-  agent.
+- **Before merging.** `node-image-mkosi.yaml` with `role: agent` builds the agent
+  image from a branch, with the stub agent or (`agent: mero-bot`) the pinned mero-bot
+  bundle, measures it, claims an agent on it with a throwaway owner key and provisions a
+  throwaway secret. A KMS that serves the agent is built only by the release.
 
 merod trusts only a KMS whose policy a release signed. A branch can therefore
 prove each half on hardware, but an agent getting its disk key from a KMS is first

@@ -22,27 +22,22 @@ if [[ -z "${image_version}" ]]; then
   echo "::error::Could not read imageVersion from versions.json (missing file or key)."
   exit 1
 fi
-packer_vars_file="ubuntu-x86.pkrvars.hcl"
-if [[ ! -f "${packer_vars_file}" ]]; then
-  echo "::error::Missing packer vars file: ${packer_vars_file}"
-  exit 1
-fi
-
 # Always x86; architecture in image name omitted (we only deploy on Intel TDX)
 cpu_architecture="x86"
-# Must match `image_name` in mero-tee/ubuntu.pkr.hcl exactly -- this recomputes
-# the name Packer published in order to find it again. The "questing-25-10" part
-# is a frozen identifier, not the base release (which is now 26.04 LTS): mdma's
-# dispatcher matches on the same prefix, so all three move together or not at all.
+# Must match the name scripts/release/mkosi/release-image-name.sh gives the
+# release image (the pattern release-image-name-test.sh pins), so this finds it.
+# The "questing-25-10" part is a frozen identifier, not the base release (26.04
+# LTS): mdma's dispatcher matches on the same prefix, so all three move together
+# or not at all.
 image_name="merotee-ubuntu-questing-25-10-${profile}-${image_version//./-}${IMAGE_SUFFIX:-}"
 image_project="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-calimero-p2p-development}}}"
 
 # Attestation VM project: same as Calimero Cloud MDMA (cloud-486420) by default so
 # published-mrtds.json matches dispatcher nodes. Set GCP_ATTESTATION_PROJECT_ID to override
-# (e.g. image_project for legacy Packer-only attestation).
+# (e.g. to image_project).
 vm_project="${GCP_ATTESTATION_PROJECT_ID:-cloud-486420}"
 vm_zone="${GCP_ATTESTATION_ZONE:-${PACKER_GCP_ZONE:-europe-west4-a}}"
-# Do not reuse Packer subnet in a different project (subnet URLs are project-scoped).
+# Do not reuse the image project's subnet in a different project (subnet URLs are project-scoped).
 vm_subnetwork="${GCP_ATTESTATION_SUBNETWORK:-}"
 if [[ -z "${vm_subnetwork}" ]] && [[ "${vm_project}" == "${image_project}" ]]; then
   vm_subnetwork="${PACKER_GCP_SUBNETWORK:-}"
@@ -61,7 +56,7 @@ if [[ -z "${vm_subnetwork}" ]]; then
     --limit=1 2>/dev/null | head -n1 || true)"
 fi
 if [[ -z "${vm_subnetwork}" ]]; then
-  echo "::error::No subnetwork for attestation VM in project '${vm_project}' (region ${vm_region}). Set GCP_ATTESTATION_SUBNETWORK or ensure this project has a subnet (Packer subnet is only inherited when vm_project == image_project)."
+  echo "::error::No subnetwork for attestation VM in project '${vm_project}' (region ${vm_region}). Set GCP_ATTESTATION_SUBNETWORK or ensure this project has a subnet (GCP_PACKER_SUBNETWORK is only inherited when vm_project == image_project)."
   exit 1
 fi
 echo "Using attestation vm_project=${vm_project} (image_project=${image_project}), subnetwork: ${vm_subnetwork}"

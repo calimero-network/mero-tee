@@ -1,19 +1,22 @@
 name: Image (mkosi)
-run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }})
+run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role == 'agent' && format(', {0}', inputs.agent) || '' }})
 
-# Moving the TEE images from Packer + Ansible to mkosi (mdma#480). Builds
+# The TEE images, built with mkosi (mdma#480) from a branch. Builds
 # mero-tee/mkosi-image for one role (node, kms or agent) and profile
 # (locked-read-only, debug-read-only or debug) from the pinned archive snapshot
-# and the same role files the Packer build uses, then:
+# and the Ansible roles' files, as the releases do, then:
 #   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
 #      boots (RTMR3: the init script's v3 event, naming the UKI's roothash=);
-#   2. boots the image and runs the probe a Packer image of that role gets:
+#   2. boots the image and runs that role's probe:
 #      node: the staging probe (admin API, quote, ITA appraisal, policy
 #        candidates);
 #      kms: a two-replica cluster (scripts/release/kms/run-cluster-probe.sh),
 #        serving the node allowlist of node_release_tag;
-#      agent: ITA, then a throwaway secret provisioned to the stub agent
-#        (scripts/release/agent/run-agent-probe.sh);
+#      agent: ITA, then a throwaway secret provisioned to the agent
+#        (scripts/release/agent/run-agent-probe.sh). The agent is the stub
+#        (scripts/agent/stub-mero-agent.py) or, with agent=mero-bot, the
+#        mero-bot release versions.json pins, as the releases bake it; that
+#        needs the MERO_BOT_RELEASE_TOKEN secret;
 #   3. compares the quote's RTMR1-3 with the computed ones.
 # Manual only; it publishes nothing, and the image is deleted afterwards unless
 # keep_image is set.
@@ -43,6 +46,14 @@ on:
         description: "kms only: the node release whose allowlist the KMS serves (mero-tee-v<version>)"
         required: false
         default: "mero-tee-v2.3.118"
+      agent:
+        description: "agent only: the agent the image runs"
+        required: false
+        type: choice
+        options:
+          - stub
+          - mero-bot
+        default: stub
       keep_image:
         description: "Keep the GCE image after the run (for booting it again by hand)"
         required: false
@@ -103,8 +114,8 @@ jobs:
         with:
           key: image-mkosi-${{ inputs.role }}
 
-      # What build-and-release.sh bakes into a KMS or agent image, as the TDX
-      # image probes build it: the binaries from this commit, the stub agent.
+      # What a KMS or agent image bakes: the binaries from this commit, and the
+      # stub agent or the pinned mero-bot bundle.
       - name: Build mero-kms
         if: ${{ inputs.role == 'kms' }}
         run: |
@@ -131,19 +142,40 @@ jobs:
             || { echo "::error::${NODE_TAG} has no complete ${PROFILE} node allowlist"; exit 1; }
           echo "KMS_NODE_POLICY_FILE=${PWD}/inputs/node-allowlist.json" >> "${GITHUB_ENV}"
 
-      - name: Build mero-agent-gate and stage the stub agent
+      - name: Build mero-agent-gate and stage the agent
         if: ${{ inputs.role == 'agent' }}
+        env:
+          AGENT: ${{ inputs.agent }}
         run: |
           set -euo pipefail
           cargo build -p mero-agent-gate --release --locked
           mkdir -p inputs agent-tools
           cp target/release/mero-agent-gate inputs/
-          cp scripts/agent/stub-mero-agent.py inputs/mero-agent
           cp target/release/mero-agent-provision agent-tools/
-          {
-            echo "MERO_AGENT_GATE_BINARY=${PWD}/inputs/mero-agent-gate"
-            echo "MERO_AGENT_BINARY=${PWD}/inputs/mero-agent"
-          } >> "${GITHUB_ENV}"
+          echo "MERO_AGENT_GATE_BINARY=${PWD}/inputs/mero-agent-gate" >> "${GITHUB_ENV}"
+          # With mero-bot, build.sh bakes the mero-bot launcher as the agent.
+          if [[ "${AGENT}" != mero-bot ]]; then
+            cp scripts/agent/stub-mero-agent.py inputs/mero-agent
+            echo "MERO_AGENT_BINARY=${PWD}/inputs/mero-agent" >> "${GITHUB_ENV}"
+          fi
+
+      # As Release mero-kms fetches it; the mero-agent role checks it against
+      # its pin again.
+      - name: Download the pinned mero-bot bundle
+        if: ${{ inputs.role == 'agent' && inputs.agent == 'mero-bot' }}
+        env:
+          GH_TOKEN: ${{ secrets.MERO_BOT_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN}" ]] || { echo "::error::agent=mero-bot needs the MERO_BOT_RELEASE_TOKEN secret"; exit 1; }
+          version="$(jq -r '.meroBotVersion // empty' mero-tee/versions.json)"
+          [[ -n "${version}" ]] || { echo "::error::versions.json pins no meroBotVersion"; exit 1; }
+          asset="mero-bot-${version}-linux-x64.tar.gz"
+          gh release download "v${version}" --repo calimero-network/mero-bot --pattern "${asset}" --dir inputs
+          want="$(jq -r --arg a "${asset}" '.meroBot.sha256[$a] // empty' mero-tee/build-inputs.lock.json)"
+          [[ -n "${want}" ]] || { echo "::error::build-inputs.lock.json pins no sha256 for ${asset}"; exit 1; }
+          echo "${want}  inputs/${asset}" | sha256sum -c -
+          echo "MERO_BOT_BUNDLE=$(realpath "inputs/${asset}")" >> "${GITHUB_ENV}"
 
       - name: Upload the agent probe's provisioning client
         if: ${{ inputs.role == 'agent' }}

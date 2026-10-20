@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The GCE name, family and description of a release image, as the Packer build
-# published them (mero-tee/ubuntu.pkr.hcl). They are a cross-repo contract:
+# The GCE name, family and description of a release image, as every release
+# since the first has published them. They are a cross-repo contract:
 # mdma's dispatcher finds images by these prefixes (`tee_image_name_prefix` /
 # `tee_image_family_prefix`), so the mkosi images keep them, the node's frozen
 # "questing-25-10" included.

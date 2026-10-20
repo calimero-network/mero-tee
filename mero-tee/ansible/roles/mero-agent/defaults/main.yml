@@ -1,12 +1,12 @@
 ---
-# Paths, on the machine running Packer, of the binaries to bake in. The agent
+# Paths, on the build host, of the binaries to bake in. The agent
 # binary is an artifact the release workflow downloads and checks against a
 # pinned digest; its source may be private, its measurements are published.
 # mero-agent-gate is built from this repository's commit.
 mero_agent_binary: ""
 mero_agent_gate_binary: ""
-# mero-bot as the agent (calimero-network/mero-bot): the path, on the machine
-# running Packer, of its release bundle (mero-bot-<version>-linux-x64.tar.gz),
+# mero-bot as the agent (calimero-network/mero-bot): the path, on the build
+# host, of its release bundle (mero-bot-<version>-linux-x64.tar.gz),
 # which must hash to its pin in build-inputs.lock.json. With it, Node is baked
 # from its pin too, and mero_agent_binary is the launcher,
 # scripts/agent/mero-bot-agent.sh. Empty: no mero-bot and no Node.

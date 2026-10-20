@@ -214,15 +214,16 @@ Authority, and publish nothing.
 <Tabs>
 <TabItem label="KMS image (GCP TDX)">
 
-`kms-tdx-image-probe.yaml`. Inputs: `profile`, `node_release_tag` (the node
-release whose allowlist the KMS image bakes in), and `wait_timeout_minutes`. It
-builds the KMS image from the dispatched commit (`playbook-kms.yml`,
-`image_role = "kms"`), starts a two-replica cluster (one with
+`node-image-mkosi.yaml` with `role: kms` (see
+[Build the images with mkosi](#build-the-images-with-mkosi)). Inputs: `profile`,
+`node_release_tag` (the node release whose allowlist the KMS image bakes in),
+and `wait_timeout_minutes`. It builds the KMS image from the dispatched commit
+(`playbook-kms.yml`, `ROLE=kms`), starts a two-replica cluster (one with
 `kms-bootstrap=true`, the other with `kms-peers` naming the first), and checks
 that both hold the root and report the same transport key — derived from the
 root, so equal keys mean one root. Intel Trust Authority verifies both quotes,
-and their measurements must be identical. It deletes its image, VMs and firewall
-rule at the end.
+and their measurements must be identical. It deletes its VMs and firewall rule
+at the end, and its image unless `keep_image` is set.
 
 </TabItem>
 <TabItem label="Node image (GCP)">
@@ -338,33 +339,36 @@ build therefore still needs those two hosts reachable over plain HTTP.
 ## Build the images with mkosi
 
 `node-image-mkosi.yaml` (named for the image it began with) builds a node,
-KMS or agent image with mkosi instead of Packer (mdma#480). Its `role` input
-picks the image and its `profile` input the profile: `locked-read-only`,
-`debug-read-only` or `debug`. The node image came first (Phase 1 and 2), and
-the KMS and agent images followed (Phase 3). The workflow publishes nothing; it
-is how the mkosi images are brought to parity before any release uses them.
+KMS or agent image with mkosi (mdma#480) from a branch, as the releases do. Its
+`role` input picks the image and its `profile` input the profile:
+`locked-read-only`, `debug-read-only` or `debug`. The workflow publishes
+nothing; it is how an image change is proven on TDX before a release builds it.
+2.3.120 was the first release built this way; the Packer build, its GRUB and
+seal steps and `build-and-release.sh` were removed after it ran in production,
+so earlier releases are rebuildable only from their tags.
 
-The roles take what their Packer build takes, from the same environment
-variables `build-and-release.sh` reads:
+The roles take their inputs from environment variables:
 
 - **node:** nothing beyond `versions.json`.
 - **kms:** `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE` and optionally
   `KMS_AGENT_POLICY_FILE`. The workflow builds mero-kms from the commit and
   takes the node allowlist from the `node_release_tag` release's
-  `published-mrtds.json`, as `kms-tdx-image-probe.yaml` does.
+  `published-mrtds.json`.
 - **agent:** `MERO_AGENT_GATE_BINARY`, and `MERO_AGENT_BINARY` or
   `MERO_BOT_BUNDLE`. The workflow builds mero-agent-gate from the commit and
-  bakes the stub agent (`scripts/agent/stub-mero-agent.py`).
+  bakes the stub agent (`scripts/agent/stub-mero-agent.py`), or with
+  `agent: mero-bot` the mero-bot release `versions.json` pins, downloaded and
+  checked as `Release mero-kms` does (needs the `MERO_BOT_RELEASE_TOKEN`
+  secret).
 
-The profiles differ as the Packer ones do:
+The profiles differ:
 
 - **Roles:** the renderer evaluates the roles' own `when:` conditions. Lockdown
   runs on `locked-read-only` only. On the node, conformance runs there too, and
   the fleet sidecar on the read-only profiles.
 - **Access:** on the debug profiles, `build.sh` also installs `openssh-server`
   and `google-compute-engine` (the guest agent and OS Login, so SSH keys come
-  from instance metadata) and adds `console=ttyS0,115200`. The Packer debug
-  images get the same from the Ubuntu cloud image. Only `locked-read-only`
+  from instance metadata) and adds `console=ttyS0,115200`. Only `locked-read-only`
   boots `quiet`; the debug profiles show the kernel and systemd on the serial
   console, where the KMS probe looks for `roothash=` and the verity setup.
 - **Checks:** `mkosi.finalize` makes the lockdown checks, and `build.sh` refuses
@@ -377,30 +381,30 @@ Locally: `ROLE=kms PROFILE=debug MERO_KMS_BINARY=... KMS_NODE_POLICY_FILE=...
 mero-tee/mkosi-image/build.sh OUT`. `ROLE` defaults to `node` and `PROFILE` to
 `locked-read-only`.
 
-The build (`mero-tee/mkosi-image/build.sh`) takes its files from the same
-Ansible roles as the Packer build. `scripts/image/render_role_tree.py` reads the
+The build (`mero-tee/mkosi-image/build.sh`) takes its files from the Ansible
+roles. `scripts/image/render_role_tree.py` reads the
 role's playbook (`playbook.yml`, `playbook-kms.yml` or `playbook-agent.yml`) and
 does what its `copy`, `template`, `file`, `get_url`, `unarchive` and `set_fact`
 tasks do into a directory. The release binaries come from a download cache and
 are checked against `build-inputs.lock.json`. It also evaluates the roles'
 asserts, so a KMS with an empty allowlist or an agent bundle that is not the
-pinned one fails here as it fails in Packer. It skips an assert only when it
+pinned one fails the build. It skips an assert only when it
 checks a probe of the VM or the VM's facts. The renderer records the roles'
 packages, users and the units they enable and mask in a manifest. It lists
-every task it does not run, such as probes and GRUB edits, so none disappears
+every task it does not run, such as probes of a running VM, so none disappears
 silently.
 
 `build.sh` adds the packages to the image. `mkosi.postinst` applies the enable
 list, creates the roles' users (the agent's slot users, baked in because the
 root is read-only) and locks root. `mkosi.finalize` applies the mask list and
-makes the lockdown checks `merotee-conformance` makes on the Packer image, plus
-each role's own:
+makes the lockdown checks of `merotee-conformance` (whose tasks probe a running
+VM, so the renderer skips them), plus each role's own:
 
 - **node:** merod, meroctl, mero-auth and calimero-init are present, and the
   journal is volatile.
 - **kms:** mero-kms, kms-init and `kms.env` are present.
 - **agent:** the gate, the agent, merod and cryptsetup are present. finalize
-  also runs the probes the Packer build runs on the VM: merod has
+  also runs the agent role's probes, which the renderer skips: merod has
   `kms disk-key`, the kernel has `dm_crypt` and `dm_integrity`, and a baked
   mero-bot starts on the baked Node.
 
@@ -410,7 +414,7 @@ checked not to start at boot. After
 mkosi, `build.sh` checks that none of the removed packages (ssh, crash
 reporters, cloud agents) is installed.
 
-The image differs from the Packer one in how it boots and seals:
+How the image boots:
 
 - **Boot:** it boots as a UKI from the ESP, with no GRUB and no shim.
 - **Root:** the root is EROFS behind dm-verity, laid out by systemd-repart
@@ -437,11 +441,11 @@ The run:
    no `console=` on `locked-read-only`), and computes RTMR1, RTMR2 and RTMR3
    from the disk and UKI;
 2. creates a GCE image through the `GCP_IMAGE_UPLOAD_BUCKET` bucket and runs
-   the probe a Packer image of that role gets:
+   that role's probe:
    - node: the node staging probe (`node-image-gcp-staging-probe.yaml`, also
      callable as a reusable workflow);
    - kms: a two-replica cluster (`scripts/release/kms/run-cluster-probe.sh`);
-   - agent: ITA, then a throwaway secret provisioned to the stub agent
+   - agent: ITA, then a throwaway secret provisioned to the agent
      (`scripts/release/agent/run-agent-probe.sh`);
 3. compares the quote's RTMR1-3 with the computed values. It compares event
    by event when the image returns its event log, and the registers only
@@ -455,7 +459,7 @@ The build, its checks and the GCE upload are scripts under
 and checks the command line and ownership, packages the disk, computes RTMR1-3
 and writes the root and initrd digests; `create-gce-image.sh` uploads and
 creates the image; `release-image-name.sh` gives a release image the name,
-family and description the Packer build published, which mdma finds images by.
+family and description mdma finds images by.
 
 Two builds of one commit give the same root and so the same RTMR1-3: checked
 for the node image, a CI build against a local one. Two things stood in the way. The build leaves out what differed

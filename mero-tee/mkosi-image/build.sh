@@ -7,24 +7,22 @@
 # ROLE defaults to node, PROFILE to locked-read-only. The output is
 # OUTPUT_DIR/merotee-<role>.{raw,efi,manifest,rendered.json}.
 #
-# What the Packer build takes as variables (build-and-release.sh), this takes
-# from the same environment variables:
+# The role's inputs are environment variables:
 #   kms:   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, optional KMS_AGENT_POLICY_FILE
 #   agent: MERO_AGENT_GATE_BINARY, and MERO_AGENT_BINARY or MERO_BOT_BUNDLE
 #          (then the agent is scripts/agent/mero-bot-agent.sh)
-# The roles' own asserts refuse a build without them, as in Packer.
+# The roles' own asserts refuse a build without them.
 #
-# The debug profiles also get what the Packer debug images have from the
-# Ubuntu cloud image: openssh-server and the GCE guest environment (SSH keys
-# from instance metadata, OS Login), and the serial console. The roles
+# The debug profiles also get openssh-server and the GCE guest environment (SSH
+# keys from instance metadata, OS Login), and the serial console. The roles
 # themselves differ per profile (lockdown and conformance run on
 # locked-read-only only, the node's fleet sidecar on the read-only profiles),
 # which the renderer takes from their when: conditions.
 #
 # 1. Copies this directory to a work directory.
 # 2. Renders the role's playbook into it (scripts/image/render_role_tree.py)
-#    with the versions in mero-tee/versions.json: the same templates, files and
-#    sha256-pinned release binaries the Packer build puts in place. Downloads
+#    with the versions in mero-tee/versions.json: the roles' templates, files
+#    and sha256-pinned release binaries. Downloads
 #    go to $DOWNLOAD_CACHE (default OUTPUT_DIR/downloads) and are checked
 #    against build-inputs.lock.json before use.
 # 3. Adds the roles' packages, users and the units they enable and mask.
@@ -66,7 +64,7 @@ mero_agent_gate_binary="$(input MERO_AGENT_GATE_BINARY "${MERO_AGENT_GATE_BINARY
 mero_bot_bundle="$(input MERO_BOT_BUNDLE "${MERO_BOT_BUNDLE:-}")"
 mero_agent_binary="$(input MERO_AGENT_BINARY "${MERO_AGENT_BINARY:-}")"
 if [[ -n "${mero_bot_bundle}" ]]; then
-  # As build-and-release.sh: with mero-bot, the agent is the launcher.
+  # With mero-bot, the agent is the launcher.
   launcher="$(realpath "${repo}/scripts/agent/mero-bot-agent.sh")"
   if [[ -n "${mero_agent_binary}" && "${mero_agent_binary}" != "${launcher}" ]]; then
     echo "build.sh: with MERO_BOT_BUNDLE the agent is ${launcher}; unset MERO_AGENT_BINARY" >&2
@@ -100,11 +98,7 @@ python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../${playbook}" \
   -e "mero_agent_gate_binary=${mero_agent_gate_binary}" \
   -e "mero_bot_bundle=${mero_bot_bundle}"
 
-# Packer-only: the GRUB drop-in (here role and profile are in mkosi.conf's
-# KernelCommandLine) and the script that seals a running VM's root (here
-# systemd-repart builds the verity root, mkosi.repart).
-rm -f "${work}/rendered/tree/etc/default/grub.d/50-calimero-profile.cfg" \
-      "${work}/rendered/tree/usr/local/sbin/calimero-seal-root"
+# No empty directories in the image: what a role makes, it fills.
 find "${work}/rendered/tree" -depth -type d -empty -delete
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"
@@ -114,12 +108,9 @@ python3 - "${work}" "${role}" "${profile}" <<'PY'
 import json, sys
 work, role, profile = sys.argv[1], sys.argv[2], sys.argv[3]
 manifest = json.load(open(f"{work}/rendered/manifest.json"))
-# erofs-utils is what calimero-seal-root formats the root with; here
-# systemd-repart does that from mkosi's tools tree.
-BUILD_ONLY = {"erofs-utils"}
 present, absent = [], []
 for entry in manifest["packages"]:
-    names = [n for n in entry["names"] if n not in BUILD_ONLY]
+    names = entry["names"]
     (absent if entry["state"] == "absent" else present).extend(names)
 with open(f"{work}/mkosi.conf.d/50-rendered.conf", "w") as f:
     f.write(f"# Written by build.sh from the render manifest.\n[Output]\nImageId=merotee-{role}\n[Content]\n")
@@ -138,14 +129,14 @@ with open(f"{work}/mkosi.conf.d/50-rendered.conf", "w") as f:
     cmdline = ["quiet"] if profile == "locked-read-only" else []
     cmdline += ["systemd.volatile=overlay", f"calimero.role={role}", f"calimero.profile={profile}"]
     if profile != "locked-read-only":
-        # What the Packer debug images keep from the Ubuntu cloud image.
+        # SSH and the GCE guest environment, as the Ubuntu cloud image has them.
         present += ["openssh-server", "google-compute-engine"]
         cmdline.append("console=ttyS0,115200")
     setting("KernelCommandLine", cmdline)
     setting("Packages", sorted(set(present)))
 # mkosi runs `systemctl preset-all` after mkosi.postinst. With no preset for
 # them, systemd enables the roles' own units (merod, traefik, node_exporter...)
-# that the Packer image leaves to calimero-init, and it fails on a masked
+# that calimero-init starts itself, and it fails on a masked
 # template instance its presets enable (getty@tty1). So the image's presets say
 # what the roles did: enable what they enabled, disable every other unit they
 # installed and every unit they mask.

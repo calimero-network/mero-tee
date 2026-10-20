@@ -8,8 +8,8 @@ set -euo pipefail
 # keys mean one root. Each replica's quote is verified by Intel Trust Authority
 # and its measurements are extracted; the two must measure identically.
 #
-# Shared by kms-tdx-image-probe.yaml (dispatch-only, throwaway image) and
-# release-kms.yaml (the release image, whose measurements become the KMS
+# Shared by node-image-mkosi.yaml with role=kms (dispatch-only, throwaway image)
+# and release-kms.yaml (the release image, whose measurements become the KMS
 # allowlist merod enforces). Creates and always deletes its own VMs and
 # firewall rule; the image is the caller's to keep or delete.
 #

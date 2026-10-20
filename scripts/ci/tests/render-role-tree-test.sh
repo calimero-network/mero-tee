@@ -221,7 +221,7 @@ assert skipped == {"Probe", "Uses the probe"}, skipped
 assert m["users"] == [{"name": "demo-1", "system": True, "shell": "/usr/sbin/nologin", "create_home": False}], m["users"]
 PY
 
-# A failing assert fails the render, as it fails the Packer build.
+# A failing assert fails the render, and with it the image build.
 if python3 "${TOOL}" "${pb}/playbook.yml" --out "${work}/out1" --manifest "${work}/m1.json" --cache "${work}/cache" \
      -e "policy_file=${work}/empty-policy.json" -e "local_archive=${work}/demo-1.0.tar.gz" >/dev/null 2>&1; then
   fail "a failing assert passed"
@@ -248,7 +248,7 @@ fi
 # The roles that only lay down files (the ones with downloads need the cache).
 python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook.yml" --out "${work}/node" --manifest "${work}/node.json" \
   --cache "${work}/empty" -e lockdown_profile=locked-read-only -e image_version=0.0.0 -e cpu_architecture=amd64 \
-  -e merod_version=0.0.0 --role merotee --role cleanup --role merod-lockdown --role merotee-conformance --role verity-root \
+  -e merod_version=0.0.0 --role merotee --role cleanup --role merod-lockdown --role merotee-conformance \
   >/dev/null || fail "the node playbook's roles do not render"
 grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/node/usr/local/lib/calimero/init.sh" || fail "calimero-init not rendered for the profile"
 for path in etc/systemd/system/calimero-init.service usr/local/lib/calimero/fleet-sidecar.sh etc/securetty \
@@ -264,7 +264,7 @@ kms_render() {
   python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook-kms.yml" --out "${work}/$1" --manifest "${work}/$1.json" \
     --cache "${work}/empty" -e lockdown_profile=locked-read-only -e image_version=0.0.0 \
     -e "mero_kms_binary=${work}/mero-kms" -e "kms_node_policy_file=$2" -e kms_agent_policy_file= \
-    --role mero-kms --role cleanup --role merod-lockdown --role verity-root
+    --role mero-kms --role cleanup --role merod-lockdown
 }
 kms_render kms "${kms_policy}" >/dev/null || fail "the KMS playbook's roles do not render"
 grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/kms/usr/local/lib/mero-kms/init.sh" || fail "kms-init not rendered for the profile"

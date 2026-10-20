@@ -1,22 +1,13 @@
 ---
 # Merod TEE image (R1–R9). Profile (locked-read-only | debug-read-only | debug) controls which roles run.
-# Attestation: calimero.role + calimero.profile + calimero.root_hash in kernel cmdline (RTMR[2]).
-# The root itself is sealed behind dm-verity as the last step, and its root hash
-# is on the cmdline too (see the verity-root role).
-# calimero-init extends RTMR[3] with role+profile+root_hash at boot (kernel 6.16+).
-# calimero.root_hash covers /etc/calimero, /usr/local/lib/calimero, /etc/default/grub, and merod
-# binaries at BUILD time and names the build in RTMR3. It is not what stops an offline edit of the
-# boot disk: the dm-verity root hash is, because every block the booted system reads is checked
-# against it (mero-tee#334).
+# Built by mkosi (mero-tee/mkosi-image): scripts/image/render_role_tree.py renders
+# these roles into the image, which is an EROFS root behind dm-verity booted as a
+# UKI. calimero.role and calimero.profile are on its command line (RTMR[2]) with
+# the verity root hash; calimero-init extends RTMR[3] with role, profile and
+# that root hash at boot.
 - hosts: all
   become: true
   vars:
-    # Installed by the merotee role, required in the sealed root (post_tasks).
-    gce_udev_paths:
-      - /usr/lib/udev/rules.d/65-gce-disk-naming.rules
-      - /usr/lib/udev/google_nvme_id
-      - /usr/sbin/nvme
-
     # Delegated execution: whether this image is a RELAY, i.e. whether a
     # keyholder with no account on this node may present a signed warrant to it
     # and have it write on their behalf.
@@ -101,9 +92,6 @@
 
     - role: ansible/roles/merotee-conformance
       when: (lockdown_profile | default('locked-read-only')) == 'locked-read-only'
-
-    # Installs the root-sealing script; the seal itself is the last post_task.
-    - role: ansible/roles/verity-root
   post_tasks:
     # Ensure each profile has distinct content so MRTD differs (merotee role has created /etc/calimero)
     - name: Record image profile for attestation
@@ -112,50 +100,10 @@
         dest: /etc/calimero/image-profile
         mode: "0644"
 
-    # Hash profile-specific root content and inject into kernel cmdline (measured into RTMR[2]).
-    # Includes merod/meroctl/mero-auth so binary substitution changes measurements (no swap attack).
-    - name: Compute root content hash for attestation
-      shell: |
-        # Hash calimero config, init, grub, and baked binaries (profile-specific)
-        { find /etc/calimero /usr/local/lib/calimero -type f 2>/dev/null
-          [ -f /etc/default/grub ] && echo /etc/default/grub
-          [ -f /usr/local/bin/merod ] && echo /usr/local/bin/merod
-          [ -f /usr/local/bin/meroctl ] && echo /usr/local/bin/meroctl
-          [ -f /usr/local/bin/mero-auth ] && echo /usr/local/bin/mero-auth
-        } | sort -u | xargs -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}'
-      register: root_hash_result
-      changed_when: false
-
-    - name: Add calimero.root_hash to kernel cmdline (measured as a string; see mero-tee#334)
-      copy:
-        content: |
-          # Root content hash for attestation (RTMR[2]); identifies the build. The dm-verity root hash is what the disk is checked against.
-          GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} calimero.root_hash={{ root_hash_result.stdout }}"
-        dest: /etc/default/grub.d/60-calimero-root-hash.cfg
-        mode: "0644"
-
-    - name: Update GRUB with root hash
-      command: update-grub
-      changed_when: true
-
-    # LAST task, on every profile: seal the root behind dm-verity (mero-tee#334).
-    # Anything changed after this is not in the booted image.
-    #
-    # On locked-read-only it also removes the ubuntu user (R4) first. Both run in
-    # one root process: Packer SSHs as ubuntu, so nothing can start after the user
-    # is gone, and the user has to be gone before the root is copied.
-    # The GCE disk-naming rule and helper (roles/merotee/files/gce-udev). 2.3.87
-    # nodes logged MISSING for both although the build installed them, so their
-    # presence is asserted twice: here, on the build host after every role has
-    # run, and by the seal inside the EROFS image it writes. Whichever fails
-    # names the step that loses them.
-    # AFTER every role, and in particular after merod-lockdown. The base image's
-    # `google-compute-engine` package owns these same two paths (`lib/udev/*`),
-    # and lockdown's `openssh-server` purge takes it along (it depends on OS
-    # Login and the guest agent), so dpkg deleted whatever was at those paths --
-    # including the copies the merotee role wrote. Every locked-read-only image
-    # since the rule was vendored shipped without it; the debug profiles, which
-    # skip lockdown, kept it. The 2.3.89 build caught this with the assert below.
+    # The GCE disk-naming rule and helper (roles/merotee/files/gce-udev), which
+    # the data disk is found by. Last, after merod-lockdown: the
+    # `google-compute-engine` package owns the same paths, and lockdown removes
+    # it on locked-read-only. mkosi.finalize checks they are in the image.
     - name: Install the GCE disk-naming udev rule and helper
       copy:
         src: "ansible/roles/merotee/files/gce-udev/{{ item.name }}"
@@ -166,30 +114,3 @@
       loop:
         - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
         - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }
-
-    - name: Stat the GCE disk-naming files before sealing
-      stat:
-        path: "{{ item }}"
-      register: gce_udev_files
-      loop: "{{ gce_udev_paths }}"
-
-    - name: Assert the GCE disk-naming files survived every role
-      assert:
-        that: item.stat.exists
-        fail_msg: "{{ item.item }} is missing just before the seal (installed above, or by the merotee role for nvme-cli)"
-      loop: "{{ gce_udev_files.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-
-    - name: Seal the root filesystem behind dm-verity
-      command: >-
-        /usr/local/sbin/calimero-seal-root
-        --seed "{{ image_version }}:node:{{ lockdown_profile | default('locked-read-only') }}"
-        {{ '--remove-user ubuntu' if (lockdown_profile | default('locked-read-only')) == 'locked-read-only' else '' }}
-        {% for path in gce_udev_paths %}--require {{ path }} {% endfor %}
-      changed_when: true
-      register: seal_result
-
-    - name: Show what the seal wrote (partitions, root hash)
-      debug:
-        var: seal_result.stdout_lines

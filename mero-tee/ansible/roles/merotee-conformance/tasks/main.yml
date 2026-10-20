@@ -242,21 +242,8 @@
       apport/whoopsie (crash dumps) or unattended-upgrades (unmeasured runtime
       code) are installed, or cryptsetup (the encrypted data disk) is missing.
 
-- name: Check no serial console on the kernel command line
-  shell: |
-    set -euo pipefail
-    grep -h '^[^#]*GRUB_CMDLINE_LINUX' /etc/default/grub /etc/default/grub.d/*.cfg 2>/dev/null \
-      | grep -o 'console=[^ "]*' || true
-  args:
-    executable: /bin/bash
-  register: grub_console
-  changed_when: false
-
-- name: Assert no console= is configured (R2)
-  assert:
-    that:
-      - grub_console.stdout | trim | length == 0
-    fail_msg: "console= is still set ({{ grub_console.stdout }}); the boot log would go to the serial port"
+# R2's other half, no console= on the kernel command line, is checked on the
+# UKI by scripts/release/mkosi/build-image.sh.
 
 # --- Services and ingress (log hygiene, auth) ---
 - name: Read the merod / mero-auth units, mero-auth config and traefik files

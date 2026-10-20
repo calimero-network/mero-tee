@@ -22,7 +22,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PACKER_GITHUB_API_TOKEN: ${{ github.token }}
   PACKER_GCP_PROJECT_ID: ${{ vars.GCP_PACKER_PROJECT_ID }}
   PACKER_GCP_REGION: ${{ vars.GCP_PACKER_REGION }}
   PACKER_GCP_ZONE: ${{ vars.GCP_PACKER_ZONE }}
@@ -278,8 +277,8 @@ jobs:
           set -euo pipefail
           scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-build.log
 
-      # The name, family and description the Packer build published: mdma finds
-      # images by them. Only a release may replace an existing image of that name.
+      # The name, family and description mdma finds images by
+      # (release-image-name.sh). Only a release may replace an existing image of that name.
       - name: Create the GCE image
         id: create_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}

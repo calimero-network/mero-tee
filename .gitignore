@@ -3,9 +3,6 @@
 *.rs.bk
 __pycache__/
 
-# Packer
-*.pkr.hcl.json
-packer_cache/
 output-*/
 
 # Ansible

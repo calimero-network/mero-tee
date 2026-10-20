@@ -1,6 +1,6 @@
 ---
 title: Configuration Reference
-description: Every configurable knob for the mero-kms service, merod's KMS client and the mero-tee image builds — environment variables, instance metadata, image-profile pin, Packer/Ansible variables, and versions.json.
+description: Every configurable knob for the mero-kms service, merod's KMS client and the mero-tee image builds — environment variables, instance metadata, image-profile pin, image build inputs, Ansible variables, and versions.json.
 sidebar:
   order: 1
 ---
@@ -9,8 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 This page enumerates every knob that shapes a Mero TEE deployment: the runtime
 environment of the `mero-kms` key-management service, the instance metadata a
-KMS replica reads, merod's `[tee.kms]` client section, and the Packer / Ansible /
-`versions.json` inputs that produce the node and KMS images. Defaults are taken
+KMS replica reads, merod's `[tee.kms]` client section, and the build inputs, Ansible variables and
+`versions.json` that produce the node, KMS and agent images. Defaults are taken
 directly from the code and vars files, not from convention.
 
 <Aside type="note">
@@ -212,10 +212,9 @@ fetches and verifies that release's signed `kms-attestation-policy[.<profile>].j
 
 ## Image build inputs
 
-The `mero-tee` node image and the KMS image are built with Packer + Ansible, from
-the same template (`image_role` picks which). Build inputs come from
-three places: `versions.json`, the Packer variables, and CI environment
-overrides consumed by `build-and-release.sh`.
+The node, KMS and agent images are built with mkosi from the Ansible roles, by
+one build (`mero-tee/mkosi-image/build.sh`; `ROLE` picks which). Build inputs
+come from `versions.json` and the build's environment variables.
 
 ### `versions.json`
 
@@ -235,7 +234,7 @@ The single source of pinned component versions (`mero-tee/versions.json`):
 | Key | Meaning |
 | --- | --- |
 | `imageVersion` | The mero-tee release/image version. Must equal `mero-kms/Cargo.toml` `package.version` (enforced by the [release version sync guard](/operate/release-pipeline/)). |
-| `merodVersion` | The `calimero-network/core` merod tag baked into the image. Overridable at build time via `GATED_MEROD_VERSION`. |
+| `merodVersion` | The `calimero-network/core` merod tag baked into the image. The node release's preflight checks the tag exists (`resolve-release-gate.sh`). |
 | `traefikVersion` / `nodeExporterVersion` / `vmagentVersion` / `vectorVersion` | Third-party components installed by the Ansible roles. |
 
 ### `build-inputs.lock.json`
@@ -270,32 +269,25 @@ Two checks enforce the lock:
   bake mero-bot, and the agent build checks the bundle it downloads against the
   same lock.
 
-A `GATED_MEROD_VERSION` other than `merodVersion` fails the build until the
-lock pins it.
+### Build environment
 
-### Packer variables
-
-Declared in `mero-tee/ubuntu.pkr.hcl`; the x86 var-file `ubuntu-x86.pkrvars.hcl`
-sets the build-host defaults.
+Read by `mero-tee/mkosi-image/build.sh` (and passed through by
+`scripts/release/mkosi/build-image.sh`, which the releases run as root):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `lockdown_profile` | `locked-read-only` | Which profile to build. Validated against `debug`, `debug-read-only`, `locked-read-only`. Selects which Ansible roles run (lockdown + conformance only for `locked-read-only`). |
-| `instance_type` | `n2-standard-2` (from var-file) | Build-host machine type. No TDX needed to build; the output image runs on `c3-standard-4` (Intel TDX) at runtime. |
-| `cpu_architecture` | `amd64` (from var-file) | Build architecture. |
-| `merod_version` | `""` (supplied at build) | merod tag baked in; comes from `versions.json`/`GATED_MEROD_VERSION`. |
-| `traefik_version` / `node_exporter_version` / `vmagent_version` / `vector_version` | `""` (supplied at build) | Component versions passed through from `versions.json`. |
-| `project_id` | `calimero-p2p-development` | GCP project for the build. |
-| `region` | `europe-west4` | GCP region. |
-| `zone` | `europe-west4-a` | GCP zone. |
-| `subnetwork` | `""` | Optional build subnetwork. |
-| `version` | `""` (supplied at build) | Image version, threaded into the image name/family. |
-| `image_role` | `node` | `node` builds the node image (`playbook.yml`); `kms` builds the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` builds the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`, a prefix mdma's dispatcher never resolves. |
-| `mero_kms_binary` | `""` | `kms` only: path of the `mero-kms` binary to bake in, built from the release commit. |
-| `kms_node_policy_file` | `""` | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
-| `mero_agent_binary` | `""` | `agent` only: path of the agent program to bake in as `/usr/local/bin/mero-agent`. Measured (RTMR2 content hash, dm-verity). |
-| `mero_agent_gate_binary` | `""` | `agent` only: path of the `mero-agent-gate` binary, built from this repository. |
-| `kms_agent_policy_file` | `""` | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Empty bakes no agent entry and leaves `kms.env` unchanged. |
+| `ROLE` | `node` | `node` builds the node image (`playbook.yml`); `kms` the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`. |
+| `PROFILE` | `locked-read-only` | `debug`, `debug-read-only` or `locked-read-only`. Selects which Ansible roles run (lockdown and conformance only on `locked-read-only`) and the kernel command line. |
+| `MERO_KMS_BINARY` | none | `kms` only: the `mero-kms` binary to bake in, built from the release commit. |
+| `KMS_NODE_POLICY_FILE` | none | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
+| `KMS_AGENT_POLICY_FILE` | none | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Unset bakes no agent entry. |
+| `MERO_AGENT_GATE_BINARY` | none | `agent` only: the `mero-agent-gate` binary, built from this repository. |
+| `MERO_AGENT_BINARY` | none | `agent` only: the agent program baked as `/usr/local/bin/mero-agent`. |
+| `MERO_BOT_BUNDLE` | none | `agent` only, instead of `MERO_AGENT_BINARY`: the mero-bot release bundle, which must hash to its pin in `build-inputs.lock.json`. The agent is then the launcher, `scripts/agent/mero-bot-agent.sh`. No provisioner is baked; the first owner claims a running agent. |
+| `DOWNLOAD_CACHE` | `OUTPUT_DIR/downloads` | Where the pinned release archives are downloaded and checked. |
+
+The image's version is `versions.json` `imageVersion`, and the image runs on
+`c3-standard-4` (Intel TDX).
 
 ### Ansible play variables
 
@@ -306,7 +298,6 @@ value), and overridable at build time with `-e`.
 | --- | --- | --- |
 | `fleet_delegated_access` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives every edge of the posture: the Traefik routers exempting `/admin-api/contexts/<ctx>/intents`, `/admin-api/contexts/<ctx>/presence-intents`, `/admin-api/groups/<group>/context-intents`, `/admin-api/groups/<group>/governance-intents` and the sealed-transport envelope (`/sealed/v2`) from `auth-node`, merod's `server.admin.delegated_access`, and merod's `server.sealed.forward_auth`, which has merod check sealed requests with the same mero-auth. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
 | `fleet_mdma_url` | `https://manager.cloud.calimero.network` | Where the fleet sidecar polls for assignments. Baked (and so measured); the sidecar exits if unset. |
-| `fleet_auth_token` | `""` | Sent as `X-Fleet-Token` on sidecar requests when set. Supplied by the release workflow from the `FLEET_AUTH_TOKEN` repository secret (`PKR_VAR_fleet_auth_token`). Baked and so measured — rotating it is an image release, not a restart — and nodes must roll before the manager gets its matching `MDMA_FLEET_AUTH_TOKEN`. See [Supplying the fleet token](/understand/fleet-sidecar/#supplying-the-fleet-token). |
 
 <Aside type="caution">
 Changing `fleet_delegated_access` changes `/etc/traefik/routing.yml` and the
@@ -397,47 +388,17 @@ warrant. `scripts/ci/tests/traefik-proxy-identity-test.sh`,
 `mero-auth-device-login-test.sh` and `fleet-sidecar-login-key-test.sh` pin the
 three edges.
 
-The base image is hardcoded for reproducibility: `source_image_family =
-ubuntu-2604-lts-amd64` from `ubuntu-os-cloud` (Ubuntu 26.04 LTS, comfortably past
-the kernel 6.17+ that RTMR3 sysfs support needs), `disk_size = 20` GB `pd-ssd`.
-That line in `ubuntu.pkr.hcl` is the single source of truth — CI's
-`Validate Packer source image` step reads the pin from the file rather than
-repeating it, so it can never check one base while Packer builds from another.
-
-The pin has to name a **supported** release, not merely a new-enough kernel:
-Canonical delists an EOL Ubuntu from `ubuntu-os-cloud`, which fails the build
-outright. That is what happened in September 2026 — 25.10 (Questing) is an
-interim release, went EOL in July 2026, and its family disappeared. An LTS avoids
-the nine-month repeat.
+The base is Ubuntu 26.04 LTS (Resolute Raccoon), comfortably past the kernel
+6.17+ that RTMR3 sysfs support needs, installed from a pinned snapshot of the
+Ubuntu archive (`Snapshot=` in `mero-tee/mkosi-image/mkosi.conf`, with the tools
+tree pinned to the same snapshot). Moving the snapshot changes every image's
+measurements.
 
 The output image name is `merotee-ubuntu-questing-25-10-<profile>-<version>` in
 family `merotee-ubuntu-questing-<profile>`. Those names intentionally still say
 `questing-25-10` after the base moved: mdma's dispatcher resolves images by those
 exact prefixes, so renaming them needs a paired mdma change and a deploy ordering.
 Read the name as an identifier, not as a statement about the base release.
-
-<Aside type="caution">
-There is **no** `ubuntu-2404-tdx` / `confidential-vm-images` base and no
-`source_image` override — the base image family is fixed in `ubuntu.pkr.hcl` for
-release reproducibility.
-</Aside>
-
-### `build-and-release.sh` environment overrides
-
-Optional CI overrides read by `mero-tee/build-and-release.sh`:
-
-| Variable | Meaning |
-| --- | --- |
-| `GATED_MEROD_VERSION` | Overrides `merodVersion` from `versions.json`. |
-| `PACKER_GCP_PROJECT_ID` (or `GOOGLE_CLOUD_PROJECT` / `CLOUDSDK_CORE_PROJECT`) | Overrides the Packer `project_id`. |
-| `PACKER_GCP_REGION` / `PACKER_GCP_ZONE` / `PACKER_GCP_SUBNETWORK` | Override the corresponding Packer vars. |
-| `PACKER_FORCE_BUILD` | When `true`, passes `packer build -force` to replace pre-existing image artifacts. |
-| `IMAGE_ROLE` | `kms` or `agent` selects that image role (default `node`). |
-| `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE`, `KMS_AGENT_POLICY_FILE` | `IMAGE_ROLE=kms`: the binary and allowlists to bake (the agent one optional). |
-| `MERO_AGENT_BINARY`, `MERO_AGENT_GATE_BINARY` | `IMAGE_ROLE=agent`: the binaries to bake. No provisioner is baked; the first owner claims a running agent. |
-
-The script builds one profile when its first argument is a profile name,
-otherwise all three (`locked-read-only`, `debug-read-only`, `debug`).
 
 ## Attestation-policy JSON
 

@@ -32,44 +32,10 @@
     - console-getty.service
     - getty.target
 
-- name: Strip console= from GRUB_CMDLINE_LINUX_DEFAULT
-  replace:
-    path: /etc/default/grub
-    regexp: 'console=[^ "]*\s*'
-    replace: ''
-  register: grub_console_stripped
-
-# The GCP Ubuntu base sets `console=ttyS0` in a grub.d drop-in
-# (50-cloudimg-settings.cfg), not in /etc/default/grub, so the task above never
-# saw it. With it, the kernel and systemd write the boot log -- including every
-# line calimero-init echoes -- to serial port 1, which the cloud project reads
-# with `get-serial-port-output` without any of the attestation or log-endpoint
-# plumbing. getty on ttyS0 is masked above, so this is about output, not login.
-#
-# The kernel command line is measured into RTMR[2], so this CHANGES the
-# locked-read-only image's measurements (expected; the CHANGELOG says so). The
-# calimero drop-ins (50-calimero-profile, 60-calimero-root-hash) carry no
-# console= and are untouched by the regexp.
-- name: Find grub.d drop-ins
-  find:
-    paths: /etc/default/grub.d
-    patterns: "*.cfg"
-  register: grub_dropins
-
-- name: Strip console= from grub.d drop-ins
-  replace:
-    path: "{{ item.path }}"
-    regexp: 'console=[^ "]*\s*'
-    replace: ''
-  loop: "{{ grub_dropins.files }}"
-  register: grub_dropin_console_stripped
-
-- name: Update GRUB (after console removal)
-  command: update-grub
-  when: >-
-    (grub_console_stripped.changed | default(false))
-    or (grub_dropin_console_stripped.changed | default(false))
-  changed_when: true
+# No console= on the kernel command line either, so the kernel and systemd
+# write nothing to the serial port: mero-tee/mkosi-image/build.sh leaves it off
+# locked-read-only, and scripts/release/mkosi/build-image.sh refuses a UKI whose
+# command line has one.
 
 # --- R3: No recovery/emergency shell ---
 - name: Mask emergency, rescue, debug-shell

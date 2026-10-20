@@ -34,14 +34,14 @@ and holds no group keys.
 
 ## Image and boot
 
-The agent image is built by the same template as the node and KMS
-(`mero-tee/ubuntu.pkr.hcl`) and sealed the same way.
+The agent image is built by the same mkosi build as the node and KMS
+(`mero-tee/mkosi-image`, `ROLE=agent`), with a dm-verity root like theirs.
 
 **Image**
 
-- `image_role = "agent"`, built from a new `playbook-agent.yml`: the KMS
+- `ROLE=agent`, built from `playbook-agent.yml`: the KMS
   playbook's base (`cleanup`, `merod-lockdown` on `locked-read-only`,
-  `verity-root`, the log and metric shippers) plus a new `mero-agent` role with
+  the log and metric shippers) plus a new `mero-agent` role with
   the agent binary, `agent-init` and its units.
 - Name and family `merotee-agent-<profile>-<version>` and
   `merotee-agent-<profile>`, plus the usual `-dev` family. mdma's dispatcher
@@ -177,7 +177,7 @@ cannot collect a key.
 2. Run `scripts/release/pin-build-inputs.sh`, with `gh` logged in, since mero-bot is a private repo.
 3. Add the `MERO_BOT_RELEASE_TOKEN` secret to this repository: a token with read access to calimero-network/mero-bot's releases.
 
-mero-bot 0.2.0 is pinned. `Release mero-kms` then builds the release's agent image with mero-bot, and `agent-tdx-image-probe.yaml` does the same from a branch with `agent: mero-bot`. Without `meroBotVersion`, the image stays the stub. A pin without the secret fails the release's agent build, which leaves its KMS images node-only.
+mero-bot 0.2.0 is pinned. `Release mero-kms` then builds the release's agent image with mero-bot, and `node-image-mkosi.yaml` does the same from a branch with `role: agent` and `agent: mero-bot`. Without `meroBotVersion`, the image stays the stub. A pin without the secret fails the release's agent build, which leaves its KMS images node-only.
 
 ## Acting in Calimero: warrants through relays
 
