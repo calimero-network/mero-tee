@@ -98,8 +98,20 @@ python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../${playbook}" \
   -e "mero_agent_gate_binary=${mero_agent_gate_binary}" \
   -e "mero_bot_bundle=${mero_bot_bundle}"
 
-# No empty directories in the image: what a role makes, it fills.
-find "${work}/rendered/tree" -depth -type d -empty -delete
+# No empty directories in the image, except one a role makes on purpose
+# (`file: state=directory`): a program fills it at run time. Vector's journald
+# source refuses to start without its data_dir, /etc/vector/data, so deleting
+# that one left every image shipping no logs at all.
+python3 - "${work}/rendered" <<'PY'
+import json, os, sys
+rendered = sys.argv[1]
+tree = os.path.join(rendered, "tree")
+made = {entry["path"] for entry in json.load(open(os.path.join(rendered, "manifest.json")))["written"]
+        if entry["by"] == "file:directory"}
+for path, _, _ in os.walk(tree, topdown=False):
+    if path != tree and not os.listdir(path) and "/" + os.path.relpath(path, tree) not in made:
+        os.rmdir(path)
+PY
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"
 printf '%s\n' "${role}" > "${work}/rendered/role"
