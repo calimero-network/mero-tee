@@ -18,6 +18,7 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **Release 2.3.122: images that ship their logs, with merod 0.11.0-rc.90.** Bumps `imageVersion` and `mero-kms` to 2.3.122. It carries the fix that keeps `/etc/vector/data` in every image (#520), without which no 2.3.120 node, KMS or agent sent a log line, and the merod 0.11.0-rc.90 that #512 bundled. rc.90 signs namespace ops as schema 26 and rc.89 accepts only 25, so a 2.3.120 TEE (rc.89) admitted by an rc.90 owner never applied its own admission. 2.3.121 was never published: its release run failed when GCP returned an internal error creating the debug-read-only probe VM, and it would not have had #520.
 - **Release 2.3.120: the first release built with mkosi (mdma#480).** Bumps `imageVersion` and `mero-kms` to 2.3.120, so `Release mero-tee` and `Release mero-kms` build every node, KMS and agent image with mkosi (a UKI and an EROFS root behind dm-verity) instead of Packer. Each image's RTMR1-3 are computed from the build and compared with its TD quote before anything is published, and every image measures differently from 2.3.119's Packer images. It carries the hostname, pcrlock and initrd fixes (#509) and the renderer fix (#510) that lets the agent image bake mero-bot. Image names, families and descriptions are the ones mdma looks up; the boot disk is about 2 GB, not 20 GB. Packer stays until this release has run in production.
 
 ### Fixed
