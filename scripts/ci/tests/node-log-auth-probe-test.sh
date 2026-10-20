@@ -187,7 +187,7 @@ chmod +x "${SB}/setup-bin/gcloud"
 : > "${SB}/gh-output"
 (cd "${REPO_ROOT}" && PATH="${SB}/setup-bin:${PATH}" GCP_CREATE_RETRY_DELAY=0 \
   VM_PROJECT=p VM_ZONE=z VM_NETWORK=n VM_SUBNETWORK=s NODE_TAG=node-tag \
-  RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="${suffix}" \
+  IMAGE_PROFILE=debug-read-only RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="${suffix}" \
   TOKEN_FILE="${SB}/token" GITHUB_OUTPUT="${SB}/gh-output" \
   bash "${PROBE}" setup) > "${SB}/setup.out" 2>&1 \
   || fail "setup failed after one transient create error: $(cat "${SB}/setup.out")"
@@ -199,5 +199,30 @@ done
 [[ "$(stat -c '%a' "${SB}/token")" == "600" && -s "${SB}/token" ]] \
   || fail "the token file is missing or not mode 0600"
 echo "ok   setup retries a transient receiver create under the same name"
+
+# locked-read-only ships logs only over https (configure_vector.sh), so it can
+# never push to the plain-http receiver: setup must say so at once, before it
+# creates anything, rather than leave verify to time out after 600s.
+for profile in locked-read-only some-new-profile; do
+  : > "${SB}/setup-calls"
+  if (cd "${REPO_ROOT}" && PATH="${SB}/setup-bin:${PATH}" \
+    VM_PROJECT=p VM_ZONE=z VM_NETWORK=n VM_SUBNETWORK=s NODE_TAG=node-tag \
+    IMAGE_PROFILE="${profile}" RUN_SUFFIX=1-1 \
+    TOKEN_FILE="${SB}/token-${profile}" GITHUB_OUTPUT="${SB}/gh-output" \
+    bash "${PROBE}" setup) > "${SB}/setup.out" 2>&1; then
+    fail "setup accepted ${profile}, which refuses a plain-http logs endpoint"
+  fi
+  grep -q LOG_AUTH_UNSUPPORTED_PROFILE "${SB}/setup.out" \
+    || fail "setup on ${profile} did not report LOG_AUTH_UNSUPPORTED_PROFILE: $(cat "${SB}/setup.out")"
+  [[ ! -s "${SB}/setup-calls" && ! -e "${SB}/token-${profile}" ]] \
+    || fail "setup on ${profile} touched GCP or wrote a token before refusing"
+  echo "ok   setup refuses ${profile} before creating anything"
+done
+
+# The profiles setup accepts must be the ones configure_vector.sh lets ship
+# over plain http; if that list changes, this check must change with it.
+grep -qx '    debug|debug-read-only) ;;' "${REPO_ROOT}/mero-tee/ansible/roles/vector/files/configure_vector.sh" \
+  || fail "configure_vector.sh's plain-http profile list changed; update node_log_auth_probe.sh setup and this test"
+echo "ok   configure_vector.sh still allows plain http on debug and debug-read-only only"
 
 echo "== log-auth probe classifies pushes and verdicts correctly =="

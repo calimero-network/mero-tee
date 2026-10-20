@@ -216,11 +216,14 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
      probe, which the post-release check uses, boots the same shape.
    - Collect TEE info and a TDX quote from the node's admin API, then verify the
      quote externally against **Intel Trust Authority**.
-   - Check the node ships its logs: it boots with `logs-endpoint` and
-     `observability-token` pointed at a throwaway receiver VM, and the job fails
-     unless the receiver sees a push carrying that token (the
+   - On `debug` and `debug-read-only`, check the node ships its logs: it boots
+     with `logs-endpoint` and `observability-token` pointed at a throwaway
+     receiver VM, and the job fails unless the receiver sees a push carrying
+     that token (the
      [log-auth check](/operate/runbooks/#log-auth-check-log_auth_check)). Neither
-     key is measured.
+     key is measured. `locked-read-only` skips it: it ships logs only over
+     https, and the receiver is plain http. The debug profiles share its vector
+     role, config and token chain.
    - Compare the quote's RTMR1–3 with the computed ones; a difference fails the
      release. The computed registers (`computed-rtmrs-<profile>.json`) and the
      build evidence go out with the attestation artifacts.

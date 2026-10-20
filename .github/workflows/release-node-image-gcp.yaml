@@ -137,6 +137,15 @@ jobs:
     env:
       GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      # The log-auth check needs a node that ships over plain http to the
+      # receiver. configure_vector.sh allows that only on the debug profiles:
+      # locked-read-only refuses a non-https logs endpoint, so its vector never
+      # starts against the receiver (run 39505209881: NO_LOG_PUSHES after 600s).
+      # An https receiver cannot help, since vector trusts no CA given to it in
+      # metadata. The debug profiles share vector's role, partial config,
+      # data_dir and token chain with it, so they catch a vector that cannot
+      # start (2.3.120).
+      LOG_AUTH_CHECK: ${{ matrix.profile != 'locked-read-only' }}
     strategy:
       fail-fast: false
       matrix:
@@ -387,11 +396,13 @@ jobs:
       # mdma sets, pointed at a throwaway receiver VM that records whether each
       # push carried that token (node_log_auth_probe.sh, the staging probe's
       # `log_auth_check`). Neither key is measured, so the published MRTD and
-      # RTMRs are the ones an mdma node, which gets both, has.
+      # RTMRs are the ones an mdma node, which gets both, has. Skipped on
+      # locked-read-only (see LOG_AUTH_CHECK above).
       - name: Set up log-auth check
         id: log_auth
-        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        if: ${{ success() && env.LOG_AUTH_CHECK == 'true' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         env:
+          IMAGE_PROFILE: ${{ matrix.profile }}
           VM_PROJECT: ${{ steps.params.outputs.vm_project }}
           VM_ZONE: ${{ steps.params.outputs.vm_zone }}
           VM_NETWORK: ${{ steps.params.outputs.vm_network }}
@@ -410,9 +421,11 @@ jobs:
         run: |
           set -euo pipefail
           metadata="merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true"
-          # The same two keys mdma sets; the receiver stands in for the sink.
-          metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
-          rm -f "${TOKEN_FILE}"
+          if [[ "${LOG_AUTH_CHECK}" == "true" ]]; then
+            # The same two keys mdma sets; the receiver stands in for the sink.
+            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
+            rm -f "${TOKEN_FILE}"
+          fi
           # The data disk mdma attaches at creation (dispatcher/app/gcp/instances.py)
           # is part of the machine RTMR0 measures: a VM measured without it publishes
           # an RTMR0 no mdma node has, and the KMS refuses every node. Same size, type
@@ -584,10 +597,11 @@ jobs:
 
       # Runs once the admin API answers, so vector has been up for a while and
       # the first poll usually passes. A failure fails this profile, and so
-      # "Publish profile MRTDs", which needs every profile.
+      # "Publish profile MRTDs", which needs every profile. Skipped on
+      # locked-read-only (see LOG_AUTH_CHECK above).
       - name: Verify the node pushed logs with its metadata token
         id: verify_log_auth
-        if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        if: ${{ success() && env.LOG_AUTH_CHECK == 'true' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         env:
           ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
           VM_PROJECT: ${{ steps.params.outputs.vm_project }}
@@ -809,7 +823,7 @@ jobs:
             --arg src_ranges "${{ steps.params.outputs.attestation_source_ranges }}" \
             --arg collect_outcome "${{ steps.collect_tee.outcome || 'skipped' }}" \
             --arg verify_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
-            --arg log_auth_outcome "${{ steps.verify_log_auth.outcome || 'skipped' }}" \
+            --arg log_auth_outcome "${{ env.LOG_AUTH_CHECK == 'true' && (steps.verify_log_auth.outcome || 'skipped') || 'skipped on this profile: locked-read-only ships logs only over https, and the receiver is plain http (debug and debug-read-only run the check)' }}" \
             --arg job_status "${{ job.status }}" \
             --arg result_line "${result_line}" \
             --arg artifact_name "gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}" \
@@ -899,7 +913,9 @@ jobs:
 
           # The log-auth receiver and its rule. Best effort, and safe after a
           # partial setup; on master the sweep job catches what this misses.
-          if [[ -n "${vm_project}" && -n "${vm_zone}" ]]; then
+          if [[ "${LOG_AUTH_CHECK}" != "true" ]]; then
+            echo "No log-auth receiver on ${{ matrix.profile }} (check skipped); nothing to delete."
+          elif [[ -n "${vm_project}" && -n "${vm_zone}" ]]; then
             VM_PROJECT="${vm_project}" VM_ZONE="${vm_zone}" \
             RECEIVER_PREFIX=tee-attest-rcv \
             RUN_SUFFIX="${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \

@@ -23,9 +23,10 @@
 #   cleanup  delete the receiver and its firewall rule. Best effort, so it is
 #            safe to run after a partial setup.
 #
-# Two callers: the staging probe's opt-in `log_auth_check`, and every profile
-# of the node release (release-node-image-gcp.yaml), where a node that does not
-# ship its logs stops the release before anything is published.
+# Two callers: the staging probe's opt-in `log_auth_check`, and the debug and
+# debug-read-only profiles of the node release (release-node-image-gcp.yaml),
+# where a node that does not ship its logs stops the release before anything
+# is published. Not locked-read-only: it ships only over https (see setup).
 set -euo pipefail
 
 source scripts/ci/logging.sh
@@ -61,6 +62,19 @@ names() {
 }
 
 setup() {
+  # The receiver speaks plain http: vector cannot trust a CA handed to it in
+  # metadata, so an https receiver would need a publicly trusted certificate.
+  # configure_vector.sh lets only the debug profiles ship over plain http (the
+  # push carries the bearer token and every log line), so on locked-read-only
+  # vector never starts against this receiver and verify could only time out.
+  # IMAGE_PROFILE is optional; when given, refuse such a profile up front.
+  case "${IMAGE_PROFILE:-}" in
+    "" | debug | debug-read-only) ;;
+    *)
+      ci_fail "LOG_AUTH_UNSUPPORTED_PROFILE" "Profile '${IMAGE_PROFILE}' ships logs only to an https endpoint (configure_vector.sh), so it cannot push to the plain-http receiver. Run the log-auth check on debug or debug-read-only; they share vector's role, config and token chain."
+      exit 1
+      ;;
+  esac
   require_env VM_NETWORK VM_SUBNETWORK NODE_TAG TOKEN_FILE GITHUB_OUTPUT
   names
 

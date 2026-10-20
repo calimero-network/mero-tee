@@ -80,7 +80,7 @@ on:
         required: false
         default: ""
       log_auth_check:
-        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it"
+        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it (debug and debug-read-only only: locked-read-only ships only over https)"
         required: false
         type: boolean
         default: false
@@ -185,7 +185,7 @@ on:
         type: string
         default: ""
       log_auth_check:
-        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it"
+        description: "Give the node a log token as observability-token metadata, as mdma does, and check its log pushes carry it (debug and debug-read-only only: locked-read-only ships only over https)"
         required: false
         type: boolean
         default: false
@@ -398,10 +398,14 @@ jobs:
       # in `observability-token` metadata, written out by calimero-init, and
       # presented by vector through the `provided` provider. A break anywhere
       # makes the sink reject every write, silently from the node's side.
+      # Fails at once (LOG_AUTH_UNSUPPORTED_PROFILE) on locked-read-only, before
+      # any VM exists: that profile ships logs only over https, and the
+      # receiver is plain http, so verify could only time out.
       - name: Set up log-auth check
         id: log_auth
         if: ${{ inputs.log_auth_check }}
         env:
+          IMAGE_PROFILE: ${{ steps.params.outputs.profile }}
           VM_PROJECT: ${{ steps.params.outputs.vm_project }}
           VM_ZONE: ${{ steps.params.outputs.vm_zone }}
           VM_NETWORK: ${{ steps.params.outputs.vm_network }}
