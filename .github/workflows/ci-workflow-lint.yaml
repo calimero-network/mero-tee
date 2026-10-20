@@ -564,6 +564,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/node-log-auth-probe-test.sh
 
+      # Release probe VMs are created through gcp_create_instance, which retries
+      # GCP's transient errors (run 39287102050 lost a release to one "Internal
+      # error"), fails at once on deterministic ones, and deletes a half-created
+      # instance before retrying under the same name.
+      - name: Check probe VM creation retries only transient GCP errors
+        id: gcp_create_instance_test
+        shell: bash
+        run: scripts/ci/tests/gcp-create-instance-retry-test.sh
+
       # Relays set `server.sealed.forward_auth` so a sealed login or logged-in
       # call is checked by the same mero-auth traefik's auth-node asks, on a
       # merod (>= 0.11.0-rc.84) that knows the key, and never fatally.
@@ -652,6 +661,7 @@ jobs:
             --checks-line "- delegated routes serve exactly their own paths: ${{ steps.traefik_delegated_route_test.outcome }}" \
             --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
+            --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
             --checks-line "- release signs only the agent allowlists: ${{ steps.kms_agent_policy_signing_test.outcome }}" \
