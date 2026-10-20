@@ -60,6 +60,8 @@ AGENT_ALLOWED_TCB_STATUSES="${AGENT_ALLOWED_TCB_STATUSES:-uptodate}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
+# shellcheck source=scripts/ci/gcp_create_instance.sh
+source "${repo_root}/scripts/ci/gcp_create_instance.sh"
 mkdir -p "${OUT_DIR}"
 
 vm="${PROBE_NAME}-a"
@@ -96,8 +98,7 @@ gcloud compute firewall-rules create "${firewall}" \
 firewall_created="true"
 
 vm_created="true"
-gcloud compute instances create "${vm}" \
-  --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
+gcp_create_instance "${vm}" "${VM_PROJECT}" "${VM_ZONE}" \
   --machine-type "${VM_MACHINE_TYPE}" \
   --confidential-compute-type TDX --maintenance-policy TERMINATE \
   --min-cpu-platform "Intel Sapphire Rapids" \
