@@ -266,7 +266,7 @@ jobs:
       # e2e boots the image this KMS serves, and mdma boots it by this exact
       # name (merotee-agent-<profile>-<version>) for its agent hosts.
       - name: Set up mkosi
-        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+        uses: systemd/mkosi@4736cd836108a97772142c461c49f1ddb4172348 # v27
 
       - name: Install the build tools
         run: scripts/release/mkosi/install-tools.sh
@@ -469,7 +469,7 @@ jobs:
       # behind; the release tag does not exist yet (publish_release), so nothing
       # published refers to it.
       - name: Set up mkosi
-        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+        uses: systemd/mkosi@4736cd836108a97772142c461c49f1ddb4172348 # v27
 
       - name: Install the build tools
         run: scripts/release/mkosi/install-tools.sh

@@ -69,7 +69,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up mkosi
-        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+        uses: systemd/mkosi@4736cd836108a97772142c461c49f1ddb4172348 # v27
 
       - name: Build the probe image
         run: |

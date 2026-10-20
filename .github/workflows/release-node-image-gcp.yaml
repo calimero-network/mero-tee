@@ -179,7 +179,7 @@ jobs:
       # it boots (checked against the quote below).
       - name: Set up mkosi
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
-        uses: systemd/mkosi@84af20892b61c8e177e391f997ded8b4cb5514f2 # v26
+        uses: systemd/mkosi@4736cd836108a97772142c461c49f1ddb4172348 # v27
 
       - name: Install the build tools
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' }}
