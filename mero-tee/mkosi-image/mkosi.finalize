@@ -60,6 +60,9 @@ esac
 for unit in "${not_at_boot[@]}"; do
   if compgen -G "${root}/etc/systemd/system/*.wants/${unit}" >/dev/null; then fail "${unit} is enabled"; fi
 done
+# Every role ships vector, whose journald source does not start without its
+# data_dir: an image missing it ships no logs.
+required+=(/etc/vector/data)
 for path in "${required[@]}"; do
   [[ -e "${root}${path}" ]] || fail "${path} is missing"
 done

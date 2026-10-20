@@ -84,7 +84,9 @@ containing `merod`. The same build makes the KMS image (`ROLE=kms`,
 the private agent image (`ROLE=agent`, `playbook-agent.yml`).
 
 `mero-tee/mkosi-image/build.sh` renders the role's playbook into a file tree
-(`scripts/image/render_role_tree.py`) and runs mkosi on Ubuntu 26.04 LTS (Resolute
+(`scripts/image/render_role_tree.py`), drops the empty directories no role made
+on purpose (vector's `/etc/vector/data` stays: vector does not start without
+it), and runs mkosi on Ubuntu 26.04 LTS (Resolute
 Raccoon) from a pinned archive snapshot. Kernel 6.17+ is required for RTMR3
 sysfs support. The result is a UKI on the ESP and an EROFS root behind dm-verity,
 and two builds of one commit give the same image. The build runs on a CI runner,
