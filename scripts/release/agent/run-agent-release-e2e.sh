@@ -45,6 +45,8 @@ KMS_PORT="${KMS_PORT:-8080}"
 GATE_PORT="${GATE_PORT:-8090}"
 WAIT_TIMEOUT_MINUTES="${WAIT_TIMEOUT_MINUTES:-25}"
 mkdir -p "${OUT_DIR}"
+# shellcheck source=scripts/ci/gcp_create_instance.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../ci" && pwd)/gcp_create_instance.sh"
 
 kms_image="merotee-kms-${PROFILE}-${VERSION//./-}"
 agent_image="merotee-agent-${PROFILE}-${VERSION//./-}"
@@ -90,8 +92,7 @@ create_vm() {
   local name="$1" image="$2" metadata="$3"
   shift 3
   created_vms+=("${name}")
-  gcloud compute instances create "${name}" \
-    --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
+  gcp_create_instance "${name}" "${VM_PROJECT}" "${VM_ZONE}" \
     --machine-type "${VM_MACHINE_TYPE}" \
     --confidential-compute-type TDX --maintenance-policy TERMINATE \
     --min-cpu-platform "Intel Sapphire Rapids" \

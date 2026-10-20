@@ -479,6 +479,27 @@ probes print the last lines of the serial port whenever their wait times out. A
 diagnostic build measures differently (RTMR2 covers the command line), so its
 registers are not the image's.
 
+### When GCP fails to create a probe VM
+
+The release probes create their VMs through `gcp_create_instance`
+(`scripts/ci/gcp_create_instance.sh`): the node release's measurement VM, the
+KMS release's agent probe and two-replica cluster, the mkosi run's KMS and
+agent probes, and the post-release agent e2e. It makes up to three attempts,
+30 and then 60 seconds apart, and only for errors GCP says to try again on:
+`Internal error`, `backendError`, HTTP 500/502/503/504, rate limiting and a
+zone out of capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`). Each retry is a
+`::warning::` in the step's log naming the error. A bad flag, a permission
+denied, an exceeded quota, an image that does not exist, a name already taken
+and any error it does not recognise fail on the first attempt.
+
+A create that failed this way can leave the instance half-made. Before a
+retry the helper deletes any instance of that name, disks included, and
+creates it again under the same name, so the job's own cleanup and the
+attestation sweep still find it. If that delete fails it stops instead of
+retrying. When all three attempts fail, re-run the failed jobs: the zone is
+having a bad hour, not the release. Release run 39287102050 (2.3.121) was
+lost to a single `Internal error` before this.
+
 ## Verify release assets
 
 Before trusting any release, run the matching verifier (all under
@@ -542,6 +563,7 @@ very node release baked in, before anything is published.
 | Every replica is gone | Cluster lost | [Recover a lost cluster](#recover-a-lost-cluster). |
 | Node key release → `403 measurement_policy_rejected` / `tcb_status_rejected` | Node image or profile is not the one this release's KMS image bakes in, or the node's TCB status is outside the baked list | Run the node image of the same release and profile as the KMS; never widen anything to fit. |
 | merod refuses the KMS (measurements not in `kms_allowed_*`) | `kms-url` points at a different release's cluster than `tee-release-version` names, or a non-release image | Point the node at its own release's cluster. |
+| A release fails at "Create ephemeral TDX VM" or a probe's `instances create` | GCP returned the same transient error on three attempts, or an error that is not transient | Read the step's `::warning::` and `::error::` lines. Transient on every attempt: re-run the failed jobs. Otherwise fix what the error names (flag, permission, quota, image). See [When GCP fails to create a probe VM](#when-gcp-fails-to-create-a-probe-vm). |
 | `cargo audit` advisory flagged | Vulnerable dependency | Bump the dependency (see `security-audit.yaml` / `CHANGELOG.md` for the pattern); it ships in the next release. |
 
 See [Error handling](/operate/error-handling/) for the full error catalog.

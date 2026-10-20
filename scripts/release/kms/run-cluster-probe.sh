@@ -47,6 +47,8 @@ ITA_APPRAISAL_URL="${ITA_APPRAISAL_URL:-https://api.trustauthority.intel.com/app
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
+# shellcheck source=scripts/ci/gcp_create_instance.sh
+source "${repo_root}/scripts/ci/gcp_create_instance.sh"
 mkdir -p "${OUT_DIR}"
 
 tag="${PROBE_NAME}"
@@ -91,8 +93,7 @@ start_replica() {
   local name="$1"
   local metadata="$2"
   created_vms+=("${name}")
-  gcloud compute instances create "${name}" \
-    --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
+  gcp_create_instance "${name}" "${VM_PROJECT}" "${VM_ZONE}" \
     --machine-type "${VM_MACHINE_TYPE}" \
     --confidential-compute-type TDX --maintenance-policy TERMINATE \
     --min-cpu-platform "Intel Sapphire Rapids" \
