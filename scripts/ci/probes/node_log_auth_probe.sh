@@ -22,6 +22,10 @@
 #            authenticated push, or fail after VERIFY_TIMEOUT_SECONDS.
 #   cleanup  delete the receiver and its firewall rule. Best effort, so it is
 #            safe to run after a partial setup.
+#
+# Two callers: the staging probe's opt-in `log_auth_check`, and every profile
+# of the node release (release-node-image-gcp.yaml), where a node that does not
+# ship its logs stops the release before anything is published.
 set -euo pipefail
 
 source scripts/ci/logging.sh
@@ -39,11 +43,20 @@ require_env() {
   done
 }
 
+# The receiver VM, its network tag and its firewall rule share one name,
+# ${RECEIVER_PREFIX}-${RUN_SUFFIX}. The staging probe keeps the default. The
+# release passes `tee-attest-rcv`, so that its cleanup sweep, which matches the
+# release's own `tee-attest-` names, also finds a receiver a cancelled run left.
 names() {
   require_env VM_PROJECT VM_ZONE RUN_SUFFIX
-  RECEIVER_NAME="tee-e2e-rcv-${RUN_SUFFIX}"
-  RECEIVER_TAG="tee-e2e-rcv-${RUN_SUFFIX}"
-  RECEIVER_FW_RULE="tee-e2e-rcv-${RUN_SUFFIX}"
+  local name="${RECEIVER_PREFIX:-tee-e2e-rcv}-${RUN_SUFFIX}"
+  if [[ ! "${name}" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then
+    ci_fail "BAD_RECEIVER_NAME" "Receiver name '${name}' is not a valid GCE resource name (lowercase, at most 63 characters)."
+    exit 1
+  fi
+  RECEIVER_NAME="${name}"
+  RECEIVER_TAG="${name}"
+  RECEIVER_FW_RULE="${name}"
 }
 
 setup() {

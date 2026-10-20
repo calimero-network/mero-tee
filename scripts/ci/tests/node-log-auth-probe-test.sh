@@ -77,6 +77,7 @@ echo "ok   GET answered, not counted"
 mkdir -p "${SB}/bin" "${SB}/art"
 cat > "${SB}/bin/gcloud" <<STUB
 #!/usr/bin/env bash
+echo "\$*" >> "${SB}/gcloud-calls"
 cat "${SB}/canned"
 STUB
 chmod +x "${SB}/bin/gcloud"
@@ -111,5 +112,53 @@ expect_verify "a receiver that never started" \
   'boot\n' RECEIVER_NOT_READY
 expect_verify "no pushes at all" \
   'PROBE_RECEIVER_READY port=9200\n' NO_LOG_PUSHES
+
+# --- receiver names: the release's cleanup sweep finds them by prefix ---------
+# The release runs the check with RECEIVER_PREFIX=tee-attest-rcv and a
+# per-profile RUN_SUFFIX; sweep-attestation-resources.sh deletes what matches.
+probe_with() {
+  : > "${SB}/gcloud-calls"
+  printf 'PROBE_RECEIVER_READY port=9200\nPROBE_AUTH_OK POST /_bulk\n' > "${SB}/canned"
+  (cd "${REPO_ROOT}" && PATH="${SB}/bin:${PATH}" ARTIFACTS_DIR="${SB}/art" \
+    VM_PROJECT=p VM_ZONE=z VERIFY_TIMEOUT_SECONDS=0 "$@") > "${SB}/verify.out" 2>&1
+}
+
+probe_with env RUN_SUFFIX=1-1 bash "${PROBE}" cleanup \
+  || fail "cleanup failed: $(cat "${SB}/verify.out")"
+grep -q 'instances delete tee-e2e-rcv-1-1 ' "${SB}/gcloud-calls" \
+  || fail "default receiver name changed: $(cat "${SB}/gcloud-calls")"
+echo "ok   default receiver name tee-e2e-rcv-<suffix>"
+
+suffix="locked-read-only-99999999999-1"
+probe_with env RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="${suffix}" bash "${PROBE}" verify \
+  || fail "verify with a prefix failed: $(cat "${SB}/verify.out")"
+grep -q "get-serial-port-output tee-attest-rcv-${suffix} " "${SB}/gcloud-calls" \
+  || fail "verify did not read the prefixed receiver: $(cat "${SB}/gcloud-calls")"
+probe_with env RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="${suffix}" bash "${PROBE}" cleanup
+for what in "instances delete" "firewall-rules delete"; do
+  grep -q "${what} tee-attest-rcv-${suffix} " "${SB}/gcloud-calls" \
+    || fail "cleanup did not run '${what}' on the prefixed receiver: $(cat "${SB}/gcloud-calls")"
+done
+echo "ok   RECEIVER_PREFIX names the receiver, its rule and its serial read"
+
+# Matches the sweep's current-run patterns for the release's receivers.
+sweep="${REPO_ROOT}/scripts/release/node-image-gcp/sweep-attestation-resources.sh"
+# The literal `${GITHUB_RUN_ID}` in the sweep's source is what gets replaced.
+# shellcheck disable=SC2016
+inst_re="$(sed -n 's/^run_prefix_regex="\(.*\)"$/\1/p' "${sweep}" | sed 's/\${GITHUB_RUN_ID}/99999999999/')"
+# shellcheck disable=SC2016
+fw_re="$(sed -n 's/^run_firewall_regex="\(.*\)"$/\1/p' "${sweep}" | sed 's/\${GITHUB_RUN_ID}/99999999999/')"
+[[ "tee-attest-rcv-${suffix}" =~ ${inst_re} ]] || fail "sweep instance regex ${inst_re} misses the release receiver"
+[[ "tee-attest-rcv-${suffix}" =~ ${fw_re} ]] || fail "sweep firewall regex ${fw_re} misses the release receiver rule"
+[[ "tdx-${suffix}" =~ ${inst_re} ]] || fail "sweep instance regex ${inst_re} no longer matches the node VM"
+[[ "tee-attest-${suffix}" =~ ${fw_re} ]] || fail "sweep firewall regex ${fw_re} no longer matches the node rule"
+echo "ok   the release's cleanup sweep matches its receiver and rule"
+
+if probe_with env RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="$(printf 'x%.0s' $(seq 1 60))" bash "${PROBE}" cleanup; then
+  fail "a receiver name over 63 characters was accepted"
+fi
+grep -q BAD_RECEIVER_NAME "${SB}/verify.out" || fail "an overlong name did not report BAD_RECEIVER_NAME"
+[[ ! -s "${SB}/gcloud-calls" ]] || fail "gcloud ran with an invalid receiver name"
+echo "ok   an invalid receiver name fails before any gcloud call"
 
 echo "== log-auth probe classifies pushes and verdicts correctly =="

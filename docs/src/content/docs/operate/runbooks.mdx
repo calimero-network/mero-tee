@@ -255,7 +255,8 @@ rejection from ITA counts as a verdict about the quote.
 
 #### Log-auth check (`log_auth_check`)
 
-Off by default, and it needs no setup. It checks the chain that makes a node's
+Off by default in the staging probe (the release always runs it, see below),
+and it needs no setup. It checks the chain that makes a node's
 logs arrive at all. MDMA stamps the fleet's observability token into instance
 metadata as `observability-token`. `calimero-init` writes it to
 `/etc/vector/provided_token`, and vector presents it on every push through the
@@ -278,6 +279,23 @@ attestation checks. On failure the reason code names what the receiver saw:
 `LOG_PUSH_UNAUTHENTICATED` (pushes with no credential), `LOG_PUSH_WRONG_TOKEN`,
 `NO_LOG_PUSHES`, or `RECEIVER_NOT_READY`. The artifact is
 `node-log-auth-result.json`.
+
+**The release always runs it.** Every `Build and attest (<profile>)` job of
+**Release mero-tee** (`release-node-image-gcp.yaml`) runs the same check on the
+VM it measures, for all three profiles, so a node image that does not ship its
+logs never reaches **Publish profile MRTDs**. It was added after 2.3.120, whose
+vector exited at boot (no `/etc/vector/data`) on every node. The node boots
+with the two extra metadata keys; neither is measured, so the published MRTD
+and RTMR0–3 are the ones an MDMA node, which gets both, has. The release names
+the receiver `tee-attest-rcv-<profile>-<run>-<attempt>` (`RECEIVER_PREFIX`),
+which the job's own cleanup step deletes, and which `Cleanup attestation
+resources` (`sweep-attestation-resources.sh`) also sweeps on `master`, with
+stale receivers over `GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS`. It adds an
+`e2-small` VM for a few minutes per profile and needs no secret beyond the GCP
+access the release already has. A failing check shows in the profile job's
+**Verify the node pushed logs with its metadata token** step, with the reason
+codes above; `node-log-auth-result.json` and `log-auth-receiver-serial.log` are
+in that profile's `gcp-tdx-attestation-*` artifact.
 
 </TabItem>
 </Tabs>
