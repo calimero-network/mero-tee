@@ -136,7 +136,7 @@ for profile in "${profiles[@]}"; do
         kms_role: "calimero.role=kms",
         node_role: "calimero.role=node",
         node_profile_key: "calimero.profile",
-        node_root_hash_key: "calimero.root_hash",
+        node_root_hash_key: "roothash",
         rtmr3_event: "calimero-rtmr3-v3:<role>:<profile>:<roothash>"
       },
       kms: {

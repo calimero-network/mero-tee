@@ -281,9 +281,9 @@ fi
 # Use baked binaries if present (image built with calimero-core); else download
 # at runtime -- but never on locked-read-only.
 #
-# The baked binaries are hashed into `calimero.root_hash` on the kernel command
-# line, which is measured into RTMR[2]; that is what makes the node's quote say
-# WHICH merod it runs. A merod fetched here at boot is in no measurement at all:
+# The baked binaries sit on the dm-verity root, whose root hash (`roothash=` on
+# the UKI's kernel command line) is measured into RTMR[2] and named in RTMR3;
+# that is what makes the node's quote say WHICH merod it runs. A merod fetched here at boot is in no measurement at all:
 # the quote would be identical whatever was downloaded, and `merod-version` is
 # instance metadata the cloud project writes. So on the production profile a
 # missing binary is a broken image, and the only safe answer is to stop.
