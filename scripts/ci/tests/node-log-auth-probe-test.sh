@@ -161,4 +161,43 @@ grep -q BAD_RECEIVER_NAME "${SB}/verify.out" || fail "an overlong name did not r
 [[ ! -s "${SB}/gcloud-calls" ]] || fail "gcloud ran with an invalid receiver name"
 echo "ok   an invalid receiver name fails before any gcloud call"
 
+# --- setup creates the receiver through gcp_create_instance -------------------
+# The release runs setup for every profile, so one transient GCP error on the
+# receiver create must be retried under the same name, not fail the release.
+mkdir -p "${SB}/setup-bin"
+cat > "${SB}/setup-bin/gcloud" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "${SB}/setup-calls"
+case "\$2 \$3" in
+  "instances create")
+    if [[ ! -e "${SB}/created-once" ]]; then
+      touch "${SB}/created-once"
+      echo "ERROR: (gcloud.compute.instances.create) Internal error. Please try again or contact Google Support." >&2
+      exit 1
+    fi
+    exit 0 ;;
+  "instances describe")
+    [[ "\$*" == *networkIP* ]] && { echo 10.0.0.5; exit 0; }
+    echo "ERROR: The resource '\$4' was not found" >&2; exit 1 ;;
+esac
+exit 0
+STUB
+chmod +x "${SB}/setup-bin/gcloud"
+: > "${SB}/setup-calls"
+: > "${SB}/gh-output"
+(cd "${REPO_ROOT}" && PATH="${SB}/setup-bin:${PATH}" GCP_CREATE_RETRY_DELAY=0 \
+  VM_PROJECT=p VM_ZONE=z VM_NETWORK=n VM_SUBNETWORK=s NODE_TAG=node-tag \
+  RECEIVER_PREFIX=tee-attest-rcv RUN_SUFFIX="${suffix}" \
+  TOKEN_FILE="${SB}/token" GITHUB_OUTPUT="${SB}/gh-output" \
+  bash "${PROBE}" setup) > "${SB}/setup.out" 2>&1 \
+  || fail "setup failed after one transient create error: $(cat "${SB}/setup.out")"
+[[ "$(grep -c "^compute instances create tee-attest-rcv-${suffix} " "${SB}/setup-calls")" == "2" ]] \
+  || fail "setup did not retry the receiver create under its name: $(cat "${SB}/setup-calls")"
+for line in "receiver_name=tee-attest-rcv-${suffix}" "receiver_ip=10.0.0.5"; do
+  grep -qx "${line}" "${SB}/gh-output" || fail "setup did not output ${line}: $(cat "${SB}/gh-output")"
+done
+[[ "$(stat -c '%a' "${SB}/token")" == "600" && -s "${SB}/token" ]] \
+  || fail "the token file is missing or not mode 0600"
+echo "ok   setup retries a transient receiver create under the same name"
+
 echo "== log-auth probe classifies pushes and verdicts correctly =="

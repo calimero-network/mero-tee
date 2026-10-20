@@ -29,6 +29,7 @@
 set -euo pipefail
 
 source scripts/ci/logging.sh
+source scripts/ci/gcp_create_instance.sh
 
 MODE="${1:-}"
 RECEIVER_PORT=9200
@@ -97,9 +98,10 @@ setup() {
 
   # Plain Debian, not a TEE image: the receiver is test scaffolding. No service
   # account and no external address, since it only listens inside the VPC.
-  gcloud compute instances create "${RECEIVER_NAME}" \
-    --project "${VM_PROJECT}" \
-    --zone "${VM_ZONE}" \
+  # The release runs this for every profile, so a transient GCP error here
+  # would fail a release. gcp_create_instance retries those under the same
+  # name, so cleanup and the release sweep still find the receiver.
+  gcp_create_instance "${RECEIVER_NAME}" "${VM_PROJECT}" "${VM_ZONE}" \
     --machine-type e2-small \
     --image-family debian-12 \
     --image-project debian-cloud \
