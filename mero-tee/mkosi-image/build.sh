@@ -125,6 +125,10 @@ PY
 if [[ "${role}" == inference ]]; then
   UV_CACHE_DIR="${cache}/uv" "${repo}/scripts/inference/install-runtime.sh" \
     "${work}/rendered/tree" /opt/mero-inference/site-packages
+  # Ubuntu ships the NVIDIA driver (linux-modules-nvidia-*-open-gcp and its
+  # user space) in `restricted`. Only this role adds it: mkosi merges the list
+  # with mkosi.conf's main,universe, and the other roles' images stay as they are.
+  printf '[Distribution]\nRepositories=restricted\n' > "${work}/mkosi.conf.d/40-inference-restricted.conf"
 fi
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"

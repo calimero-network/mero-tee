@@ -10,6 +10,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 - **The agent image bakes mero-bot 0.3.0** (was 0.2.0), pinned in `versions.json` and `build-inputs.lock.json` by the sha256 GitHub reports for the release asset, which equals the one the mero-bot release workflow published. 0.3.0 adds `"attest": "mero"` (calimero-network/mero-bot#93), so an agent whose owner picks a private inference host in mdma can reach it; with only NEAR profiles it behaves as 0.2.0. The agent image's content, and so its measurements, change with the next release.
 
+### Fixed
+
+- **The inference image builds: it enables Ubuntu's `restricted` component.** The first `node-image-mkosi.yaml` run with `role: inference` (run 39682195284) stopped in mkosi's package install with `Unable to locate package linux-modules-nvidia-580-server-open-gcp` (and the other four NVIDIA packages): `mkosi.conf` enables `main,universe`, and Ubuntu ships the NVIDIA driver in `restricted`. `build.sh` now adds `restricted` for `ROLE=inference` only, through a `mkosi.conf.d` drop-in that mkosi merges with the list in `mkosi.conf`; the node, KMS and agent images are built exactly as before. All five packages are in the pinned snapshot's `restricted` (580.126.20, and 7.0.0-1003.3 for the modules, matching `linux-image-gcp`).
+
 ### Removed
 
 - **The Packer image build.** 2.3.120 built every image with mkosi and its node, KMS and agent images run in production, so the Packer path is gone:
