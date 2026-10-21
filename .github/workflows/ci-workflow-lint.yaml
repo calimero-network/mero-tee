@@ -280,6 +280,16 @@ jobs:
           sudo apt-get install -y -q python3-jinja2 python3-yaml >/dev/null
           scripts/ci/tests/render-role-tree-test.sh
 
+      # A KMS image bakes its node (and agent) allowlist into the measured
+      # kms.env and the release signs that image, so only the node release's
+      # own signed policy, in shapes kms.env carries intact, may become one.
+      # After the renderer's step (jinja2) and the playbook load (ansible-core):
+      # the role's asserts run under both, and may not be skipped here.
+      - name: Check the KMS allowlists are verified and well-formed
+        id: kms_node_allowlist_test
+        shell: bash
+        run: scripts/ci/tests/kms-node-allowlist-test.sh
+
       # The release names its mkosi images; mdma and the rest of the release
       # find them by the names they build themselves.
       - name: Check the release image names
@@ -634,6 +644,7 @@ jobs:
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
             --checks-line "- role renderer test: ${{ steps.render_role_tree_test.outcome }}" \
+            --checks-line "- KMS allowlists verified and well-formed: ${{ steps.kms_node_allowlist_test.outcome }}" \
             --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \

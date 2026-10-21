@@ -94,8 +94,12 @@ There is exactly one source, fixed at build time:
 
 1. The **Release mero-tee** workflow measures each profile's node image and publishes
    `published-mrtds.json`.
-2. The **Release mero-kms** workflow reads it and bakes each profile's measurements into
-   that profile's KMS image (`kms_node_policy_file` → `/etc/mero-kms/kms.env`).
+2. The **Release mero-kms** workflow verifies its Sigstore bundle against
+   `release-node-image-gcp.yaml` on `master` (`verify-node-policy.sh`), extracts each
+   profile's measurements, accepting only 96-hex values and known TCB statuses
+   (`extract-node-allowlist.sh`), and bakes them into that profile's KMS image
+   (`kms_node_policy_file` → `/etc/mero-kms/kms.env`). The `mero-kms` role asserts the
+   same shapes, for the agent allowlist too.
 3. At startup the KMS reads `ALLOWED_TCB_STATUSES` / `ALLOWED_MRTD` /
    `ALLOWED_RTMR0..3` (and, on a KMS that serves agents, `AGENT_ALLOWED_MRTD` /
    `AGENT_ALLOWED_RTMR0..3` from `kms_agent_policy_file`) from that baked environment

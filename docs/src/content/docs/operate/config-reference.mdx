@@ -279,7 +279,7 @@ Read by `mero-tee/mkosi-image/build.sh` (and passed through by
 | `ROLE` | `node` | `node` builds the node image (`playbook.yml`); `kms` the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`. |
 | `PROFILE` | `locked-read-only` | `debug`, `debug-read-only` or `locked-read-only`. Selects which Ansible roles run (lockdown and conformance only on `locked-read-only`) and the kernel command line. |
 | `MERO_KMS_BINARY` | none | `kms` only: the `mero-kms` binary to bake in, built from the release commit. |
-| `KMS_NODE_POLICY_FILE` | none | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. |
+| `KMS_NODE_POLICY_FILE` | none | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. Each field holds 1-32 strings: 96 hex characters each, or TCB status names; the role refuses anything else. |
 | `KMS_AGENT_POLICY_FILE` | none | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Unset bakes no agent entry. |
 | `MERO_AGENT_GATE_BINARY` | none | `agent` only: the `mero-agent-gate` binary, built from this repository. |
 | `MERO_AGENT_BINARY` | none | `agent` only: the agent program baked as `/usr/local/bin/mero-agent`. |

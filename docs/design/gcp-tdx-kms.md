@@ -126,7 +126,16 @@ address only fails the join.
 The KMS image bakes in the node allowlist: the MRTD and RTMR0–3 of the node
 image it is released with. The allowlist is part of the KMS image's own
 measurements, so changing it produces a different KMS, which the running
-cluster refuses to join. `/challenge` and `/get-key` keep today's protocol:
+cluster refuses to join. The release, and the branch build in
+`node-image-mkosi.yaml`, take it only from a `published-mrtds.json` whose
+Sigstore bundle verifies against `release-node-image-gcp.yaml` on master
+(`scripts/release/kms/verify-node-policy.sh`), and only in the shapes
+`kms.env` carries intact: 96-hex measurements and known non-revoked TCB
+statuses, 1-32 per field (`scripts/release/kms/extract-node-allowlist.sh`,
+asserted again by the `mero-kms` role). Editing the GitHub release is not
+enough to change what an official KMS admits. An agent allowlist, which the
+same release run measures, gets the same shape checks (`--check`, and the role)
+but no signature check. `/challenge` and `/get-key` keep today's protocol:
 single-use nonce, a quote bound to the peer ID, a libp2p signature, and sealed
 release.
 

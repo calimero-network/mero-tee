@@ -426,7 +426,10 @@ The roles take their inputs from environment variables:
 - **kms:** `MERO_KMS_BINARY`, `KMS_NODE_POLICY_FILE` and optionally
   `KMS_AGENT_POLICY_FILE`. The workflow builds mero-kms from the commit and
   takes the node allowlist from the `node_release_tag` release's
-  `published-mrtds.json`.
+  `published-mrtds.json`, which must verify against its `.bundle.json`
+  (`verify-node-policy.sh`) and pass `extract-node-allowlist.sh`. Locally, pass
+  `KMS_NODE_POLICY_FILE` a file the extract script wrote: the role refuses any
+  value that is not 96 hex characters or a TCB status name.
 - **agent:** `MERO_AGENT_GATE_BINARY`, and `MERO_AGENT_BINARY` or
   `MERO_BOT_BUNDLE`. The workflow builds mero-agent-gate from the commit and
   bakes the stub agent (`scripts/agent/stub-mero-agent.py`), or with
