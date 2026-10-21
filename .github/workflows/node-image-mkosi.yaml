@@ -2,7 +2,7 @@ name: Image (mkosi)
 run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role == 'agent' && format(', {0}', inputs.agent) || '' }})
 
 # The TEE images, built with mkosi (mdma#480) from a branch. Builds
-# mero-tee/mkosi-image for one role (node, kms or agent) and profile
+# mero-tee/mkosi-image for one role (node, kms, agent or inference) and profile
 # (locked-read-only, debug-read-only or debug) from the pinned archive snapshot
 # and the Ansible roles' files, as the releases do, then:
 #   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
@@ -18,6 +18,10 @@ run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role
 #        (scripts/agent/stub-mero-agent.py) or, with agent=mero-bot, the
 #        mero-bot release versions.json pins, as the releases bake it; that
 #        needs the MERO_BOT_RELEASE_TOKEN secret;
+#      inference: on a GPU TDX VM (a3, H100), measure-only by default
+#        (scripts/release/inference/run-inference-probe.sh, as the release); or,
+#        with a model in inference_options, serves it and runs one chat
+#        completion, and the compare step replays that model's RTMR3 event;
 #   3. compares the quote's RTMR1-3 with the computed ones.
 # With log_auth_check (debug profiles), the probe VM also gets the two log keys
 # and must push to a throwaway receiver with its token, as in the releases
@@ -36,6 +40,7 @@ on:
           - node
           - kms
           - agent
+          - inference
         default: node
       profile:
         description: "Profile to build and probe"
@@ -58,6 +63,13 @@ on:
           - stub
           - mero-bot
         default: stub
+      inference_options:
+        description: >-
+          inference only, JSON: {"zone", "machine_type", "provisioning_model" (STANDARD|SPOT),
+          "model": {"repo", "revision", "sha256", "served_name", "engine_args", "disk_gb"}}.
+          Every key optional; no model: measure-only
+        required: false
+        default: "{}"
       keep_image:
         description: "Keep the GCE image after the run (for booting it again by hand)"
         required: false
@@ -192,6 +204,22 @@ jobs:
           echo "${want}  inputs/${asset}" | sha256sum -c -
           echo "MERO_BOT_BUNDLE=$(realpath "inputs/${asset}")" >> "${GITHUB_ENV}"
 
+      # vLLM and torch's CUDA libraries are several GB installed.
+      - name: Free runner disk for the inference image
+        if: ${{ inputs.role == 'inference' }}
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build mero-inference-gate
+        if: ${{ inputs.role == 'inference' }}
+        run: |
+          set -euo pipefail
+          cargo build -p mero-inference-gate --release --locked
+          mkdir -p inputs
+          cp target/release/mero-inference-gate inputs/
+          echo "MERO_INFERENCE_GATE_BINARY=${PWD}/inputs/mero-inference-gate" >> "${GITHUB_ENV}"
+
       - name: Upload the agent probe's provisioning client
         if: ${{ inputs.role == 'agent' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -210,7 +238,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts/release/mkosi/build-image.sh
-          if [[ -n "${MERO_KMS_BINARY:-}${MERO_AGENT_GATE_BINARY:-}" ]]; then
+          if [[ -n "${MERO_KMS_BINARY:-}${MERO_AGENT_GATE_BINARY:-}${MERO_INFERENCE_GATE_BINARY:-}" ]]; then
             sha256sum inputs/* | tee "${EVIDENCE_DIR}/inputs.sha256"
           fi
 
@@ -296,7 +324,8 @@ jobs:
     needs: build
     if: ${{ inputs.role != 'node' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # An inference VM with a model downloads and loads it first.
+    timeout-minutes: ${{ inputs.role == 'inference' && 150 || 60 }}
     permissions:
       contents: read
     env:
@@ -311,6 +340,10 @@ jobs:
       WAIT_TIMEOUT_MINUTES: ${{ inputs.wait_timeout_minutes }}
       PROBE_NAME: ${{ inputs.role }}-mkosi-${{ github.run_number }}-${{ github.run_attempt }}
       OUT_DIR: ${{ github.workspace }}/probe
+      # inference: the release's defaults, which inference_options overrides.
+      INFERENCE_VM_MACHINE_TYPE: ${{ vars.INFERENCE_VM_MACHINE_TYPE != '' && vars.INFERENCE_VM_MACHINE_TYPE || 'a3-highgpu-1g' }}
+      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a' }}
+      INFERENCE_VM_PROVISIONING_MODEL: ${{ vars.INFERENCE_VM_PROVISIONING_MODEL != '' && vars.INFERENCE_VM_PROVISIONING_MODEL || 'STANDARD' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -367,6 +400,34 @@ jobs:
           set -euo pipefail
           chmod +x agent-tools/mero-agent-provision
           PROVISION_BIN="${PWD}/agent-tools/mero-agent-provision" bash scripts/release/agent/run-agent-probe.sh
+
+      # inference_options picks the GPU shape, zone and model; the VM is
+      # created in that zone, as is the log receiver above (VM_ZONE below
+      # applies to both only through this step's own env).
+      - name: Boot and probe the inference image
+        if: ${{ inputs.role == 'inference' }}
+        env:
+          OPTIONS: ${{ inputs.inference_options }}
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
+        run: |
+          set -euo pipefail
+          opt() { jq -r "$1 // empty" <<< "${OPTIONS:-{\}}"; }
+          jq -e 'type == "object"' <<< "${OPTIONS:-{\}}" >/dev/null || { echo "::error::inference_options is not a JSON object"; exit 1; }
+          VM_ZONE="$(opt .zone)"; VM_ZONE="${VM_ZONE:-${INFERENCE_VM_ZONE}}"
+          VM_MACHINE_TYPE="$(opt .machine_type)"; VM_MACHINE_TYPE="${VM_MACHINE_TYPE:-${INFERENCE_VM_MACHINE_TYPE}}"
+          VM_PROVISIONING_MODEL="$(opt .provisioning_model)"
+          VM_PROVISIONING_MODEL="${VM_PROVISIONING_MODEL:-${INFERENCE_VM_PROVISIONING_MODEL}}"
+          MODEL_REPO="$(opt .model.repo)"
+          MODEL_REVISION="$(opt .model.revision)"
+          MODEL_SHA256="$(opt .model.sha256)"
+          SERVED_MODEL_NAME="$(opt .model.served_name)"
+          ENGINE_ARGS="$(jq -c '.model.engine_args // {}' <<< "${OPTIONS:-{\}}")"
+          MODEL_DISK_GB="$(opt .model.disk_gb)"; MODEL_DISK_GB="${MODEL_DISK_GB:-200}"
+          export VM_ZONE VM_MACHINE_TYPE VM_PROVISIONING_MODEL MODEL_REPO MODEL_REVISION MODEL_SHA256 \
+            SERVED_MODEL_NAME ENGINE_ARGS MODEL_DISK_GB
+          echo "inference: ${VM_MACHINE_TYPE} in ${VM_ZONE} (${VM_PROVISIONING_MODEL}), model: ${MODEL_REPO:-none (measure-only)}"
+          bash scripts/release/inference/run-inference-probe.sh
 
       - name: Verify the image pushed logs with its metadata token
         if: ${{ inputs.log_auth_check }}
@@ -431,10 +492,29 @@ jobs:
             node) attest="$(echo evidence/node-gcp-staging-probe-*)/tee-attest-response.json" ;;
             kms) attest="$(echo evidence/mkosi-probe-*)/bootstrap-attest.json" ;;
             agent) attest="$(echo evidence/mkosi-probe-*)/agent-attest.json" ;;
+            inference) attest="$(echo evidence/mkosi-probe-*)/inference-attest.json" ;;
           esac
           jq '(.data // .) | {quoteB64, eventLogB64}' "${attest}" > evidence/evidence.json
+          computed="${build}/computed.json"
+          # An inference VM serving a model extended RTMR3 a second time, with
+          # its configuration: replay that onto the computed image event, as a
+          # client does (docs/design/private-inference.md), and compare that.
+          if [[ "${ROLE}" == inference && -n "$(jq -r '.configJson' "${attest}")" ]]; then
+            python3 - "${computed}" "${attest}" evidence/computed-with-model.json <<'PY'
+          import hashlib, json, sys
+          computed, attest = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+          digest = hashlib.sha256(attest["configJson"].encode()).hexdigest()
+          assert digest == attest["configDigest"], "configDigest is not SHA-256(configJson)"
+          event = hashlib.sha384(f"calimero-inference-config-v1:{digest}".encode()).digest()
+          base = bytes.fromhex(computed["registers"]["RTMR3"])
+          computed["registers"]["RTMR3"] = hashlib.sha384(base + event).hexdigest()
+          json.dump(computed, open(sys.argv[3], "w"))
+          print(f"RTMR3 replayed with config digest {digest}")
+          PY
+            computed=evidence/computed-with-model.json
+          fi
           python3 scripts/attestation/shared/compute_rtmr.py compare \
-            "${build}/computed.json" evidence/evidence.json | tee -a "${GITHUB_STEP_SUMMARY}"
+            "${computed}" evidence/evidence.json | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Determine GCP auth mode
         id: auth_mode

@@ -26,6 +26,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
   - **Agents.** mero-agent-gate's operator may now also write `MERO_INFERENCE_API_KEY`, and the mero-bot launcher passes it, as it does `NEAR_AI_API_KEY`.
   - **Tests.** `inference-init-test.sh` (measure-only, the configuration event, every refusal, CC mode), `inference-model-test.py` (metadata rules, canonical bytes shared with mdma, digest, vLLM argv), the gate's unit tests, and the inference playbook in `render-role-tree-test.sh`, `init-rtmr3-test.sh`, `release-image-name-test.sh` and `kms-agent-policy-signing-test.sh`.
 
+  - **Branch builds.** `node-image-mkosi.yaml` takes `role: inference` and an `inference_options` JSON input (zone, shape, spot, and optionally a model to serve): measure-only, or a real model with one chat completion and RTMR3 replayed in the compare job.
+
   Not yet booted on an H100: the NVML evidence format, the driver's CC behaviour and vLLM on Python 3.14 are checked by the first release run with `INFERENCE_RELEASE=true`. No existing image changes.
 
 - **Release 2.3.123: the first release built under the new release checks.** Bumps `imageVersion` and `mero-kms` to 2.3.123; merod stays at 0.11.0-rc.90. It is the first release to run the log-auth checks on the debug and debug-read-only node, KMS and agent images (#523, #526), the GCP create retries (#522), the signature and shape checks on the node allowlist a KMS bakes (#527), and the `roothash` marker in the signed release metadata (#524). Every image measures differently from 2.3.122, as with every release (#524 changes a comment in `calimero-init`).

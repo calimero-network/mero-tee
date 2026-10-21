@@ -412,7 +412,7 @@ build therefore still needs those two hosts reachable over plain HTTP.
 ## Build the images with mkosi
 
 `node-image-mkosi.yaml` (named for the image it began with) builds a node,
-KMS or agent image with mkosi (mdma#480) from a branch, as the releases do. Its
+KMS, agent or inference image with mkosi (mdma#480) from a branch, as the releases do. Its
 `role` input picks the image and its `profile` input the profile:
 `locked-read-only`, `debug-read-only` or `debug`. The workflow publishes
 nothing; it is how an image change is proven on TDX before a release builds it.
@@ -436,6 +436,18 @@ The roles take their inputs from environment variables:
   `agent: mero-bot` the mero-bot release `versions.json` pins, downloaded and
   checked as `Release mero-kms` does (needs the `MERO_BOT_RELEASE_TOKEN`
   secret).
+- **inference:** `MERO_INFERENCE_GATE_BINARY`; vLLM comes from
+  `mero-tee/inference/requirements.lock`, installed with uv. The workflow boots
+  it on a GPU TDX VM (H100 quota needed) set by `inference_options`, JSON:
+  `zone`, `machine_type` and `provisioning_model` (default the
+  `INFERENCE_VM_*` repository variables, then `us-central1-a`, `a3-highgpu-1g`,
+  `STANDARD`), and `model`. Without a model it boots `measure-only`, as the
+  release does. With one (`{"model": {"repo", "revision", "sha256",
+  "served_name", "engine_args", "disk_gb"}}`, `sha256` from
+  `scripts/inference/model-digest.sh`) it serves it, checks `/attest` names it
+  and carries GPU evidence, runs one chat completion, and the compare job
+  replays the model's RTMR3 event onto the computed image event
+  ([private inference](../flows/private-inference/)).
 
 The profiles differ:
 

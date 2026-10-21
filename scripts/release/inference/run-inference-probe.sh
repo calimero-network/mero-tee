@@ -6,6 +6,12 @@ set -euo pipefail
 # verify it, and write the release's inference allowlist
 # (docs/design/private-inference.md, "Release").
 #
+# With MODEL_REPO set it serves that model instead (node-image-mkosi.yaml,
+# role inference): the VM gets the model metadata, a scratch disk and a
+# throwaway access token, and the probe waits for vLLM, checks /attest names
+# the configuration and carries GPU evidence, and runs one chat completion.
+# No allowlist is written then: RTMR3 includes the model's event.
+#
 # measure-only loads no model, so RTMR3 holds the image event alone: the base
 # every client replays the model's configuration event onto. The VM's shape is
 # the one hosts run on, because RTMR0 measures it.
@@ -25,8 +31,11 @@ set -euo pipefail
 #   GATE_PORT (8443), WAIT_TIMEOUT_MINUTES (20), ITA_APPRAISAL_URL,
 #   INFERENCE_ALLOWED_TCB_STATUSES (uptodate; a declared release input)
 #   LOGS_ENDPOINT, OBSERVABILITY_TOKEN_FILE  the log-auth check, as for the agent
+#   MODEL_REPO, MODEL_REVISION, MODEL_SHA256  serve this model (see above)
+#   SERVED_MODEL_NAME, ENGINE_ARGS (JSON), MODEL_DISK_GB (200)
 #
-# Output: ${OUT_DIR}/inference-attestation-policy.${PROFILE}.json
+# Output: ${OUT_DIR}/inference-attestation-policy.${PROFILE}.json (measure-only),
+#   ${OUT_DIR}/inference-attest.json and, with a model, inference-chat.json
 
 required=(IMAGE IMAGE_PROJECT PROFILE PROBE_NAME VM_PROJECT VM_ZONE VM_MACHINE_TYPE ITA_API_KEY OUT_DIR)
 for var in "${required[@]}"; do
@@ -52,8 +61,30 @@ repo_root="$(cd "${script_dir}/../../.." && pwd)"
 source "${repo_root}/scripts/ci/gcp_create_instance.sh"
 # shellcheck source=scripts/ci/probes/log_auth_metadata.sh
 source "${repo_root}/scripts/ci/probes/log_auth_metadata.sh"
-vm_metadata="measure-only=true$(log_auth_metadata)"
 mkdir -p "${OUT_DIR}"
+extra_disk=()
+if [[ -n "${MODEL_REPO:-}" ]]; then
+  for var in MODEL_REVISION MODEL_SHA256; do
+    [[ -n "${!var:-}" ]] || { echo "::error::${var} is required with MODEL_REPO"; exit 1; }
+  done
+  access_token="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  token_hash="$(printf '%s' "${access_token}" | sha256sum | cut -d' ' -f1)"
+  # A metadata file per key: engine-args is JSON, which --metadata's commas break.
+  meta_dir="$(mktemp -d)"
+  printf '%s' "${MODEL_REPO}" >"${meta_dir}/model-repo"
+  printf '%s' "${MODEL_REVISION}" >"${meta_dir}/model-revision"
+  printf '%s' "${MODEL_SHA256}" >"${meta_dir}/model-sha256"
+  printf '%s' "${SERVED_MODEL_NAME:-}" >"${meta_dir}/served-model-name"
+  printf '%s' "${ENGINE_ARGS:-{\}}" >"${meta_dir}/engine-args"
+  printf '%s' "${token_hash}" >"${meta_dir}/access-token-sha256"
+  vm_metadata="model-store=disk$(log_auth_metadata)"
+  extra_disk=(
+    --metadata-from-file "model-repo=${meta_dir}/model-repo,model-revision=${meta_dir}/model-revision,model-sha256=${meta_dir}/model-sha256,served-model-name=${meta_dir}/served-model-name,engine-args=${meta_dir}/engine-args,access-token-sha256=${meta_dir}/access-token-sha256"
+    --create-disk "device-name=model,size=${MODEL_DISK_GB:-200}GB,type=pd-ssd,auto-delete=yes"
+  )
+else
+  vm_metadata="measure-only=true$(log_auth_metadata)"
+fi
 
 vm="${PROBE_NAME}-i"
 firewall="${PROBE_NAME}"
@@ -99,6 +130,7 @@ gcp_create_instance "${vm}" "${VM_PROJECT}" "${VM_ZONE}" \
   --no-service-account --no-scopes \
   --image "${IMAGE}" --image-project "${IMAGE_PROJECT}" \
   --metadata "${vm_metadata}" \
+  "${extra_disk[@]}" \
   --tags "${PROBE_NAME}"
 ip="$(gcloud compute instances describe "${vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
@@ -114,15 +146,46 @@ until curl -fsSk --max-time 5 "${gate}/health" >"${OUT_DIR}/inference-health.jso
   fi
   sleep 10
 done
-jq -e '.measureOnly == true and .model == null' "${OUT_DIR}/inference-health.json" >/dev/null \
-  || { echo "::error::the measurement VM serves a model: $(cat "${OUT_DIR}/inference-health.json")"; exit 1; }
+if [[ -z "${MODEL_REPO:-}" ]]; then
+  jq -e '.measureOnly == true and .model == null' "${OUT_DIR}/inference-health.json" >/dev/null \
+    || { echo "::error::the measurement VM serves a model: $(cat "${OUT_DIR}/inference-health.json")"; exit 1; }
+else
+  # The gate answers "starting" until vLLM has loaded the weights.
+  until jq -e '.status == "ok"' "${OUT_DIR}/inference-health.json" >/dev/null 2>&1; do
+    if (( $(date +%s) >= deadline )); then
+      echo "::error::vLLM never became ready: $(cat "${OUT_DIR}/inference-health.json" 2>/dev/null)"
+      exit 1
+    fi
+    sleep 20
+    curl -fsSk --max-time 5 "${gate}/health" >"${OUT_DIR}/inference-health.json" || true
+  done
+fi
 
 nonce="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 curl -fsSk --max-time 90 -X POST "${gate}/attest" \
   -H 'content-type: application/json' \
   -d "{\"nonceHex\":\"${nonce}\"}" >"${OUT_DIR}/inference-attest.json"
-jq -e '.configJson == ""' "${OUT_DIR}/inference-attest.json" >/dev/null \
-  || { echo "::error::the measurement VM attests to a model configuration"; exit 1; }
+if [[ -z "${MODEL_REPO:-}" ]]; then
+  jq -e '.configJson == ""' "${OUT_DIR}/inference-attest.json" >/dev/null \
+    || { echo "::error::the measurement VM attests to a model configuration"; exit 1; }
+else
+  jq -e --arg repo "${MODEL_REPO}" --arg nonce "${nonce}" '
+      (.configJson | fromjson | .repo == $repo)
+      and (.gpuJson != null) and (.gpuJson | fromjson | .nonce == $nonce)' \
+    "${OUT_DIR}/inference-attest.json" >/dev/null \
+    || { echo "::error::/attest does not name the model or carries no GPU evidence for this nonce"; exit 1; }
+  model="$(jq -r '.configJson | fromjson | .servedModelName' "${OUT_DIR}/inference-attest.json")"
+  curl -fsSk --max-time 300 -X POST "${gate}/v1/chat/completions" \
+    -H "authorization: Bearer ${access_token}" -H 'content-type: application/json' \
+    -d "{\"model\":\"${model}\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"Say hello.\"}]}" \
+    >"${OUT_DIR}/inference-chat.json"
+  jq -e '.choices[0].message.content | length > 0' "${OUT_DIR}/inference-chat.json" >/dev/null \
+    || { echo "::error::no answer from the model: $(cat "${OUT_DIR}/inference-chat.json")"; exit 1; }
+  echo "Answer: $(jq -r '.choices[0].message.content' "${OUT_DIR}/inference-chat.json")"
+  if [[ "$(curl -sk -o /dev/null -w '%{http_code}' -X POST "${gate}/v1/chat/completions" -d '{}')" != 401 ]]; then
+    echo "::error::the gate served a caller without a token"; exit 1
+  fi
+fi
 mkdir -p "${OUT_DIR}/inference-ita"
 python3 "${repo_root}/scripts/attestation/shared/verify_tdx_quote_ita.py" \
   --attest-response "${OUT_DIR}/inference-attest.json" \
@@ -135,6 +198,11 @@ python3 "${repo_root}/scripts/attestation/shared/extract_tdx_policy_candidates.p
   --output-json "${OUT_DIR}/inference-measurements.json" \
   --allow-missing-tcb \
   --keep-outofdate
+
+if [[ -n "${MODEL_REPO:-}" ]]; then
+  echo "Served ${MODEL_REPO}@${MODEL_REVISION}; no allowlist from a VM with a model"
+  exit 0
+fi
 
 # allowed_rtmr3 is the base: RTMR3 after the image event, before any model's.
 policy="${OUT_DIR}/inference-attestation-policy.${PROFILE}.json"
