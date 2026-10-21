@@ -11,7 +11,8 @@ run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role
 #      node: the staging probe (admin API, quote, ITA appraisal, policy
 #        candidates);
 #      kms: a two-replica cluster (scripts/release/kms/run-cluster-probe.sh),
-#        serving the node allowlist of node_release_tag;
+#        serving the node allowlist of node_release_tag, which must verify
+#        against its Sigstore bundle (scripts/release/kms/verify-node-policy.sh);
 #      agent: ITA, then a throwaway secret provisioned to the agent
 #        (scripts/release/agent/run-agent-probe.sh). The agent is the stub
 #        (scripts/agent/stub-mero-agent.py) or, with agent=mero-bot, the
@@ -133,6 +134,12 @@ jobs:
           cp target/release/mero-kms inputs/
           echo "MERO_KMS_BINARY=${PWD}/inputs/mero-kms" >> "${GITHUB_ENV}"
 
+      - name: Install cosign to verify the node policy
+        if: ${{ inputs.role == 'kms' }}
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
+      # As Release mero-kms does: only the node release workflow's own signed
+      # policy, in shapes kms.env carries intact.
       - name: Fetch the node allowlist the KMS serves
         if: ${{ inputs.role == 'kms' }}
         env:
@@ -140,14 +147,13 @@ jobs:
           NODE_TAG: ${{ inputs.node_release_tag }}
         run: |
           set -euo pipefail
+          mkdir -p inputs/node-policy
           gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-            --pattern "published-mrtds.json" --dir inputs
-          jq --arg p "${PROFILE}" '.profiles[$p] | {
-              allowed_tcb_statuses, allowed_mrtd,
-              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
-            }' inputs/published-mrtds.json > inputs/node-allowlist.json
-          jq -e 'all(.[]; type == "array" and length > 0)' inputs/node-allowlist.json >/dev/null \
-            || { echo "::error::${NODE_TAG} has no complete ${PROFILE} node allowlist"; exit 1; }
+            --pattern "published-mrtds.json" --pattern "published-mrtds.json.bundle.json" \
+            --dir inputs/node-policy
+          bash scripts/release/kms/verify-node-policy.sh inputs/node-policy
+          bash scripts/release/kms/extract-node-allowlist.sh \
+            inputs/node-policy/published-mrtds.json "${PROFILE}" inputs/node-allowlist.json
           echo "KMS_NODE_POLICY_FILE=${PWD}/inputs/node-allowlist.json" >> "${GITHUB_ENV}"
 
       - name: Build mero-agent-gate and stage the agent

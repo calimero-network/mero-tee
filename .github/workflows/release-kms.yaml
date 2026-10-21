@@ -122,7 +122,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Wait for mero-tee-v${{ needs.prepare.outputs.version }} and fetch its node policy
+      - name: Install cosign to verify the node policy
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+
+      - name: Wait for mero-tee-v${{ needs.prepare.outputs.version }}, fetch its node policy and verify its signature
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -454,12 +457,10 @@ jobs:
           fi
           mkdir -p build probe
           tar -xzf "artifacts/mero-kms_${BINARY_TARGET}.tar.gz" -C build --no-same-owner
-          jq --arg p "${PROFILE}" '.profiles[$p] | {
-              allowed_tcb_statuses, allowed_mrtd,
-              allowed_rtmr0, allowed_rtmr1, allowed_rtmr2, allowed_rtmr3
-            }' node-policy/published-mrtds.json > build/node-allowlist.json
-          jq -e 'all(.[]; type == "array" and length > 0)' build/node-allowlist.json >/dev/null \
-            || { echo "::error::mero-tee-v${VERSION} has no complete ${PROFILE} node allowlist"; exit 1; }
+          # Verified against the node release's signature in the node-policy
+          # job; its values are checked here before they reach the measured kms.env.
+          bash scripts/release/kms/extract-node-allowlist.sh \
+            node-policy/published-mrtds.json "${PROFILE}" build/node-allowlist.json
 
       - name: Download the agent policy, if the agent image was measured
         id: agent_policy
@@ -488,6 +489,9 @@ jobs:
             "${policy}" > build/agent-allowlist.json
           jq -e 'all(.[]; type == "array" and length > 0)' build/agent-allowlist.json >/dev/null \
             || { echo "::warning::The ${PROFILE} agent policy is incomplete; serving nodes only"; echo "file=" >> "${GITHUB_OUTPUT}"; exit 0; }
+          # This run measured the agent image, so there is no signature to check,
+          # but its values reach kms.env as AGENT_ALLOWED_*: same rules as the node's.
+          bash scripts/release/kms/extract-node-allowlist.sh --check build/agent-allowlist.json
           jq --arg p "${PROFILE}" --arg v "${VERSION}" \
             '. + {schema_version: 1, role: "agent", profile: $p, version: $v}' \
             build/agent-allowlist.json > "probe/agent-attestation-policy.${PROFILE}.json"

@@ -259,7 +259,10 @@ done
 # --- the real KMS playbook ----------------------------------------------------
 echo stub > "${work}/mero-kms"
 kms_policy="${work}/kms-policy.json"
-echo '{"allowed_tcb_statuses":["UpToDate"],"allowed_mrtd":["a"],"allowed_rtmr0":["b"],"allowed_rtmr1":["c"],"allowed_rtmr2":["d"],"allowed_rtmr3":["e"]}' > "${kms_policy}"
+# The role takes only 96-hex measurements (see kms-node-allowlist-test.sh).
+jq -n '{allowed_tcb_statuses: ["UpToDate"]}
+  + ([["mrtd", "a"], ["rtmr0", "b"], ["rtmr1", "c"], ["rtmr2", "d"], ["rtmr3", "e"]]
+     | map({key: "allowed_\(.[0])", value: [.[1] * 96]}) | from_entries)' > "${kms_policy}"
 kms_render() {
   python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook-kms.yml" --out "${work}/$1" --manifest "${work}/$1.json" \
     --cache "${work}/empty" -e lockdown_profile=locked-read-only -e image_version=0.0.0 \
@@ -271,7 +274,7 @@ grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/kms/usr/local/lib/mero-kms
 for path in etc/mero-kms/kms.env etc/systemd/system/mero-kms.service usr/local/bin/mero-kms; do
   [[ -e "${work}/kms/${path}" ]] || fail "KMS playbook: ${path} not rendered"
 done
-grep -q '^ALLOWED_RTMR3=e$' "${work}/kms/etc/mero-kms/kms.env" || fail "the node allowlist is not in kms.env"
+grep -q '^ALLOWED_RTMR3=e\{96\}$' "${work}/kms/etc/mero-kms/kms.env" || fail "the node allowlist is not in kms.env"
 jq '.allowed_rtmr3 = []' "${kms_policy}" > "${work}/kms-empty.json"
 if kms_render kms-empty "${work}/kms-empty.json" >/dev/null 2>&1; then
   fail "a KMS image with an empty RTMR3 allowlist rendered"

@@ -53,7 +53,9 @@ release's jobs instead, which keeps the original push event.
 
 2. **`node-policy`** — wait for the counterpart node release `mero-tee-v<version>`
    and fetch its `published-mrtds.json` (`wait-for-node-release.sh`). Those are the
-   measurements the KMS will release keys to.
+   measurements the KMS will release keys to, so the file's Sigstore bundle must
+   verify against `release-node-image-gcp.yaml` on `master`
+   (`verify-node-policy.sh`): editing the GitHub release does not change them.
 
 3. **`build-binary`** — build the `mero-kms` binary (`x86_64`) from the release
    commit.
@@ -61,7 +63,9 @@ release's jobs instead, which keeps the original push event.
 4. **`kms-image`** (matrix over the three profiles) — **build the KMS image**
    with mkosi (`ROLE=kms`, `scripts/release/mkosi/build-image.sh`), from
    `mero-tee/playbook-kms.yml`'s roles: the binary, the profile's node
-   allowlist from `published-mrtds.json` baked into `/etc/mero-kms/kms.env`,
+   allowlist from `published-mrtds.json` baked into `/etc/mero-kms/kms.env`
+   (`extract-node-allowlist.sh` takes only 96-hex measurements and known TCB
+   statuses, so no value can add a line or an entry to `kms.env`),
    the same lockdown as the node image, and an EROFS root behind dm-verity. The
    allowlist is part of the image and so of its measurements. The image is
    `merotee-kms-<profile>-<version>` in family `merotee-kms-<profile>`, the
@@ -141,7 +145,8 @@ the stub agent. It boots that image once with
 it pushed its logs with its token, as the KMS image must (the
 [log-auth check](/operate/runbooks/#log-auth-check-log_auth_check)). A measured
 profile's KMS image then also bakes that agent allowlist (`kms_agent_policy_file`,
-with the node allowlist's TCB statuses). Release-metadata publishes it as
+with the node allowlist's TCB statuses, held to the same shapes by
+`extract-node-allowlist.sh --check` and the `mero-kms` role). Release-metadata publishes it as
 `kms-agent-attestation-policy.<profile>.json`, signed like the other assets.
 
 If an agent build or measurement fails, nothing else changes: that profile's KMS
@@ -268,7 +273,8 @@ as the releases do, boots it on TDX and runs that role's probe:
 
 - **node:** the staging probe.
 - **kms:** a two-replica cluster, with the node allowlist of a published node
-  release (`node_release_tag`) baked in. It checks that both replicas come to
+  release (`node_release_tag`) baked in, verified and extracted as the release
+  does. It checks that both replicas come to
   hold the root and report the same transport key, and that Intel Trust Authority
   verifies both quotes with identical measurements.
 - **agent:** Intel Trust Authority, then a throwaway secret provisioned with a
