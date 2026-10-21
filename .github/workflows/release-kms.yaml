@@ -18,6 +18,13 @@ name: Release mero-kms
 # best effort: an agent build or measurement that fails leaves that KMS image
 # node-only, exactly as before agents, and never blocks the release.
 #
+# Logs: on debug and debug-read-only, the agent and KMS probe VMs boot with
+# `logs-endpoint` and `observability-token` pointed at a throwaway receiver
+# (scripts/ci/probes/node_log_auth_probe.sh, as in release-node-image-gcp.yaml),
+# and the job fails unless the receiver saw a push carrying that token. A KMS
+# image that fails it stops the release; an agent that fails it is left out,
+# as above. locked-read-only ships only over https, so it skips the check.
+#
 # The workflow `name:` is the Sigstore identity merod and the verifiers expect;
 # do not rename it.
 
@@ -88,10 +95,13 @@ jobs:
       - name: Validate release helper scripts
         run: |
           set -euo pipefail
-          for script in scripts/release/kms/*.sh scripts/release/verify-kms-release-assets.sh; do
+          for script in scripts/release/kms/*.sh scripts/release/verify-kms-release-assets.sh \
+            scripts/release/agent/run-agent-probe.sh \
+            scripts/ci/probes/node_log_auth_probe.sh scripts/ci/probes/log_auth_metadata.sh; do
             bash -n "${script}"
           done
           python3 -m py_compile \
+            scripts/ci/probes/log_auth_receiver.py \
             scripts/attestation/shared/verify_tdx_quote_ita.py \
             scripts/attestation/shared/extract_tdx_policy_candidates.py
 
@@ -175,6 +185,14 @@ jobs:
     env:
       PROFILE: ${{ matrix.profile }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      PROBE_NAME: agent-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # The log-auth check, as in the node release, on debug and
+      # debug-read-only only: configure_vector.sh lets no other profile ship
+      # over the receiver's plain http, and agent-init hands it the same two
+      # keys and its role's image-profile. See "Set up log-auth check".
+      LOG_AUTH_CHECK: ${{ matrix.profile != 'locked-read-only' }}
+      RECEIVER_PREFIX: agent-attest-rcv
+      RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -295,15 +313,36 @@ jobs:
         if: ${{ failure() && steps.build_image.outcome == 'failure' }}
         run: tail -200 /tmp/mkosi-agent-build.log 2>/dev/null || true
 
+      # The agent must ship its logs before its allowlist reaches a KMS image:
+      # 2.3.120's agent image ran a vector that exited at boot. A throwaway
+      # receiver VM (node_log_auth_probe.sh, as in the node release) stands in
+      # for the sink, and the measurement VM boots with `logs-endpoint` pointed
+      # at it and a random `observability-token`, the two keys mdma sets.
+      # Neither is measured (agent-init reads them after extending RTMR3), so
+      # the allowlist is the one an mdma agent has. The probe VM sits on the
+      # `default` network, so the receiver does too (no VM_SUBNETWORK), and its
+      # rule admits the probe VM's tag on tcp:9200.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          IMAGE_PROFILE: ${{ matrix.profile }}
+          VM_NETWORK: default
+          VM_SUBNETWORK: ""
+          NODE_TAG: ${{ env.PROBE_NAME }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
       # Measures only, on an ephemeral store: the measurement VM is never
       # claimed. Provisioning is checked end to end by the post-release agent
       # e2e, which claims its own VM with a throwaway key.
       - name: Boot and measure the agent image
         env:
-          PROBE_NAME: agent-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
           PROVISION_MODE: skip
           OUT_DIR: probe
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
         run: |
           set -euo pipefail
           export IMAGE="merotee-agent-${PROFILE}-${VERSION//./-}"
@@ -311,6 +350,20 @@ jobs:
           bash scripts/release/agent/run-agent-probe.sh
           gcloud compute images describe "${IMAGE}" --project "${IMAGE_PROJECT}" --format=json \
             | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/agent-image.json
+
+      # After the probe, whose trap has deleted the VM: the receiver keeps each
+      # push on its own serial console, and vector pushes within seconds of
+      # agent-init starting it, before the gate answers the probe at all. A
+      # failure fails this job, so the agent image is deleted below and its
+      # allowlist never uploaded: that profile's KMS image serves nodes only,
+      # as for any agent that fails here (see the header).
+      - name: Verify the agent pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          ARTIFACTS_DIR: probe
+          VERIFY_TIMEOUT_SECONDS: "180"
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
 
       # mdma#480: the quote's RTMR1-3 must be the ones computed from the build.
       - name: Compare the quote's RTMR1-3 with the computed ones
@@ -340,6 +393,13 @@ jobs:
           gcloud compute images delete "merotee-agent-${PROFILE}-${VERSION//./-}" \
             --project "${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}" --quiet || true
 
+      # On success, failure and cancellation, once setup has started. Best
+      # effort and safe after a partial setup. The node release's sweep deletes
+      # a receiver a lost runner left, once past its max age.
+      - name: Delete the log-auth receiver
+        if: ${{ always() && steps.log_auth.outcome != 'skipped' && steps.log_auth.outcome != '' }}
+        run: bash scripts/ci/probes/node_log_auth_probe.sh cleanup
+
   kms-image:
     name: Build and probe KMS image (${{ matrix.profile }})
     needs: [prepare, node-policy, build-binary, agent-image]
@@ -360,6 +420,14 @@ jobs:
     env:
       PROFILE: ${{ matrix.profile }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      PROBE_NAME: kms-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # The log-auth check, as in the node release, on debug and
+      # debug-read-only only: configure_vector.sh lets no other profile ship
+      # over the receiver's plain http, and kms-init hands it the same two keys
+      # and its role's image-profile. See "Set up log-auth check".
+      LOG_AUTH_CHECK: ${{ matrix.profile != 'locked-read-only' }}
+      RECEIVER_PREFIX: kms-attest-rcv
+      RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -520,14 +588,50 @@ jobs:
             echo "project=${image_project}"
           } >> "${GITHUB_OUTPUT}"
 
+      # The KMS must ship its logs before its release publishes: 2.3.120's KMS
+      # image ran a vector that exited at boot. A throwaway receiver VM
+      # (node_log_auth_probe.sh, as in the node release) stands in for the
+      # sink, and the bootstrap replica boots with `logs-endpoint` pointed at
+      # it and a random `observability-token`, the two keys mdma sets. One
+      # replica is enough: both boot this image through the same kms-init, and
+      # the bootstrap lives through the whole probe. Neither key is measured
+      # (kms-init reads them after extending RTMR3), so the joiner still
+      # measures like the bootstrap and the published measurements are the
+      # ones an mdma replica has. The replicas sit on the `default` network, so
+      # the receiver does too (no VM_SUBNETWORK), and its rule admits their tag
+      # on tcp:9200.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          IMAGE_PROFILE: ${{ matrix.profile }}
+          VM_NETWORK: default
+          VM_SUBNETWORK: ""
+          NODE_TAG: ${{ env.PROBE_NAME }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
       - name: Run the two-replica cluster and measure the image
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           IMAGE_PROJECT: ${{ steps.image.outputs.project }}
-          PROBE_NAME: kms-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
           OUT_DIR: probe
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
         run: bash scripts/release/kms/run-cluster-probe.sh
+
+      # After the probe, whose trap has deleted the replicas: the receiver keeps
+      # each push on its own serial console. A failure fails this profile, so
+      # its image is deleted below and release-metadata, which needs every
+      # profile, publishes nothing.
+      - name: Verify the KMS pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          ARTIFACTS_DIR: probe
+          VERIFY_TIMEOUT_SECONDS: "180"
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
 
       # mdma#480: the quote's RTMR1-3 must be the ones computed from the build.
       - name: Compare the quote's RTMR1-3 with the computed ones
@@ -555,6 +659,13 @@ jobs:
         run: |
           gcloud compute images delete "merotee-kms-${PROFILE}-${VERSION//./-}" \
             --project "${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}" --quiet || true
+
+      # On success, failure and cancellation, once setup has started. Best
+      # effort and safe after a partial setup. The node release's sweep deletes
+      # a receiver a lost runner left, once past its max age.
+      - name: Delete the log-auth receiver
+        if: ${{ always() && steps.log_auth.outcome != 'skipped' && steps.log_auth.outcome != '' }}
+        run: bash scripts/ci/probes/node_log_auth_probe.sh cleanup
 
   release-metadata:
     name: Release Metadata

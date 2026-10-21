@@ -313,6 +313,45 @@ access the release already has. A failing check shows in the profile job's
 codes above; `node-log-auth-result.json` and `log-auth-receiver-serial.log` are
 in that profile's `gcp-tdx-attestation-*` artifact.
 
+**The KMS release runs it on its KMS and agent images.** The `debug` and
+`debug-read-only` jobs of **Release mero-kms** (`release-kms.yaml`), `Build and
+probe KMS image (<profile>)` and `Build and measure agent image (<profile>)`,
+run the same check. `kms-init` and `agent-init` read the same two keys and hand
+them to the same `configure_vector.sh`, with their role's
+`/etc/mero-kms/image-profile` or `/etc/mero-agent/image-profile`, so the
+https-only rule is the same and `locked-read-only` skips it the same way. Both
+read the keys after extending RTMR3, whose event names only the role, profile
+and root hash, so neither key is measured.
+
+- **KMS:** only the bootstrap replica of the two-replica cluster
+  (`run-cluster-probe.sh`) gets the keys. Both replicas boot the same image
+  through the same `kms-init`, and the bootstrap lives through the whole probe;
+  the joiner boots exactly as before. A failure deletes that profile's image
+  and stops **Release Metadata**, so nothing is published. The result and the
+  receiver's serial log are in `kms-probe-<version>-<profile>`.
+- **Agent:** the measurement VM (`run-agent-probe.sh`) gets the keys. A failure
+  deletes the agent image and withholds its allowlist, so that profile's KMS
+  image serves nodes only and the release goes on, as for any agent that fails
+  its probe ([Agents in the KMS release](/operate/release-pipeline/#agents-in-the-kms-release)).
+
+The probes take the keys as `LOGS_ENDPOINT` and `OBSERVABILITY_TOKEN_FILE`
+(`scripts/ci/probes/log_auth_metadata.sh`); without them a probe VM's metadata
+is unchanged. The probe VMs sit on the `default` network with no subnet flag,
+so the receiver is created with `--network default` (`VM_SUBNETWORK` empty) and
+its rule admits the probe's tag (`kms-rel-…`, `agent-rel-…`) on `tcp:9200`.
+Verify runs after the probe has deleted its VMs: the receiver keeps every push
+on its own serial console, and vector pushes within seconds of starting, long
+before the probe finishes. The receivers are `kms-attest-rcv-<profile>-<run>-<attempt>`
+and `agent-attest-rcv-…`. Each job's **Delete the log-auth receiver** step
+deletes its own on success, failure and cancellation. `Release mero-kms` has no
+sweep job, so `sweep-attestation-resources.sh`'s stale patterns also match
+these names: the next node release on `master` deletes one a lost runner left,
+once it is past `GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS`.
+
+`Release mero-kms` builds nothing off `master`, so to try the check from a
+branch, dispatch **Image (mkosi)** (`node-image-mkosi.yaml`) with `role: kms`
+or `agent`, a debug profile and `log_auth_check` set.
+
 </TabItem>
 </Tabs>
 

@@ -37,6 +37,10 @@ set -euo pipefail
 #   GATE_PORT (8090), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL,
 #   AGENT_ALLOWED_TCB_STATUSES (uptodate; a declared release input, as for the
 #   KMS, not a reading)
+#   LOGS_ENDPOINT, OBSERVABILITY_TOKEN_FILE  together, the log-auth check
+#     (release-kms.yaml, node_log_auth_probe.sh): the VM also gets
+#     `logs-endpoint` and `observability-token`, the keys mdma sets, so the
+#     caller can check its vector pushed with that token. Neither is measured.
 #
 # Output: ${OUT_DIR}/agent-attestation-policy.${PROFILE}.json
 
@@ -62,6 +66,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
 # shellcheck source=scripts/ci/gcp_create_instance.sh
 source "${repo_root}/scripts/ci/gcp_create_instance.sh"
+# shellcheck source=scripts/ci/probes/log_auth_metadata.sh
+source "${repo_root}/scripts/ci/probes/log_auth_metadata.sh"
+# Before anything exists, so a half-set check fails without touching GCP.
+vm_metadata="ephemeral-store=true$(log_auth_metadata)"
 mkdir -p "${OUT_DIR}"
 
 vm="${PROBE_NAME}-a"
@@ -104,7 +112,7 @@ gcp_create_instance "${vm}" "${VM_PROJECT}" "${VM_ZONE}" \
   --min-cpu-platform "Intel Sapphire Rapids" \
   --no-service-account --no-scopes \
   --image "${IMAGE}" --image-project "${IMAGE_PROJECT}" \
-  --metadata "ephemeral-store=true" \
+  --metadata "${vm_metadata}" \
   --tags "${PROBE_NAME}"
 ip="$(gcloud compute instances describe "${vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"

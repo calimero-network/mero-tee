@@ -225,4 +225,131 @@ grep -qx '    debug|debug-read-only) ;;' "${REPO_ROOT}/mero-tee/ansible/roles/ve
   || fail "configure_vector.sh's plain-http profile list changed; update node_log_auth_probe.sh setup and this test"
 echo "ok   configure_vector.sh still allows plain http on debug and debug-read-only only"
 
+# The KMS and agent releases run the same check, on the same profiles, because
+# their init scripts read the same two keys and hand them to the same
+# configure_vector.sh, pointing it at the profile their role pins.
+for role in mero-kms:kms-init mero-agent:agent-init; do
+  dir="${REPO_ROOT}/mero-tee/ansible/roles/${role%%:*}"
+  init="${dir}/templates/${role#*:}.sh.j2"
+  for want in 'get_meta logs-endpoint' 'get_meta observability-token' \
+    "export OBS_PROFILE_FILE=/etc/${role%%:*}/image-profile" '/etc/vector/configure_vector.sh '; do
+    grep -qF "${want}" "${init}" || fail "${role#*:} no longer has '${want}'; the log-auth check assumes it"
+  done
+  grep -qF "dest: /etc/${role%%:*}/image-profile" "${dir}/tasks/main.yml" \
+    || fail "the ${role%%:*} role no longer writes /etc/${role%%:*}/image-profile"
+done
+echo "ok   kms-init and agent-init take the log keys and ship through configure_vector.sh"
+
+# --- setup without a subnetwork puts the receiver on VM_NETWORK ---------------
+# The KMS and agent probes create their VMs with neither --network nor --subnet,
+# so on the `default` network's subnet in the zone's region. Their receiver must
+# land there too: with VM_SUBNETWORK empty, setup passes --network and no
+# --subnet. The node release, which passes a subnetwork, keeps --subnet.
+touch "${SB}/created-once"
+for case_ in subnet network; do
+  : > "${SB}/setup-calls"
+  subnet="s"
+  [[ "${case_}" == network ]] && subnet=""
+  (cd "${REPO_ROOT}" && PATH="${SB}/setup-bin:${PATH}" GCP_CREATE_RETRY_DELAY=0 \
+    VM_PROJECT=p VM_ZONE=z VM_NETWORK=default VM_SUBNETWORK="${subnet}" NODE_TAG=kms-rel-debug-1-1 \
+    IMAGE_PROFILE=debug RECEIVER_PREFIX=kms-attest-rcv RUN_SUFFIX=debug-1-1 \
+    TOKEN_FILE="${SB}/token-${case_}" GITHUB_OUTPUT="${SB}/gh-output" \
+    bash "${PROBE}" setup) > "${SB}/setup.out" 2>&1 \
+    || fail "setup (${case_}) failed: $(cat "${SB}/setup.out")"
+  create="$(grep '^compute instances create kms-attest-rcv-debug-1-1 ' "${SB}/setup-calls" || true)"
+  if [[ "${case_}" == subnet ]]; then
+    [[ "${create}" == *"--subnet s "* && "${create}" != *"--network "* ]] \
+      || fail "setup with a subnetwork changed how it places the receiver: ${create}"
+  else
+    [[ "${create}" == *"--network default "* && "${create}" != *"--subnet"* ]] \
+      || fail "setup without a subnetwork did not put the receiver on VM_NETWORK: ${create}"
+  fi
+done
+grep -q -- '--network default .*--source-tags kms-rel-debug-1-1 .*--target-tags kms-attest-rcv-debug-1-1' "${SB}/setup-calls" \
+  || fail "the receiver's rule does not admit the probe VM's tag on its network: $(cat "${SB}/setup-calls")"
+echo "ok   without VM_SUBNETWORK the receiver joins VM_NETWORK, as the KMS and agent VMs do"
+
+# --- the KMS and agent probes give their VM the two log keys -------------------
+# log_auth_metadata.sh turns LOGS_ENDPOINT and OBSERVABILITY_TOKEN_FILE into the
+# `logs-endpoint` and `observability-token` keys. Neither is measured; without
+# them a probe VM's metadata must stay exactly what it was.
+HELPER="${REPO_ROOT}/scripts/ci/probes/log_auth_metadata.sh"
+printf 'abc123' > "${SB}/obs-token"
+printf 'a,b' > "${SB}/bad-token"
+meta() {
+  # shellcheck source=scripts/ci/probes/log_auth_metadata.sh
+  (source "${HELPER}" && LOGS_ENDPOINT="$1" OBSERVABILITY_TOKEN_FILE="$2" log_auth_metadata) 2>"${SB}/meta.err"
+}
+[[ "$(meta "" "")" == "" ]] || fail "log_auth_metadata printed keys with no endpoint"
+got="$(meta "http://10.0.0.5:9200" "${SB}/obs-token" || true)"
+[[ "${got}" == ",logs-endpoint=http://10.0.0.5:9200,observability-token=abc123" ]] \
+  || fail "log_auth_metadata printed '${got}': $(cat "${SB}/meta.err")"
+for bad in "http://10.0.0.5:9200|" "|${SB}/obs-token" "http://10.0.0.5:9200,x=y|${SB}/obs-token" \
+  "http://10.0.0.5:9200|${SB}/bad-token" "http://10.0.0.5:9200|${SB}/missing-token"; do
+  if meta "${bad%%|*}" "${bad#*|}" >/dev/null; then
+    fail "log_auth_metadata accepted '${bad}'"
+  fi
+done
+echo "ok   log_auth_metadata prints both keys, nothing, or refuses"
+
+# Each probe runs against a stub gcloud whose `instances create` records its
+# arguments and fails, so the probe stops at its first VM, as a real create
+# failure would, and its trap cleans up.
+mkdir -p "${SB}/vm-bin"
+cat > "${SB}/vm-bin/gcloud" <<STUB
+#!/usr/bin/env bash
+echo "\$*" >> "${SB}/vm-calls"
+if [[ "\$2 \$3" == "instances create" ]]; then
+  echo "ERROR: (gcloud.compute.instances.create) Invalid value for field" >&2
+  exit 1
+fi
+exit 0
+STUB
+cat > "${SB}/vm-bin/curl" <<'STUB'
+#!/usr/bin/env bash
+echo 192.0.2.1
+STUB
+chmod +x "${SB}/vm-bin/gcloud" "${SB}/vm-bin/curl"
+run_vm_probe() {
+  local script="$1"; shift
+  : > "${SB}/vm-calls"
+  (cd "${REPO_ROOT}" && env PATH="${SB}/vm-bin:${PATH}" IMAGE=img IMAGE_PROJECT=ip PROFILE=debug \
+    PROBE_NAME=probe-debug-1-1 VM_PROJECT=p VM_ZONE=z VM_MACHINE_TYPE=m ITA_API_KEY=k \
+    OUT_DIR="${SB}/vm-out" PROVISION_MODE=skip "$@" bash "${script}") > "${SB}/vm.out" 2>&1 || true
+  grep -m1 '^compute instances create ' "${SB}/vm-calls" || true
+}
+for probe in "scripts/release/kms/run-cluster-probe.sh|kms-bootstrap=true" \
+  "scripts/release/agent/run-agent-probe.sh|ephemeral-store=true"; do
+  script="${REPO_ROOT}/${probe%%|*}" base="${probe#*|}"
+  create="$(run_vm_probe "${script}")"
+  [[ "${create}" == *"--metadata ${base} "* ]] \
+    || fail "${probe%%|*} changed its VM's metadata without the check: ${create} $(cat "${SB}/vm.out")"
+  create="$(run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 OBSERVABILITY_TOKEN_FILE="${SB}/obs-token")"
+  [[ "${create}" == *"--metadata ${base},logs-endpoint=http://10.0.0.5:9200,observability-token=abc123 "* ]] \
+    || fail "${probe%%|*} did not give its VM the two log keys: ${create} $(cat "${SB}/vm.out")"
+  run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 >/dev/null
+  [[ ! -s "${SB}/vm-calls" ]] || fail "${probe%%|*} touched GCP with a half-set log-auth check: $(cat "${SB}/vm-calls")"
+  echo "ok   ${probe%%|*} passes the log keys to its VM, and only when asked"
+done
+
+# The release names its receivers <kms|agent>-attest-rcv-<profile>-<run>-<attempt>.
+# The longest must be a valid GCE name, and the node release's sweep must catch
+# one a lost runner left behind (its stale patterns, after the max age).
+long="agent-attest-rcv-debug-read-only-99999999999-99"
+(( ${#long} <= 63 )) || fail "${long} is over 63 characters"
+stale_inst_re="$(sed -n 's/^stale_prefix_regex="\(.*\)"$/\1/p' "${sweep}")"
+stale_fw_re="$(sed -n 's/^stale_firewall_regex="\(.*\)"$/\1/p' "${sweep}")"
+for name in kms-attest-rcv-debug-12345-1 agent-attest-rcv-debug-read-only-12345-2 \
+  tee-attest-rcv-debug-12345-1; do
+  [[ "${name}" =~ ${stale_inst_re} ]] || fail "sweep stale instance regex ${stale_inst_re} misses ${name}"
+  [[ "${name}" =~ ${stale_fw_re} ]] || fail "sweep stale firewall regex ${stale_fw_re} misses ${name}"
+done
+[[ "tdx-debug-12345-1" =~ ${stale_inst_re} && "tee-attest-debug-12345-1" =~ ${stale_fw_re} ]] \
+  || fail "the sweep's stale patterns no longer match the node VM and its rule"
+for name in kms-rel-debug-12345-1 kms-attest-debug-12345-1 agent-rel-debug-12345-1; do
+  [[ ! "${name}" =~ ${stale_inst_re} && ! "${name}" =~ ${stale_fw_re} ]] \
+    || fail "the sweep's stale patterns match ${name}, which is not a receiver"
+done
+echo "ok   the node release's sweep also catches stale KMS and agent receivers"
+
 echo "== log-auth probe classifies pushes and verdicts correctly =="

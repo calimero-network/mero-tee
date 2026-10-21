@@ -76,6 +76,14 @@ release's jobs instead, which keeps the original push event.
    replica's RTMR1–3 must also be the ones `compute_rtmr.py` computed from the
    build before it booted. An image that is not proven this way is deleted.
 
+   On `debug` and `debug-read-only`, check the KMS ships its logs: the bootstrap
+   replica boots with `logs-endpoint` and `observability-token` pointed at a
+   throwaway receiver VM, and the job fails unless the receiver sees a push
+   carrying that token (the
+   [log-auth check](/operate/runbooks/#log-auth-check-log_auth_check), as in the
+   node release). Neither key is measured. `locked-read-only` skips it: it ships
+   logs only over https, and the receiver is plain http.
+
    The probe measures each joiner before waiting on its join. Now and then a TD
    on GCE comes up with a different RTMR0 while MRTD and RTMR1–3 are equal, and
    the bootstrap rightly refuses it the root. The probe then prints the event
@@ -128,7 +136,10 @@ for each profile: `mero-agent-gate` plus the reference agent, named
 with the `MERO_BOT_RELEASE_TOKEN` secret (mero-bot is a private repository) and
 checks it against its sha256 in `build-inputs.lock.json`. Without a pin, it is
 the stub agent. It boots that image once with
-`ephemeral-store=true` and has Intel Trust Authority measure it. A measured
+`ephemeral-store=true` and has Intel Trust Authority measure it. On `debug` and
+`debug-read-only` that VM also gets the two log keys, and the job fails unless
+it pushed its logs with its token, as the KMS image must (the
+[log-auth check](/operate/runbooks/#log-auth-check-log_auth_check)). A measured
 profile's KMS image then also bakes that agent allowlist (`kms_agent_policy_file`,
 with the node allowlist's TCB statuses). Release-metadata publishes it as
 `kms-agent-attestation-policy.<profile>.json`, signed like the other assets.
@@ -266,6 +277,9 @@ as the releases do, boots it on TDX and runs that role's probe:
   secret).
 
 It then compares the quote's RTMR1–3 with the values computed from the build.
+With `log_auth_check` on a debug profile, it also runs the releases'
+[log-auth check](/operate/runbooks/#log-auth-check-log_auth_check) for any
+role; it is the way to try that check on a KMS or agent image from a branch.
 Its image carries a suffix and its own family, so it can never be mistaken for
 a release, and it is deleted afterwards unless `keep_image` is set. A KMS that
 serves an agent is built only by the release. See

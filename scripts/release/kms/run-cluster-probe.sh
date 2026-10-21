@@ -23,6 +23,12 @@ set -euo pipefail
 # Optional env:
 #   KMS_PORT (8080), WAIT_TIMEOUT_MINUTES (15), ITA_APPRAISAL_URL,
 #   MAX_JOINER_ATTEMPTS (3)
+#   LOGS_ENDPOINT, OBSERVABILITY_TOKEN_FILE  together, the log-auth check
+#     (release-kms.yaml, node_log_auth_probe.sh): the bootstrap replica also
+#     gets `logs-endpoint` and `observability-token`, the keys mdma sets, so the
+#     caller can check its vector pushed with that token. Only the bootstrap:
+#     both replicas boot the same image through the same kms-init, and the
+#     bootstrap lives through the whole probe. Neither key is measured.
 #
 # A joiner whose quote measures differently from the bootstrap's is replaced by
 # a new VM, as the runbooks replace a replica that cannot join: now and then a
@@ -49,6 +55,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
 # shellcheck source=scripts/ci/gcp_create_instance.sh
 source "${repo_root}/scripts/ci/gcp_create_instance.sh"
+# shellcheck source=scripts/ci/probes/log_auth_metadata.sh
+source "${repo_root}/scripts/ci/probes/log_auth_metadata.sh"
+# Before anything exists, so a half-set check fails without touching GCP.
+bootstrap_metadata="kms-bootstrap=true$(log_auth_metadata)"
 mkdir -p "${OUT_DIR}"
 
 tag="${PROBE_NAME}"
@@ -215,7 +225,7 @@ delete_vm() {
   created_vms=("${kept[@]}")
 }
 
-start_replica "${first}" "kms-bootstrap=true"
+start_replica "${first}" "${bootstrap_metadata}"
 first_ip="$(vm_ip "${first}" 'accessConfigs[0].natIP')"
 first_internal="$(vm_ip "${first}" 'networkIP')"
 wait_for_root bootstrap "${first_ip}"

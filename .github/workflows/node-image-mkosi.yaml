@@ -18,6 +18,9 @@ run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role
 #        mero-bot release versions.json pins, as the releases bake it; that
 #        needs the MERO_BOT_RELEASE_TOKEN secret;
 #   3. compares the quote's RTMR1-3 with the computed ones.
+# With log_auth_check (debug profiles), the probe VM also gets the two log keys
+# and must push to a throwaway receiver with its token, as in the releases
+# (scripts/ci/probes/node_log_auth_probe.sh).
 # Manual only; it publishes nothing, and the image is deleted afterwards unless
 # keep_image is set.
 
@@ -61,6 +64,11 @@ on:
         default: false
       serial_console:
         description: "Diagnostic build: kernel and journal on the serial console (console=ttyS0). Not the profile's measurement: it changes RTMR2"
+        required: false
+        type: boolean
+        default: false
+      log_auth_check:
+        description: "Boot with a log token and logs-endpoint pointed at a throwaway receiver, as the releases do, and check the pushes carry it (debug and debug-read-only only)"
         required: false
         type: boolean
         default: false
@@ -273,6 +281,7 @@ jobs:
       image_project: ${{ needs.build.outputs.project }}
       merod_version: ${{ needs.build.outputs.merod_version }}
       log_verbosity: ${{ inputs.log_verbosity }}
+      log_auth_check: ${{ inputs.log_auth_check }}
     secrets: inherit
 
   probe-tdx:
@@ -317,18 +326,56 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
+      # `log_auth_check`: the check release-kms.yaml runs on the KMS and agent
+      # images of the debug profiles, here on demand, with the same receiver
+      # names (the node release's sweep catches stale ones). Setup refuses
+      # locked-read-only (LOG_AUTH_UNSUPPORTED_PROFILE) before creating anything.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ inputs.log_auth_check }}
+        env:
+          IMAGE_PROFILE: ${{ inputs.profile }}
+          VM_NETWORK: default
+          VM_SUBNETWORK: ""
+          NODE_TAG: ${{ env.PROBE_NAME }}
+          RECEIVER_PREFIX: ${{ inputs.role }}-attest-rcv
+          RUN_SUFFIX: ${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
       - name: Run the two-replica cluster and verify both quotes
         if: ${{ inputs.role == 'kms' }}
         env:
           KMS_PORT: "8080"
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
         run: bash scripts/release/kms/run-cluster-probe.sh
 
       - name: Boot, measure and provision the agent
         if: ${{ inputs.role == 'agent' }}
+        env:
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
         run: |
           set -euo pipefail
           chmod +x agent-tools/mero-agent-provision
           PROVISION_BIN="${PWD}/agent-tools/mero-agent-provision" bash scripts/release/agent/run-agent-probe.sh
+
+      - name: Verify the image pushed logs with its metadata token
+        if: ${{ inputs.log_auth_check }}
+        env:
+          RECEIVER_PREFIX: ${{ inputs.role }}-attest-rcv
+          RUN_SUFFIX: ${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACTS_DIR: ${{ github.workspace }}/probe
+          VERIFY_TIMEOUT_SECONDS: "180"
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
+
+      - name: Delete the log-auth receiver
+        if: ${{ always() && steps.log_auth.outcome != 'skipped' && steps.log_auth.outcome != '' }}
+        env:
+          RECEIVER_PREFIX: ${{ inputs.role }}-attest-rcv
+          RUN_SUFFIX: ${{ inputs.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/probes/node_log_auth_probe.sh cleanup
 
       - name: Upload the probe evidence
         if: ${{ always() }}
