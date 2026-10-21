@@ -10,6 +10,7 @@ on:
       - Cargo.lock
       - "mero-kms/src/**"
       - "mero-agent-gate/**"
+      - "mero-inference-gate/**"
       - ".github/workflows/ci-kms.yaml"
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - Cargo.lock
       - "mero-kms/src/**"
       - "mero-agent-gate/**"
+      - "mero-inference-gate/**"
       - ".github/workflows/ci-kms.yaml"
 
 permissions:
@@ -83,11 +85,25 @@ jobs:
           cargo test -p mero-agent-gate
           cargo test -p mero-agent-gate --features mock-attestation
 
+      # mero-inference-gate: the attested TLS front of the inference image
+      # (docs/design/private-inference.md). Same quote code and mock gating.
+      - name: Clippy (mero-inference-gate)
+        id: inference_gate_clippy
+        run: |
+          cargo clippy -p mero-inference-gate --all-targets -- -D warnings
+          cargo clippy -p mero-inference-gate --all-targets --features mock-attestation -- -D warnings
+
+      - name: Tests (mero-inference-gate)
+        id: inference_gate_tests
+        run: |
+          cargo test -p mero-inference-gate
+          cargo test -p mero-inference-gate --features mock-attestation
+
       - name: Doc warnings
         id: docs
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p mero-kms -p mero-agent-gate --no-deps
+        run: cargo doc -p mero-kms -p mero-agent-gate -p mero-inference-gate --no-deps
 
       - name: Summarize CI outcomes
         if: ${{ always() }}

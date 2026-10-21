@@ -9,6 +9,7 @@ on:
       - "scripts/attestation/**"
       - "scripts/ci/**"
       - "scripts/agent/**"
+      - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
   push:
@@ -21,6 +22,7 @@ on:
       - "scripts/attestation/**"
       - "scripts/ci/**"
       - "scripts/agent/**"
+      - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
   workflow_dispatch:
@@ -57,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh mero-tee/**/*.sh
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh scripts/inference/**/*.sh mero-tee/**/*.sh
                        mero-tee/mkosi-*/mkosi.postinst mero-tee/mkosi-*/mkosi.finalize)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
@@ -104,6 +106,12 @@ jobs:
               -e merod_version=0.0.0 -e cpu_architecture=amd64 \
               -e traefik_version=0.0.0 -e node_exporter_version=0.0.0 \
               -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
+          done
+          # The inference image's playbook too (docs/design/private-inference.md).
+          for profile in locked-read-only debug-read-only debug; do
+            ansible-playbook -i localhost, --syntax-check playbook-inference.yml \
+              -e lockdown_profile="${profile}" -e image_version=0.0.0 -e cpu_architecture=amd64 \
+              -e node_exporter_version=0.0.0 -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
           done
 
       # Static, because the token is optional by construction: every header is
@@ -425,9 +433,10 @@ jobs:
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
       # Each image's RTMR3 extend is what its KMS policy entry matches, so the
-      # node, KMS and agent init scripts' one shared block is executed and the
-      # v3 event (role, profile, dm-verity roothash) checked byte for byte.
-      - name: Check calimero-init, kms-init and agent-init extend RTMR3 (v3)
+      # node, KMS, agent and inference init scripts' one shared block is
+      # executed and the v3 event (role, profile, dm-verity roothash) checked
+      # byte for byte.
+      - name: Check calimero-init, kms-init, agent-init and inference-init extend RTMR3 (v3)
         id: init_rtmr3_test
         shell: bash
         run: scripts/ci/tests/init-rtmr3-test.sh
@@ -457,6 +466,25 @@ jobs:
         id: mero_bot_launcher_test
         shell: bash
         run: scripts/ci/tests/mero-bot-agent-launcher-test.sh
+
+      # inference-init against stubs: measure-only extends RTMR3 with the image
+      # alone; a model's configuration is measured as its second event; code
+      # from a repository, a moving revision, an open gate or weights that do
+      # not hash to model-sha256 stop the boot before vLLM starts; a GPU outside
+      # confidential-computing mode stops a locked-read-only boot.
+      - name: Check inference-init measures the model and refuses what it must
+        id: inference_init_test
+        shell: bash
+        run: scripts/ci/tests/inference-init-test.sh
+
+      # The inference image's model configuration (docs/design/private-inference.md):
+      # metadata can set only allowlisted vLLM flags, never remote code; the
+      # canonical bytes measured into RTMR3 match mdma's; the weights digest
+      # covers exactly the files kept; vLLM listens on loopback only.
+      - name: Check the inference image's model configuration
+        id: inference_model_test
+        shell: bash
+        run: python3 scripts/ci/tests/inference-model-test.py
 
       # A node with no fleet token must still be able to register. should-join
       # requires a token; registration ISSUES one and takes none. Poll first and

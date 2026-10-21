@@ -17,12 +17,15 @@ assets_for_rekor=(
   release-assets/kms-compatibility-map.json
 )
 # The agent allowlists this release's KMS images serve, for the profiles whose
-# agent image was measured (docs/design/private-agents.md). Optional: a
-# release whose agent measurement failed ships node-only KMS images and none.
+# agent image was measured (docs/design/private-agents.md), and the inference
+# allowlists, for the profiles whose GPU image was measured
+# (docs/design/private-inference.md). Optional: a release whose measurement
+# failed or did not run ships none.
 # The glob also matches the `.bundle.json` that signing writes beside each one
 # (a retried step): only the allowlists themselves are assets.
 shopt -s nullglob
-for policy in release-assets/kms-agent-attestation-policy.*.json; do
+for policy in release-assets/kms-agent-attestation-policy.*.json \
+    release-assets/kms-inference-attestation-policy.*.json; do
   [[ "${policy}" == *.bundle.json ]] || assets_for_rekor+=("${policy}")
 done
 shopt -u nullglob

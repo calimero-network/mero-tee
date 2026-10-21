@@ -1,6 +1,6 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node, KMS and agent images with TDX attestation).
+TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node, KMS, agent and GPU inference images with TDX attestation).
 
 > **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
 
@@ -9,7 +9,8 @@ TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run a
 | Component | Description |
 |-----------|-------------|
 | **mero-kms** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes. Runs as the frozen, dm-verity-sealed GCP TDX image `merotee-kms-<profile>-<version>`: one 5-replica cluster per release, whose root key exists only in the replicas' memory and is shared only by attested join. See the [design](docs/design/gcp-tdx-kms.md) |
-| **mero-tee/** | mkosi build of the merod node, KMS and agent images (debug, debug-read-only, locked-read-only profiles) |
+| **mero-tee/** | mkosi build of the merod node, KMS, agent and inference images (debug, debug-read-only, locked-read-only profiles) |
+| **mero-inference-gate** | The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
 | **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`) and its own MRTD from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`, polls MDMA for group assignments (sending `peer_id` + `mrtd` so MDMA's MRTD-gated `should_join` can match) and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. See [Fleet HA sidecar lifecycle](#fleet-ha-sidecar-lifecycle) for the join + leave-on-disable reconcile loop. |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 

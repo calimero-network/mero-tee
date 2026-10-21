@@ -1,0 +1,41 @@
+# Partial Vector config for the inference image. configure_vector.sh appends the
+# sink when inference-init finds `logs-endpoint` in instance metadata.
+#
+# These lines LEAVE THE TEE. The endpoint is instance metadata, which whoever
+# runs the VM can set, so treat every line below as readable by an operator.
+# vLLM's unit is NOT shipped: it runs with request logging off, but a model
+# server's errors can quote what it was asked. inference-init and the gate log
+# configuration and counts, never prompts.
+sources:
+  inference_journal:
+    type: journald
+    include_units:
+      [
+        "mero-inference-init.service",
+        "mero-inference-gate.service",
+        "vector.service",
+        "vmagent.service",
+      ]
+    data_dir: "/etc/vector/data"
+
+transforms:
+  add_labels:
+    type: remap
+    inputs: [inference_journal]
+    source: |
+      .unit = ._SYSTEMD_UNIT
+      .hostname = .host
+      .instance_name = "mero-inference"
+      .instance_type = "gcp"
+      # Substituted by configure_vector.sh from /etc/mero-inference/image-profile.
+      .instance_profile = "__IMAGE_PROFILE__"
+
+  # Every line passes egress-guard.vrl before it leaves: only named fields,
+  # credential shapes masked, messages capped. A line the program cannot
+  # process is dropped, never shipped as it came.
+  guard_egress:
+    type: remap
+    inputs: [add_labels]
+    file: /etc/vector/egress-guard.vrl
+    drop_on_error: true
+    drop_on_abort: true

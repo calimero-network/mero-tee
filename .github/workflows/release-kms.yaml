@@ -18,6 +18,13 @@ name: Release mero-kms
 # best effort: an agent build or measurement that fails leaves that KMS image
 # node-only, exactly as before agents, and never blocks the release.
 #
+# Inference (docs/design/private-inference.md): `inference-image` builds the
+# GPU inference image per profile and measures it on an a3 (H100) TDX VM with
+# measure-only, publishing kms-inference-attestation-policy.<profile>.json,
+# signed with the rest. Opt-in (repository variable INFERENCE_RELEASE=true: it
+# needs H100 quota and costs GPU time) and best effort: no KMS image serves it,
+# and a failure only leaves the release without it.
+#
 # Logs: on debug and debug-read-only, the agent and KMS probe VMs boot with
 # `logs-endpoint` and `observability-token` pointed at a throwaway receiver
 # (scripts/ci/probes/node_log_auth_probe.sh, as in release-node-image-gcp.yaml),
@@ -44,6 +51,12 @@ on:
       - "mero-tee/ansible/roles/mero-agent/**"
       - "scripts/agent/**"
       - "scripts/release/agent/**"
+      - "mero-inference-gate/**"
+      - "mero-tee/playbook-inference.yml"
+      - "mero-tee/ansible/roles/mero-inference/**"
+      - "mero-tee/inference/**"
+      - "scripts/inference/**"
+      - "scripts/release/inference/**"
       - ".github/workflows/release-kms.yaml"
       - "scripts/attestation/**"
       - "scripts/release/kms/**"
@@ -96,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           for script in scripts/release/kms/*.sh scripts/release/verify-kms-release-assets.sh \
-            scripts/release/agent/run-agent-probe.sh \
+            scripts/release/agent/run-agent-probe.sh scripts/release/inference/run-inference-probe.sh \
             scripts/ci/probes/node_log_auth_probe.sh scripts/ci/probes/log_auth_metadata.sh; do
             bash -n "${script}"
           done
@@ -403,6 +416,204 @@ jobs:
         if: ${{ always() && steps.log_auth.outcome != 'skipped' && steps.log_auth.outcome != '' }}
         run: bash scripts/ci/probes/node_log_auth_probe.sh cleanup
 
+  inference-image:
+    name: Build and measure inference image (${{ matrix.profile }})
+    needs: prepare
+    if: ${{ github.ref == 'refs/heads/master' && needs.prepare.outputs.publish_release == 'true' && vars.INFERENCE_RELEASE == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    # Best effort: see the header. Nothing waits on its success.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      # One GPU VM at a time: H100 quota is usually one or two.
+      max-parallel: 1
+      matrix:
+        profile: [debug, debug-read-only, locked-read-only]
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROFILE: ${{ matrix.profile }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PROBE_NAME: inf-rel-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      LOG_AUTH_CHECK: ${{ matrix.profile != 'locked-read-only' }}
+      RECEIVER_PREFIX: inference-attest-rcv
+      RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # The shape hosts run on: RTMR0 measures it. a3-highgpu-1g is one H100.
+      INFERENCE_VM_MACHINE_TYPE: ${{ vars.INFERENCE_VM_MACHINE_TYPE != '' && vars.INFERENCE_VM_MACHINE_TYPE || 'a3-highgpu-1g' }}
+      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a' }}
+      INFERENCE_VM_PROVISIONING_MODEL: ${{ vars.INFERENCE_VM_PROVISIONING_MODEL != '' && vars.INFERENCE_VM_PROVISIONING_MODEL || 'STANDARD' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # vLLM and torch's CUDA libraries are several GB installed, and the
+      # image is built beside them: make room on the runner.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Setup rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-mero-inference-gate
+
+      - name: Build mero-inference-gate
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p mero-inference-gate
+          mkdir -p inference probe
+          cp target/release/mero-inference-gate inference/
+          sha256sum inference/mero-inference-gate mero-tee/inference/requirements.lock | tee probe/inference-inputs.sha256
+
+      - name: Determine GCP auth mode
+        id: auth_mode
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+        run: |
+          if [[ -n "${WIF_PROVIDER}" && -n "${WIF_SERVICE_ACCOUNT}" ]]; then
+            echo "mode=wif" >> "${GITHUB_OUTPUT}"
+          elif [[ -n "${SA_KEY}" ]]; then
+            echo "mode=key" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::error::Set GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_PACKER_SERVICE_ACCOUNT_EMAIL, or GCP_SERVICE_ACCOUNT_KEY."
+            exit 1
+          fi
+
+      - name: Authenticate to GCP via workload identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_PACKER_SERVICE_ACCOUNT_EMAIL }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Authenticate to GCP via service account key
+        if: ${{ steps.auth_mode.outputs.mode == 'key' }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Set up mkosi
+        uses: systemd/mkosi@4736cd836108a97772142c461c49f1ddb4172348 # v27
+
+      - name: Install the build tools
+        run: scripts/release/mkosi/install-tools.sh
+
+      # Kept under the name mdma looks up (release-image-name.sh): its
+      # dispatcher boots merotee-inference-<profile>-<version> for its hosts.
+      - name: Build the inference image
+        id: build_image
+        env:
+          ROLE: inference
+          MKOSI_OUT: ${{ runner.temp }}/mkosi-out
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+          UPLOAD_BUCKET: ${{ vars.GCP_IMAGE_UPLOAD_BUCKET }}
+        run: |
+          set -euo pipefail
+          export MERO_INFERENCE_GATE_BINARY="${PWD}/inference/mero-inference-gate"
+          scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-inference-build.log
+          names="$(scripts/release/mkosi/release-image-name.sh inference "${PROFILE}" "${VERSION}")"
+          IMAGE_NAME="$(sed -n 's/^name=//p' <<< "${names}")"
+          IMAGE_FAMILY="$(sed -n 's/^family=//p' <<< "${names}")"
+          IMAGE_DESCRIPTION="$(sed -n 's/^description=//p' <<< "${names}")"
+          IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          export IMAGE_NAME IMAGE_FAMILY IMAGE_DESCRIPTION IMAGE_PROJECT REPLACE=true
+          scripts/release/mkosi/create-gce-image.sh
+
+      - name: Show build log on failure
+        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+        run: tail -200 /tmp/mkosi-inference-build.log 2>/dev/null || true
+
+      # As for the agent: the measurement VM must ship its logs with the token
+      # mdma would set. Neither key is measured.
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          IMAGE_PROFILE: ${{ matrix.profile }}
+          VM_NETWORK: default
+          VM_SUBNETWORK: ""
+          VM_ZONE: ${{ env.INFERENCE_VM_ZONE }}
+          NODE_TAG: ${{ env.PROBE_NAME }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
+      - name: Boot and measure the inference image
+        env:
+          ITA_API_KEY: ${{ secrets.ITA_API_KEY }}
+          OUT_DIR: probe
+          VM_ZONE: ${{ env.INFERENCE_VM_ZONE }}
+          VM_MACHINE_TYPE: ${{ env.INFERENCE_VM_MACHINE_TYPE }}
+          VM_PROVISIONING_MODEL: ${{ env.INFERENCE_VM_PROVISIONING_MODEL }}
+          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
+          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
+        run: |
+          set -euo pipefail
+          export IMAGE="merotee-inference-${PROFILE}-${VERSION//./-}"
+          export IMAGE_PROJECT="${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}"
+          bash scripts/release/inference/run-inference-probe.sh
+          gcloud compute images describe "${IMAGE}" --project "${IMAGE_PROJECT}" --format=json \
+            | jq --arg project "${IMAGE_PROJECT}" '{name, family, id, project: $project}' > probe/inference-image.json
+
+      - name: Verify the inference VM pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ env.LOG_AUTH_CHECK == 'true' }}
+        env:
+          ARTIFACTS_DIR: probe
+          VERIFY_TIMEOUT_SECONDS: "180"
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
+
+      # RTMR1-3 against the ones computed from the build; RTMR3 is the image
+      # event alone on a measure-only VM, which is what the build computes.
+      - name: Compare the quote's RTMR1-3 with the computed ones
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+        run: |
+          set -euo pipefail
+          cp "${EVIDENCE_DIR}/computed.json" "probe/inference-computed-rtmrs.${PROFILE}.json"
+          jq '{quoteB64}' probe/inference-attest.json > "${RUNNER_TEMP}/evidence.json"
+          python3 scripts/attestation/shared/compute_rtmr.py compare \
+            "${EVIDENCE_DIR}/computed.json" "${RUNNER_TEMP}/evidence.json" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Stamp the inference policy with its release
+        run: |
+          set -euo pipefail
+          policy="probe/inference-attestation-policy.${PROFILE}.json"
+          jq --arg v "${VERSION}" '. + {version: $v}' "${policy}" > "${policy}.tmp"
+          mv "${policy}.tmp" "${policy}"
+
+      - name: Upload the inference policy
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inference-policy-${{ needs.prepare.outputs.version }}-${{ matrix.profile }}
+          path: |
+            probe/inference-attestation-policy.${{ matrix.profile }}.json
+            probe/inference-image.json
+            probe/inference-inputs.sha256
+            probe/inference-computed-rtmrs.${{ matrix.profile }}.json
+          retention-days: 7
+
+      - name: Delete the inference image if it was not measured
+        if: ${{ failure() && steps.build_image.outcome == 'success' }}
+        run: |
+          gcloud compute images delete "merotee-inference-${PROFILE}-${VERSION//./-}" \
+            --project "${PACKER_GCP_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT}}" --quiet || true
+
+      - name: Delete the log-auth receiver
+        if: ${{ always() && steps.log_auth.outcome != 'skipped' && steps.log_auth.outcome != '' }}
+        run: bash scripts/ci/probes/node_log_auth_probe.sh cleanup
+
   kms-image:
     name: Build and probe KMS image (${{ matrix.profile }})
     needs: [prepare, node-policy, build-binary, agent-image]
@@ -673,9 +884,10 @@ jobs:
 
   release-metadata:
     name: Release Metadata
-    needs: [prepare, node-policy, build-binary, kms-image]
+    needs: [prepare, node-policy, build-binary, kms-image, inference-image]
     # Explicit results rather than the implicit success(): kms-image runs after
-    # the best-effort agent-image, whatever it concluded, and so must this.
+    # the best-effort agent-image, whatever it concluded, and so must this; and
+    # after the best-effort, opt-in inference-image, whatever it concluded.
     if: >-
       ${{ !cancelled() && github.ref == 'refs/heads/master' &&
           needs.prepare.outputs.publish_release == 'true' &&
@@ -707,6 +919,12 @@ jobs:
           pattern: kms-probe-${{ needs.prepare.outputs.version }}-*
           path: probe-artifacts/
 
+      - name: Download inference policies
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: inference-policy-${{ needs.prepare.outputs.version }}-*
+          path: inference-artifacts/
+
       - name: Install Syft for SBOM generation
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
@@ -732,6 +950,16 @@ jobs:
             profile="$(jq -r '.profile' "${policy}")"
             cp "${policy}" "release-assets/kms-agent-attestation-policy.${profile}.json"
             echo "Publishing the ${profile} agent allowlist"
+          done
+          # The inference allowlists (docs/design/private-inference.md), for the
+          # profiles whose GPU measurement ran; no KMS image serves them.
+          for policy in inference-artifacts/inference-policy-"${PREP_VERSION}"-*/inference-attestation-policy.*.json; do
+            [[ -f "${policy}" ]] || continue
+            profile="$(jq -r '.profile' "${policy}")"
+            jq -e --arg v "${PREP_VERSION}" '.role == "inference" and .version == $v' "${policy}" >/dev/null \
+              || { echo "::warning::${policy} is not this release's inference allowlist; not publishing it"; continue; }
+            cp "${policy}" "release-assets/kms-inference-attestation-policy.${profile}.json"
+            echo "Publishing the ${profile} inference allowlist"
           done
 
       - name: Install cosign for keyless signing

@@ -1,0 +1,224 @@
+---
+# The private inference image (docs/design/private-inference.md): the NVIDIA
+# driver, vLLM (installed by build.sh from mero-tee/inference/requirements.lock),
+# mero-inference-gate, inference-init and their units. No KMS client: the TD
+# keeps nothing across boots.
+- name: Require the gate binary
+  assert:
+    that:
+      - mero_inference_gate_binary | length > 0
+    fail_msg: "Pass -e mero_inference_gate_binary=... to build an inference image."
+
+# The open kernel modules prebuilt for the image's kernel (no DKMS: nothing is
+# compiled into the image at build time), their user space, and the
+# persistence daemon confidential computing needs. All from the image's
+# archive snapshot, like every other package.
+- name: Install the NVIDIA driver
+  apt:
+    name:
+      - "linux-modules-nvidia-{{ nvidia_driver_branch }}-server-open-gcp"
+      - "nvidia-kernel-common-{{ nvidia_driver_branch }}-server"
+      - "nvidia-utils-{{ nvidia_driver_branch }}-server"
+      - "nvidia-compute-utils-{{ nvidia_driver_branch }}-server"
+      - "libnvidia-compute-{{ nvidia_driver_branch }}-server"
+    state: present
+
+# cryptsetup for the scratch disk. Triton, which vLLM's kernels run on,
+# compiles a small CUDA launcher with the system C compiler against Python's
+# headers on first use, into its cache on the scratch disk.
+- name: Install the scratch-disk, Python and compiler packages
+  apt:
+    name:
+      - cryptsetup
+      - python3
+      - python3-dev
+      - gcc
+      - libc6-dev
+    state: present
+
+- name: Create the vLLM user
+  user:
+    name: "{{ mero_inference_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create mero-inference directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/mero-inference
+    - /usr/local/lib/mero-inference
+    - /etc/systemd/system/node_exporter.service.d
+
+- name: Install the gate binary
+  copy:
+    src: "{{ mero_inference_gate_binary }}"
+    dest: /usr/local/bin/mero-inference-gate
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the model and GPU helpers
+  copy:
+    src: "{{ item.src }}"
+    dest: "/usr/local/lib/mero-inference/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { src: inference_model.py, dest: inference_model.py }
+    - { src: gpu-evidence.py, dest: gpu-evidence.py }
+
+# The gate runs the GPU helper by path, with the baked site-packages (NVML's
+# bindings) and nothing else from the environment. PYTHONSAFEPATH: the
+# script's own directory is not searched first.
+- name: Install the GPU evidence launcher
+  copy:
+    content: |
+      #!/bin/sh
+      exec env -i PATH=/usr/bin:/bin PYTHONPATH={{ mero_inference_site_packages }} PYTHONNOUSERSITE=1 \
+        PYTHONSAFEPATH=1 /usr/bin/python3 -S /usr/local/lib/mero-inference/gpu-evidence.py "$@"
+    dest: /usr/local/lib/mero-inference/gpu-evidence
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Pin the image profile
+  copy:
+    content: "{{ lockdown_profile }}\n"
+    dest: /etc/mero-inference/image-profile
+    mode: "0644"
+
+- name: Bake the gate configuration
+  template:
+    src: gate.env.j2
+    dest: /etc/mero-inference/gate.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the inference boot script
+  template:
+    src: inference-init.sh.j2
+    dest: /usr/local/lib/mero-inference/init.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the inference vector partial config
+  copy:
+    src: vector-partial-inference.yaml
+    dest: /etc/vector/vector_partial.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the inference vmagent scrape config
+  copy:
+    src: vmagent-scrape-config.yml
+    dest: /etc/vmagent/scrape_config.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Bind node_exporter to loopback
+  copy:
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/local/bin/node_exporter --web.listen-address=127.0.0.1:9100
+    dest: /etc/systemd/system/node_exporter.service.d/loopback.conf
+    mode: "0644"
+
+# Downloading a large model takes a while: no start timeout.
+- name: Install mero-inference-init.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-inference boot: extend RTMR3, check the GPU, fetch and measure the model
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      TimeoutStartSec=infinity
+      ExecStart=/usr/local/lib/mero-inference/init.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-inference-init.service
+    mode: "0644"
+
+# As root, like mero-agent-gate: a configfs-tsm quote needs root, and so does
+# NVML's attestation report. It starts with a new TLS key every time.
+- name: Install mero-inference-gate.service
+  copy:
+    content: |
+      [Unit]
+      Description=mero-inference-gate: attested TLS front of vLLM
+      Requires=mero-inference-init.service
+      After=mero-inference-init.service
+
+      [Service]
+      EnvironmentFile=/etc/mero-inference/gate.env
+      ExecStart=/usr/local/bin/mero-inference-gate
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/mero-inference-gate.service
+    mode: "0644"
+
+# vLLM, from the configuration inference-init measured, as its own user. Only
+# inference-init starts it (no [Install]): on the measurement VM there is no
+# model. It writes only its caches on the scratch disk, and listens on
+# loopback, where only the gate reaches it.
+- name: Install mero-inference-vllm.service
+  copy:
+    content: |
+      [Unit]
+      Description=vLLM serving the measured model
+      Requires=mero-inference-init.service
+      After=mero-inference-init.service
+
+      [Service]
+      User={{ mero_inference_user }}
+      Group={{ mero_inference_user }}
+      EnvironmentFile=/run/mero-inference/vllm.env
+      Environment=PYTHONPATH={{ mero_inference_site_packages }} PYTHONNOUSERSITE=1 PYTHONSAFEPATH=1
+      ExecStart=/usr/bin/python3 /usr/local/lib/mero-inference/inference_model.py serve --config /run/mero-inference/config.json --dir /mnt/model/weights
+      Restart=on-failure
+      RestartSec=10
+      NoNewPrivileges=yes
+      PrivateTmp=yes
+      ProtectHome=yes
+      ProtectSystem=strict
+      ReadWritePaths=/mnt/model/cache
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectControlGroups=yes
+      RestrictSUIDSGID=yes
+      LockPersonality=yes
+      CapabilityBoundingSet=
+    dest: /etc/systemd/system/mero-inference-vllm.service
+    mode: "0644"
+
+- name: Enable the inference units
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - mero-inference-init.service
+    - mero-inference-gate.service

@@ -82,6 +82,9 @@ grep -q "waiting for the owner" "${WORK}/log" || fail "no waiting line: $(cat "$
 
 secret CALIMERO_NODE_URL "https://node.example"
 operator_secret NEAR_AI_API_KEY "near-operator-value"
+operator_secret MERO_INFERENCE_API_KEY "inference-operator-value"
+# Only the operator's own names: anything else in operator/ never reaches mero-bot.
+operator_secret HYPERFEED_CONTEXT "operator-picked-feed"
 sleep 0.5
 [[ ! -e "${WORK}/argv" ]] || fail "mero-bot started with no agents.json or node login"
 secret CALIMERO_AUTH_TOKEN "auth-secret-value"
@@ -102,10 +105,12 @@ CALIMERO_MCP_STATE_DIR
 CALIMERO_NODE_URL
 HOME
 MERO_BOT_STATE_DIR
+MERO_INFERENCE_API_KEY
 NEAR_AI_API_KEY
 PATH"
 [[ "$(cat "${WORK}/env-names")" == "${expected_env}" ]] || fail "environment: $(tr '\n' ' ' <"${WORK}/env-names")"
 grep -qx "NEAR_AI_API_KEY=near-operator-value" "${WORK}/env" || fail "NEAR_AI_API_KEY not taken from the operator's"
+grep -qx "MERO_INFERENCE_API_KEY=inference-operator-value" "${WORK}/env" || fail "MERO_INFERENCE_API_KEY not taken from the operator's"
 grep -qx "HOME=${SLOT_DIR}/state/home" "${WORK}/env" || fail "HOME is not on the state dir"
 
 for pid in "$(cat "${WORK}/pid")" "${launcher}"; do

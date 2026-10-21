@@ -1,0 +1,14 @@
+---
+# Path, on the build host, of mero-inference-gate (built from this
+# repository's commit, as mero-agent-gate is).
+mero_inference_gate_binary: ""
+# The NVIDIA driver branch: the open kernel modules prebuilt for the image's
+# linux-image-gcp, and their user space, from the image's archive snapshot
+# (mkosi.conf). Confidential computing on an H100 needs the open modules.
+nvidia_driver_branch: "580"
+mero_inference_gate_port: 8443
+# The unprivileged user vLLM runs as. The gate runs as root: quotes need it.
+mero_inference_user: mero-inference
+# Where vLLM and its dependencies are installed (by build.sh, from
+# mero-tee/inference/requirements.lock), for the image's own Python.
+mero_inference_site_packages: /opt/mero-inference/site-packages
