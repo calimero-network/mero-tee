@@ -23,7 +23,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 command -v openssl >/dev/null || fail "openssl is required"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# inference-init makes the weights read-only (chmod a-w), which an unprivileged
+# runner cannot then delete.
+trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 ROOT_HASH="5f2d0c1e9a8b7c6d5e4f30211203f4e5d6c7b8a9908172635445362718090a1b"
 REV="0123456789abcdef0123456789abcdef01234567"
