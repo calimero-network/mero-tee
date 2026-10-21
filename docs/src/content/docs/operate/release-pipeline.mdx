@@ -216,14 +216,22 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
      probe, which the post-release check uses, boots the same shape.
    - Collect TEE info and a TDX quote from the node's admin API, then verify the
      quote externally against **Intel Trust Authority**.
+   - On `debug` and `debug-read-only`, check the node ships its logs: it boots
+     with `logs-endpoint` and `observability-token` pointed at a throwaway
+     receiver VM, and the job fails unless the receiver sees a push carrying
+     that token (the
+     [log-auth check](/operate/runbooks/#log-auth-check-log_auth_check)). Neither
+     key is measured. `locked-read-only` skips it: it ships logs only over
+     https, and the receiver is plain http. The debug profiles share its vector
+     role, config and token chain.
    - Compare the quote's RTMR1–3 with the computed ones; a difference fails the
      release. The computed registers (`computed-rtmrs-<profile>.json`) and the
      build evidence go out with the attestation artifacts.
    - Emit `mrtd-<profile>.json` (MRTD + RTMR0–3), a provenance record, and the
      attestation artifacts.
 
-3. **`cleanup_attestation_resources`** — tear down the ephemeral VM and firewall
-   rule.
+3. **`cleanup_attestation_resources`** — tear down the ephemeral VMs and
+   firewall rules, the log-auth receivers among them.
 
 4. **`publish_mrtds`** — assemble `published-mrtds.json` (per-profile
    measurements) with `assemble-published-mrtd-payload.sh`, generate the SBOM,

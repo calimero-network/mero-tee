@@ -11,10 +11,13 @@ if ! [[ "${max_age_hours}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-run_prefix_regex="^tdx-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
-stale_prefix_regex="^tdx-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
-run_firewall_regex="^tee-attest-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
-stale_firewall_regex="^tee-attest-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+# Each profile's node VM (tdx-<profile>-<run>-<attempt>) and admin-API rule
+# (tee-attest-<profile>-...), plus the log-auth receiver VM and its rule, which
+# share one name (tee-attest-rcv-<profile>-..., node_log_auth_probe.sh).
+run_prefix_regex="^(tdx|tee-attest-rcv)-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
+stale_prefix_regex="^(tdx|tee-attest-rcv)-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+run_firewall_regex="^tee-attest-(rcv-)?(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
+stale_firewall_regex="^tee-attest-(rcv-)?(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
 cutoff_epoch="$(date -u -d "-${max_age_hours} hours" +%s)"
 
 echo "Cleanup project: ${vm_project}"

@@ -255,7 +255,9 @@ rejection from ITA counts as a verdict about the quote.
 
 #### Log-auth check (`log_auth_check`)
 
-Off by default, and it needs no setup. It checks the chain that makes a node's
+Off by default in the staging probe (the release runs it on the debug
+profiles, see below), and it needs no setup. It runs on `debug` and
+`debug-read-only` only. It checks the chain that makes a node's
 logs arrive at all. MDMA stamps the fleet's observability token into instance
 metadata as `observability-token`. `calimero-init` writes it to
 `/etc/vector/provided_token`, and vector presents it on every push through the
@@ -278,6 +280,38 @@ attestation checks. On failure the reason code names what the receiver saw:
 `LOG_PUSH_UNAUTHENTICATED` (pushes with no credential), `LOG_PUSH_WRONG_TOKEN`,
 `NO_LOG_PUSHES`, or `RECEIVER_NOT_READY`. The artifact is
 `node-log-auth-result.json`.
+
+**Not on `locked-read-only`.** The receiver speaks plain http, and
+`configure_vector.sh` lets only `debug` and `debug-read-only` ship over plain
+http: on every other profile it refuses a non-https `logs-endpoint`, because
+the push carries the bearer token and every log line. So a `locked-read-only`
+node never starts vector against the receiver. An https receiver would not
+help either, since vector trusts no CA handed to it in metadata. Production is
+unaffected: MDMA points nodes at an https endpoint. With `log_auth_check` set on
+`locked-read-only`, the probe fails at once with `LOG_AUTH_UNSUPPORTED_PROFILE`,
+before it creates anything. The debug profiles share vector's role, partial
+config, `data_dir` and token chain with `locked-read-only`, so they catch a
+vector that cannot start or present its token; what only `locked-read-only`
+has, its https-only rule, is covered by `observability-config-injection-test.sh`.
+
+**The release runs it on the debug profiles.** The `debug` and
+`debug-read-only` `Build and attest (<profile>)` jobs of **Release mero-tee**
+(`release-node-image-gcp.yaml`) run the same check on the VM they measure, so a
+node image that does not ship its logs never reaches **Publish profile
+MRTDs**. The `locked-read-only` job skips it (`LOG_AUTH_CHECK`) for the reason
+above, and its job summary says so. It was added after 2.3.120, whose
+vector exited at boot (no `/etc/vector/data`) on every node. The node boots
+with the two extra metadata keys; neither is measured, so the published MRTD
+and RTMR0–3 are the ones an MDMA node, which gets both, has. The release names
+the receiver `tee-attest-rcv-<profile>-<run>-<attempt>` (`RECEIVER_PREFIX`),
+which the job's own cleanup step deletes, and which `Cleanup attestation
+resources` (`sweep-attestation-resources.sh`) also sweeps on `master`, with
+stale receivers over `GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS`. It adds an
+`e2-small` VM for a few minutes per checked profile and needs no secret beyond the GCP
+access the release already has. A failing check shows in the profile job's
+**Verify the node pushed logs with its metadata token** step, with the reason
+codes above; `node-log-auth-result.json` and `log-auth-receiver-serial.log` are
+in that profile's `gcp-tdx-attestation-*` artifact.
 
 </TabItem>
 </Tabs>

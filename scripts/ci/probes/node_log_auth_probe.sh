@@ -22,9 +22,15 @@
 #            authenticated push, or fail after VERIFY_TIMEOUT_SECONDS.
 #   cleanup  delete the receiver and its firewall rule. Best effort, so it is
 #            safe to run after a partial setup.
+#
+# Two callers: the staging probe's opt-in `log_auth_check`, and the debug and
+# debug-read-only profiles of the node release (release-node-image-gcp.yaml),
+# where a node that does not ship its logs stops the release before anything
+# is published. Not locked-read-only: it ships only over https (see setup).
 set -euo pipefail
 
 source scripts/ci/logging.sh
+source scripts/ci/gcp_create_instance.sh
 
 MODE="${1:-}"
 RECEIVER_PORT=9200
@@ -39,14 +45,36 @@ require_env() {
   done
 }
 
+# The receiver VM, its network tag and its firewall rule share one name,
+# ${RECEIVER_PREFIX}-${RUN_SUFFIX}. The staging probe keeps the default. The
+# release passes `tee-attest-rcv`, so that its cleanup sweep, which matches the
+# release's own `tee-attest-` names, also finds a receiver a cancelled run left.
 names() {
   require_env VM_PROJECT VM_ZONE RUN_SUFFIX
-  RECEIVER_NAME="tee-e2e-rcv-${RUN_SUFFIX}"
-  RECEIVER_TAG="tee-e2e-rcv-${RUN_SUFFIX}"
-  RECEIVER_FW_RULE="tee-e2e-rcv-${RUN_SUFFIX}"
+  local name="${RECEIVER_PREFIX:-tee-e2e-rcv}-${RUN_SUFFIX}"
+  if [[ ! "${name}" =~ ^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then
+    ci_fail "BAD_RECEIVER_NAME" "Receiver name '${name}' is not a valid GCE resource name (lowercase, at most 63 characters)."
+    exit 1
+  fi
+  RECEIVER_NAME="${name}"
+  RECEIVER_TAG="${name}"
+  RECEIVER_FW_RULE="${name}"
 }
 
 setup() {
+  # The receiver speaks plain http: vector cannot trust a CA handed to it in
+  # metadata, so an https receiver would need a publicly trusted certificate.
+  # configure_vector.sh lets only the debug profiles ship over plain http (the
+  # push carries the bearer token and every log line), so on locked-read-only
+  # vector never starts against this receiver and verify could only time out.
+  # IMAGE_PROFILE is optional; when given, refuse such a profile up front.
+  case "${IMAGE_PROFILE:-}" in
+    "" | debug | debug-read-only) ;;
+    *)
+      ci_fail "LOG_AUTH_UNSUPPORTED_PROFILE" "Profile '${IMAGE_PROFILE}' ships logs only to an https endpoint (configure_vector.sh), so it cannot push to the plain-http receiver. Run the log-auth check on debug or debug-read-only; they share vector's role, config and token chain."
+      exit 1
+      ;;
+  esac
   require_env VM_NETWORK VM_SUBNETWORK NODE_TAG TOKEN_FILE GITHUB_OUTPUT
   names
 
@@ -84,9 +112,10 @@ setup() {
 
   # Plain Debian, not a TEE image: the receiver is test scaffolding. No service
   # account and no external address, since it only listens inside the VPC.
-  gcloud compute instances create "${RECEIVER_NAME}" \
-    --project "${VM_PROJECT}" \
-    --zone "${VM_ZONE}" \
+  # The release runs this for every profile, so a transient GCP error here
+  # would fail a release. gcp_create_instance retries those under the same
+  # name, so cleanup and the release sweep still find the receiver.
+  gcp_create_instance "${RECEIVER_NAME}" "${VM_PROJECT}" "${VM_ZONE}" \
     --machine-type e2-small \
     --image-family debian-12 \
     --image-project debian-cloud \

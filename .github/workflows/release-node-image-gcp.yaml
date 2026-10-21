@@ -77,6 +77,8 @@ jobs:
           bash -n scripts/release/node-image-gcp/sign-release-assets.sh
           bash -n scripts/release/node-image-gcp/verify-generated-signatures.sh
           bash -n scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
+          bash -n scripts/ci/probes/node_log_auth_probe.sh
+          python3 -m py_compile scripts/ci/probes/log_auth_receiver.py
           python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py
           python3 -m py_compile scripts/attestation/shared/extract_tdx_policy_candidates.py
 
@@ -135,6 +137,15 @@ jobs:
     env:
       GATED_MEROD_VERSION: ${{ needs.preflight.outputs.latest_merod_version }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      # The log-auth check needs a node that ships over plain http to the
+      # receiver. configure_vector.sh allows that only on the debug profiles:
+      # locked-read-only refuses a non-https logs endpoint, so its vector never
+      # starts against the receiver (run 39505209881: NO_LOG_PUSHES after 600s).
+      # An https receiver cannot help, since vector trusts no CA given to it in
+      # metadata. The debug profiles share vector's role, partial config,
+      # data_dir and token chain with it, so they catch a vector that cannot
+      # start (2.3.120).
+      LOG_AUTH_CHECK: ${{ matrix.profile != 'locked-read-only' }}
     strategy:
       fail-fast: false
       matrix:
@@ -379,9 +390,42 @@ jobs:
             --target-tags "${{ steps.params.outputs.firewall_tag }}" \
             --description "Temporary attestation ingress for run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}"
 
+      # The node must ship its logs before its release publishes: 2.3.120
+      # shipped images whose vector exited at boot, and nothing noticed. The
+      # node boots with `logs-endpoint` and `observability-token`, the two keys
+      # mdma sets, pointed at a throwaway receiver VM that records whether each
+      # push carried that token (node_log_auth_probe.sh, the staging probe's
+      # `log_auth_check`). Neither key is measured, so the published MRTD and
+      # RTMRs are the ones an mdma node, which gets both, has. Skipped on
+      # locked-read-only (see LOG_AUTH_CHECK above).
+      - name: Set up log-auth check
+        id: log_auth
+        if: ${{ success() && env.LOG_AUTH_CHECK == 'true' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          IMAGE_PROFILE: ${{ matrix.profile }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          VM_NETWORK: ${{ steps.params.outputs.vm_network }}
+          VM_SUBNETWORK: ${{ steps.params.outputs.vm_subnetwork }}
+          NODE_TAG: ${{ steps.params.outputs.firewall_tag }}
+          RECEIVER_PREFIX: tee-attest-rcv
+          RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
+        run: bash scripts/ci/probes/node_log_auth_probe.sh setup
+
       - name: Create ephemeral TDX VM
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          RECEIVER_IP: ${{ steps.log_auth.outputs.receiver_ip }}
+          TOKEN_FILE: ${{ runner.temp }}/log-auth-token
         run: |
+          set -euo pipefail
+          metadata="merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true"
+          if [[ "${LOG_AUTH_CHECK}" == "true" ]]; then
+            # The same two keys mdma sets; the receiver stands in for the sink.
+            metadata+=",logs-endpoint=http://${RECEIVER_IP}:9200,observability-token=$(cat "${TOKEN_FILE}")"
+            rm -f "${TOKEN_FILE}"
+          fi
           # The data disk mdma attaches at creation (dispatcher/app/gcp/instances.py)
           # is part of the machine RTMR0 measures: a VM measured without it publishes
           # an RTMR0 no mdma node has, and the KMS refuses every node. Same size, type
@@ -402,7 +446,7 @@ jobs:
             --image "${{ steps.params.outputs.image_name }}" \
             --image-project "${{ steps.params.outputs.image_project }}" \
             --subnet "${{ steps.params.outputs.vm_subnetwork }}" \
-            --metadata "merod-version=${{ steps.params.outputs.merod_version }},ephemeral-store=true" \
+            --metadata "${metadata}" \
             --create-disk "size=200GB,type=pd-balanced,device-name=data,auto-delete=yes" \
             --tags "merotee,${{ steps.params.outputs.firewall_tag }}"
 
@@ -551,6 +595,22 @@ jobs:
           fi
           echo "Booted the dm-verity root."
 
+      # Runs once the admin API answers, so vector has been up for a while and
+      # the first poll usually passes. A failure fails this profile, and so
+      # "Publish profile MRTDs", which needs every profile. Skipped on
+      # locked-read-only (see LOG_AUTH_CHECK above).
+      - name: Verify the node pushed logs with its metadata token
+        id: verify_log_auth
+        if: ${{ success() && env.LOG_AUTH_CHECK == 'true' && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        env:
+          ARTIFACTS_DIR: ${{ steps.params.outputs.artifacts_dir }}
+          VM_PROJECT: ${{ steps.params.outputs.vm_project }}
+          VM_ZONE: ${{ steps.params.outputs.vm_zone }}
+          RECEIVER_PREFIX: tee-attest-rcv
+          RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+          VERIFY_TIMEOUT_SECONDS: "600"
+        run: bash scripts/ci/probes/node_log_auth_probe.sh verify
+
       - name: Add profile-specific artifact names
         if: ${{ success() && steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
         run: |
@@ -582,6 +642,8 @@ jobs:
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
             --entry "mrtd.json|MRTD from external verification" \
             --entry "profile-provenance-${{ steps.params.outputs.profile }}.json|Per-profile provenance record" \
+            --entry "node-log-auth-result.json|Log-auth check: pushes seen by the receiver" \
+            --entry "log-auth-receiver-serial.log|Log-auth receiver serial console" \
             --entry "serial-port-1.log|Serial logs when health probe fails"
           ci_artifact "artifact index saved to ${index_file}"
 
@@ -761,6 +823,7 @@ jobs:
             --arg src_ranges "${{ steps.params.outputs.attestation_source_ranges }}" \
             --arg collect_outcome "${{ steps.collect_tee.outcome || 'skipped' }}" \
             --arg verify_outcome "${{ steps.verify_external.outcome || 'skipped' }}" \
+            --arg log_auth_outcome "${{ env.LOG_AUTH_CHECK == 'true' && (steps.verify_log_auth.outcome || 'skipped') || 'skipped on this profile: locked-read-only ships logs only over https, and the receiver is plain http (debug and debug-read-only run the check)' }}" \
             --arg job_status "${{ job.status }}" \
             --arg result_line "${result_line}" \
             --arg artifact_name "gcp-tdx-attestation-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}" \
@@ -784,7 +847,8 @@ jobs:
                   name: "Check Outcomes",
                   lines: [
                     ("- Collect TEE artifacts: " + $collect_outcome),
-                    ("- External verification: " + $verify_outcome)
+                    ("- External verification: " + $verify_outcome),
+                    ("- Log push authenticated: " + $log_auth_outcome)
                   ]
                 },
                 {
@@ -845,6 +909,19 @@ jobs:
               --quiet || true
           else
             echo "Direct firewall cleanup skipped (firewall parameters unavailable)."
+          fi
+
+          # The log-auth receiver and its rule. Best effort, and safe after a
+          # partial setup; on master the sweep job catches what this misses.
+          if [[ "${LOG_AUTH_CHECK}" != "true" ]]; then
+            echo "No log-auth receiver on ${{ matrix.profile }} (check skipped); nothing to delete."
+          elif [[ -n "${vm_project}" && -n "${vm_zone}" ]]; then
+            VM_PROJECT="${vm_project}" VM_ZONE="${vm_zone}" \
+            RECEIVER_PREFIX=tee-attest-rcv \
+            RUN_SUFFIX="${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              bash scripts/ci/probes/node_log_auth_probe.sh cleanup
+          else
+            echo "Direct log-auth receiver cleanup skipped (instance parameters unavailable)."
           fi
 
       # A branch build's image exists only to be measured here; it is never
