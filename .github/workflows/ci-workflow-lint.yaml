@@ -556,9 +556,10 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-delegated-route-test.sh
 
-      # The staging probe's log-auth check only runs on real GCP; this pins the
-      # two parts that could make it lie without any cloud: the receiver's
-      # token classification and the verdict read from it.
+      # The log-auth check (staging probe, node and KMS releases) only runs on
+      # real GCP; this pins what could make it lie without any cloud: the
+      # receiver's token classification, the verdict read from it, and how the
+      # KMS and agent probes get the two keys and find the receiver.
       - name: Check the log-auth probe tells an authenticated push from one without a token
         id: log_auth_probe_test
         shell: bash

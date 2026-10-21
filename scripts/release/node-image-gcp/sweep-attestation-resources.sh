@@ -14,10 +14,14 @@ fi
 # Each profile's node VM (tdx-<profile>-<run>-<attempt>) and admin-API rule
 # (tee-attest-<profile>-...), plus the log-auth receiver VM and its rule, which
 # share one name (tee-attest-rcv-<profile>-..., node_log_auth_probe.sh).
+# The stale patterns also take the KMS release's receivers
+# (kms-attest-rcv-... and agent-attest-rcv-..., release-kms.yaml): that
+# workflow deletes its own in an always() step and has no sweep, so this one
+# catches what a lost runner left, once it is past the max age.
 run_prefix_regex="^(tdx|tee-attest-rcv)-(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
-stale_prefix_regex="^(tdx|tee-attest-rcv)-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+stale_prefix_regex="^(tdx|tee-attest-rcv|kms-attest-rcv|agent-attest-rcv)-(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
 run_firewall_regex="^tee-attest-(rcv-)?(debug|debug-read-only|locked-read-only)-${GITHUB_RUN_ID}-[0-9]+$"
-stale_firewall_regex="^tee-attest-(rcv-)?(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
+stale_firewall_regex="^(tee-attest-(rcv-)?|kms-attest-rcv-|agent-attest-rcv-)(debug|debug-read-only|locked-read-only)-[0-9]+-[0-9]+$"
 cutoff_epoch="$(date -u -d "-${max_age_hours} hours" +%s)"
 
 echo "Cleanup project: ${vm_project}"

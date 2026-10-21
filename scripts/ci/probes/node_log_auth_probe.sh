@@ -23,10 +23,13 @@
 #   cleanup  delete the receiver and its firewall rule. Best effort, so it is
 #            safe to run after a partial setup.
 #
-# Two callers: the staging probe's opt-in `log_auth_check`, and the debug and
+# Callers: the staging probe's opt-in `log_auth_check`; the debug and
 # debug-read-only profiles of the node release (release-node-image-gcp.yaml),
 # where a node that does not ship its logs stops the release before anything
-# is published. Not locked-read-only: it ships only over https (see setup).
+# is published; and the same profiles of the KMS release (release-kms.yaml),
+# for its KMS and agent images, whose probes take the two keys through
+# log_auth_metadata.sh. Not locked-read-only: it ships only over https (see
+# setup).
 set -euo pipefail
 
 source scripts/ci/logging.sh
@@ -49,6 +52,8 @@ require_env() {
 # ${RECEIVER_PREFIX}-${RUN_SUFFIX}. The staging probe keeps the default. The
 # release passes `tee-attest-rcv`, so that its cleanup sweep, which matches the
 # release's own `tee-attest-` names, also finds a receiver a cancelled run left.
+# The KMS release passes `kms-attest-rcv` and `agent-attest-rcv`, which that
+# sweep's stale patterns also match.
 names() {
   require_env VM_PROJECT VM_ZONE RUN_SUFFIX
   local name="${RECEIVER_PREFIX:-tee-e2e-rcv}-${RUN_SUFFIX}"
@@ -75,8 +80,18 @@ setup() {
       exit 1
       ;;
   esac
-  require_env VM_NETWORK VM_SUBNETWORK NODE_TAG TOKEN_FILE GITHUB_OUTPUT
+  require_env VM_NETWORK NODE_TAG TOKEN_FILE GITHUB_OUTPUT
   names
+
+  # The receiver goes where the VM it listens for is. The node release and the
+  # staging probe place their node on VM_SUBNETWORK. The KMS and agent probes
+  # (release-kms.yaml) give theirs neither a network nor a subnet, so it lands
+  # on the `default` network's subnet in the zone's region; they leave
+  # VM_SUBNETWORK empty, and the receiver gets the same with --network.
+  local placement=(--subnet "${VM_SUBNETWORK:-}")
+  if [[ -z "${VM_SUBNETWORK:-}" ]]; then
+    placement=(--network "${VM_NETWORK}")
+  fi
 
   # A throwaway token, valid for no real sink. It goes to the node through
   # instance metadata, as mdma's does, and the file hands it to the step that
@@ -121,7 +136,7 @@ setup() {
     --image-project debian-cloud \
     --no-service-account \
     --no-scopes \
-    --subnet "${VM_SUBNETWORK}" \
+    "${placement[@]}" \
     --no-address \
     --tags "${RECEIVER_TAG}" \
     --metadata-from-file "startup-script=${startup}"
