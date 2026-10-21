@@ -1,0 +1,339 @@
+#!/bin/bash
+# mero-inference boot (docs/design/private-inference.md). Extends RTMR3 so a
+# quote names this image as INFERENCE, then measures the model configuration
+# into RTMR3 too, checks the GPU with NVIDIA before readying it, fetches the
+# weights onto a scratch disk encrypted under a key that never leaves the TD,
+# refuses them unless they hash to model-sha256, and starts vLLM and the gate.
+#
+# Instance metadata is written by whoever runs the VM, so it is untrusted, and
+# every key read is validated (inference_model.py for the model). Keys:
+#   model-repo, model-revision, model-sha256   The model. Required unless measure-only.
+#   served-model-name    Optional. The name clients ask for.
+#   engine-args          Optional. JSON object of allowlisted vLLM flags.
+#   access-token-sha256  Hex SHA-256 of the bearer tokens the gate takes,
+#                        comma-separated. Required unless measure-only.
+#   hf-token             Optional. Hugging Face token, for gated repositories.
+#   model-store          Optional. "disk" (default: the GCE disk named model)
+#                        or "memory" (a tmpfs in TD memory).
+#   measure-only         Optional. "true": the release's measurement VM. No
+#                        model; the gate serves /attest for the image alone.
+#   logs-endpoint, metrics-endpoint, observability-token   As on every role.
+# A wrong value can only fail the boot, serve a different model (which the
+# quote then names, and clients refuse unless they asked for it), or change
+# who may call. The configuration is measured; tokens, store and hf-token are not.
+set -euo pipefail
+
+LOG_DIR="/run/mero-inference"
+LOG="${LOG_DIR}/inference-init.log"
+mkdir -p "$LOG_DIR"
+chmod 0755 "$LOG_DIR"
+IMAGE_PROFILE="{{ lockdown_profile }}"
+IMAGE_ROLE="inference"
+INFERENCE_USER="{{ mero_inference_user }}"
+SITE_PACKAGES="{{ mero_inference_site_packages }}"
+LIB_DIR="/usr/local/lib/mero-inference"
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+
+log() { echo "[mero-inference-init] $*" | tee -a "$LOG"; }
+fatal() {
+  log "ERROR: $*"
+  exit 1
+}
+
+get_meta() {
+  curl -sf -H "Metadata-Flavor: Google" "${METADATA_URL}/$1" 2>/dev/null || true
+}
+
+# --- RTMR3 --------------------------------------------------------------------
+# The block below is byte for byte the other roles' (its comment predates this
+# fourth copy; editing it would change every other image's measurements).
+# rtmr3-v3 begin -- the same in calimero-init, kms-init and agent-init
+# (scripts/ci/tests/init-rtmr3-test.sh checks the three copies are identical).
+#
+# Extends RTMR3 with SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>").
+# <roothash> is the dm-verity root hash the initrd opened / with: `roothash=` on
+# the kernel command line, which RTMR2 also measures. Every block of the root is
+# checked against it, so the event names the root filesystem as a whole. (v2
+# named `calimero.root_hash`, a build-time hash of a few directories.) The role
+# tells a node, a KMS and an agent quote apart: the KMS releases each one's keys
+# only to a quote matching its own policy entry.
+#
+# Fatal on locked-read-only: an unextended RTMR3 does not name the image, so a
+# quote from it would not say which image is running. The debug profiles warn,
+# so a kernel without the sysfs interface can still be debugged.
+rtmr3_problem() {
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "RTMR3 not extended: $*"
+  fi
+  log "WARN: RTMR3 not extended: $*"
+}
+
+ROOT_HASH="$(tr ' ' '\n' < /proc/cmdline 2>/dev/null | sed -n 's/^roothash=\([0-9a-f]\{64\}\)$/\1/p' | head -n 1)"
+modprobe tdx_guest 2>/dev/null || true
+rtmr3_sysfs=""
+for candidate in \
+  "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384" \
+  "/sys/class/misc/tdx_guest/mr/rtmr3:sha384"; do
+  if [[ -w "$candidate" ]]; then
+    rtmr3_sysfs="$candidate"
+    break
+  fi
+done
+if [[ -z "$ROOT_HASH" ]]; then
+  rtmr3_problem "no dm-verity roothash= on the kernel command line"
+elif [[ -z "$rtmr3_sysfs" ]]; then
+  rtmr3_problem "no writable rtmr3:sha384 under /sys/class/misc/tdx_guest/"
+else
+  extend="$(mktemp)"
+  printf 'calimero-rtmr3-v3:%s:%s:%s' "$IMAGE_ROLE" "$IMAGE_PROFILE" "$ROOT_HASH" \
+    | openssl dgst -sha384 -binary > "$extend"
+  if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
+    rtmr3_problem "extend input is not 48 bytes"
+  elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
+    rtmr3_problem "write failed ($rtmr3_sysfs)"
+  else
+    log "Extended RTMR3 (v3, role=$IMAGE_ROLE profile=$IMAGE_PROFILE roothash=${ROOT_HASH:0:16}...)"
+  fi
+  rm -f "$extend"
+fi
+# rtmr3-v3 end
+
+# The second RTMR3 event, after the image's: the model configuration this TD
+# serves. Same sysfs file, same rules: fatal on locked-read-only, a warning on
+# the debug profiles (whose quotes no client accepts).
+extend_config_event() {
+  local digest="$1" extend
+  if [[ -z "$rtmr3_sysfs" ]]; then
+    rtmr3_problem "no writable rtmr3:sha384 for the configuration event"
+    return 0
+  fi
+  extend="$(mktemp)"
+  printf 'calimero-inference-config-v1:%s' "$digest" | openssl dgst -sha384 -binary > "$extend"
+  if [[ "$(wc -c < "$extend" | tr -d '[:space:]')" != "48" ]]; then
+    rtmr3_problem "configuration extend input is not 48 bytes"
+  elif ! cat "$extend" > "$rtmr3_sysfs" 2>/dev/null; then
+    rtmr3_problem "configuration write failed ($rtmr3_sysfs)"
+  else
+    log "Extended RTMR3 with the model configuration (config digest ${digest})"
+  fi
+  rm -f "$extend"
+}
+
+# --- Observability ------------------------------------------------------------
+# As on the agent: first after RTMR3, off unless an endpoint is set, and a bad
+# value turns shipping off rather than failing the boot. vLLM's own journal is
+# never shipped (vector_partial.yaml).
+logs_endpoint="$(get_meta logs-endpoint | tr -d '\r\n')"
+metrics_endpoint="$(get_meta metrics-endpoint | tr -d '\r\n')"
+obs_token="$(get_meta observability-token | tr -d '\r\n')"
+
+obs_auth="false"
+obs_secret=""
+if [[ -n "$obs_token" && ( -n "$logs_endpoint" || -n "$metrics_endpoint" ) ]]; then
+  mkdir -p /etc/vector
+  ( umask 077; printf '%s' "$obs_token" > /etc/vector/provided_token )
+  obs_auth="true"
+  obs_secret="/etc/vector/provided_token"
+  log "Observability token installed ($(sha256sum /etc/vector/provided_token | awk '{print $1}'))"
+fi
+
+export OBS_PROFILE_FILE=/etc/mero-inference/image-profile
+export OBS_INSTANCE_TYPE=mero-inference
+export VMAGENT_HTTP_LISTEN=127.0.0.1:8429
+metrics="off"
+if [[ -n "$metrics_endpoint" ]]; then
+  systemctl enable --now node_exporter || log "WARN: node_exporter did not start"
+  if /etc/vmagent/configure_vmagent.sh /etc/vmagent/scrape_config.yml "$metrics_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    metrics="on"
+  else
+    log "WARN: vmagent configure failed"
+  fi
+fi
+logs="off"
+if [[ -n "$logs_endpoint" ]]; then
+  if /etc/vector/configure_vector.sh /etc/vector/vector_partial.yaml "$logs_endpoint" \
+    "$obs_auth" provided "$obs_secret" >/dev/null; then
+    logs="on"
+  else
+    log "WARN: vector configure failed"
+  fi
+fi
+log "Observability: logs=${logs} metrics=${metrics} auth=${obs_auth}"
+
+# --- Metadata -----------------------------------------------------------------
+meta_bool() {
+  local value
+  value="$(get_meta "$1" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    true) echo true ;;
+    false | "") echo false ;;
+    *) fatal "$1 must be true or false, got '$value'" ;;
+  esac
+}
+
+MEASURE_ONLY="$(meta_bool measure-only)"
+if [[ "$MEASURE_ONLY" == true ]]; then
+  # The release's measurement VM: RTMR3 holds the image event alone, which is
+  # what the release publishes as the allowlist's RTMR3 base. No config file:
+  # the gate answers /attest for the image and serves nothing else.
+  rm -f "${LOG_DIR}/config.json" "${LOG_DIR}/access-tokens"
+  log "measure-only: no model; the gate serves /attest for the image alone"
+  exit 0
+fi
+
+# The model configuration, canonical, as it is measured and as the gate sends it.
+MODEL_REPO="$(get_meta model-repo | tr -d '\r\n')" \
+MODEL_REVISION="$(get_meta model-revision | tr -d '\r\n')" \
+MODEL_SHA256="$(get_meta model-sha256 | tr -d '\r\n')" \
+SERVED_MODEL_NAME="$(get_meta served-model-name | tr -d '\r\n')" \
+ENGINE_ARGS="$(get_meta engine-args)" \
+  python3 -I "${LIB_DIR}/inference_model.py" config --out "${LOG_DIR}/config.json" >>"$LOG" 2>&1 \
+  || fatal "the model configuration in metadata is invalid: $(tail -n 1 "$LOG")"
+chmod 0644 "${LOG_DIR}/config.json"
+CONFIG_DIGEST="$(sha256sum "${LOG_DIR}/config.json" | awk '{print $1}')"
+log "Model configuration: $(cat "${LOG_DIR}/config.json")"
+# Measured before anything is fetched: a quote from this boot names this
+# configuration, whatever happens after.
+extend_config_event "$CONFIG_DIGEST"
+
+# Who may call /v1. Hashes only: the operator keeps the tokens.
+TOKENS="$(get_meta access-token-sha256 | tr ',' '\n' | tr -d '\r[:blank:]' | tr '[:upper:]' '[:lower:]' | sed '/^$/d')"
+[[ -n "$TOKENS" ]] || fatal "no access-token-sha256 metadata: the gate would refuse every caller"
+while read -r hash; do
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || fatal "access-token-sha256 holds '$hash', which is not 64 hex digits"
+done <<<"$TOKENS"
+(umask 077 && printf '%s\n' "$TOKENS" > "${LOG_DIR}/access-tokens")
+log "Access tokens: $(wc -l <<<"$TOKENS")"
+
+MODEL_STORE="$(get_meta model-store | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
+case "${MODEL_STORE:-disk}" in
+  disk | memory) MODEL_STORE="${MODEL_STORE:-disk}" ;;
+  *) fatal "model-store must be disk or memory, got '$MODEL_STORE'" ;;
+esac
+
+# --- The GPU ------------------------------------------------------------------
+# The H100 must be in confidential-computing mode, and NVIDIA must accept its
+# evidence, before it is set ready: until then it takes no work. On the debug
+# profiles a TD without a GPU boots on (to debug the image), and serves nothing.
+gpu_problem() {
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
+    fatal "GPU: $*"
+  fi
+  log "WARN: GPU: $*"
+}
+
+modprobe nvidia >>"$LOG" 2>&1 || gpu_problem "the nvidia module did not load"
+modprobe nvidia_uvm >>"$LOG" 2>&1 || gpu_problem "the nvidia_uvm module did not load"
+nvidia-persistenced --uvm-persistence-mode >>"$LOG" 2>&1 || log "WARN: nvidia-persistenced did not start"
+if ! nvidia-smi -L >>"$LOG" 2>&1; then
+  gpu_problem "nvidia-smi finds no GPU"
+else
+  CC_STATUS="$(nvidia-smi conf-compute -f 2>&1 || true)"
+  log "GPU: ${CC_STATUS//$'\n'/ }"
+  if ! grep -qiE 'CC status:[[:space:]]*ON' <<<"$CC_STATUS"; then
+    gpu_problem "confidential-computing mode is not on (a GPU outside a confidential VM can be read by its host)"
+  fi
+  if ! "${LIB_DIR}/gpu-evidence" --check >>"$LOG" 2>&1; then
+    gpu_problem "NVIDIA's attestation service did not accept this GPU: $(tail -n 1 "$LOG")"
+  fi
+  nvidia-smi conf-compute -srs 1 >>"$LOG" 2>&1 || gpu_problem "could not set the GPU ready"
+  log "GPU ready: $(nvidia-smi conf-compute -grs 2>&1 | tr '\n' ' ')"
+fi
+
+# --- The scratch disk -----------------------------------------------------------
+# The weights are public, but what sits on a disk the host can write is not
+# what was hashed unless the host cannot change it. So the disk is LUKS2 with
+# HMAC-SHA256 integrity under a random key made here and kept only in a tmpfs
+# until the volume is open: an edit by the host fails the read. The key is
+# never stored, so the volume is new at every boot, and the download with it.
+MODEL_MOUNT="/mnt/model"
+MODEL_DEVICE="/dev/disk/by-id/google-model"
+MODEL_MAPPER_NAME="mero-inference-model"
+MODEL_MAPPER="/dev/mapper/${MODEL_MAPPER_NAME}"
+KEY_DIR="/run/mero-inference-disk"
+MODEL_DEVICE_WAIT_SECS="${MODEL_DEVICE_WAIT_SECS:-300}"
+mkdir -p "$MODEL_MOUNT"
+
+key_cleanup() {
+  if [[ -e "${KEY_DIR}/key" ]]; then shred -u "${KEY_DIR}/key" 2>/dev/null || rm -f "${KEY_DIR}/key"; fi
+  if mountpoint -q "$KEY_DIR" 2>/dev/null; then umount "$KEY_DIR" 2>/dev/null || true; fi
+}
+trap key_cleanup EXIT
+
+if mountpoint -q "$MODEL_MOUNT"; then
+  fatal "$MODEL_MOUNT is already mounted; inference-init runs once per boot"
+elif [[ "$MODEL_STORE" == memory ]]; then
+  # TD memory, which TDX encrypts.
+  mount -t tmpfs -o mode=0755,size=75%,nosuid,nodev tmpfs "$MODEL_MOUNT" >>"$LOG" 2>&1 \
+    || fatal "could not mount a tmpfs at $MODEL_MOUNT"
+  log "Model store: a tmpfs in TD memory"
+else
+  waited=0
+  while [[ ! -b "$MODEL_DEVICE" && "$waited" -lt "$MODEL_DEVICE_WAIT_SECS" ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  [[ -b "$MODEL_DEVICE" ]] || fatal "no scratch disk at $MODEL_DEVICE after ${MODEL_DEVICE_WAIT_SECS}s \
+(attach a disk named 'model', or set model-store=memory for a small model)"
+  mkdir -p "$KEY_DIR"
+  mount -t tmpfs -o mode=0700,size=1m,nosuid,nodev,noexec tmpfs "$KEY_DIR" >>"$LOG" 2>&1 \
+    || fatal "could not mount a tmpfs at $KEY_DIR for the scratch-disk key"
+  (umask 077 && head -c 64 /dev/urandom > "${KEY_DIR}/key")
+  modprobe dm_crypt 2>/dev/null || true
+  modprobe dm_integrity 2>/dev/null || true
+  log "Formatting the scratch disk: LUKS2, aes-xts-plain64, hmac-sha256 integrity, a key made in this TD"
+  cryptsetup luksFormat --type luks2 \
+      --cipher aes-xts-plain64 --key-size 512 \
+      --integrity hmac-sha256 \
+      --pbkdf pbkdf2 --pbkdf-force-iterations 1000 \
+      --batch-mode --key-file "${KEY_DIR}/key" \
+      "$MODEL_DEVICE" >>"$LOG" 2>&1 \
+    || fatal "cryptsetup luksFormat failed on $MODEL_DEVICE; see $LOG"
+  cryptsetup open --type luks2 --key-file "${KEY_DIR}/key" "$MODEL_DEVICE" "$MODEL_MAPPER_NAME" >>"$LOG" 2>&1 \
+    || fatal "could not open the scratch disk"
+  key_cleanup
+  mkfs.ext4 -q "$MODEL_MAPPER" >>"$LOG" 2>&1 || fatal "mkfs.ext4 failed on $MODEL_MAPPER"
+  mount -t ext4 -o nosuid,nodev "$MODEL_MAPPER" "$MODEL_MOUNT" >>"$LOG" 2>&1 \
+    || fatal "could not mount $MODEL_MAPPER at $MODEL_MOUNT"
+  STATUS="$(cryptsetup status "$MODEL_MAPPER_NAME" 2>/dev/null || true)"
+  grep -qE '^[[:space:]]*integrity:[[:space:]]+[a-z]' <<<"$STATUS" \
+    || fatal "$MODEL_MAPPER_NAME has no integrity protection"
+  log "Model store: the scratch disk, encrypted with integrity under a key made in this TD"
+fi
+install -d -o root -g root -m 0755 "$MODEL_MOUNT/weights"
+install -d -o "$INFERENCE_USER" -g "$INFERENCE_USER" -m 0700 "$MODEL_MOUNT/cache" "$MODEL_MOUNT/cache/home"
+
+# --- The weights ----------------------------------------------------------------
+HF_TOKEN_VALUE="$(get_meta hf-token | tr -d '\r\n')"
+log "Downloading the weights (this takes a while for a large model)"
+env -i PATH=/usr/bin:/bin HOME=/root PYTHONPATH="$SITE_PACKAGES" PYTHONNOUSERSITE=1 PYTHONSAFEPATH=1 \
+    HF_HOME="$MODEL_MOUNT/cache/hf-download" HF_HUB_DISABLE_TELEMETRY=1 HF_TOKEN="$HF_TOKEN_VALUE" \
+    python3 "${LIB_DIR}/inference_model.py" download --config "${LOG_DIR}/config.json" \
+    --dir "$MODEL_MOUNT/weights" >>"$LOG" 2>&1 \
+  || fatal "the weights could not be fetched or do not hash to model-sha256: $(tail -n 1 "$LOG")"
+unset HF_TOKEN_VALUE
+rm -rf "$MODEL_MOUNT/cache/hf-download" "$MODEL_MOUNT/weights/.cache"
+chmod -R a-w,a+rX "$MODEL_MOUNT/weights"
+log "Weights verified: $(sha256sum "${LOG_DIR}/config.json" | awk '{print $1}') (config digest)"
+
+# --- vLLM -----------------------------------------------------------------------
+# Offline, with no usage reporting, its caches on the scratch disk. The gate
+# starts after this script and answers "starting" until vLLM is up.
+cache="$MODEL_MOUNT/cache"
+cat > "${LOG_DIR}/vllm.env" <<ENV
+HOME=${cache}/home
+XDG_CACHE_HOME=${cache}
+TRITON_CACHE_DIR=${cache}/triton
+VLLM_CACHE_ROOT=${cache}/vllm
+HF_HOME=${cache}/hf
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+HF_HUB_DISABLE_TELEMETRY=1
+VLLM_NO_USAGE_STATS=1
+VLLM_DO_NOT_TRACK=1
+DO_NOT_TRACK=1
+ENV
+chmod 0644 "${LOG_DIR}/vllm.env"
+systemctl start --no-block mero-inference-vllm.service
+log "vLLM starting: $(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c["servedModelName"], c["repo"] + "@" + c["revision"][:12])' "${LOG_DIR}/config.json")"

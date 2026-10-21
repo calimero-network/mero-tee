@@ -187,7 +187,7 @@ def main():
     compute_parser.add_argument("--disk", required=True)
     compute_parser.add_argument("--uki", required=True)
     compute_parser.add_argument("--out")
-    compute_parser.add_argument("--role", help="node, kms or agent: also compute RTMR3")
+    compute_parser.add_argument("--role", help="node, kms, agent or inference: also compute RTMR3 (the image event)")
     compute_parser.add_argument("--profile", help="the image profile, with --role")
     compare_parser = sub.add_parser("compare")
     compare_parser.add_argument("computed")

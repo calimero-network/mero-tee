@@ -61,7 +61,11 @@ pub const OPERATOR_INFO_DOMAIN: &[u8] = b"mero-agent-gate/operator/v1";
 /// The only secrets the operator may write: what the operator pays for and
 /// the agent cannot run without. Never the owner's (`secrets/`), and never
 /// anything that decides where the agent sends its data.
-pub const OPERATOR_SECRETS: &[&str] = &["NEAR_AI_API_KEY"];
+///
+/// `MERO_INFERENCE_API_KEY` is the bearer token of a private inference TD
+/// (docs/design/private-inference.md): it decides who pays, not where prompts
+/// go, which the owner's `MERO_AGENTS_JSON` and the inference TD's quote do.
+pub const OPERATOR_SECRETS: &[&str] = &["NEAR_AI_API_KEY", "MERO_INFERENCE_API_KEY"];
 
 /// At most this many bytes in an agent id.
 pub const MAX_AGENT_ID_LEN: usize = 63;

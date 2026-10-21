@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# calimero-init (node), kms-init and agent-init extend RTMR3 with
+# calimero-init (node), kms-init, agent-init and inference-init extend RTMR3 with
 # SHA-384("calimero-rtmr3-v3:<role>:<profile>:<roothash>"), <roothash> being the
 # dm-verity root hash on the kernel command line, and an unextended RTMR3 stops
 # a locked-read-only boot.
@@ -31,6 +31,7 @@ declare -A TEMPLATES=(
   [node]="${ROLES}/merotee/templates/calimero-init.sh.j2"
   [kms]="${ROLES}/mero-kms/templates/kms-init.sh.j2"
   [agent]="${ROLES}/mero-agent/templates/agent-init.sh.j2"
+  [inference]="${ROLES}/mero-inference/templates/inference-init.sh.j2"
 )
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -42,7 +43,7 @@ trap 'rm -rf "$WORK"' EXIT
 block_of() { awk '/^# rtmr3-v3 begin/{on=1} on{print} /^# rtmr3-v3 end/{exit}' "$1"; }
 
 reference=""
-for role in node kms agent; do
+for role in node kms agent inference; do
   template="${TEMPLATES[$role]}"
   [[ -r "$template" ]] || fail "cannot read ${template}"
   grep -qxF "IMAGE_ROLE=\"${role}\"" "$template" || fail "$(basename "$template") must set IMAGE_ROLE=\"${role}\""
@@ -53,7 +54,7 @@ for role in node kms agent; do
   if [[ -z "$reference" ]]; then
     reference="$block"
   elif [[ "$block" != "$reference" ]]; then
-    fail "$(basename "$template")'s RTMR3 block differs from calimero-init's; keep the three in step"
+    fail "$(basename "$template")'s RTMR3 block differs from calimero-init's; keep them in step"
   fi
   grep -q 'calimero-rtmr3-v2' "$template" && fail "$(basename "$template") still extends the v2 string"
 
@@ -111,13 +112,13 @@ rc() { cat "$WORK/$1/rc"; }
 SEALED="BOOT_IMAGE=/vmlinuz root=/dev/mapper/root ro roothash=${ROOT_HASH} calimero.root_hash=${OLD_HASH} quiet"
 UNSEALED="BOOT_IMAGE=/vmlinuz root=/dev/sda1 calimero.root_hash=${OLD_HASH} quiet"
 
-for role in node kms agent; do
+for role in node kms agent inference; do
   # --- the extend ------------------------------------------------------------
   run "$role-locked" "$role" locked-read-only writable "$SEALED"
   [[ "$(rc "$role-locked")" == 0 ]] || fail "$role: a writable RTMR3 must be extended: $(cat "$WORK/$role-locked/log")"
   [[ "$(written_hex "$role-locked")" == "$(expected_hex "$role" locked-read-only "$ROOT_HASH")" ]] \
     || fail "$role: RTMR3 was extended with something other than SHA-384('calimero-rtmr3-v3:$role:locked-read-only:<roothash>')"
-  for other in node kms agent; do
+  for other in node kms agent inference; do
     [[ "$other" == "$role" ]] && continue
     [[ "$(written_hex "$role-locked")" != "$(expected_hex "$other" locked-read-only "$ROOT_HASH")" ]] \
       || fail "$role extends as $other"
@@ -153,4 +154,4 @@ for role in node kms agent; do
   grep -qF 'WARN: RTMR3 not extended' "$WORK/$role-debug/log" || fail "$role: a debug profile must warn that RTMR3 was not extended"
 done
 
-echo "init RTMR3 (v3, node/kms/agent): OK"
+echo "init RTMR3 (v3, node/kms/agent/inference): OK"

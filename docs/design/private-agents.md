@@ -130,7 +130,7 @@ The first real agent is [mero-bot](https://github.com/calimero-network/mero-bot)
 - the TLS key every request goes over;
 - a signature on every answer.
 
-The GPU TD of our own that this design once planned is parked.
+The GPU TD of our own that this design once planned is now its own image role, `inference`: an attested vLLM server on an H100 that mero-bot reaches with `"attest": "mero"` ([private inference](private-inference.md)). NEAR AI Cloud stays the default.
 
 **What the image adds** (`mero_bot_bundle`, `scripts/agent/mero-bot-agent.sh`)
 

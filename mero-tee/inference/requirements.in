@@ -1,0 +1,7 @@
+# What the inference image runs (docs/design/private-inference.md). Lock with
+# scripts/inference/lock-requirements.sh; build.sh installs exactly the lock.
+vllm==0.32.0
+# NVML bindings, for the GPU evidence helper.
+nvidia-ml-py
+# Model download (huggingface_hub, with its Xet transfer backend).
+huggingface_hub[hf_xet]

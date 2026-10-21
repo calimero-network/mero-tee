@@ -19,7 +19,7 @@
 #
 # Secrets (files in the slot's secrets directory, by NAME):
 #   MERO_AGENTS_JSON      required: mero-bot's agents.json. Every agent a turn
-#                         can reach must be attested ("attest": "near").
+#                         can reach must be attested ("attest": "near" or "mero").
 #   MERO_INVITATION.<any> an invitation for the agent's account to join a
 #                         namespace: {"namespaceId", "invitation"}. Each is
 #                         joined once; a new one restarts mero-bot to join it.
@@ -30,6 +30,9 @@
 #                         operator's (mdma pays for the agent's model calls):
 #                         the gate writes it to the slot's operator/ directory,
 #                         and the owner's own, if provisioned, wins.
+#   MERO_INFERENCE_API_KEY the bearer token a private inference TD takes
+#                         ("attest": "mero" profiles): the operator's or the
+#                         owner's, as NEAR_AI_API_KEY.
 #   HYPERFEED_CONTEXT     optional: pins the feed.
 # Any other name is ignored: only these reach mero-bot's environment.
 #
@@ -60,8 +63,13 @@ ENV_SECRETS=(
   CALIMERO_USERNAME
   CALIMERO_PASSWORD
   NEAR_AI_API_KEY
+  MERO_INFERENCE_API_KEY
   HYPERFEED_CONTEXT
 )
+
+# What the operator may supply (mero-agent-gate's OPERATOR_SECRETS); the owner's wins.
+OPERATOR_ENV=(NEAR_AI_API_KEY MERO_INFERENCE_API_KEY)
+operator_secret() { [[ " ${OPERATOR_ENV[*]} " == *" $1 "* && -n "$OPERATOR" && -s "$OPERATOR/$1" ]]; }
 
 log() { echo "mero-agent: $*"; }
 
@@ -123,7 +131,7 @@ cd "$STATE/work"
   for name in "${ENV_SECRETS[@]}"; do
     if secret "$name"; then
       export "$name=$(<"$SECRETS/$name")"
-    elif [[ "$name" == NEAR_AI_API_KEY && -n "$OPERATOR" && -s "$OPERATOR/$name" ]]; then
+    elif operator_secret "$name"; then
       export "$name=$(<"$OPERATOR/$name")"
     fi
   done

@@ -24,7 +24,7 @@ Slot `n` has its own Unix user and group, `mero-agent-<n>`, its own unit,
 | `agents/<n>/keys/owner.x25519` | root:`mero-agent-<n>`, 0640 | The owner's X25519 public key |
 | `agents/<n>/keys/signing.ed25519` | root:`mero-agent-<n>`, 0640 | The agent's Ed25519 seed |
 | `agents/<n>/secrets/<NAME>` | root:`mero-agent-<n>`, 0640 | What the owner provisioned |
-| `agents/<n>/operator/<NAME>` | root:`mero-agent-<n>`, 0640 | What the operator provisioned: `NEAR_AI_API_KEY` only |
+| `agents/<n>/operator/<NAME>` | root:`mero-agent-<n>`, 0640 | What the operator provisioned: `NEAR_AI_API_KEY` and `MERO_INFERENCE_API_KEY` only |
 | `agents/<n>/state/` | `mero-agent-<n>`, 0700 | The agent's own files |
 
 No agent reads another's keys, secrets or state. Each unit runs as its slot's
@@ -39,7 +39,7 @@ interrupted claim or release left in it is erased before anyone else gets it.
 | `GET` | `/health` | `{"status":"ok","slots","claimed","free","provisioned"}`: counts only. Which agents a TD hosts, and whose they are, is asked one agent id at a time |
 | `POST` | `/attest` | `{"nonceB64","agentId"?}` → a quote whose report data is `nonce ‖ SHA-256("mero-agent-gate/attest/v3" ‖ provisioning_pub ‖ len(agent_id) ‖ agent_id ‖ signing_pub ‖ owner_pub)`, and the keys. While the agent is unclaimed, `signing_pub` and `owner_pub` are 32 zero bytes and `signingPublicKeyB64` and `ownerPublicKeyB64` are absent. Without `agentId`, the quote is for the TD alone (an empty id): what the release pipeline measures |
 | `POST` | `/provision` | An HPKE message for `agentId`, sealed to the provisioning key, with its sender's key. The first one for an unknown agent id claims a free slot for it and its sender. Writes each secret to the slot's `secrets/<NAME>` and answers `{"written","claimed"}`. `403` if another key owns the agent or the sender did not seal it for this agent, `409` if it was sealed to a key from an earlier start, `503` `no_free_slot` if every slot is taken |
-| `POST` | `/operator` | The same shape, from the **operator**: the key the VM's `operator-key` metadata names (agent-init writes it to `GATE_OPERATOR_KEY_FILE`), sealed under its own domain. Writes only the names in `OPERATOR_SECRETS` (`NEAR_AI_API_KEY`) to the slot's `operator/`, and only for a claimed agent. `403` `not_the_operator` from any other key or with no operator key, `404` for an agent nobody claimed, `400` for any other name |
+| `POST` | `/operator` | The same shape, from the **operator**: the key the VM's `operator-key` metadata names (agent-init writes it to `GATE_OPERATOR_KEY_FILE`), sealed under its own domain. Writes only the names in `OPERATOR_SECRETS` (`NEAR_AI_API_KEY`, `MERO_INFERENCE_API_KEY`) to the slot's `operator/`, and only for a claimed agent. `403` `not_the_operator` from any other key or with no operator key, `404` for an agent nobody claimed, `400` for any other name |
 | `POST` | `/release` | The same shape, sealing `{"release": true}`, from the agent's owner: the gate stops the slot's unit, erases its `id`, keys, secrets and state, and starts the unit again, empty. Answers `{"released"}`; `404` for an unknown agent id |
 
 ## Keys
@@ -68,7 +68,7 @@ agent_id`, so an owner's message never opens as the operator's or the other way
 round. Its sender must be the operator key. It is how mdma, which pays for the
 agent's model calls, gives the agent its NEAR AI key without that key passing
 through the owner's browser. The operator can neither claim, release nor write
-the owner's `secrets/`; the launcher uses the operator's `NEAR_AI_API_KEY` only
+the owner's `secrets/`; the launcher uses the operator's `NEAR_AI_API_KEY` (and `MERO_INFERENCE_API_KEY`, the bearer token of a private inference TD) only
 when the owner provisioned none.
 
 **Owner claim.** Nobody is baked in as allowed to provision, so neither who

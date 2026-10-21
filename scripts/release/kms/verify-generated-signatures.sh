@@ -21,7 +21,8 @@ signed_assets=(
 # Signing writes <policy>.json.bundle.json beside each agent policy, which the
 # glob also matches: those are signing outputs, not signed assets.
 shopt -s nullglob
-for policy in release-assets/kms-agent-attestation-policy.*.json; do
+for policy in release-assets/kms-agent-attestation-policy.*.json \
+    release-assets/kms-inference-attestation-policy.*.json; do
   [[ "${policy}" == *.bundle.json ]] || signed_assets+=("${policy}")
 done
 shopt -u nullglob
