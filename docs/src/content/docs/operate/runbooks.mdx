@@ -557,7 +557,11 @@ registers are not the image's.
 The release probes create their VMs through `gcp_create_instance`
 (`scripts/ci/gcp_create_instance.sh`): the node release's measurement VM, the
 KMS release's agent probe and two-replica cluster, the mkosi run's KMS and
-agent probes, and the post-release agent e2e. It makes up to three attempts,
+agent probes, the post-release agent e2e, and the log-auth receiver the node
+release's debug profiles start. The manual probes create theirs the same way:
+`node-image-gcp-staging-probe.yaml` (its TDX VM) and `uki-tdx-probe.yaml`. No
+workflow or script calls `gcloud compute instances create` directly any more,
+so every VM mero-tee's CI starts is retried. It makes up to three attempts,
 30 and then 60 seconds apart, and only for errors GCP says to try again on:
 `Internal error`, `backendError`, HTTP 500/502/503/504, rate limiting and a
 zone out of capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`). Each retry is a

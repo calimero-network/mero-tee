@@ -432,9 +432,12 @@ jobs:
           # is part of the machine RTMR0 measures: a VM measured without it publishes
           # an RTMR0 no mdma node has, and the KMS refuses every node. Same size, type
           # and device name as mdma; the disk itself is unused here.
-          gcloud compute instances create "${{ steps.params.outputs.instance_name }}" \
-            --project "${{ steps.params.outputs.vm_project }}" \
-            --zone "${{ steps.params.outputs.vm_zone }}" \
+          # gcp_create_instance retries GCP's transient errors and keeps the
+          # name, so the cleanup step still finds the VM.
+          source scripts/ci/gcp_create_instance.sh
+          gcp_create_instance "${{ steps.params.outputs.instance_name }}" \
+            "${{ steps.params.outputs.vm_project }}" \
+            "${{ steps.params.outputs.vm_zone }}" \
             --machine-type "${{ steps.params.outputs.vm_machine_type }}" \
             --confidential-compute-type "TDX" \
             --maintenance-policy "TERMINATE" \
