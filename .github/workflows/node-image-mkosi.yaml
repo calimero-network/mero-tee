@@ -147,13 +147,14 @@ jobs:
           NODE_TAG: ${{ inputs.node_release_tag }}
         run: |
           set -euo pipefail
-          mkdir -p inputs/node-policy
+          # Straight into inputs/: the build hashes inputs/* as evidence, and
+          # sha256sum refuses a directory.
           gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
             --pattern "published-mrtds.json" --pattern "published-mrtds.json.bundle.json" \
-            --dir inputs/node-policy
-          bash scripts/release/kms/verify-node-policy.sh inputs/node-policy
+            --dir inputs
+          bash scripts/release/kms/verify-node-policy.sh inputs
           bash scripts/release/kms/extract-node-allowlist.sh \
-            inputs/node-policy/published-mrtds.json "${PROFILE}" inputs/node-allowlist.json
+            inputs/published-mrtds.json "${PROFILE}" inputs/node-allowlist.json
           echo "KMS_NODE_POLICY_FILE=${PWD}/inputs/node-allowlist.json" >> "${GITHUB_ENV}"
 
       - name: Build mero-agent-gate and stage the agent

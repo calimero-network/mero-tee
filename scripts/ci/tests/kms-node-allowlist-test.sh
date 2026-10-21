@@ -228,6 +228,13 @@ uses .github/workflows/node-image-mkosi.yaml "scripts/release/kms/verify-node-po
   "Image (mkosi) verifies the node policy"
 uses .github/workflows/node-image-mkosi.yaml "scripts/release/kms/extract-node-allowlist.sh" \
   "Image (mkosi) extracts the node allowlist through the script"
+# Image (mkosi) hashes inputs/* as build evidence, and sha256sum fails on a
+# directory, so nothing may be downloaded into a subdirectory of inputs/.
+if grep -qE -- '--dir inputs/|mkdir -p inputs/' "${REPO_ROOT}/.github/workflows/node-image-mkosi.yaml"; then
+  report "flat inputs/" "a subdirectory of inputs/" "Image (mkosi) keeps inputs/ flat for its evidence hashes"
+else
+  report "flat inputs/" "flat inputs/" "Image (mkosi) keeps inputs/ flat for its evidence hashes"
+fi
 for workflow in release-kms.yaml node-image-mkosi.yaml; do
   if grep -q "'.profiles\[\$p\]" "${REPO_ROOT}/.github/workflows/${workflow}"; then
     report "no inline extraction" "inline extraction" "${workflow}"
