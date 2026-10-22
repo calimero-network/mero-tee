@@ -601,6 +601,12 @@ print(urlsplit(sys.argv[1]).hostname or "")
 ' "${1:-}" 2>/dev/null || true
 }
 
+# The SAN set of the CSR for `host`: the name itself and its app hosts.
+csr_sans() {
+  [[ -n "$1" ]] && echo "DNS:$1,DNS:*.$1"
+  return 0
+}
+
 # A CSR over the node key for `host`, base64 DER.
 #
 # Cached beside the key: it is deterministic for (key, host), and regenerating
@@ -617,7 +623,7 @@ node_csr_b64() {
   if [[ ! -s "$cached" ]]; then
     local der="$TLS_DIR/.csr.der.$$"
     if ! openssl req -new -key "$TLS_KEY" -subj "/CN=${host}" \
-        -addext "subjectAltName=DNS:${host},DNS:*.${host}" -outform DER -out "$der" >>"$LOG" 2>&1; then
+        -addext "subjectAltName=$(csr_sans "$host")" -outform DER -out "$der" >>"$LOG" 2>&1; then
       rm -f "$der"
       logq "WARN: could not build a CSR for ${host}"
       return 1
@@ -2523,6 +2529,15 @@ save_registration() {
   echo "$1" > "$REGISTRATION_FILE"
 }
 
+# The identity a registration is recorded under. The CSR's SAN set is part of
+# it, so a node registered with an older CSR re-registers once with the new one.
+registration_state_json() {
+  python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3], "csr_san": sys.argv[4]}, sort_keys=True))
+' "$1" "$2" "$3" "$(csr_sans "$(relay_host "$3")")" 2>/dev/null || echo '{}'
+}
+
 # Persist the token mdma issued, and start using it immediately.
 #
 # 0600 and written via a temp file so a crash mid-write cannot leave a truncated
@@ -2902,10 +2917,7 @@ advertised as a relay until it has one."
     (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
     LAST_REGISTRATION_ATTEMPT="$now_ts"
     register_with_mdma "$peer_id" "$account" "$relay_url" "$port" || return 0
-    save_registration "$(python3 -c '
-import json, sys
-print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
-' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    save_registration "$(registration_state_json "$peer_id" "$account" "$relay_url")"
     return 0
   fi
 
@@ -2916,16 +2928,13 @@ try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '']))
+print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '', state.get('csr_san') or '']))
 " 2>/dev/null || echo "")
-  want="${peer_id}|${account}|${relay_url}"
+  want="${peer_id}|${account}|${relay_url}|$(csr_sans "$(relay_host "$relay_url")")"
   [[ "$recorded" == "$want" ]] && return 0
 
   if register_with_mdma "$peer_id" "$account" "$relay_url" "$port"; then
-    save_registration "$(python3 -c '
-import json, sys
-print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
-' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    save_registration "$(registration_state_json "$peer_id" "$account" "$relay_url")"
   fi
 }
 

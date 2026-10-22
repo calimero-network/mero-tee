@@ -246,6 +246,18 @@ reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 [[ "$(registrations)" == "2" ]] || fail "a changed relay url must re-register"
 [[ "$(field 1 relay_url)" == "https://relay-02.test" ]] || fail "the new identity must be sent"
 
+# --- a changed CSR SAN set re-registers once ------------------------------
+# A node registered before the wildcard SAN has the same peer, account and relay
+# url, yet its certificate does not cover app hosts until it sends the new CSR.
+echo "chal-three" > "${SB}/challenge"
+csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
+reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
+[[ "$(registrations)" == "3" ]] || fail "a changed CSR SAN set must re-register"
+reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
+[[ "$(registrations)" == "3" ]] || fail "an unchanged CSR SAN set must not re-register"
+unset -f csr_sans
+source "${SB}/functions.sh"
+
 # --- 503 is retried, not recorded -----------------------------------------
 # "Could not EVALUATE the quote" is not "your quote is bad". Recording it would
 # leave a healthy node unregistered for as long as it runs.
