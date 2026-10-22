@@ -95,4 +95,44 @@ before="$(mtime "${clean}")"
 cmp -s "${clean}" "${SB}/clean.want" || fail "a clean config was changed"
 [[ "$(mtime "${clean}")" == "${before}" ]] || fail "a clean config was rewritten"
 
+# --- app hosts ----------------------------------------------------------------
+# With a relay URL, merod serves each app on `<app id>.<host>` and takes the
+# proxy's word for the caller there. Without one there is no host to name.
+grep -q 'RELAY_URL=$(get_meta "relay-url"' <<<"${code}" || fail "calimero-init does not read relay-url"
+sed -n '/^relay_host() {$/,/^}$/p;/^configure_app_host() {$/,/^}$/p' "${INIT}" > "${SB}/app.sh"
+grep -q '^configure_app_host() {$' "${SB}/app.sh" || fail "no configure_app_host in calimero-init"
+grep -q '^configure_app_host$' <<<"${code}" || fail "calimero-init never calls configure_app_host"
+
+mkdir -p "${SB}/bin"
+cat > "${SB}/bin/merod" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "${SB}/merod.calls"
+[[ -z "${MEROD_REFUSES:-}" ]]
+STUB
+chmod +x "${SB}/bin/merod"
+export SB
+run_app_host() (
+  # shellcheck source=/dev/null
+  source "${SB}/app.sh"
+  # Called by the sourced function, not by this script.
+  # shellcheck disable=SC2329
+  log() { echo "$*" >> "${SB}/log"; }
+  export BIN_DIR="${SB}/bin" CALIMERO_HOME=/h CALIMERO_NODE=n RELAY_URL="$1"
+  configure_app_host
+)
+
+: > "${SB}/merod.calls"; : > "${SB}/log"
+run_app_host "https://relay-07.relay.calimero.test" || fail "configure_app_host failed with a relay url"
+grep -qF 'server.apps.base_domain="relay-07.relay.calimero.test"' "${SB}/merod.calls" || fail "base_domain not set to the relay host"
+grep -qF 'server.apps.trust_proxy=true' "${SB}/merod.calls" || fail "trust_proxy not set"
+
+: > "${SB}/merod.calls"
+run_app_host "" || fail "configure_app_host failed with no relay url"
+[[ ! -s "${SB}/merod.calls" ]] || fail "merod was configured with no relay url"
+
+# A merod that predates the keys refuses them: warn, never abort the boot.
+: > "${SB}/merod.calls"; : > "${SB}/log"
+MEROD_REFUSES=1 run_app_host "https://relay-07.relay.calimero.test" || fail "a merod refusing the keys aborted the boot"
+grep -q 'WARN' "${SB}/log" || fail "a refused key must be warned about"
+
 echo "OK: calimero-init pins no browser origin and drops the one 2.3.109 wrote"
