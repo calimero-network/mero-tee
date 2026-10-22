@@ -79,6 +79,87 @@ if re.search(r"^\s*forwardedHeaders:", static, flags=re.M):
         "has no trusted proxy in front of it"
     )
 
+# --- app hosts ---------------------------------------------------------------
+# `<52-char base32 app id>.<base domain>` serves an installed app. merod checks
+# the exact base domain; these routers only have to pick the right backend and
+# guard, host-agnostically (no per-node value may enter a measured file).
+routers = {}
+in_routers = False
+current = None
+for line in lines:
+    if re.match(r"^  routers:\s*$", line):
+        in_routers = True
+        continue
+    if in_routers and re.match(r"^  \S", line):
+        break
+    if not in_routers:
+        continue
+    m = re.match(r"^    ([A-Za-z0-9-]+):\s*$", line)
+    if m:
+        current = routers[m.group(1)] = {"mw": [], "rule": "", "service": "", "priority": 0}
+        continue
+    if current is None:
+        continue
+    for key in ("rule", "service"):
+        m = re.match(rf"^\s+{key}:\s*['\"]?(.*?)['\"]?\s*$", line)
+        if m:
+            current[key] = m.group(1)
+    m = re.match(r"^\s+priority:\s*(\d+)\s*$", line)
+    if m:
+        current["priority"] = int(m.group(1))
+    m = re.match(r"^\s+-\s*([a-z-]+)\s*$", line)
+    if m:
+        current["mw"].append(m.group(1))
+
+APP_HOST = r"HostRegexp(`^[a-z2-7]{52}\..+$`)"
+app = {n: r for n, r in routers.items() if APP_HOST in r["rule"]}
+if len(app) != 4:
+    failures.append(f"expected 4 app-host routers, found {sorted(app)}")
+for name, r in app.items():
+    if not r["rule"].startswith(APP_HOST):
+        failures.append(f"{name}: rule does not lead with the app-host matcher")
+    if re.search(r"Host\(", r["rule"]):
+        failures.append(f"{name}: rule names a host; no per-node value may be baked in")
+    if "rate-limit" not in r["mw"]:
+        failures.append(f"{name}: no rate-limit")
+    if "cors" in r["mw"]:
+        failures.append(f"{name}: app hosts must not carry cors")
+
+def find(pred):
+    return [(n, r) for n, r in app.items() if pred(r["rule"])]
+
+api = find(lambda rule: all(p in rule for p in ("/jsonrpc", "/ws", "/sse", "/admin-api/")))
+files = find(lambda rule: "PathPrefix" not in rule and "Path(" not in rule)
+refresh = find(lambda rule: "/auth/refresh" in rule and "/auth/validate" in rule)
+login = find(lambda rule: "/auth/login" in rule)
+for what, found in (("api", api), ("files", files), ("refresh/validate", refresh), ("login", login)):
+    if len(found) != 1:
+        failures.append(f"expected one app-host {what} router, found {[n for n, _ in found]}")
+if len(api) == 1 and len(files) == 1 and len(refresh) == 1 and len(login) == 1:
+    api, files, refresh, login = api[0][1], files[0][1], refresh[0][1], login[0][1]
+    if "auth-node" not in api["mw"]:
+        failures.append("app-host api router has no auth-node")
+    if api["service"] != "node-core":
+        failures.append("app-host api router does not go to merod")
+    if "auth-node" in files["mw"]:
+        failures.append("app-host file router has auth-node; app files are public")
+    if files["service"] != "node-core":
+        failures.append("app-host file router does not go to merod")
+    if refresh["service"] != "auth-service":
+        failures.append("app-host /auth/refresh and /auth/validate do not go to mero-auth")
+    if login["service"] != "node-core":
+        failures.append("app-host /auth/login does not go to merod")
+    for what, r in (("api", api), ("refresh/validate", refresh), ("login", login)):
+        if r["priority"] <= files["priority"]:
+            failures.append(f"app-host {what} router does not outrank the file router")
+    if files["priority"] <= 10:
+        failures.append("app-host file router does not outrank node-api")
+
+# A node's own host has no 52-char base32 first label, so none of the above applies to it.
+rx = re.compile(r"^[a-z2-7]{52}\..+$")
+if rx.match("relay-07.relay.calimero.network") or not rx.match("a" * 52 + ".relay.calimero.network"):
+    failures.append("the app-host pattern does not separate app hosts from node hosts")
+
 if failures:
     for line in failures:
         print(f"FAIL {line}")
@@ -87,4 +168,5 @@ if failures:
 for owner, _ in blocks:
     print(f"ok   {owner} forwardAuth: trustForwardHeader false")
 print("ok   entrypoints trust no forwarded headers")
+print("ok   app-host routers: api guarded, files public, no cors")
 PY
