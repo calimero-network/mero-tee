@@ -65,7 +65,7 @@ on:
         default: stub
       inference_options:
         description: >-
-          inference only, JSON: {"zone", "machine_type", "provisioning_model" (STANDARD|SPOT),
+          inference only, JSON: {"zone" (one or more, space-separated, tried in order), "machine_type", "provisioning_model" (STANDARD|SPOT),
           "model": {"repo", "revision", "sha256", "served_name", "engine_args", "disk_gb"}}.
           Every key optional; no model: measure-only
         required: false
@@ -342,7 +342,7 @@ jobs:
       OUT_DIR: ${{ github.workspace }}/probe
       # inference: the release's defaults, which inference_options overrides.
       INFERENCE_VM_MACHINE_TYPE: ${{ vars.INFERENCE_VM_MACHINE_TYPE != '' && vars.INFERENCE_VM_MACHINE_TYPE || 'a3-highgpu-1g' }}
-      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a' }}
+      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a us-central1-b us-central1-c' }}
       INFERENCE_VM_PROVISIONING_MODEL: ${{ vars.INFERENCE_VM_PROVISIONING_MODEL != '' && vars.INFERENCE_VM_PROVISIONING_MODEL || 'STANDARD' }}
     steps:
       - name: Checkout code
@@ -401,9 +401,9 @@ jobs:
           chmod +x agent-tools/mero-agent-provision
           PROVISION_BIN="${PWD}/agent-tools/mero-agent-provision" bash scripts/release/agent/run-agent-probe.sh
 
-      # inference_options picks the GPU shape, zone and model; the VM is
-      # created in that zone, as is the log receiver above (VM_ZONE below
-      # applies to both only through this step's own env).
+      # inference_options picks the GPU shape, zones and model; the VM is
+      # created in the first zone with a GPU free. The log receiver above stays
+      # in the job's VM_ZONE: VM_ZONE below is this step's own.
       - name: Boot and probe the inference image
         if: ${{ inputs.role == 'inference' }}
         env:

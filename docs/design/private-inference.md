@@ -171,8 +171,10 @@ It is `null` only on a TD with no GPU, which a client refuses.
 ## Release
 
 `release-kms.yaml` gains `inference-image`, best effort like `agent-image`:
-build, boot on `INFERENCE_VM_MACHINE_TYPE` (default `a3-highgpu-1g`) in
-`INFERENCE_VM_ZONE` with `measure-only=true`, take the quote, and publish
+build, boot on `INFERENCE_VM_MACHINE_TYPE` (default `a3-highgpu-1g`) in the
+first of the `INFERENCE_VM_ZONE` zones that has one free (default
+`us-central1-a us-central1-b us-central1-c`: H100s run out per zone, and GPU
+quota is per region) with `measure-only=true`, take the quote, and publish
 `kms-inference-attestation-policy.<profile>.json` (`"role": "inference"`, the
 agent policy's shape) on `mero-kms-v<version>`, signed with the rest. The KMS
 image does not serve it: an inference TD asks the KMS for nothing. A failed or
