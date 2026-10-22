@@ -250,12 +250,14 @@ reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 # A node registered before the wildcard SAN has the same peer, account and relay
 # url, yet its certificate does not cover app hosts until it sends the new CSR.
 echo "chal-three" > "${SB}/challenge"
+# shellcheck disable=SC2329
 csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
 reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 [[ "$(registrations)" == "3" ]] || fail "a changed CSR SAN set must re-register"
 reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 [[ "$(registrations)" == "3" ]] || fail "an unchanged CSR SAN set must not re-register"
 unset -f csr_sans
+# shellcheck source=/dev/null
 source "${SB}/functions.sh"
 
 # --- 503 is retried, not recorded -----------------------------------------

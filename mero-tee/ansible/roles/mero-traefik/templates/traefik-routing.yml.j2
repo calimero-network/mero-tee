@@ -360,10 +360,26 @@ http:
     # first label, so these never shadow the routers above and below it.
     #
     # Files are public, so no `auth-node` and no `cors` (the app is same-origin
-    # on its host). The API routes carry `auth-node`, whose
-    # `X-Auth-Permissions` merod requires; `cors` stays off for the same reason.
+    # on its host), and read-only: GET and HEAD. The API routes carry
+    # `auth-node`, whose `X-Auth-Permissions` merod requires; `cors` stays off
+    # for the same reason.
+    #
+    # The matcher also accepts hosts merod does not treat as app hosts (another
+    # domain, a trailing dot) and sends them to its node router, where proxy
+    # mode has no guard. `app-deny` keeps the node-only routes out of reach, and
+    # `app-api` outranks the node-host routers so `/admin-api/health` is guarded.
+    app-deny:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (PathPrefix(`/metrics`) || PathPrefix(`/sealed`) || PathPrefix(`/admin-api/tee`) || PathRegexp(`^/admin-api/(contexts|groups|namespaces)/[0-9a-f]{64}/(intents|presence-intents|context-intents|governance-intents|admit)$`))'
+      entryPoints:
+        - web
+        - websecure
+      service: noop@internal
+      middlewares:
+        - rate-limit
+      priority: 130
+
     app-files:
-      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`)'
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (Method(`GET`) || Method(`HEAD`))'
       entryPoints:
         - web
         - websecure
@@ -381,7 +397,7 @@ http:
       middlewares:
         - rate-limit
         - auth-node
-      priority: 60
+      priority: 110
 
     # Token refresh and validation are mero-auth's, as on the node host.
     app-auth:

@@ -111,10 +111,15 @@ for line in lines:
     if m:
         current["mw"].append(m.group(1))
 
-APP_HOST = r"HostRegexp(`^[a-z2-7]{52}\..+$`)"
+m = re.search(r"HostRegexp\(`([^`]*)`\)", routers.get("app-files", {}).get("rule", ""))
+if not m:
+    print("FAIL app-files has no HostRegexp matcher")
+    sys.exit(1)
+APP_RX = m.group(1)
+APP_HOST = f"HostRegexp(`{APP_RX}`)"
 app = {n: r for n, r in routers.items() if APP_HOST in r["rule"]}
-if len(app) != 4:
-    failures.append(f"expected 4 app-host routers, found {sorted(app)}")
+if len(app) != 5:
+    failures.append(f"expected 5 app-host routers, found {sorted(app)}")
 for name, r in app.items():
     if not r["rule"].startswith(APP_HOST):
         failures.append(f"{name}: rule does not lead with the app-host matcher")
@@ -143,6 +148,8 @@ if len(api) == 1 and len(files) == 1 and len(refresh) == 1 and len(login) == 1:
         failures.append("app-host api router does not go to merod")
     if "auth-node" in files["mw"]:
         failures.append("app-host file router has auth-node; app files are public")
+    if "Method(`GET`) || Method(`HEAD`)" not in files["rule"] or "POST" in files["rule"]:
+        failures.append("app-host file router is not limited to GET and HEAD")
     if files["service"] != "node-core":
         failures.append("app-host file router does not go to merod")
     if refresh["service"] != "auth-service":
@@ -156,7 +163,7 @@ if len(api) == 1 and len(files) == 1 and len(refresh) == 1 and len(login) == 1:
         failures.append("app-host file router does not outrank node-api")
 
 # A node's own host has no 52-char base32 first label, so none of the above applies to it.
-rx = re.compile(r"^[a-z2-7]{52}\..+$")
+rx = re.compile(APP_RX)
 if rx.match("relay-07.relay.calimero.network") or not rx.match("a" * 52 + ".relay.calimero.network"):
     failures.append("the app-host pattern does not separate app hosts from node hosts")
 
