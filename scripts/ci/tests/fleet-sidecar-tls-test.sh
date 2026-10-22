@@ -113,7 +113,7 @@ printf 'b2xkLWNzcg==' > "${SB}/tls/csr-${HOST}.b64"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] || fail "a legacy single-SAN CSR was reused"
 rm -f "${SB}/tls/csr-${HOST}.b64"
 # The cache is keyed on the SAN set, so a changed set builds a fresh CSR.
-# shellcheck disable=SC2329  # called by node_csr_b64, sourced above
+# shellcheck disable=SC2317,SC2329  # called by node_csr_b64, sourced above
 csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
 WIDER="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR for a wider SAN set"
 echo "${WIDER}" | base64 -d | openssl req -inform DER -noout -text \

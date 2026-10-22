@@ -116,7 +116,7 @@ run_app_host() (
   # shellcheck source=/dev/null
   source "${SB}/app.sh"
   # Called by the sourced function, not by this script.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   log() { echo "$*" >> "${SB}/log"; }
   export BIN_DIR="${SB}/bin" CALIMERO_HOME=/h CALIMERO_NODE=n RELAY_URL="$1"
   configure_app_host
