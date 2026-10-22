@@ -388,6 +388,28 @@ warrant. `scripts/ci/tests/traefik-proxy-identity-test.sh`,
 `mero-auth-device-login-test.sh` and `fleet-sidecar-login-key-test.sh` pin the
 three edges.
 
+#### App hosts
+
+An installed app is served on `<app id>.<base domain>`, where the app id is a 52-character base32 label.
+Four edges move together:
+
+| Edge | What it does |
+| --- | --- |
+| merod (`calimero-init.sh.j2`) | Sets `server.apps.base_domain` to the host of the `relay-url` instance metadata, and `server.apps.trust_proxy=true`. Both need a merod release that has `server.apps`; a merod without them refuses the keys, and the script only warns, so the node simply does not serve apps on their own hosts. Nothing is set when `relay-url` is absent. |
+| Traefik (`app-*` routers) | The matcher is `HostRegexp` on the label shape, with no per-node value, because a measured file cannot hold one. `app-files` serves every path to merod on `GET` and `HEAD` only, with no `auth-node`. `app-api` (`/jsonrpc`, `/ws`, `/sse`, `/admin-api/`) runs `auth-node` and outranks the node-host routers, so `/admin-api/health` is guarded there too. `app-auth` and `app-login` send token refresh and login to mero-auth and merod. |
+| Traefik deny routes | `app-deny` answers `/metrics`, `/sealed`, `/admin-api/tee` and the delegated intents and admit paths on an app host from Traefik itself, without reaching merod. The matcher also accepts hosts that merod does not treat as app hosts, such as another domain, and merod's node router has no guard in proxy mode. |
+| Fleet sidecar | The node CSR carries a wildcard SAN, `*.<relay host>`, so the certificate covers app hosts. A change to the CSR's SAN set re-registers the node once. |
+
+The wildcard certificate and the CSR are covered in [Fleet HA sidecar](/understand/fleet-sidecar/#the-key-never-leaves-the-enclave).
+
+Deploy in this order:
+
+1. mdma, on `feat/app-host-wildcard`, which orders the wildcard certificate.
+2. A merod release that has `server.apps.trust_proxy`.
+3. This image.
+
+An image deployed earlier gets no wildcard certificate, or a merod that ignores the app host keys.
+
 The base is Ubuntu 26.04 LTS (Resolute Raccoon), comfortably past the kernel
 6.17+ that RTMR3 sysfs support needs, installed from a pinned snapshot of the
 Ubuntu archive (`Snapshot=` in `mero-tee/mkosi-image/mkosi.conf`, with the tools
