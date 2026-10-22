@@ -105,6 +105,13 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 CSR="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR"
 echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
   | grep -q "DNS:${HOST}" || fail "the CSR must carry the hostname as a SAN"
+# App hosts are `<app id>.<host>`, served by this same node and certificate.
+echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:\*.${HOST}" || fail "the CSR must carry the wildcard as a SAN"
+# A CSR cached by an older sidecar (one SAN, old file name) is never reused.
+printf 'b2xkLWNzcg==' > "${SB}/tls/csr-${HOST}.b64"
+[[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] || fail "a legacy single-SAN CSR was reused"
+rm -f "${SB}/tls/csr-${HOST}.b64"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] \
   || fail "the CSR must be stable: the registration nonce commits to its digest"
 
@@ -112,7 +119,7 @@ echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
 # CSR does not linger to be sent for a name this node no longer answers to.
 OTHER="$(node_csr_b64 "relay-09.relay.calimero.test")" || fail "CSR for a second host"
 [[ "${OTHER}" != "${CSR}" ]] || fail "the CSR must change with the hostname"
-[[ ! -f "${SB}/tls/csr-${HOST}.b64" ]] || fail "the superseded CSR must be removed"
+ls "${SB}"/tls/csr-*"${HOST}"* >/dev/null 2>&1 && fail "the superseded CSR must be removed"
 
 # With no key there is no CSR -- and, crucially, no log line masquerading as one.
 mv "${SB}/tls/key.pem" "${SB}/tls/key.pem.bak"
