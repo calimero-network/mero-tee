@@ -2909,7 +2909,7 @@ advertised as a relay until it has one."
   # TDX quote and spends a challenge, so a node mdma will not issue a token to --
   # measurement not yet published, or no signing key configured there -- would
   # otherwise generate a quote a second indefinitely. The identity-change path
-  # below needs no such guard: it is a string compare that settles immediately.
+  # below is throttled on the same clock after a failed attempt.
   if [[ -z "${FLEET_TOKEN:-}" ]]; then
     local now_ts
     now_ts=$(date +%s)

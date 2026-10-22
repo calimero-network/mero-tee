@@ -422,7 +422,7 @@ http:
 
     # merod answers `/auth/login` with a redirect to the node's own login page.
     app-login:
-      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && Path(`/auth/login`)'
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && Path(`/auth/login`) && (Method(`GET`) || Method(`HEAD`))'
       entryPoints:
         - web
         - websecure

@@ -395,6 +395,9 @@ PATHS = [
     ("HEAD", "/auth/validate", AUTH_SERVICE),
     ("POST", "/auth/validate", DENIED),
     ("GET", "/auth/refresh", FILES),
+    ("GET", "/auth/login", FILES),
+    ("HEAD", "/auth/login", FILES),
+    ("POST", "/auth/login", DENIED),
 ]
 UNSAFE_FILES = [(m, "/index.html") for m in ("POST", "PUT", "DELETE", "PATCH")] + [
     (m, t) for m in ("POST", "PUT", "DELETE", "PATCH") for t in ("/auth/token", "/auth/keys", "/admin/keys", "/admin/x")
