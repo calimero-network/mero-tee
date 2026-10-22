@@ -105,6 +105,26 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 CSR="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR"
 echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
   | grep -q "DNS:${HOST}" || fail "the CSR must carry the hostname as a SAN"
+# App hosts are `<app id>.<host>`, served by this same node and certificate.
+echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:\*.${HOST}" || fail "the CSR must carry the wildcard as a SAN"
+# A CSR cached under an older name (one SAN) is never reused.
+printf 'b2xkLWNzcg==' > "${SB}/tls/csr-${HOST}.b64"
+[[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] || fail "a legacy single-SAN CSR was reused"
+rm -f "${SB}/tls/csr-${HOST}.b64"
+# The cache is keyed on the SAN set, so a changed set builds a fresh CSR.
+# shellcheck disable=SC2317,SC2329  # called by node_csr_b64, sourced above
+csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
+WIDER="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR for a wider SAN set"
+echo "${WIDER}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:extra.${HOST}" || fail "a changed SAN set must produce a fresh CSR"
+unset -f csr_sans
+# shellcheck source=/dev/null
+source "${SB}/functions.sh"
+CSR="$(node_csr_b64 "${HOST}")"
+echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:extra" && fail "restoring the SAN set must build the CSR for it"
+[[ "$(find "${SB}/tls" -name 'csr-*.b64' | wc -l)" -eq 1 ]] || fail "a superseded SAN set's CSR must be removed"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] \
   || fail "the CSR must be stable: the registration nonce commits to its digest"
 
@@ -112,7 +132,7 @@ echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
 # CSR does not linger to be sent for a name this node no longer answers to.
 OTHER="$(node_csr_b64 "relay-09.relay.calimero.test")" || fail "CSR for a second host"
 [[ "${OTHER}" != "${CSR}" ]] || fail "the CSR must change with the hostname"
-[[ ! -f "${SB}/tls/csr-${HOST}.b64" ]] || fail "the superseded CSR must be removed"
+ls "${SB}"/tls/csr-*"${HOST}"* >/dev/null 2>&1 && fail "the superseded CSR must be removed"
 
 # With no key there is no CSR -- and, crucially, no log line masquerading as one.
 mv "${SB}/tls/key.pem" "${SB}/tls/key.pem.bak"

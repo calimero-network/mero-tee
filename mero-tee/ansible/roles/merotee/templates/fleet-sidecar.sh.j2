@@ -601,22 +601,31 @@ print(urlsplit(sys.argv[1]).hostname or "")
 ' "${1:-}" 2>/dev/null || true
 }
 
+# The SAN set of the CSR for `host`: the name itself and its app hosts.
+csr_sans() {
+  [[ -n "$1" ]] && echo "DNS:$1,DNS:*.$1"
+  return 0
+}
+
 # A CSR over the node key for `host`, base64 DER.
 #
 # Cached beside the key: it is deterministic for (key, host), and regenerating
 # it every  pass would change the value the registration nonce commits to for no
 # reason. Keyed on the host so a node that moves behind a different name asks
-# for the new one instead of re-presenting its old certificate.
+# for the new one instead of re-presenting its old certificate. Also keyed on a
+# short hash of the SAN set, so changing it builds a fresh CSR.
 node_csr_b64() {
   local host="$1"
   [[ -n "$host" ]] || return 1
   [[ -s "$TLS_KEY" ]] || { logq "WARN: no TLS key at $TLS_KEY; cannot request a certificate"; return 1; }
 
-  local cached="$TLS_DIR/csr-${host}.b64"
+  local sans_id
+  sans_id=$(csr_sans "$host" | sha256sum | cut -c1-8)
+  local cached="$TLS_DIR/csr-san-${host}-${sans_id}.b64"
   if [[ ! -s "$cached" ]]; then
     local der="$TLS_DIR/.csr.der.$$"
     if ! openssl req -new -key "$TLS_KEY" -subj "/CN=${host}" \
-        -addext "subjectAltName=DNS:${host}" -outform DER -out "$der" >>"$LOG" 2>&1; then
+        -addext "subjectAltName=$(csr_sans "$host")" -outform DER -out "$der" >>"$LOG" 2>&1; then
       rm -f "$der"
       logq "WARN: could not build a CSR for ${host}"
       return 1
@@ -626,7 +635,7 @@ node_csr_b64() {
       return 1
     fi
     rm -f "$der"
-    find "$TLS_DIR" -maxdepth 1 -name 'csr-*.b64' ! -name "csr-${host}.b64" -delete 2>/dev/null || true
+    find "$TLS_DIR" -maxdepth 1 -name 'csr-*.b64' ! -name "${cached##*/}" -delete 2>/dev/null || true
   fi
   cat "$cached"
 }
@@ -2522,6 +2531,15 @@ save_registration() {
   echo "$1" > "$REGISTRATION_FILE"
 }
 
+# The identity a registration is recorded under. The CSR's SAN set is part of
+# it, so a node registered with an older CSR re-registers once with the new one.
+registration_state_json() {
+  python3 -c '
+import json, sys
+print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3], "csr_san": sys.argv[4]}, sort_keys=True))
+' "$1" "$2" "$3" "$(csr_sans "$(relay_host "$3")")" 2>/dev/null || echo '{}'
+}
+
 # Persist the token mdma issued, and start using it immediately.
 #
 # 0600 and written via a temp file so a crash mid-write cannot leave a truncated
@@ -2891,7 +2909,7 @@ advertised as a relay until it has one."
   # TDX quote and spends a challenge, so a node mdma will not issue a token to --
   # measurement not yet published, or no signing key configured there -- would
   # otherwise generate a quote a second indefinitely. The identity-change path
-  # below needs no such guard: it is a string compare that settles immediately.
+  # below is throttled on the same clock after a failed attempt.
   if [[ -z "${FLEET_TOKEN:-}" ]]; then
     local now_ts
     now_ts=$(date +%s)
@@ -2901,10 +2919,7 @@ advertised as a relay until it has one."
     (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
     LAST_REGISTRATION_ATTEMPT="$now_ts"
     register_with_mdma "$peer_id" "$account" "$relay_url" "$port" || return 0
-    save_registration "$(python3 -c '
-import json, sys
-print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
-' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    save_registration "$(registration_state_json "$peer_id" "$account" "$relay_url")"
     return 0
   fi
 
@@ -2915,16 +2930,19 @@ try:
   state = json.load(sys.stdin)
 except Exception:
   state = {}
-print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '']))
+print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '', state.get('relay_url') or '', state.get('csr_san') or '']))
 " 2>/dev/null || echo "")
-  want="${peer_id}|${account}|${relay_url}"
+  want="${peer_id}|${account}|${relay_url}|$(csr_sans "$(relay_host "$relay_url")")"
   [[ "$recorded" == "$want" ]] && return 0
 
+  # A failed attempt costs a quote and a challenge: wait out the retry clock.
+  local now_ts
+  now_ts=$(date +%s)
+  (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
   if register_with_mdma "$peer_id" "$account" "$relay_url" "$port"; then
-    save_registration "$(python3 -c '
-import json, sys
-print(json.dumps({"peer_id": sys.argv[1], "executor_account": sys.argv[2], "relay_url": sys.argv[3]}, sort_keys=True))
-' "$peer_id" "$account" "$relay_url" 2>/dev/null || echo '{}')"
+    save_registration "$(registration_state_json "$peer_id" "$account" "$relay_url")"
+  else
+    LAST_REGISTRATION_ATTEMPT="$now_ts"
   fi
 }
 

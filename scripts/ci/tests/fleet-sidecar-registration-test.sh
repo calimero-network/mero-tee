@@ -130,6 +130,8 @@ ACCOUNT="4d4d4d"
 RELAY="https://relay-01.test"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# The first registration stamps the retry clock; only the throttle test keeps it.
+reconcile_now() { LAST_REGISTRATION_ATTEMPT=0; reconcile_registration "$@"; }
 registrations() { awk 'NF{n++} END{print n+0}' "${SB}/register-log"; }
 field() { python3 -c "
 import json,sys
@@ -152,13 +154,13 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 # proves WHICH NODE is asking and says nothing about the key travelling beside
 # it -- mdma would then sign a certificate for whatever key reached it. With the
 # digest bound, the certificate provably belongs to a key born in this enclave.
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "1" ]] || fail "expected one registration, got $(registrations)"
 
 csr="$(field 0 csr)"
 [[ -n "${csr}" ]] || fail "the CSR must travel with the registration"
 echo "${csr}" | base64 -d | openssl req -inform DER -noout -text \
-  | grep -q "DNS:relay-01.test" || fail "the CSR must be for the relay hostname"
+  | grep -q "DNS:relay-01.test, DNS:\*.relay-01.test$" || fail "the CSR sent must carry exactly the host and its wildcard as SANs"
 
 expected="$(python3 -c "
 import hashlib, sys
@@ -192,7 +194,7 @@ rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
 touch "${SB}/registration-attest-missing"
 echo "chal-fallback" > "${SB}/challenge"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 rm -f "${SB}/registration-attest-missing"
 [[ "$(registrations)" == "1" ]] || fail "a merod without registration-attest must still register"
 [[ "$(tr '\n' ' ' < "${SB}/attest-route-log")" == "registration-attest attest " ]] \
@@ -211,7 +213,7 @@ rm -f "${SB}"/tls/csr-*.b64
 : > "${SB}/attest-log"
 : > "${SB}/register-log"
 echo "chal-nokey" > "${SB}/challenge"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "1" ]] || fail "a node with no TLS key must still register"
 [[ -z "$(python3 -c "
 import json,sys
@@ -233,18 +235,32 @@ rm -f "${SB}/fleet-registration.json"
 : > "${SB}/attest-log"
 : > "${SB}/register-log"
 echo "chal-one" > "${SB}/challenge"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 
 # --- an unchanged identity does not re-register ---------------------------
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "1" ]] || fail "a stable identity must not re-register every cycle"
 
 # --- a changed identity re-registers --------------------------------------
 echo "chal-two" > "${SB}/challenge"
-reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 [[ "$(registrations)" == "2" ]] || fail "a changed relay url must re-register"
 [[ "$(field 1 relay_url)" == "https://relay-02.test" ]] || fail "the new identity must be sent"
+
+# --- a changed CSR SAN set re-registers once ------------------------------
+# A node registered before the wildcard SAN has the same peer, account and relay
+# url, yet its certificate does not cover app hosts until it sends the new CSR.
+echo "chal-three" > "${SB}/challenge"
+# shellcheck disable=SC2317,SC2329
+csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
+reconcile_now "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
+[[ "$(registrations)" == "3" ]] || fail "a changed CSR SAN set must re-register"
+reconcile_now "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
+[[ "$(registrations)" == "3" ]] || fail "an unchanged CSR SAN set must not re-register"
+unset -f csr_sans
+# shellcheck source=/dev/null
+source "${SB}/functions.sh"
 
 # --- 503 is retried, not recorded -----------------------------------------
 # "Could not EVALUATE the quote" is not "your quote is bad". Recording it would
@@ -252,25 +268,25 @@ reconcile_registration "${PEER}" "${ACCOUNT}" "https://relay-02.test" 2428
 rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
 echo "503" > "${SB}/register-code"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 echo "200" > "${SB}/register-code"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "2" ]] || fail "a 503 must be retried on the next pass"
 
 # --- a refusal is likewise not recorded -----------------------------------
 rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
 echo "403" > "${SB}/register-code"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 echo "200" > "${SB}/register-code"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 [[ "$(registrations)" == "2" ]] || fail "a 403 must not be recorded as a completed registration"
 
 # --- merod unreachable writes nothing -------------------------------------
 rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
 touch "${SB}/attest-fails"
-reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_now "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
 rm -f "${SB}/attest-fails"
 [[ "$(registrations)" == "0" ]] || fail "no quote means no registration attempt"
 
@@ -279,8 +295,29 @@ rm -f "${SB}/attest-fails"
 # half-identity would only record something that has to be replaced.
 rm -f "${SB}/fleet-registration.json"
 : > "${SB}/register-log"
-reconcile_registration "${PEER}" "" "${RELAY}" 2428
+reconcile_now "${PEER}" "" "${RELAY}" 2428
 [[ "$(registrations)" == "0" ]] || fail "an identity with no account must not register"
+
+# --- a failing re-registration waits out the retry interval -----------------
+# The identity check runs every second; a registration that keeps failing (mdma
+# 503, quote failure) would otherwise cost a TDX quote a second.
+# shellcheck disable=SC2034  # read by reconcile_registration, sourced above
+FLEET_TOKEN="f1.${PEER}.deadbeef"
+rm -f "${SB}/fleet-registration.json"
+: > "${SB}/register-log"
+# shellcheck disable=SC2034  # ditto
+LAST_REGISTRATION_ATTEMPT=0
+echo "503" > "${SB}/register-code"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" == "1" ]] || fail "a failing re-registration must not retry before REGISTRATION_RETRY_INTERVAL"
+echo "200" > "${SB}/register-code"
+# shellcheck disable=SC2034  # ditto
+LAST_REGISTRATION_ATTEMPT=0
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" == "2" ]] || fail "a failing re-registration must retry once the interval has passed"
+reconcile_registration "${PEER}" "${ACCOUNT}" "${RELAY}" 2428
+[[ "$(registrations)" == "2" ]] || fail "a recorded identity must not re-register"
 
 # --- the token is EARNED, never baked --------------------------------------
 # The image carries no fleet credential. mdma issues one scoped to this peer

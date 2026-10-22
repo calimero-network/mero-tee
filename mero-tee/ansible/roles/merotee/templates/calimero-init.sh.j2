@@ -134,6 +134,7 @@ KMS_URL=$(get_meta "kms-url" | tr -d '\r\n')
 EPHEMERAL_STORE=$(get_meta "ephemeral-store" | tr -d '\r\n')
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
+RELAY_URL=$(get_meta "relay-url" | tr -d '\r\n')
 # The bearer token vector and vmagent present to the observability front end.
 # Stamped per-instance at creation by mdma's dispatcher, the same way
 # `enrolment-token` and `relay-url` are. `tr -d` because a metadata value
@@ -1315,6 +1316,31 @@ log "Guarding sealed requests with mero-auth..."
 "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
   'server.sealed.forward_auth="http://127.0.0.1:3001"' \
   || log "WARN: failed to set server.sealed.forward_auth; logins and logged-in calls stay outside the sealed transport"
+
+# The hostname inside a relay URL, as the fleet sidecar derives it; empty if none.
+relay_host() {
+  python3 -c '
+import sys
+from urllib.parse import urlsplit
+print(urlsplit(sys.argv[1]).hostname or "")
+' "${1:-}" 2>/dev/null || true
+}
+
+# Serve each installed app on `<app id>.<relay host>`. Two calls, warn only:
+# a merod without `server.apps.trust_proxy` refuses a call that names it, and
+# must still get the base domain so it serves the app files.
+configure_app_host() {
+  local host
+  host=$(relay_host "${RELAY_URL:-}")
+  [[ -n "$host" ]] || return 0
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    "server.apps.base_domain=\"${host}\"" \
+    || log "WARN: failed to set server.apps.base_domain; apps are not served on their own hosts"
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    'server.apps.trust_proxy=true' \
+    || log "WARN: failed to set server.apps.trust_proxy; the app API on app hosts needs a merod that has it"
+}
+configure_app_host
 
 # No `server.cors.allowed_origins` is set. merod admits browser pages from any
 # origin on a node that takes callers' identity from the proxy (the key above):

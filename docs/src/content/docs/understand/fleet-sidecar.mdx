@@ -1182,6 +1182,12 @@ certificate. MDMA holds no private key for any node, and a compromise of its
 certificate table leaks only material already public in Certificate
 Transparency.
 
+The CSR carries two SANs, the relay host and `*.<relay host>`.
+The wildcard covers app hosts, which are `<app id>.<relay host>`.
+Its SAN set is part of the identity the sidecar registers under, so a node registered with an older CSR re-registers once with the new one.
+The relay host comes from the `relay-url` instance metadata, the same value `calimero-init` sets as `server.apps.base_domain`.
+App host traffic and its Traefik routes are described under [App hosts](/operate/config-reference/#app-hosts).
+
 The placeholder deliberately reports **no expiry** to MDMA. It is valid for ten
 years, and reporting that would tell the control plane this node is covered
 until 2036 — no certificate would ever be ordered, and the node would serve an

@@ -79,6 +79,108 @@ if re.search(r"^\s*forwardedHeaders:", static, flags=re.M):
         "has no trusted proxy in front of it"
     )
 
+# --- app hosts ---------------------------------------------------------------
+# `<52-char base32 app id>.<base domain>` serves an installed app. merod checks
+# the exact base domain; these routers only have to pick the right backend and
+# guard, host-agnostically (no per-node value may enter a measured file).
+routers = {}
+in_routers = False
+current = None
+for line in lines:
+    if re.match(r"^  routers:\s*$", line):
+        in_routers = True
+        continue
+    if in_routers and re.match(r"^  \S", line):
+        break
+    if not in_routers:
+        continue
+    m = re.match(r"^    ([A-Za-z0-9-]+):\s*$", line)
+    if m:
+        current = routers[m.group(1)] = {"mw": [], "rule": "", "service": "", "priority": 0}
+        continue
+    if current is None:
+        continue
+    for key in ("rule", "service"):
+        m = re.match(rf"^\s+{key}:\s*['\"]?(.*?)['\"]?\s*$", line)
+        if m:
+            current[key] = m.group(1)
+    m = re.match(r"^\s+priority:\s*(\d+)\s*$", line)
+    if m:
+        current["priority"] = int(m.group(1))
+    m = re.match(r"^\s+-\s*([a-z-]+)\s*$", line)
+    if m:
+        current["mw"].append(m.group(1))
+
+m = re.search(r"HostRegexp\(`([^`]*)`\)", routers.get("app-files", {}).get("rule", ""))
+if not m:
+    print("FAIL app-files has no HostRegexp matcher")
+    sys.exit(1)
+APP_RX = m.group(1)
+APP_HOST = f"HostRegexp(`{APP_RX}`)"
+app = {n: r for n, r in routers.items() if APP_HOST in r["rule"]}
+if len(app) != 6:
+    failures.append(f"expected 6 app-host routers, found {sorted(app)}")
+for name, r in app.items():
+    if not r["rule"].startswith(APP_HOST):
+        failures.append(f"{name}: rule does not lead with the app-host matcher")
+    if re.search(r"Host\(", r["rule"]):
+        failures.append(f"{name}: rule names a host; no per-node value may be baked in")
+    if "rate-limit" not in r["mw"]:
+        failures.append(f"{name}: no rate-limit")
+    if "cors" in r["mw"]:
+        failures.append(f"{name}: app hosts must not carry cors")
+
+def find(pred):
+    return [(n, r) for n, r in app.items() if pred(r["rule"])]
+
+api = find(lambda rule: all(p in rule for p in ("/jsonrpc", "/ws", "/sse", "/admin-api/")))
+files = find(lambda rule: "Method(" in rule and "PathPrefix" not in rule and "Path(" not in rule)
+catchall = find(lambda rule: rule == APP_HOST)
+refresh = find(lambda rule: "/auth/refresh" in rule and "/auth/validate" in rule)
+login = find(lambda rule: "/auth/login" in rule)
+for what, found in (("api", api), ("files", files), ("catch-all deny", catchall), ("refresh/validate", refresh), ("login", login)):
+    if len(found) != 1:
+        failures.append(f"expected one app-host {what} router, found {[n for n, _ in found]}")
+if len(api) == 1 and len(files) == 1 and len(catchall) == 1 and len(refresh) == 1 and len(login) == 1:
+    api, files, catchall, refresh, login = api[0][1], files[0][1], catchall[0][1], refresh[0][1], login[0][1]
+    if "auth-node" not in api["mw"]:
+        failures.append("app-host api router has no auth-node")
+    if api["service"] != "node-core":
+        failures.append("app-host api router does not go to merod")
+    if "auth-node" in files["mw"]:
+        failures.append("app-host file router has auth-node; app files are public")
+    if "Method(`GET`) || Method(`HEAD`)" not in files["rule"] or "POST" in files["rule"]:
+        failures.append("app-host file router is not limited to GET and HEAD")
+    if files["service"] != "node-core":
+        failures.append("app-host file router does not go to merod")
+    if refresh["service"] != "auth-service":
+        failures.append("app-host /auth/refresh and /auth/validate do not go to mero-auth")
+    if login["service"] != "node-core":
+        failures.append("app-host /auth/login does not go to merod")
+    for what, r in (("api", api), ("refresh/validate", refresh), ("login", login)):
+        if r["priority"] <= files["priority"]:
+            failures.append(f"app-host {what} router does not outrank the file router")
+    # Traefik's default priority is the rule's length.
+    def prio(name):
+        r = routers.get(name)
+        return None if r is None else r["priority"] or len(r["rule"])
+    for node_router in ("node-api", "auth-public", "node-dashboard"):
+        if prio(node_router) is None:
+            failures.append(f"no {node_router} router to compare the app-host file router against")
+        elif files["priority"] <= prio(node_router):
+            failures.append(f"app-host file router does not outrank {node_router}")
+    if catchall["service"] != "noop@internal" or "auth-node" in catchall["mw"]:
+        failures.append("app-host catch-all must be a static refusal")
+    if not prio("auth-public") < catchall["priority"] < files["priority"]:
+        failures.append("app-host catch-all must sit between auth-public and the file router")
+    if "Method(`POST`)" not in refresh["rule"] or "Method(`GET`) || Method(`HEAD`)" not in refresh["rule"]:
+        failures.append("app-host auth router is not limited to POST /auth/refresh and GET|HEAD /auth/validate")
+
+# A node's own host has no 52-char base32 first label, so none of the above applies to it.
+rx = re.compile(APP_RX)
+if rx.match("relay-07.relay.calimero.network") or not rx.match("a" * 52 + ".relay.calimero.network"):
+    failures.append("the app-host pattern does not separate app hosts from node hosts")
+
 if failures:
     for line in failures:
         print(f"FAIL {line}")
@@ -87,4 +189,5 @@ if failures:
 for owner, _ in blocks:
     print(f"ok   {owner} forwardAuth: trustForwardHeader false")
 print("ok   entrypoints trust no forwarded headers")
+print("ok   app-host routers: api guarded, files public, no cors")
 PY
