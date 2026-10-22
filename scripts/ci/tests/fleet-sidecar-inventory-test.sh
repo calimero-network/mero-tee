@@ -166,6 +166,8 @@ for a in "$@"; do
     printf '{"members":[{"identity":"4d4d4d","role":"%s"}]}\n' "$(cat "${SB}/tee-role")"
     exit 0
   fi
+  # The version reads are not under test here (see fleet-sidecar-switch-test.sh).
+  if [[ "${a}" == */admin-api/groups/* || "${a}" == */admin-api/contexts ]]; then exit 22; fi
   if [[ "${prev}" == "-d" ]]; then body="${a}"; [[ "${body}" != "@-" ]] || body=$(cat); fi
   prev="${a}"
 done
