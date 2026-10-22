@@ -252,7 +252,7 @@ python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook.yml" --out "${work}/node" --ma
   >/dev/null || fail "the node playbook's roles do not render"
 grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/node/usr/local/lib/calimero/init.sh" || fail "calimero-init not rendered for the profile"
 grep -qF "'server.apps.trust_proxy=true'" "${work}/node/usr/local/lib/calimero/init.sh" || fail "rendered init does not set server.apps.trust_proxy"
-grep -qF "DNS:*.\${host}" "${work}/node/usr/local/lib/calimero/fleet-sidecar.sh" || fail "rendered sidecar CSR has no wildcard SAN"
+grep -qF 'DNS:*.$1' "${work}/node/usr/local/lib/calimero/fleet-sidecar.sh" || fail "rendered sidecar CSR has no wildcard SAN"
 for path in etc/systemd/system/calimero-init.service usr/local/lib/calimero/fleet-sidecar.sh etc/securetty \
             etc/systemd/journald.conf.d/60-calimero-volatile.conf; do
   [[ -e "${work}/node/${path}" ]] || fail "node playbook: ${path} not rendered"
