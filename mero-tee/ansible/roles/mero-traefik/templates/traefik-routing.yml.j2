@@ -397,9 +397,21 @@ http:
         - auth-node
       priority: 110
 
+    # Whatever no router above claims on an app host is refused, so a node
+    # router (`auth-public`'s write routes) never serves one. Below app-files.
+    app-catchall-deny:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`)'
+      entryPoints:
+        - web
+        - websecure
+      service: noop@internal
+      middlewares:
+        - rate-limit
+      priority: 49
+
     # Token refresh and validation are mero-auth's, as on the node host.
     app-auth:
-      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (Path(`/auth/refresh`) || Path(`/auth/validate`))'
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && ((Method(`POST`) && Path(`/auth/refresh`)) || ((Method(`GET`) || Method(`HEAD`)) && Path(`/auth/validate`)))'
       entryPoints:
         - web
         - websecure

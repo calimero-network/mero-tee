@@ -367,6 +367,7 @@ NODE_HOST = "relay-07.relay.calimero.network"
 DENIED = "deny"
 API = "auth"
 FILES = "files"
+AUTH_SERVICE = "auth-service"
 PATHS = [
     ("GET", "/metrics", DENIED),
     ("POST", "/metrics", DENIED),
@@ -389,8 +390,15 @@ PATHS = [
     ("GET", "/sse", API),
     ("GET", "/index.html", FILES),
     ("HEAD", "/assets/app.js", FILES),
+    ("POST", "/auth/refresh", AUTH_SERVICE),
+    ("GET", "/auth/validate", AUTH_SERVICE),
+    ("HEAD", "/auth/validate", AUTH_SERVICE),
+    ("POST", "/auth/validate", DENIED),
+    ("GET", "/auth/refresh", FILES),
 ]
-UNSAFE_FILES = [(m, "/index.html") for m in ("POST", "PUT", "DELETE", "PATCH")]
+UNSAFE_FILES = [(m, "/index.html") for m in ("POST", "PUT", "DELETE", "PATCH")] + [
+    (m, t) for m in ("POST", "PUT", "DELETE", "PATCH") for t in ("/auth/token", "/auth/keys", "/admin/keys", "/admin/x")
+]
 
 
 def check_app_hosts(label, routers):
@@ -412,6 +420,10 @@ def check_app_hosts(label, routers):
                 fail(f"{what} is not behind auth-node")
             elif want == FILES and not (reaches_merod and not guarded):
                 fail(f"{what} is not the public file router")
+            elif want == AUTH_SERVICE and r["service"] != "auth-service":
+                fail(f"{what} does not go to mero-auth")
+            elif not got.startswith("app-"):
+                fail(f"{what} is served by a node router")
             else:
                 print(f"ok   {what}")
         for method, target in UNSAFE_FILES:
@@ -419,14 +431,19 @@ def check_app_hosts(label, routers):
             r = routers.get(got) if got else None
             if r is not None and r["service"] == "node-core" and "auth-node" not in r["middlewares"]:
                 fail(f"{label}: {method} {host.replace(APP_ID, '<app>')}{target} reaches merod unauthenticated via {got}")
+            elif r is not None and r["service"] != "noop@internal":
+                fail(f"{label}: {method} {host.replace(APP_ID, '<app>')}{target} is served by {got}")
     # Near misses are node hosts, which never see an app router.
     for host in (f"{'a' * 51}.node.example", f"{'a' * 53}.node.example", f"{'a' * 51}1.node.example", f"{'A' * 52}.node.example"):
         got = route(routers, "GET", "/metrics", host)
         if got is not None:
             fail(f"{label}: GET {host}/metrics -> {got}, expected no router")
-    for method, target in (("GET", "/admin-api/health"), ("GET", "/admin-api/x"), ("POST", "/jsonrpc")):
+    for method, target, want in (("GET", "/admin-api/health", "node-api-health"), ("GET", "/admin-api/x", "node-api"), ("POST", "/jsonrpc", "node-api")):
         got = route(routers, method, target, NODE_HOST)
-        print(f"ok   {label}: node host {method} {target} -> {got}")
+        if got != want:
+            fail(f"{label}: node host {method} {target} -> {got}, expected {want}")
+        else:
+            print(f"ok   {label}: node host {method} {target} -> {got}")
 
 
 for label, routers in (("relay", relay), ("non-relay", plain)):

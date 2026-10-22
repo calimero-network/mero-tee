@@ -118,8 +118,8 @@ if not m:
 APP_RX = m.group(1)
 APP_HOST = f"HostRegexp(`{APP_RX}`)"
 app = {n: r for n, r in routers.items() if APP_HOST in r["rule"]}
-if len(app) != 5:
-    failures.append(f"expected 5 app-host routers, found {sorted(app)}")
+if len(app) != 6:
+    failures.append(f"expected 6 app-host routers, found {sorted(app)}")
 for name, r in app.items():
     if not r["rule"].startswith(APP_HOST):
         failures.append(f"{name}: rule does not lead with the app-host matcher")
@@ -134,14 +134,15 @@ def find(pred):
     return [(n, r) for n, r in app.items() if pred(r["rule"])]
 
 api = find(lambda rule: all(p in rule for p in ("/jsonrpc", "/ws", "/sse", "/admin-api/")))
-files = find(lambda rule: "PathPrefix" not in rule and "Path(" not in rule)
+files = find(lambda rule: "Method(" in rule and "PathPrefix" not in rule and "Path(" not in rule)
+catchall = find(lambda rule: rule == APP_HOST)
 refresh = find(lambda rule: "/auth/refresh" in rule and "/auth/validate" in rule)
 login = find(lambda rule: "/auth/login" in rule)
-for what, found in (("api", api), ("files", files), ("refresh/validate", refresh), ("login", login)):
+for what, found in (("api", api), ("files", files), ("catch-all deny", catchall), ("refresh/validate", refresh), ("login", login)):
     if len(found) != 1:
         failures.append(f"expected one app-host {what} router, found {[n for n, _ in found]}")
-if len(api) == 1 and len(files) == 1 and len(refresh) == 1 and len(login) == 1:
-    api, files, refresh, login = api[0][1], files[0][1], refresh[0][1], login[0][1]
+if len(api) == 1 and len(files) == 1 and len(catchall) == 1 and len(refresh) == 1 and len(login) == 1:
+    api, files, catchall, refresh, login = api[0][1], files[0][1], catchall[0][1], refresh[0][1], login[0][1]
     if "auth-node" not in api["mw"]:
         failures.append("app-host api router has no auth-node")
     if api["service"] != "node-core":
@@ -159,8 +160,21 @@ if len(api) == 1 and len(files) == 1 and len(refresh) == 1 and len(login) == 1:
     for what, r in (("api", api), ("refresh/validate", refresh), ("login", login)):
         if r["priority"] <= files["priority"]:
             failures.append(f"app-host {what} router does not outrank the file router")
-    if files["priority"] <= 10:
-        failures.append("app-host file router does not outrank node-api")
+    # Traefik's default priority is the rule's length.
+    def prio(name):
+        r = routers.get(name)
+        return None if r is None else r["priority"] or len(r["rule"])
+    for node_router in ("node-api", "auth-public", "node-dashboard"):
+        if prio(node_router) is None:
+            failures.append(f"no {node_router} router to compare the app-host file router against")
+        elif files["priority"] <= prio(node_router):
+            failures.append(f"app-host file router does not outrank {node_router}")
+    if catchall["service"] != "noop@internal" or "auth-node" in catchall["mw"]:
+        failures.append("app-host catch-all must be a static refusal")
+    if not prio("auth-public") < catchall["priority"] < files["priority"]:
+        failures.append("app-host catch-all must sit between auth-public and the file router")
+    if "Method(`POST`)" not in refresh["rule"] or "Method(`GET`) || Method(`HEAD`)" not in refresh["rule"]:
+        failures.append("app-host auth router is not limited to POST /auth/refresh and GET|HEAD /auth/validate")
 
 # A node's own host has no 52-char base32 first label, so none of the above applies to it.
 rx = re.compile(APP_RX)

@@ -113,6 +113,7 @@ printf 'b2xkLWNzcg==' > "${SB}/tls/csr-${HOST}.b64"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] || fail "a legacy single-SAN CSR was reused"
 rm -f "${SB}/tls/csr-${HOST}.b64"
 # The cache is keyed on the SAN set, so a changed set builds a fresh CSR.
+# shellcheck disable=SC2329  # called by node_csr_b64, sourced above
 csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
 WIDER="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR for a wider SAN set"
 echo "${WIDER}" | base64 -d | openssl req -inform DER -noout -text \
@@ -123,7 +124,7 @@ source "${SB}/functions.sh"
 CSR="$(node_csr_b64 "${HOST}")"
 echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
   | grep -q "DNS:extra" && fail "restoring the SAN set must build the CSR for it"
-ls "${SB}"/tls/csr-*.b64 | wc -l | grep -q '^ *1$' || fail "a superseded SAN set's CSR must be removed"
+[[ "$(find "${SB}/tls" -name 'csr-*.b64' | wc -l)" -eq 1 ]] || fail "a superseded SAN set's CSR must be removed"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] \
   || fail "the CSR must be stable: the registration nonce commits to its digest"
 
