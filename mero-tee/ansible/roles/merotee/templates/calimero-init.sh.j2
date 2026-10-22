@@ -1326,15 +1326,19 @@ print(urlsplit(sys.argv[1]).hostname or "")
 ' "${1:-}" 2>/dev/null || true
 }
 
-# Serve each installed app on `<app id>.<relay host>`, taking the proxy's word
-# for the caller there. Warn only: a merod without the keys refuses them.
+# Serve each installed app on `<app id>.<relay host>`. Two calls, warn only:
+# a merod without `server.apps.trust_proxy` refuses a call that names it, and
+# must still get the base domain so it serves the app files.
 configure_app_host() {
   local host
   host=$(relay_host "${RELAY_URL:-}")
   [[ -n "$host" ]] || return 0
   "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-    "server.apps.base_domain=\"${host}\"" 'server.apps.trust_proxy=true' \
-    || log "WARN: failed to set server.apps; apps are not served on their own hosts"
+    "server.apps.base_domain=\"${host}\"" \
+    || log "WARN: failed to set server.apps.base_domain; apps are not served on their own hosts"
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
+    'server.apps.trust_proxy=true' \
+    || log "WARN: failed to set server.apps.trust_proxy; the app API on app hosts needs a merod that has it"
 }
 configure_app_host
 

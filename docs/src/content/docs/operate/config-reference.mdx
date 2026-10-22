@@ -395,7 +395,7 @@ Four edges move together:
 
 | Edge | What it does |
 | --- | --- |
-| merod (`calimero-init.sh.j2`) | Sets `server.apps.base_domain` to the host of the `relay-url` instance metadata, and `server.apps.trust_proxy=true`. Both need a merod release that has `server.apps`; a merod without them refuses the keys, and the script only warns, so the node simply does not serve apps on their own hosts. Nothing is set when `relay-url` is absent. |
+| merod (`calimero-init.sh.j2`) | Sets `server.apps.base_domain` to the host of the `relay-url` instance metadata, then `server.apps.trust_proxy=true` in a separate call. A merod that has `[server.apps]` serves app files once `base_domain` is set; the app API on app hosts also needs a merod that accepts `trust_proxy`. A merod that refuses either key only gets a warning, so it never blocks the boot. Nothing is set when `relay-url` is absent. |
 | Traefik (`app-*` routers) | The matcher is `HostRegexp` on the label shape, with no per-node value, because a measured file cannot hold one. `app-files` serves every path to merod on `GET` and `HEAD` only, with no `auth-node`. `app-api` (`/jsonrpc`, `/ws`, `/sse`, `/admin-api/`) runs `auth-node` and outranks the node-host routers, so `/admin-api/health` is guarded there too. `app-auth` and `app-login` send token refresh and login to mero-auth and merod. |
 | Traefik deny routes | `app-deny` answers `/metrics`, `/sealed`, `/admin-api/tee` and the delegated intents and admit paths on an app host from Traefik itself, without reaching merod. The matcher also accepts hosts that merod does not treat as app hosts, such as another domain, and merod's node router has no guard in proxy mode. |
 | Fleet sidecar | The node CSR carries a wildcard SAN, `*.<relay host>`, so the certificate covers app hosts. A change to the CSR's SAN set re-registers the node once. |
@@ -405,10 +405,10 @@ The wildcard certificate and the CSR are covered in [Fleet HA sidecar](/understa
 Deploy in this order:
 
 1. mdma, on `feat/app-host-wildcard`, which orders the wildcard certificate.
-2. A merod release that has `server.apps.trust_proxy`.
+2. A merod release that has `[server.apps]`, which serves app files. The app API on app hosts additionally needs a merod that accepts `server.apps.trust_proxy`, which is not in a release yet; until then the image only warns that it was refused.
 3. This image.
 
-An image deployed earlier gets no wildcard certificate, or a merod that ignores the app host keys.
+An image deployed earlier gets no wildcard certificate, or a merod that refuses the app host keys.
 
 The base is Ubuntu 26.04 LTS (Resolute Raccoon), comfortably past the kernel
 6.17+ that RTMR3 sysfs support needs, installed from a pinned snapshot of the

@@ -107,7 +107,8 @@ mkdir -p "${SB}/bin"
 cat > "${SB}/bin/merod" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "${SB}/merod.calls"
-[[ -z "${MEROD_REFUSES:-}" ]]
+[[ -z "${MEROD_REFUSES:-}" ]] || exit 1
+[[ -z "${MEROD_REFUSES_ONLY:-}" || "$*" != *"${MEROD_REFUSES_ONLY}"* ]]
 STUB
 chmod +x "${SB}/bin/merod"
 export SB
@@ -125,14 +126,23 @@ run_app_host() (
 run_app_host "https://relay-07.relay.calimero.test" || fail "configure_app_host failed with a relay url"
 grep -qF 'server.apps.base_domain="relay-07.relay.calimero.test"' "${SB}/merod.calls" || fail "base_domain not set to the relay host"
 grep -qF 'server.apps.trust_proxy=true' "${SB}/merod.calls" || fail "trust_proxy not set"
+# One key per call: a merod that knows only base_domain refuses a call naming both.
+[[ "$(grep -c 'server.apps' "${SB}/merod.calls")" == "2" ]] || fail "each server.apps key needs its own merod call"
+! grep 'base_domain' "${SB}/merod.calls" | grep -q 'trust_proxy' || fail "base_domain and trust_proxy share a merod call"
 
 : > "${SB}/merod.calls"
 run_app_host "" || fail "configure_app_host failed with no relay url"
 [[ ! -s "${SB}/merod.calls" ]] || fail "merod was configured with no relay url"
 
-# A merod that predates the keys refuses them: warn, never abort the boot.
+# A merod that refuses a key: warn, never abort the boot.
 : > "${SB}/merod.calls"; : > "${SB}/log"
 MEROD_REFUSES=1 run_app_host "https://relay-07.relay.calimero.test" || fail "a merod refusing the keys aborted the boot"
 grep -q 'WARN' "${SB}/log" || fail "a refused key must be warned about"
+
+# A merod that serves files but predates trust_proxy: base_domain still lands.
+: > "${SB}/merod.calls"; : > "${SB}/log"
+MEROD_REFUSES_ONLY=trust_proxy run_app_host "https://relay-07.relay.calimero.test" || fail "a merod without trust_proxy aborted the boot"
+grep -qF 'server.apps.base_domain=' "${SB}/merod.calls" || fail "base_domain must be set before trust_proxy is tried"
+[[ "$(grep -c WARN "${SB}/log")" == "1" ]] || fail "only the refused trust_proxy call may warn"
 
 echo "OK: calimero-init pins no browser origin and drops the one 2.3.109 wrote"
