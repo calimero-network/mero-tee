@@ -96,7 +96,7 @@ def routers_of(lines):
             continue
         if current is None:
             continue
-        m = re.match(r'^      rule:\s*"(.*)"\s*$', line)
+        m = re.match(r'^      rule:\s*["\'](.*)["\']\s*$', line)
         if m:
             routers[current]["rule"] = m.group(1)
             continue
@@ -113,7 +113,8 @@ def routers_of(lines):
             continue
         if re.match(r"^      \S", line):
             in_mw = False
-    return routers
+    # These cases are requests to the node's own host; app-host routers never match it.
+    return {n: r for n, r in routers.items() if "HostRegexp" not in (r["rule"] or "")}
 
 
 # --- the rule grammar these routers use ---------------------------------------
