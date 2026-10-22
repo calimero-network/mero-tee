@@ -108,10 +108,22 @@ echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
 # App hosts are `<app id>.<host>`, served by this same node and certificate.
 echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
   | grep -q "DNS:\*.${HOST}" || fail "the CSR must carry the wildcard as a SAN"
-# A CSR cached by an older sidecar (one SAN, old file name) is never reused.
+# A CSR cached under an older name (one SAN) is never reused.
 printf 'b2xkLWNzcg==' > "${SB}/tls/csr-${HOST}.b64"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] || fail "a legacy single-SAN CSR was reused"
 rm -f "${SB}/tls/csr-${HOST}.b64"
+# The cache is keyed on the SAN set, so a changed set builds a fresh CSR.
+csr_sans() { echo "DNS:$1,DNS:*.$1,DNS:extra.$1"; }
+WIDER="$(node_csr_b64 "${HOST}")" || fail "could not build a CSR for a wider SAN set"
+echo "${WIDER}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:extra.${HOST}" || fail "a changed SAN set must produce a fresh CSR"
+unset -f csr_sans
+# shellcheck source=/dev/null
+source "${SB}/functions.sh"
+CSR="$(node_csr_b64 "${HOST}")"
+echo "${CSR}" | base64 -d | openssl req -inform DER -noout -text \
+  | grep -q "DNS:extra" && fail "restoring the SAN set must build the CSR for it"
+ls "${SB}"/tls/csr-*.b64 | wc -l | grep -q '^ *1$' || fail "a superseded SAN set's CSR must be removed"
 [[ "$(node_csr_b64 "${HOST}")" == "${CSR}" ]] \
   || fail "the CSR must be stable: the registration nonce commits to its digest"
 

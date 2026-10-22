@@ -612,14 +612,16 @@ csr_sans() {
 # Cached beside the key: it is deterministic for (key, host), and regenerating
 # it every  pass would change the value the registration nonce commits to for no
 # reason. Keyed on the host so a node that moves behind a different name asks
-# for the new one instead of re-presenting its old certificate. The wildcard SAN
-# covers the app hosts; `csr-san-` retires CSRs cached with a single SAN.
+# for the new one instead of re-presenting its old certificate. Also keyed on a
+# short hash of the SAN set, so changing it builds a fresh CSR.
 node_csr_b64() {
   local host="$1"
   [[ -n "$host" ]] || return 1
   [[ -s "$TLS_KEY" ]] || { logq "WARN: no TLS key at $TLS_KEY; cannot request a certificate"; return 1; }
 
-  local cached="$TLS_DIR/csr-san-${host}.b64"
+  local sans_id
+  sans_id=$(csr_sans "$host" | sha256sum | cut -c1-8)
+  local cached="$TLS_DIR/csr-san-${host}-${sans_id}.b64"
   if [[ ! -s "$cached" ]]; then
     local der="$TLS_DIR/.csr.der.$$"
     if ! openssl req -new -key "$TLS_KEY" -subj "/CN=${host}" \
@@ -633,7 +635,7 @@ node_csr_b64() {
       return 1
     fi
     rm -f "$der"
-    find "$TLS_DIR" -maxdepth 1 -name 'csr-*.b64' ! -name "csr-san-${host}.b64" -delete 2>/dev/null || true
+    find "$TLS_DIR" -maxdepth 1 -name 'csr-*.b64' ! -name "${cached##*/}" -delete 2>/dev/null || true
   fi
   cat "$cached"
 }
@@ -2933,8 +2935,14 @@ print('|'.join([state.get('peer_id') or '', state.get('executor_account') or '',
   want="${peer_id}|${account}|${relay_url}|$(csr_sans "$(relay_host "$relay_url")")"
   [[ "$recorded" == "$want" ]] && return 0
 
+  # A failed attempt costs a quote and a challenge: wait out the retry clock.
+  local now_ts
+  now_ts=$(date +%s)
+  (( now_ts - ${LAST_REGISTRATION_ATTEMPT:-0} >= REGISTRATION_RETRY_INTERVAL )) || return 0
   if register_with_mdma "$peer_id" "$account" "$relay_url" "$port"; then
     save_registration "$(registration_state_json "$peer_id" "$account" "$relay_url")"
+  else
+    LAST_REGISTRATION_ATTEMPT="$now_ts"
   fi
 }
 
