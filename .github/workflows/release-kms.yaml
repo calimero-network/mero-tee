@@ -442,7 +442,7 @@ jobs:
       RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
       # The shape hosts run on: RTMR0 measures it. a3-highgpu-1g is one H100.
       INFERENCE_VM_MACHINE_TYPE: ${{ vars.INFERENCE_VM_MACHINE_TYPE != '' && vars.INFERENCE_VM_MACHINE_TYPE || 'a3-highgpu-1g' }}
-      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a us-central1-b us-central1-c' }}
+      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a' }}
       INFERENCE_VM_PROVISIONING_MODEL: ${{ vars.INFERENCE_VM_PROVISIONING_MODEL != '' && vars.INFERENCE_VM_PROVISIONING_MODEL || 'STANDARD' }}
     steps:
       - name: Checkout code
