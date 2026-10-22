@@ -378,6 +378,15 @@ jobs:
         shell: bash
         run: scripts/ci/tests/fleet-sidecar-json-args-test.sh
 
+      # A namespace switch is complete only when the inventory reports the
+      # version its contexts run, since an application id never changes between
+      # releases. Covers the install-then-activate order, the retry spacing, and
+      # the lowest-semver rule behind running_version.
+      - name: Check the sidecar switches namespaces and reports running versions
+        id: switch_test
+        shell: bash
+        run: scripts/ci/tests/fleet-sidecar-switch-test.sh
+
       # The set that diff reads starts EMPTY on the first boot after the build
       # that introduced it, and the join loop skips anything already confirmed --
       # so nothing ever records the namespaces joined under the previous build,
@@ -691,6 +700,7 @@ jobs:
             --checks-line "- should-join reports held namespaces: ${{ steps.held_namespaces_test.outcome }}" \
             --checks-line "- should-join reports revoked devices: ${{ steps.revoked_devices_test.outcome }}" \
             --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
+            --checks-line "- sidecar switches namespaces and reports running versions: ${{ steps.switch_test.outcome }}" \
             --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
             --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
