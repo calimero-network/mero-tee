@@ -38,9 +38,9 @@
     }
   },
   "meroBot": {
-    "version": "0.2.0",
+    "version": "0.3.0",
     "sha256": {
-      "mero-bot-0.2.0-linux-x64.tar.gz": "03c4d04600c55839e839b376e68e098fd3a1ca05c8c107d97ba9668a5977b9b9"
+      "mero-bot-0.3.0-linux-x64.tar.gz": "bc8f620a51895a98671a091ba22b2b1cb792fa790854aef0ec2ab73e1de363f4"
     }
   }
 }

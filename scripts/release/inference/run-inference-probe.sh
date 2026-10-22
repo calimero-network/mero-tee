@@ -23,10 +23,14 @@ set -euo pipefail
 #   IMAGE, IMAGE_PROJECT   the inference image to boot
 #   PROFILE                its lockdown profile
 #   PROBE_NAME             lowercase prefix for the VM, firewall rule and tag
-#   VM_PROJECT, VM_ZONE, VM_MACHINE_TYPE   an a3 shape in a zone that has it
+#   VM_PROJECT, VM_MACHINE_TYPE   an a3 shape
+#   VM_ZONE                zones to try in order, space- or comma-separated:
+#                          H100s are often out of stock in one zone and not the
+#                          next (ZONE_RESOURCE_POOL_EXHAUSTED)
 #   ITA_API_KEY
 #   OUT_DIR                where the attest response, ITA evidence and the policy go
 # Optional env:
+#   VM_ZONE_ROUNDS (2)     passes over VM_ZONE before giving up, 60s apart
 #   VM_PROVISIONING_MODEL  STANDARD (default) or SPOT: GPU capacity is scarce
 #   GATE_PORT (8443), WAIT_TIMEOUT_MINUTES (20), ITA_APPRAISAL_URL,
 #   INFERENCE_ALLOWED_TCB_STATUSES (uptodate; a declared release input)
@@ -86,6 +90,8 @@ else
   vm_metadata="measure-only=true$(log_auth_metadata)"
 fi
 
+read -ra zones <<<"${VM_ZONE//,/ }"
+VM_ZONE_ROUNDS="${VM_ZONE_ROUNDS:-2}"
 vm="${PROBE_NAME}-i"
 firewall="${PROBE_NAME}"
 vm_created="false"
@@ -121,17 +127,43 @@ firewall_created="true"
 
 # The image is several GB larger than the other roles' (vLLM, CUDA in torch),
 # so the boot disk is sized for it. No min-cpu-platform: a3 fixes it.
+#
+# Each zone gets one attempt per round: another zone is likelier to have an
+# H100 than the same one 30s later. The create's leftovers, if any, are gone
+# before the next zone is tried, so only the zone it succeeded in is cleaned up.
+VM_ZONE="${zones[0]}"
 vm_created="true"
-gcp_create_instance "${vm}" "${VM_PROJECT}" "${VM_ZONE}" \
-  --machine-type "${VM_MACHINE_TYPE}" \
-  --confidential-compute-type TDX --maintenance-policy TERMINATE \
-  "${provisioning[@]}" \
-  --boot-disk-size 100GB \
-  --no-service-account --no-scopes \
-  --image "${IMAGE}" --image-project "${IMAGE_PROJECT}" \
-  --metadata "${vm_metadata}" \
-  "${extra_disk[@]}" \
-  --tags "${PROBE_NAME}"
+created=0
+for ((round = 1; round <= VM_ZONE_ROUNDS && !created; round++)); do
+  for zone in "${zones[@]}"; do
+    VM_ZONE="${zone}"
+    echo "creating ${vm} in ${zone} (round ${round}/${VM_ZONE_ROUNDS})"
+    if GCP_CREATE_ATTEMPTS=1 gcp_create_instance "${vm}" "${VM_PROJECT}" "${zone}" \
+      --machine-type "${VM_MACHINE_TYPE}" \
+      --confidential-compute-type TDX --maintenance-policy TERMINATE \
+      "${provisioning[@]}" \
+      --boot-disk-size 100GB \
+      --no-service-account --no-scopes \
+      --image "${IMAGE}" --image-project "${IMAGE_PROJECT}" \
+      --metadata "${vm_metadata}" \
+      "${extra_disk[@]}" \
+      --tags "${PROBE_NAME}"; then
+      created=1
+      break
+    fi
+    _gcp_create_remove_leftover "${vm}" "${VM_PROJECT}" "${zone}" \
+      || { echo "::error::could not delete the ${vm} a failed create left in ${zone}"; exit 1; }
+  done
+  if (( !created && round < VM_ZONE_ROUNDS )); then
+    sleep 60
+  fi
+done
+if (( !created )); then
+  vm_created="false"
+  echo "::error::no zone of ${zones[*]} could create ${VM_MACHINE_TYPE} (${VM_PROVISIONING_MODEL}) in ${VM_ZONE_ROUNDS} rounds"
+  exit 1
+fi
+echo "inference VM ${vm} in ${VM_ZONE}"
 ip="$(gcloud compute instances describe "${vm}" --project "${VM_PROJECT}" --zone "${VM_ZONE}" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 gate="https://${ip}:${GATE_PORT}"

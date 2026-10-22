@@ -442,7 +442,7 @@ jobs:
       RUN_SUFFIX: ${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
       # The shape hosts run on: RTMR0 measures it. a3-highgpu-1g is one H100.
       INFERENCE_VM_MACHINE_TYPE: ${{ vars.INFERENCE_VM_MACHINE_TYPE != '' && vars.INFERENCE_VM_MACHINE_TYPE || 'a3-highgpu-1g' }}
-      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a' }}
+      INFERENCE_VM_ZONE: ${{ vars.INFERENCE_VM_ZONE != '' && vars.INFERENCE_VM_ZONE || 'us-central1-a us-east5-a europe-west4-c' }}
       INFERENCE_VM_PROVISIONING_MODEL: ${{ vars.INFERENCE_VM_PROVISIONING_MODEL != '' && vars.INFERENCE_VM_PROVISIONING_MODEL || 'STANDARD' }}
     steps:
       - name: Checkout code
@@ -536,7 +536,9 @@ jobs:
         run: tail -200 /tmp/mkosi-inference-build.log 2>/dev/null || true
 
       # As for the agent: the measurement VM must ship its logs with the token
-      # mdma would set. Neither key is measured.
+      # mdma would set. Neither key is measured. The receiver stays in the
+      # job's VM_ZONE, where verify and cleanup look for it; the GPU VM
+      # reaches its internal address from any zone of the default network.
       - name: Set up log-auth check
         id: log_auth
         if: ${{ env.LOG_AUTH_CHECK == 'true' }}
@@ -544,7 +546,6 @@ jobs:
           IMAGE_PROFILE: ${{ matrix.profile }}
           VM_NETWORK: default
           VM_SUBNETWORK: ""
-          VM_ZONE: ${{ env.INFERENCE_VM_ZONE }}
           NODE_TAG: ${{ env.PROBE_NAME }}
           TOKEN_FILE: ${{ runner.temp }}/log-auth-token
         run: bash scripts/ci/probes/node_log_auth_probe.sh setup

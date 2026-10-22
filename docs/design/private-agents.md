@@ -177,7 +177,7 @@ cannot collect a key.
 2. Run `scripts/release/pin-build-inputs.sh`, with `gh` logged in, since mero-bot is a private repo.
 3. Add the `MERO_BOT_RELEASE_TOKEN` secret to this repository: a token with read access to calimero-network/mero-bot's releases.
 
-mero-bot 0.2.0 is pinned. `Release mero-kms` then builds the release's agent image with mero-bot, and `node-image-mkosi.yaml` does the same from a branch with `role: agent` and `agent: mero-bot`. Without `meroBotVersion`, the image stays the stub. A pin without the secret fails the release's agent build, which leaves its KMS images node-only.
+mero-bot 0.3.0 is pinned: it adds `"attest": "mero"`, so a cloud agent can also use a private inference TD ([private inference](private-inference.md)). `Release mero-kms` then builds the release's agent image with mero-bot, and `node-image-mkosi.yaml` does the same from a branch with `role: agent` and `agent: mero-bot`. Without `meroBotVersion`, the image stays the stub. A pin without the secret fails the release's agent build, which leaves its KMS images node-only.
 
 ## Acting in Calimero: warrants through relays
 

@@ -125,6 +125,29 @@ PY
 if [[ "${role}" == inference ]]; then
   UV_CACHE_DIR="${cache}/uv" "${repo}/scripts/inference/install-runtime.sh" \
     "${work}/rendered/tree" /opt/mero-inference/site-packages
+  # Ubuntu ships the NVIDIA driver (linux-modules-nvidia-*-open-gcp and its
+  # user space) in `restricted`. Only this role adds it: mkosi merges the list
+  # with mkosi.conf's main,universe, and the other roles' images stay as they are.
+  printf '[Distribution]\nRepositories=restricted\n' > "${work}/mkosi.conf.d/40-inference-restricted.conf"
+  # linux-modules-nvidia-*-open-<kver>-gcp also ships an empty
+  # /lib/modules/kernel/nvidia-*-open/ beside the real <kver> directory, and
+  # mkosi takes every non-empty directory there for a kernel: "depmod --all
+  # kernel" fails the build ("Bad version passed kernel"). mkosi runs
+  # mkosi.prepare after the packages and before that depmod. It removes the
+  # directory only while it holds nothing but empty directories.
+  cat > "${work}/mkosi.prepare" <<'PREPARE'
+#!/bin/bash
+set -euo pipefail
+stray="${BUILDROOT}/usr/lib/modules/kernel"
+[[ "${1:-}" == final && -d "${stray}" ]] || exit 0
+if [[ -n "$(find "${stray}" -mindepth 1 ! -type d -print -quit)" ]]; then
+  echo "mkosi.prepare: ${stray} holds files, not just empty directories; refusing to remove it" >&2
+  exit 1
+fi
+rm -r "${stray}"
+echo "mkosi.prepare: removed the empty /usr/lib/modules/kernel the NVIDIA module package ships"
+PREPARE
+  chmod 0755 "${work}/mkosi.prepare"
 fi
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"

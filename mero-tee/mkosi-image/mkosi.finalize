@@ -97,7 +97,14 @@ while IFS= read -r -d '' binary; do
   if missing="$(mkosi-chroot ldd "${path}" </dev/null 2>/dev/null | grep 'not found')"; then
     fail "${path} links a library the image lacks: $(echo "${missing}" | tr -s ' \t\n' ' ')"
   fi
-done < <(find "${root}/usr/local/bin" "${root}/usr/local/sbin" "${root}/opt" -type f -perm -u+x -print0 2>/dev/null)
+done < <(find "${root}/usr/local/bin" "${root}/usr/local/sbin" "${root}/opt" \
+  -path "${root}/opt/mero-inference/site-packages" -prune -o -type f -perm -u+x -print0 2>/dev/null)
+# The inference image's Python packages are left out above: a wheel's
+# extensions find their libraries the way Python loads them, through $ORIGIN
+# rpaths and the libraries an earlier import already loaded (libtorch,
+# libcudart, libnccl), and some are optional backends (torchcodec's ffmpeg,
+# triton's test plugins) that ldd alone would call missing. The inference
+# checks below import the stack instead, which is what the TD does.
 
 # The agent role's own probes, which the renderer skips (they run commands on
 # the build host): the baked merod can fetch a data-disk key, the kernel can
@@ -116,6 +123,22 @@ if [[ "${role}" == agent ]]; then
     bot="$(mkosi-chroot /opt/node/bin/node /opt/mero-bot/dist/cli.js --help </dev/null 2>&1)" || fail "mero-bot does not start on the baked Node: ${bot}"
     grep -q -- '--attested-only' <<<"${bot}" || fail "the baked mero-bot has no --attested-only"
   fi
+fi
+
+# The inference image (docs/design/private-inference.md): the baked Python
+# imports the stack vLLM serves with, the model helper runs, and the kernel has
+# the NVIDIA open module. No GPU here: torch and vLLM import without one.
+if [[ "${role}" == inference ]]; then
+  site=/opt/mero-inference/site-packages
+  imports="$(mkosi-chroot env -i PATH=/usr/bin:/bin HOME=/tmp PYTHONPATH="${site}" PYTHONNOUSERSITE=1 \
+    python3 -c 'import torch, vllm, pynvml, huggingface_hub, transformers; print("torch", torch.__version__, "cuda", torch.version.cuda, "vllm", vllm.__version__)' \
+    </dev/null 2>&1)" || fail "the baked Python cannot import vLLM's stack: $(tail -n 5 <<<"${imports}")"
+  echo "inference: $(tail -n 1 <<<"${imports}")"
+  mkosi-chroot python3 /usr/local/lib/mero-inference/inference_model.py --help </dev/null >/dev/null 2>&1 \
+    || fail "inference_model.py does not run on the baked Python"
+  kver="$(find "${root}/usr/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -n 1)"
+  mkosi-chroot modinfo -k "${kver}" nvidia </dev/null >/dev/null 2>&1 || fail "kernel ${kver} has no nvidia module"
+  [[ -x "${root}/usr/bin/nvidia-smi" ]] || fail "nvidia-smi is not in the image"
 fi
 
 exit "${failed}"
