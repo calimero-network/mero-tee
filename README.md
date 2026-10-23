@@ -1,5 +1,7 @@
 # mero-tee
 
+The "verify us" layer of Calimero: sealed, attested node images and a key service that releases keys only to nodes whose measured image matches the release policy, so customers can check what runs instead of trusting the operator.
+
 TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node, KMS, agent and GPU inference images with TDX attestation).
 
 > **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
