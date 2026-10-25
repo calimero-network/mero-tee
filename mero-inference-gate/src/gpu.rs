@@ -116,22 +116,12 @@ mod tests {
 
     #[tokio::test]
     async fn the_helper_gets_the_nonce() {
-        let dir = std::env::temp_dir().join(format!("gpu-evidence-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let helper = dir.join("helper");
-        std::fs::write(
-            &helper,
-            "#!/bin/sh\nprintf '{\"nonce\":\"%s\",\"evidence_list\":[{\"evidence\":\"e\"}]}' \"$1\"\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        let text = GpuEvidence::Helper(helper)
+        let helper = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gpu-helper.sh");
+        let text = GpuEvidence::Helper(helper.into())
             .collect(NONCE)
             .await
             .unwrap()
             .unwrap();
         assert!(text.contains(r#""nonce":"ab""#));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
