@@ -14,4 +14,7 @@ ignore = [
   # O(n^2) name-compression CPU exhaustion (fix in hickory-proto >=0.26.1,
   # gated by the pinned core rev).
   "RUSTSEC-2026-0119",
+  # crypto-bigint 0.5 via elliptic-curve 0.13 (dcap-qvl's ecdsa); the fix is in
+  # crypto-bigint 0.7, which needs the elliptic-curve 0.14 upgrade upstream.
+  "RUSTSEC-2026-0387",
 ]
