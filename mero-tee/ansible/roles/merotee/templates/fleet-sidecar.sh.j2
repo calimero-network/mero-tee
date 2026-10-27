@@ -2030,8 +2030,8 @@ for e in json.load(sys.stdin).get("switch") or []:
         print(*f)' 2>>"$LOG" || true
 }
 
-# Install the target release when missing, then activate it. Returns 1 on any
-# failure so the caller retries on a later poll.
+# Install every missing release oldest first (the replay path), the target when
+# missing, then activate it. Returns 1 on any failure so the caller retries later.
 switch_namespace() {
   local namespace_id="$1" app_id="$2" version="$3"
   local info group_app package group_version
@@ -2051,7 +2051,27 @@ print(*f)' 2>>"$LOG"); then
     return 0
   fi
 
-  local rc=0 versions
+  local rc=0 versions missing pkg ver
+  if ! missing=$(curl -sf --max-time 10 "http://127.0.0.1:${SERVER_PORT:-2428}/admin-api/groups/${namespace_id}/upgrade/status" 2>>"$LOG" | python3 -c '
+import json, re, sys
+for r in json.load(sys.stdin).get("missingReleases") or []:
+    f = [str(r.get(k) or "") if isinstance(r, dict) else "" for k in ("package", "version")]
+    if not all(re.fullmatch(r"\S+", v) for v in f):
+        sys.exit(1)
+    print(*f)' 2>>"$LOG"); then
+    log "WARN: switch of $namespace_id: could not read the upgrade status; retrying later"
+    return 1
+  fi
+  while read -r pkg ver; do
+    [[ -n "$pkg" ]] || continue
+    log "Installing $pkg@$ver for namespace $namespace_id (missing release)"
+    meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json app install "$pkg@$ver" >/dev/null 2>>"$LOG" || rc=$?
+    if (( rc != 0 )); then
+      log "WARN: switch of $namespace_id: installing $pkg@$ver failed ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"
+      return 1
+    fi
+  done <<< "$missing"
+
   versions=$(meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json app list-versions "$package" 2>>"$LOG") || rc=$?
   if (( rc != 0 )); then
     log "WARN: switch of $namespace_id: could not list installed versions of $package ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"

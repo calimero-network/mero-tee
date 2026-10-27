@@ -660,11 +660,13 @@ If the namespace now targets a different application id or version than the entr
 The sidecar logs it, does nothing, and waits for MDMA's next instruction.
 This moved-target check keeps a late instruction from activating a release the namespace has already moved past.
 
-Otherwise it makes sure the release is present, then activates it:
+Otherwise it reads the namespace's upgrade status (`GET /admin-api/groups/{namespace_id}/upgrade/status`) and installs every missing release, oldest first.
+A member that missed several upgrades needs the intermediate releases too, because activation replays each step.
+It then makes sure the target release is present, which also covers a merod that does not report missing releases, and activates it:
 
 ```bash
 meroctl ... app list-versions <PACKAGE>                 # is the version installed?
-meroctl ... app install <PACKAGE>@<VERSION>             # only when it is missing
+meroctl ... app install <PACKAGE>@<VERSION>             # each missing release, oldest first, then the target if missing
 meroctl ... group upgrade activate <NAMESPACE_ID> \
   --expect-application-id <APP_ID> --expect-version <VERSION>
 ```
@@ -672,7 +674,7 @@ meroctl ... group upgrade activate <NAMESPACE_ID> \
 The activate call asserts both values, so it fails rather than switching to anything other than what MDMA instructed.
 The assertion includes the version because an application id is the same for every release of an application, so the id alone cannot tell one release from the next.
 
-Each of the three calls has a 120 second budget (`MEROCTL_SWITCH_TIMEOUT`), since an install can be large and an activate replays deltas.
+Each meroctl call has a 120 second budget (`MEROCTL_SWITCH_TIMEOUT`), since an install can be large and an activate replays deltas.
 Any failure is logged and the entry is tried again on a later poll.
 Attempts at one `intent_id` are spaced at least 30 seconds apart (`SWITCH_RETRY_INTERVAL`), success or failure, because MDMA keeps sending the entry until the inventory shows the switch done.
 That signal is the group's `running_version`, described in [the context inventory](#the-context-inventory-and-why-it-is-per-group).

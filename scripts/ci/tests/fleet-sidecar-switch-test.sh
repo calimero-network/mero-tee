@@ -63,7 +63,8 @@ esac
 exit 1
 STUB
 
-# `curl`: GET /admin-api/groups/<ns> from ${SB}/group.json, GET
+# `curl`: GET /admin-api/groups/<ns>/upgrade/status from ${SB}/status.json
+# (absent => no missingReleases field; ${SB}/status-fail => the read fails), GET /admin-api/groups/<ns> from ${SB}/group.json, GET
 # /admin-api/contexts from ${SB}/contexts.json (each absent => the read fails);
 # any POST body is appended to ${SB}/inventory-log.
 cat > "${SB}/bin/curl" <<'STUB'
@@ -73,6 +74,7 @@ for a in "$@"; do
   printf '%s\n' "${a}" >> "${SB}/curl-log"
   case "${a}" in
     */admin-api/groups/*/members\?*) exit 22 ;;
+    */admin-api/groups/*/upgrade/status) [[ ! -f "${SB}/status-fail" ]] || exit 22; cat "${SB}/status.json" 2>/dev/null || echo '{"data":null}'; exit 0 ;;
     */admin-api/groups/*) [[ -f "${SB}/group.json" ]] || exit 22; cat "${SB}/group.json"; exit 0 ;;
     */admin-api/contexts) [[ -f "${SB}/contexts.json" ]] || exit 22; cat "${SB}/contexts.json"; exit 0 ;;
     */admin-api/usage) exit 7 ;;
@@ -97,7 +99,7 @@ export PATH
 source "${SB}/functions.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-reset() { : > "${SB}/meroctl-log"; : > "${SB}/curl-log"; : > "${SB}/fleet.log"; rm -f "${SB}/installed" "${SB}/activate-rc"; SWITCH_NEXT_TRY=(); }
+reset() { : > "${SB}/meroctl-log"; : > "${SB}/curl-log"; : > "${SB}/fleet.log"; rm -f "${SB}/installed" "${SB}/activate-rc" "${SB}/status.json" "${SB}/status-fail"; SWITCH_NEXT_TRY=(); }
 calls() { grep -c -- "$1" "${SB}/meroctl-log" || true; }
 
 NS="$(printf 'aa%.0s' {1..32})"
@@ -125,6 +127,23 @@ echo '{"versions":["1.0.0","2.0.0"]}' > "${SB}/installed"
 reconcile_switch "$(answer i2 2.0.0)"
 [[ "$(calls 'app install')" == 0 ]] || fail "an installed release must not be installed again"
 [[ "$(calls 'upgrade activate')" == 1 ]] || fail "an installed release must be activated once"
+
+# 2a. Two missed upgrades: every missing release is installed oldest first,
+#     target included, before the activate.
+reset; group_json 3.0.0
+echo '{"versions":["1.0.0","2.0.0","3.0.0"]}' > "${SB}/installed"
+echo '{"data":null,"missingReleases":[{"package":"com.example.app","version":"2.0.0","applicationId":"x"},{"package":"com.example.app","version":"3.0.0","applicationId":"x"}]}' > "${SB}/status.json"
+reconcile_switch "$(answer i2a 3.0.0)"
+[[ "$(awk '/ app install |upgrade activate/ { for (i = 1; i <= NF; i++) if ($i == "app" || $i == "group") { print $i, $(i+1), $(i+2); break } }' "${SB}/meroctl-log")" == "$(printf 'app install com.example.app@2.0.0\napp install com.example.app@3.0.0\ngroup upgrade activate' )" ]] \
+  || fail "missing releases must install oldest first, then activate: $(cat "${SB}/meroctl-log")"
+
+# 2b. An unreadable upgrade status: nothing installed or activated, retried later.
+reset; group_json 2.0.0
+echo '{"versions":["1.0.0"]}' > "${SB}/installed"
+: > "${SB}/status-fail"
+reconcile_switch "$(answer i2b 2.0.0)"
+[[ "$(calls 'app install')" == 0 && "$(calls 'upgrade activate')" == 0 ]] || fail "a failed status read must not install or activate: $(cat "${SB}/meroctl-log")"
+grep -q "WARN: switch of ${NS}: could not read" "${SB}/fleet.log" || fail "a failed status read must be logged: $(cat "${SB}/fleet.log")"
 
 # 3. A failed activate (409, or anything else) is logged and not retried within
 #    the poll interval; a later poll retries it.
