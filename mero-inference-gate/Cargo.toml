@@ -23,7 +23,7 @@ mock-attestation = ["calimero-tee-attestation/mock-attestation"]
 
 [dependencies]
 axum = "0.8"
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 base64 = "0.23"
 bytes = "1"
 eyre = "0.6"
