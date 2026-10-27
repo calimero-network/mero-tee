@@ -207,6 +207,8 @@ MEROCTL="meroctl --home /mnt/data/calimero --node default"
 MEROCTL_KILL_GRACE=5
 MEROCTL_FLEET_JOIN_TIMEOUT=90
 MEROCTL_LEAVE_TIMEOUT=60
+MEROCTL_SWITCH_TIMEOUT=120 # one install or one activate, which replays deltas
+SWITCH_RETRY_INTERVAL=30 # seconds between attempts at one switch instruction
 MEROCTL_SEAL_TIMEOUT=30
 MEROCTL_READ_TIMEOUT=15
 MEROCTL_PROBE_TIMEOUT=10
@@ -1519,6 +1521,7 @@ collect_namespace_inventory() {
   EXECUTOR_ACCOUNT="${EXECUTOR_ACCOUNT:-}" \
   TEE_ROLE="$tee_role" \
   TEE_ROLE_READ="$tee_role_read" \
+  SERVER_PORT="${SERVER_PORT:-2428}" \
   PAGE_LIMIT="$MEROCTL_PAGE_LIMIT" \
   MAX_GROUPS="$MAX_GROUP_WALK" \
   WALK_BUDGET="$INVENTORY_WALK_BUDGET" \
@@ -1535,6 +1538,7 @@ NAMESPACE_ID = os.environ["NAMESPACE_ID"].strip()
 ACCOUNT = os.environ.get("EXECUTOR_ACCOUNT", "").strip()
 TEE_ROLE = os.environ.get("TEE_ROLE", "")
 TEE_ROLE_READ = os.environ.get("TEE_ROLE_READ") == "true"
+SERVER_PORT = os.environ["SERVER_PORT"]
 PAGE_LIMIT = int(os.environ["PAGE_LIMIT"])
 MAX_GROUPS = int(os.environ["MAX_GROUPS"])
 DEADLINE = time.monotonic() + float(os.environ["WALK_BUDGET"])
@@ -1588,6 +1592,32 @@ def meroctl(*args, critical=True):
     except Exception as exc:
         failed("meroctl " + " ".join(args) + " returned unparseable JSON: " + str(exc))
         return None
+
+
+def admin_get(path):
+    """GET over loopback, or None. Never critical: these reads only add the
+    version fields, so a failure omits them rather than hiding a context."""
+    try:
+        proc = subprocess.run(
+            ["curl", "-sf", "--max-time", "10", "http://127.0.0.1:" + SERVER_PORT + "/admin-api" + path],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc.returncode == 0:
+            return json.loads(proc.stdout)
+    except Exception:
+        pass
+    print("sidecar: GET /admin-api" + path + " failed; omitting version fields", file=sys.stderr)
+    return None
+
+
+def semver_key(version):
+    """Sort key for semver: a prerelease is lower than its release."""
+    core, _, pre = version.split("+")[0].partition("-")
+    nums = tuple(int(p) if p.isdigit() else 0 for p in core.split("."))
+    idents = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")) if pre else ()
+    return nums, not pre, idents
 
 
 def hexid(entry, *keys):
@@ -1707,6 +1737,9 @@ if queue:
         "(cap " + str(MAX_GROUPS) + ", budget " + os.environ["WALK_BUDGET"] + "s)"
     )
 
+held = admin_get("/contexts")
+held = ((held.get("data") or {}).get("contexts")) if isinstance(held, dict) else None
+
 groups = []
 distinct_contexts = set()
 for group_id in group_ids:
@@ -1723,13 +1756,25 @@ for group_id in group_ids:
         # Nothing to advertise, and no reason to spend a membership read.
         continue
     distinct_contexts.update(context_ids)
-    groups.append(
-        {
-            "group_id": group_id,
-            "context_ids": sorted(set(context_ids)),
-            "authorship_ready": authorship_ready(group_id),
-        }
-    )
+    entry = {
+        "group_id": group_id,
+        "context_ids": sorted(set(context_ids)),
+        "authorship_ready": authorship_ready(group_id),
+    }
+    info = admin_get("/groups/" + group_id)
+    info = info.get("data") if isinstance(info, dict) else None
+    if isinstance(info, dict):
+        for ours, theirs in (("target_application_id", "targetApplicationId"), ("target_version", "appVersion")):
+            if isinstance(info.get(theirs), str):
+                entry[ours] = info[theirs]
+    if isinstance(held, list):
+        versions = [
+            c["applicationVersion"]
+            for c in held
+            if isinstance(c, dict) and hexid(c, "groupId") == group_id and isinstance(c.get("applicationVersion"), str)
+        ]
+        entry["running_version"] = min(versions, key=semver_key) if versions else None
+    groups.append(entry)
 
 if not groups and not complete:
     # Nothing read and nothing trustworthy to say. Reporting an empty namespace
@@ -1969,6 +2014,104 @@ print(json.dumps({'namespaces': namespaces, 'last_full': last_full}, sort_keys=T
       log "Reported the context inventory for ${#posted[@]} namespace(s) (full=$full_landed)"
     fi
   fi
+}
+
+# --- namespace switch -------------------------------------------------------
+
+# Intent, namespace, application id and version of each well-formed `switch`
+# entry in a should-join answer, one per line. A missing or empty field yields
+# nothing, so an mdma that predates it changes nothing here.
+switch_entries() {
+  echo "$1" | python3 -c '
+import json, re, sys
+for e in json.load(sys.stdin).get("switch") or []:
+    f = [str(e.get(k) or "") if isinstance(e, dict) else "" for k in ("intent_id", "namespace_id", "target_application_id", "target_version")]
+    if all(re.fullmatch(r"\S+", v) for v in f) and re.fullmatch(r"[0-9a-fA-F]{64}", f[1]):
+        print(*f)' 2>>"$LOG" || true
+}
+
+# Install every missing release oldest first (the replay path), the target when
+# missing, then activate it. Returns 1 on any failure so the caller retries later.
+switch_namespace() {
+  local namespace_id="$1" app_id="$2" version="$3"
+  local info group_app package group_version
+  if ! info=$(curl -sf --max-time 10 "http://127.0.0.1:${SERVER_PORT:-2428}/admin-api/groups/${namespace_id}" 2>>"$LOG" | python3 -c '
+import json, sys
+d = json.load(sys.stdin).get("data") or {}
+f = [d.get(k) for k in ("targetApplicationId", "appPackage", "appVersion")]
+if not all(isinstance(v, str) and v for v in f):
+    sys.exit(1)
+print(*f)' 2>>"$LOG"); then
+    log "WARN: switch of $namespace_id: could not read the namespace's target; retrying later"
+    return 1
+  fi
+  read -r group_app package group_version <<< "$info"
+  if [[ "$group_app" != "$app_id" || "$group_version" != "$version" ]]; then
+    log "Switch of $namespace_id skipped: the target moved to $group_app $group_version, not $app_id $version; waiting for mdma's next instruction"
+    return 0
+  fi
+
+  local rc=0 versions missing pkg ver
+  if ! missing=$(curl -sf --max-time 10 "http://127.0.0.1:${SERVER_PORT:-2428}/admin-api/groups/${namespace_id}/upgrade/status" 2>>"$LOG" | python3 -c '
+import json, re, sys
+for r in json.load(sys.stdin).get("missingReleases") or []:
+    f = [str(r.get(k) or "") if isinstance(r, dict) else "" for k in ("package", "version")]
+    if not all(re.fullmatch(r"\S+", v) for v in f):
+        sys.exit(1)
+    print(*f)' 2>>"$LOG"); then
+    log "WARN: switch of $namespace_id: could not read the upgrade status; retrying later"
+    return 1
+  fi
+  while read -r pkg ver; do
+    [[ -n "$pkg" ]] || continue
+    log "Installing $pkg@$ver for namespace $namespace_id (missing release)"
+    meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json app install "$pkg@$ver" >/dev/null 2>>"$LOG" || rc=$?
+    if (( rc != 0 )); then
+      log "WARN: switch of $namespace_id: installing $pkg@$ver failed ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"
+      return 1
+    fi
+  done <<< "$missing"
+
+  versions=$(meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json app list-versions "$package" 2>>"$LOG") || rc=$?
+  if (( rc != 0 )); then
+    log "WARN: switch of $namespace_id: could not list installed versions of $package ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"
+    return 1
+  fi
+  if ! echo "$versions" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+sys.exit(0 if sys.argv[1] in (d.get("data", d).get("versions") or []) else 1)' "$version" 2>>"$LOG"; then
+    log "Installing $package@$version for namespace $namespace_id"
+    meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json app install "$package@$version" >/dev/null 2>>"$LOG" || rc=$?
+    if (( rc != 0 )); then
+      log "WARN: switch of $namespace_id: installing $package@$version failed ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"
+      return 1
+    fi
+  fi
+
+  log "Activating $package@$version for namespace $namespace_id"
+  meroctl_timed "$MEROCTL_SWITCH_TIMEOUT" --output-format json group upgrade activate "$namespace_id" \
+    --expect-application-id "$app_id" --expect-version "$version" >/dev/null 2>>"$LOG" || rc=$?
+  if (( rc != 0 )); then
+    log "WARN: switch of $namespace_id: activate failed ($(meroctl_failure "$rc" "$MEROCTL_SWITCH_TIMEOUT")); retrying later"
+    return 1
+  fi
+  log "Activated $package@$version for namespace $namespace_id; the next inventory report carries running_version"
+}
+
+# Run mdma's switch instructions from one should-join answer. Each intent is
+# attempted at most once per SWITCH_RETRY_INTERVAL, whatever the outcome: mdma
+# keeps sending it until the inventory shows the switch done.
+declare -A SWITCH_NEXT_TRY=()
+reconcile_switch() {
+  local intent namespace_id app_id version now
+  now=$(date +%s)
+  while read -r intent namespace_id app_id version; do
+    [[ -n "$intent" ]] || continue
+    (( now >= ${SWITCH_NEXT_TRY[$intent]:-0} )) || continue
+    SWITCH_NEXT_TRY[$intent]=$((now + SWITCH_RETRY_INTERVAL))
+    switch_namespace "$namespace_id" "$app_id" "$version" || true
+  done < <(switch_entries "$1")
 }
 
 # --- account recovery envelopes ---------------------------------------------
@@ -3764,6 +3907,8 @@ rotated its signing key, in which case re-registration will issue a new one"
     log "should-join is succeeding again"
     LAST_POLL_STATE="ok"
   fi
+
+  reconcile_switch "$response"
 
   # Desired state: every group mdma currently assigns this fleet node
   # to (returns existing 'assigned' + 'active' assignments via heartbeat).

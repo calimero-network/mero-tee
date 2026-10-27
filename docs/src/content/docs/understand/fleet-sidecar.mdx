@@ -369,9 +369,13 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    unparseable/wrong-shape 200 body aborts the cycle *before* any state change —
    the loop sleeps and `continue`s, leaving the confirmed set untouched (see the
    safety gate below).
-3. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
+3. **Run the switch instructions.** Each `switch` entry in the answer is
+   attempted at most once per 30 seconds, whatever the outcome, by
+   `reconcile_switch`. See
+   [Switching a namespace to its new release](#switching-a-namespace-to-its-new-release).
+4. **Compute `desired`.** The sorted set of `group_id`s in `assignments` — every
    namespace MDMA currently assigns this node to.
-4. **Join toward `desired`, in the background.** `join_group` (see below) runs
+5. **Join toward `desired`, in the background.** `join_group` (see below) runs
    in a background worker, one namespace at a time, so the loop never waits on
    it. Each cycle the loop collects a join that has finished, if any, and
    starts the next assigned namespace **not already in the local confirmed
@@ -382,7 +386,7 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    `{MDMA_URL}/api/fleet/confirm` with `{"peer_id": "...", "group_id": "..."}`.
    A namespace is added to `fleet-confirmed.json` **only when both** local
    admission **and** the MDMA confirm succeed.
-5. **Leave dropped namespaces, eventually.** The candidates are
+6. **Leave dropped namespaces, eventually.** The candidates are
    `admitted − desired − retain`; `plan_leaves` starts a timer for each and
    returns only those that have waited out the grace period, within the rate
    limit, and never while the answer looks like a mass drop (see
@@ -393,15 +397,15 @@ the sidecar enters an infinite loop with a **one-second poll interval**
    started or timed out stays in `admitted`, so it is issued again next cycle
    (after the other due leaves, so it cannot starve them). See
    [A leave that times out](#a-leave-that-times-out).
-6. **Prune both sets.** Set `confirmed = confirmed ∩ desired`, and remove from
+7. **Prune both sets.** Set `confirmed = confirmed ∩ desired`, and remove from
    `admitted` exactly the namespaces just left, and persist them — so a future
    re-add is recognized as new, a namespace just left is not left again every
    second, and one still inside its grace period (or whose leave did not finish)
    is not forgotten.
-7. **Report the context inventory**, over the pruned set — but on its own much
+8. **Report the context inventory**, over the pruned set — but on its own much
    slower clock than this loop, and immediately when the confirmed set itself
    changed. See [The context inventory](#the-context-inventory-and-why-it-is-per-group).
-8. **Sleep** one second and repeat.
+9. **Sleep** one second and repeat.
 
 The confirmed set is persisted at `/mnt/data/fleet/fleet-confirmed.json`
 (a deliberately separate path from any pre-upgrade legacy state file, and a
@@ -644,6 +648,38 @@ otherwise fail every join on an unknown flag, which is strictly worse than the
 broadcast-only join it replaces. Covered by
 `scripts/ci/tests/fleet-sidecar-direct-admission-test.sh`.
 
+### Switching a namespace to its new release
+
+The `should-join` answer may also carry a `switch` array.
+Each entry has an `intent_id`, a `namespace_id`, a `target_application_id` and a `target_version`.
+An entry with a missing field, or a `namespace_id` that is not 64 hex characters, is dropped.
+A missing or empty `switch`, which is what an MDMA that predates it sends, makes no calls at all.
+
+For each entry `switch_namespace` first reads the namespace's current target from merod over loopback (`GET /admin-api/groups/{namespace_id}`).
+If the namespace now targets a different application id or version than the entry names, the entry is stale.
+The sidecar logs it, does nothing, and waits for MDMA's next instruction.
+This moved-target check keeps a late instruction from activating a release the namespace has already moved past.
+
+Otherwise it reads the namespace's upgrade status (`GET /admin-api/groups/{namespace_id}/upgrade/status`) and installs every missing release, oldest first.
+A member that missed several upgrades needs the intermediate releases too, because activation replays each step.
+It then makes sure the target release is present, which also covers a merod that does not report missing releases, and activates it:
+
+```bash
+meroctl ... app list-versions <PACKAGE>                 # is the version installed?
+meroctl ... app install <PACKAGE>@<VERSION>             # each missing release, oldest first, then the target if missing
+meroctl ... group upgrade activate <NAMESPACE_ID> \
+  --expect-application-id <APP_ID> --expect-version <VERSION>
+```
+
+The activate call asserts both values, so it fails rather than switching to anything other than what MDMA instructed.
+The assertion includes the version because an application id is the same for every release of an application, so the id alone cannot tell one release from the next.
+
+Each meroctl call has a 120 second budget (`MEROCTL_SWITCH_TIMEOUT`), since an install can be large and an activate replays deltas.
+Any failure is logged and the entry is tried again on a later poll.
+Attempts at one `intent_id` are spaced at least 30 seconds apart (`SWITCH_RETRY_INTERVAL`), success or failure, because MDMA keeps sending the entry until the inventory shows the switch done.
+That signal is the group's `running_version`, described in [the context inventory](#the-context-inventory-and-why-it-is-per-group).
+A switch is never confirmed to MDMA directly.
+
 ### Leaving a namespace (disable path)
 
 When a namespace the node was admitted to has stayed out of `desired` (and out of
@@ -871,6 +907,14 @@ They are RocksDB estimates, so they are **excluded from change detection** —
 counting them would post on every scan — and refresh on whatever post happens
 next, at worst the 15-minute full pass. An unreachable `/usage` omits `bytes`
 and changes nothing else about the report; bytes never block a prune.
+
+Each group also carries three version fields, which MDMA uses to tell whether a [switch](#switching-a-namespace-to-its-new-release) has finished:
+
+- `target_application_id` and `target_version` are the application id and release the group is set to run, read from `GET /admin-api/groups/{group_id}`.
+- `running_version` is the lowest semver among the group's contexts that this node holds, read from `GET /admin-api/contexts`. A prerelease sorts below its release. It is `null` when the node holds none of the group's contexts.
+
+The target fields are omitted when the group read fails, and `running_version` is omitted when the contexts read fails.
+Absent means "did not look", the same rule as `member_count`, and none of these reads can hide a context or block a prune.
 
 #### On change, with a slow full reconcile
 
