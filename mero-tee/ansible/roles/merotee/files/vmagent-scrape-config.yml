@@ -3,3 +3,9 @@ scrape_configs:
   - job_name: node_exporter
     static_configs:
       - targets: ["localhost:9100"]
+  # merod's own metrics (requests, latency, errors, Raft, disk, process), served
+  # by release-v2 merod on loopback (MEROD_METRICS_LISTEN in merod.service).
+  # A merod that does not serve them leaves this target down (`up` = 0).
+  - job_name: merod
+    static_configs:
+      - targets: ["127.0.0.1:9464"]

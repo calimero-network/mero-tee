@@ -225,6 +225,9 @@
 
         [Service]
         EnvironmentFile=-/etc/calimero/merod.env
+        # Plain-HTTP /metrics for vmagent, on loopback only (release-v2 merod
+        # reads MEROD_METRICS_LISTEN; a merod without it ignores the variable).
+        Environment=MEROD_METRICS_LISTEN=127.0.0.1:9464
         ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
         Restart=always
         # A core dump of merod is its signing identity and every group key.
