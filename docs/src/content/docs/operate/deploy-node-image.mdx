@@ -188,9 +188,18 @@ scripts. All are optional except where noted:
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
-present. `node_exporter` is started alongside `vmagent`, because it is the only
-thing the default scrape config targets — its unit file is installed by the
-image but is not enabled, so without that it would be a dead scrape target.
+present. `node_exporter` is started alongside `vmagent`, because the default
+scrape config targets it — its unit file is installed by the image but is not
+enabled, so without that it would be a dead scrape target.
+
+The scrape config's other target is merod itself (job `merod`): `merod.service`
+sets `MEROD_METRICS_LISTEN=127.0.0.1:9464`, so a release-v2 merod serves its
+request, latency, error, Raft, disk and process metrics there, in plain HTTP on
+loopback only. They carry counts, route templates and group numbers, never an
+app, account or organization id (see core's `operate/observability` page). A
+merod that does not serve them leaves the target down (`up{job="merod"} == 0`)
+and nothing else changes. vmagent adds the same `instance_name`, `instance_type`
+and `instance_profile` labels to these series as to node_exporter's.
 
 :::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
 Instance metadata picks the log sink, so treat every shipped line as readable

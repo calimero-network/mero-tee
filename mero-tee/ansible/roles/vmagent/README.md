@@ -71,7 +71,7 @@ scrape_configs:
   - job_name: "merod"
     scrape_interval: "15s"
     static_configs:
-      - targets: ["localhost:2428"]
+      - targets: ["127.0.0.1:9464"] # merod --metrics-listen (release-v2)
 
   - job_name: "node-exporter"
     scrape_interval: "15s"
@@ -111,7 +111,7 @@ scrape_configs:
   - job_name: "merod"
     scrape_interval: "15s"
     static_configs:
-      - targets: ["localhost:2428"]
+      - targets: ["127.0.0.1:9464"] # merod --metrics-listen (release-v2)
 EOF
 
 # Step 2: Configure and start vmagent (no auth)
