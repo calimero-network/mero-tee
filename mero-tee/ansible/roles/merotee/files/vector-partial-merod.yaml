@@ -28,7 +28,6 @@ sources:
       [
         "calimero-init.service",
         "merod.service",
-        "mero-auth.service",
         "traefik.service",
         "vector.service",
         "vmagent.service",

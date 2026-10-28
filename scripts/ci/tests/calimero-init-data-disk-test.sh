@@ -4,7 +4,7 @@
 # Every node is created with a separate data disk and nothing mounted it:
 # `merod` initialised into `/mnt/data/calimero`, a directory on the ~19 GB root
 # filesystem, while the console advertised 200 GB. When root fills it takes
-# merod, traefik, mero-auth, vector and vmagent with it, on a machine with no
+# merod, traefik, vector and vmagent with it, on a machine with no
 # shell to recover from.
 #
 # The logic could not live in a GCP startup script: `merod-lockdown` blocks

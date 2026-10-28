@@ -23,7 +23,7 @@ case "${role}" in
   node)
     name="merotee-ubuntu-questing-25-10-${profile}-${v}${suffix}"
     family="merotee-ubuntu-questing-${profile}${dev}"
-    description="MeroTEE ${profile} profile image, built with mkosi from Ubuntu 26.04 LTS (Resolute Raccoon) packages, with Traefik and mero-auth. Name retains the questing-25-10 prefix for dispatcher compatibility." ;;
+    description="MeroTEE ${profile} profile image, built with mkosi from Ubuntu 26.04 LTS (Resolute Raccoon) packages, with Traefik. Name retains the questing-25-10 prefix for dispatcher compatibility." ;;
   kms)
     name="merotee-kms-${profile}-${v}${suffix}"
     family="merotee-kms-${profile}${dev}"

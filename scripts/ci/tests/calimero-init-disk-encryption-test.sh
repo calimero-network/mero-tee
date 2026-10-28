@@ -4,9 +4,8 @@
 # name a release older than the image.
 #
 # TDX protects the VM's memory, not its disks. merod's store has its own KMS
-# key, but the data disk also holds config.toml, the node's TLS private key,
-# mero-auth's database and the fleet sidecar's token -- all readable from a
-# snapshot of a plain disk. So calimero-init formats a blank data disk as LUKS2
+# key, but the data disk also holds config.toml, the node's TLS private key
+# and the KMS identity -- all readable from a snapshot of a plain disk. So calimero-init formats a blank data disk as LUKS2
 # keyed by `merod kms disk-key`, keeps the disk-unlock identity in a LUKS2
 # token, and reopens it on every boot.
 #

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Calimero locked-down image init (R6). Uses baked merod/meroctl/mero-auth if present;
+# Calimero locked-down image init (R6). Uses baked merod/meroctl if present;
 # otherwise, on the debug profiles ONLY, downloads them from GitHub (legacy, requires
 # merod-version metadata). locked-read-only refuses: see "Binaries" below.
 set -euo pipefail
@@ -262,10 +262,10 @@ fi
 # the quote would be identical whatever was downloaded, and `merod-version` is
 # instance metadata the cloud project writes. So on the production profile a
 # missing binary is a broken image, and the only safe answer is to stop.
-if [[ -x "${BIN_DIR}/merod" ]] && [[ -x "${BIN_DIR}/meroctl" ]] && [[ -x "${BIN_DIR}/mero-auth" ]]; then
-  log "Using baked merod/meroctl/mero-auth from image"
+if [[ -x "${BIN_DIR}/merod" ]] && [[ -x "${BIN_DIR}/meroctl" ]]; then
+  log "Using baked merod/meroctl from image"
 elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-  fatal "merod/meroctl/mero-auth are not baked into this image. locked-read-only \
+  fatal "merod/meroctl are not baked into this image. locked-read-only \
 never downloads them at boot: a downloaded binary is covered by no measurement, \
 so the node's attestation would vouch for code it never measured. Rebuild the image."
 else
@@ -288,7 +288,6 @@ else
   }
   download merod
   download meroctl
-  download mero-auth
 fi
 
 log "server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
@@ -435,7 +434,7 @@ fi
 # and NOTHING WAS MOUNTING IT. `merod` initialised into `/mnt/data/calimero`,
 # which was a directory on the ~19 GB root filesystem, so a node had roughly
 # 15 GB of usable space while the console advertised 200 -- and when root fills
-# it takes merod, traefik, mero-auth, vector and vmagent with it, on a machine
+# it takes merod, traefik, vector and vmagent with it, on a machine
 # with no shell to recover from.
 #
 # The mounting logic existed in mdma (`dispatcher/app/startup_script.py`) but
@@ -454,8 +453,8 @@ fi
 # TDX protects memory, not disks, and the cloud project can snapshot, read and
 # rewrite this device at will. merod's own store is encrypted from `init
 # --kms-url` (below), but the disk holds more than the store: `config.toml`,
-# blobs, the node's TLS private key, mero-auth's database, the fleet sidecar's
-# token and state. So the whole block device is a dm-crypt mapping:
+# blobs, the node's TLS private key and the KMS identity. So the whole block
+# device is a dm-crypt mapping:
 #
 #   * aes-xts-plain64 for confidentiality, and `--integrity hmac-sha256` so an
 #     offline edit is DETECTED (the read fails) rather than silently decrypted
@@ -814,8 +813,8 @@ Refusing to initialise onto the root filesystem -- see $LOG."
 
 warn_plaintext_data_disk() {
   log "WARN: the data disk is UNENCRYPTED ext4 (created before full-disk \
-encryption, or on a debug profile without a KMS). Its TLS key, merod config, \
-mero-auth database and fleet credentials are readable by anyone who can \
+encryption, or on a debug profile without a KMS). Its TLS key and merod \
+config are readable by anyone who can \
 snapshot it. It is mounted as before and NOT reformatted. Recreate this node to \
 get an encrypted data disk."
 }
@@ -1210,84 +1209,6 @@ log "Enabling delegated access on the admin API..."
 "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
   'server.admin.delegated_access=true' \
   || log "WARN: failed to enable delegated access; this node will replicate but not relay"
-
-# Who a device-key session belongs to. merod runs in proxy auth mode, so it
-# installs no guard of its own and, without this, sees every caller as
-# anonymous: the caller-scoped listings answer node-wide and `POST .../query`
-# refuses. With it, merod takes the account and device from the
-# `X-Auth-Account` / `X-Auth-Device` headers that traefik's `auth-node` copies
-# from mero-auth, and scopes each tenant to its own groups.
-#
-# Safe here because traefik is the only way in: it replaces those two headers on
-# every route `auth-node` guards and strips them on every other route
-# (`strip-proxy-identity` on both entrypoints), and merod listens on loopback.
-#
-# FATAL on failure, unlike the key above. A relay whose mero-auth has
-# device-key login on (`mero-auth-start`) but whose merod ignores the caller's
-# identity would list every tenant's contexts to any one of them. Refusing to
-# start is the failure that cannot leak.
-log "Taking device-key callers' identity from the proxy..."
-"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-  'server.proxy_identity=true' \
-  || fatal "failed to set server.proxy_identity; refusing to serve device-key sessions node-wide"
-
-# Sealed logins and logged-in calls. A sealed request reaches traefik only as
-# `POST /sealed/v2` (the `node-sealed` router), so `auth-node` never sees the
-# route or token inside it, and merod, in proxy auth mode, refuses every
-# guarded route an opened request names (`sealed_route_unguarded`). Clients
-# then send their login, token, reads and event streams as plain TLS, which
-# ends outside the TD.
-#
-# With `forward_auth`, merod does for an opened request what traefik would
-# have done: it forwards `/auth/` and `/admin/` to mero-auth (the
-# `auth-public` split) and asks mero-auth's `/auth/validate` about every other
-# guarded route (the `auth-node` check), setting the `X-Auth-*` identity
-# only from mero-auth's answer. mero-auth stays the one authority, so a sealed
-# request reaches exactly what the same token reaches through traefik.
-#
-# The origin is traefik's `auth-service` (routing.yml); merod accepts only a
-# loopback `http` origin, since tokens cross it in the clear.
-# `scripts/ci/tests/sealed-forward-auth-test.sh` keeps the two equal and the
-# pinned merod new enough to know the key.
-#
-# Non-fatal on failure: a node without it serves sealed requests exactly as
-# before, and clients fall back to plain TLS for logged-in calls. A merod
-# that predates the key refuses it (`[server.sealed]` denies unknown fields)
-# and writes nothing, so the rest of config.toml is untouched.
-log "Guarding sealed requests with mero-auth..."
-"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-  'server.sealed.forward_auth="http://127.0.0.1:3001"' \
-  || log "WARN: failed to set server.sealed.forward_auth; logins and logged-in calls stay outside the sealed transport"
-
-# No `server.cors.allowed_origins` is set. merod admits browser pages from any
-# origin on a node that takes callers' identity from the proxy (the key above):
-# the proxy, not the page's origin, says who the caller is, so the origin guard
-# does not apply here and CORS stays at merod's permissive default. Listing this
-# relay's own origin, as image 2.3.109 did, made that list the CORS allow-list
-# too, and every hosted app (the cloud, the wallet, any app on its own domain)
-# was then refused by the browser. Needs a merod that trusts proxy identity in
-# its origin guard; on an older one, this relay's own dashboard is refused.
-#
-# config.toml lives on the data disk and `merod config` only sets keys, so a
-# node that first booted on 2.3.109 still carries the list. It is dropped here:
-# the one `allowed_origins` line under `[server.cors]`, nothing else, and the
-# file is replaced atomically with its mode kept (it holds the node's key).
-# `[]` would not do: merod reads an empty list as "refuse every origin".
-drop_allowed_origins() {
-  local config="$1" tmp
-  grep -q '^allowed_origins[[:space:]]*=' "$config" || return 0
-  tmp="$(mktemp "${config}.XXXXXX")" || return 1
-  # `cp -p` first so the rewritten file keeps config.toml's mode and owner.
-  cp -p "$config" "$tmp" \
-    && sed -E '/^\[server\.cors\][[:space:]]*$/,/^\[/{/^allowed_origins[[:space:]]*=/d;}' "$config" > "$tmp" \
-    && mv -f "$tmp" "$config" \
-    || { rm -f "$tmp"; return 1; }
-}
-if grep -q '^allowed_origins[[:space:]]*=' "$NODE_CONFIG"; then
-  log "Dropping server.cors.allowed_origins so browser pages from any origin are admitted..."
-  drop_allowed_origins "$NODE_CONFIG" \
-    || log "WARN: failed to drop server.cors.allowed_origins; browsers will reach this relay only from the listed origin"
-fi
 {% endif %}
 
 # TLS material for traefik.
@@ -1330,9 +1251,9 @@ fi
 
 log "Starting services..."
 systemctl daemon-reload
-systemctl enable merod mero-auth traefik
+systemctl enable merod traefik
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
-systemctl start --no-block merod mero-auth traefik
-log "Queued non-blocking start for merod, mero-auth, and traefik"
+systemctl start --no-block merod traefik
+log "Queued non-blocking start for merod and traefik"
 
 log "Calimero init completed"

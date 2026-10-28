@@ -182,15 +182,6 @@ jobs:
         shell: bash
         run: scripts/ci/tests/metadata-port-test.sh
 
-      # merod admits browser pages from any origin on a node that takes callers'
-      # identity from the proxy, so a relay sets no allowed_origins (that list is
-      # also the CORS allow-list, which shut every hosted app out) and drops the
-      # one 2.3.109 wrote into config.toml, which persists on the data disk.
-      - name: Check a relay pins no browser origin
-        id: no_origin_pin_test
-        shell: bash
-        run: scripts/ci/tests/calimero-init-no-origin-pin-test.sh
-
       - name: Check the data disk is mounted before use
         id: data_disk_test
         shell: bash
@@ -206,8 +197,8 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-store-encryption-test.sh
 
-      # The store is not the whole disk: config.toml, the TLS key, mero-auth's
-      # database and the fleet token sit beside it. So the data disk itself is
+      # The store is not the whole disk: config.toml, the TLS key and the KMS
+      # identity sit beside it. So the data disk itself is
       # LUKS2 with integrity, keyed from the KMS. Runs the disk block against
       # stub cryptsetup/blkid/mount/merod: only a disk blkid reports blank is
       # ever formatted, an existing LUKS disk is reopened from its header token,
@@ -322,21 +313,6 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-forward-auth-test.sh
 
-      # merod scopes a device-key session by X-Auth-Account / X-Auth-Device
-      # (server.proxy_identity). Only mero-auth may write them: auth-node
-      # replaces them, and every entrypoint strips a client's.
-      - name: Check a client cannot name the account merod scopes it as
-        id: traefik_proxy_identity_test
-        shell: bash
-        run: scripts/ci/tests/traefik-proxy-identity-test.sh
-
-      # mero-auth's account_proof provider refuses to start without the node's
-      # key, and a mero-auth that does not start takes forwardAuth down.
-      - name: Check mero-auth-start enables device-key login only with a node key
-        id: mero_auth_device_login_test
-        shell: bash
-        run: scripts/ci/tests/mero-auth-device-login-test.sh
-
       # Everything under /admin-api/tee/ except info and attest is on core's
       # protected router, which only traefik guards on these nodes.
       - name: Check the public TEE router serves only info and attest
@@ -389,14 +365,6 @@ jobs:
         shell: bash
         run: scripts/ci/tests/gcp-create-instance-retry-test.sh
 
-      # Relays set `server.sealed.forward_auth` so a sealed login or logged-in
-      # call is checked by the same mero-auth traefik's auth-node asks, on a
-      # merod (>= 0.11.0-rc.84) that knows the key, and never fatally.
-      - name: Check sealed requests are guarded by traefik's own mero-auth
-        id: sealed_forward_auth_test
-        shell: bash
-        run: scripts/ci/tests/sealed-forward-auth-test.sh
-
       # Every binary the image build downloads is pinned by sha256 in
       # mero-tee/build-inputs.lock.json, for the versions versions.json names,
       # and every download in the image's Ansible is checked against it.
@@ -433,8 +401,6 @@ jobs:
             --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
             --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
-            --checks-line "- mero-auth device-key login test: ${{ steps.mero_auth_device_login_test.outcome }}" \
-            --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
@@ -443,7 +409,6 @@ jobs:
             --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
-            --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
@@ -460,7 +425,6 @@ jobs:
             --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
-            --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
             --checks-line "- release signs only the agent allowlists: ${{ steps.kms_agent_policy_signing_test.outcome }}" \
             --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \
