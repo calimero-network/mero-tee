@@ -195,20 +195,25 @@ filesystem. It is fatal on `locked-read-only`, so a quote always names the
 role, profile and root, and the KMS and node images can never measure alike.
 Releases up to 2.3.118 extended `calimero-rtmr3-v2:...:<calimero.root_hash>`.
 
-## merod's KMS client (`[tee.kms]`)
+## merod's KMS client
 
-merod (in `calimero-network/core`) reads its KMS settings from the `[tee.kms]`
-section of `config.toml`:
+merod 1.0 (in `calimero-network/core`) takes its storage key from mero-kms only
+in TDX mode, through two flags that `merod init` writes to `config.toml` as
+`kms-url` and `kms-identity`:
 
-| Key | Meaning |
+| Flag / key | Meaning |
 | --- | --- |
-| `tee.kms.url` | The cluster's VPC-internal URL. Node images write it from `kms-url` metadata via `merod init --kms-url`. |
-| `tee.kms.tls.*` | Optional TLS settings for reaching the KMS. |
-| `tee.kms.attestation.*` | The KMS allowlists merod enforces on `/attest`: MRTD, RTMR0–3 and TCB statuses, as published in the release's `kms_allowed_*` lists. merod fills them from the signed release policy named by `MERO_TEE_VERSION` (`tee-release-version` on the node images). |
+| `--kms-url` / `kms-url` | The cluster's VPC-internal URL. Node images write it from `kms-url` metadata at the node's first boot. |
+| `--kms-identity` / `kms-identity` | The disk identity (a protobuf libp2p keypair) presented to the KMS, which derives the key per identity. Node images keep it at `/mnt/data/merod/kms-identity`, on the encrypted data disk; merod creates it if missing. Every node of a cluster must present the same one. |
 
-On the node images, `tee-release-version` metadata names the release, and merod
-fetches and verifies that release's signed `kms-attestation-policy[.<profile>].json`
-(see [below](#attestation-policy-json)).
+merod trusts the KMS only if its quote matches the signed release the
+environment names (`MERO_KMS_RELEASE_TAG`, else `MERO_KMS_VERSION`, else
+`MERO_TEE_VERSION`, which the node images set from `tee-release-version`), for
+the profile in `MERO_TEE_PROFILE`, and no older than `MERO_TEE_MIN_VERSION`.
+It fetches and verifies that release's signed
+`kms-attestation-policy[.<profile>].json` (see
+[below](#attestation-policy-json)). `merod kms disk-key` is the same client,
+used by the image's boot script to unlock the data disk.
 
 ## Image build inputs
 
@@ -240,8 +245,8 @@ The single source of pinned component versions (`mero-tee/versions.json`):
 ### `build-inputs.lock.json`
 
 `mero-tee/build-inputs.lock.json` pins the sha256 of every archive the image
-build downloads, for the versions `versions.json` names: merod, meroctl and
-mero-auth from the core release, Traefik, node_exporter, vmagent and Vector, and, for the
+build downloads, for the versions `versions.json` names: merod and meroctl
+from the core release (core 1.0 publishes no mero-auth), Traefik, node_exporter, vmagent and Vector, and, for the
 agent image, Node and the mero-bot bundle (`meroBotVersion`).
 `group_vars/all.yml` loads it as `build_inputs`. Every download in the Ansible
 roles is a `get_url` with `checksum:` taken from it, so an archive replaced
@@ -289,104 +294,20 @@ Read by `mero-tee/mkosi-image/build.sh` (and passed through by
 The image's version is `versions.json` `imageVersion`, and the image runs on
 `c3-standard-4` (Intel TDX).
 
-### Ansible play variables
+### Traefik on the node image
 
-Defined at play level in `mero-tee/playbook.yml` (so several roles see one
-value), and overridable at build time with `-e`.
+Traefik is a TLS front only: `/etc/traefik/routing.yml` has one router that
+sends every path, on `:80` and `:443`, to merod on `127.0.0.1:2528` with no
+middleware (no forwardAuth, rate limit, CORS or header rewriting). merod 1.0
+authenticates its callers itself, inside the sealed channel, so Traefik never
+sees a credential. See
+[What Traefik does on a 1.0 node](/operate/deploy-node-image/#what-traefik-does-on-a-10-node).
+`scripts/ci/tests/traefik-passthrough-test.sh` and the `locked-read-only`
+conformance role pin that shape.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `fleet_delegated_access` | `true` for `debug-read-only` and `locked-read-only`; `false` for `debug` | Whether this image is a **relay**: whether a keyholder with no account on the node may present a signed warrant and have the node write on their behalf. Drives every edge of the posture: the Traefik routers exempting `/admin-api/contexts/<ctx>/intents`, `/admin-api/contexts/<ctx>/presence-intents`, `/admin-api/groups/<group>/context-intents`, `/admin-api/groups/<group>/governance-intents` and the sealed-transport envelope (`/sealed/v2`) from `auth-node`, merod's `server.admin.delegated_access`, and merod's `server.sealed.forward_auth`, which has merod check sealed requests with the same mero-auth. One variable because these nodes run merod in proxy auth mode, so Traefik is the only gate and a drift between the two would be silent in the unsafe direction. See [Fleet HA sidecar → Delegated execution](/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay). |
-| `fleet_mdma_url` | `https://manager.cloud.calimero.network` | Where the fleet sidecar polls for assignments. Baked (and so measured); the sidecar exits if unset. |
-
-<Aside type="caution">
-Changing `fleet_delegated_access` changes `/etc/traefik/routing.yml` and the
-node's merod config, both of which are covered by the image root hash — so it
-**changes the image's measurements**. That is intended: opening a write path is
-exactly the kind of change an attestation policy should notice.
-</Aside>
-
-#### What `auth-node` checks a token against
-
-`auth-node` forwards each request to mero-auth's `/auth/validate`, which checks
-a scoped token against the route named in `X-Forwarded-Uri` and
-`X-Forwarded-Method`. The middleware sets `trustForwardHeader: false`, so
-Traefik fills in those headers from the request it is actually routing and
-discards whatever the client sent. With `true`, a token scoped to one route
-could get through to another by claiming the first route in its own
-`X-Forwarded-Uri`. Nothing sits in front of the node's Traefik that could be
-trusted with those headers, and the entrypoints configure no
-`forwardedHeaders` for the same reason. `scripts/ci/tests/traefik-forward-auth-test.sh`
-and the `locked-read-only` conformance role both pin this setting.
-
-#### The paths exempt from `auth-node`
-
-Every `/admin-api/` path goes through the `auth-node` forwardAuth except five,
-and they are exempt for the same reason: the request carries its own authority
-rather than borrowing the node's. They differ in **who serves them**.
-
-| Path | Served by | Why it is exempt |
-| --- | --- | --- |
-| `POST /admin-api/namespaces/<ns>/admit` | **every** node image | The join op arrives already signed by the joiner's device key, and merod refuses it unless this node's account is on the invitation's `admitters` list — which the inviter signed. |
-| `GET`/`POST /admin-api/contexts/<ctx>/intents` | relays only (`fleet_delegated_access`) | The body holds a warrant signed by the author's device key, committing to this context, method and arguments. |
-| `POST /admin-api/contexts/<ctx>/presence-intents` | relays only (`fleet_delegated_access`) | Delegated presence. The body holds an ephemeral presence statement signed by the device key, with the account proof tying the device to its account; merod verifies both and publishes it. Nothing runs and no state changes. No descriptor, so `GET` stays behind `auth-node`. |
-| `GET`/`POST /admin-api/groups/<group>/context-intents` | relays only (`fleet_delegated_access`) | Delegated context creation. The body holds a creation warrant signed by the author's device key, committing to this group, the application, the `init` arguments and this relay as executor; merod refuses it unless the **author** may create contexts in the group. `GET` (optionally `?author=<hex>`) is the descriptor a client reads first. |
-| `GET`/`POST /admin-api/groups/<group>/governance-intents` | relays only (`fleet_delegated_access`) | Delegated governance. The body holds a governance warrant signed by a group member's device key, which merod verifies before applying the change; this relay submits it for the member. `GET` is the descriptor a client reads first. |
-
-Admission is **not** gated on `fleet_delegated_access`, and that asymmetry is
-deliberate. Delegated execution is a *hosted* capability — the node authors on
-someone else's behalf, which is what a fleet relay is assigned to do. Admission
-is not hosted and involves no cloud at all: the `admitters` list is chosen by
-the **inviter**, who may name any node, including a peer's self-hosted one. Two
-people running their own nodes can invite and admit each other with no account
-anywhere, so gating admission on a fleet variable would have made a
-peer-to-peer flow a cloud-only feature.
-
-Serving admission everywhere grants no node authority it did not already have:
-a node named in no invitation's `admitters` list refuses every request to that
-route, whatever image it runs. The signed list is the gate, not the build flag.
-
-The cost of the wider exposure is that any node will verify signatures for an
-unauthenticated caller, so this is a request-rate surface like any other public
-route.
-
-All five exemptions are anchored regexes (a lowercase 64-hex id and a literal
-final segment), never prefixes: a `PathPrefix` on `/admin-api/namespaces/` would
-have exempted namespace creation and deletion along with admission, and one on
-`/admin-api/groups/` would have exempted `/admin-api/groups/<group>/contexts` and
-every membership route with creation and governance. Traefik matches them against the path
-only, so the descriptor's `?author=` query needs no room in the pattern.
-`scripts/ci/tests/traefik-delegated-route-test.sh` routes the allowed paths and
-their near misses (uppercase hex, 63 or 65 hex characters, a trailing slash, an
-extra segment) through every router and requires each near miss to land on
-`auth-node`. The rendered file is
-asserted at build time — admission on every image, delegated execution,
-presence, creation and governance only where the image was built to relay — so a template regression cannot reach a
-release.
-
-#### Device-key login, and who merod thinks the caller is
-
-A relay also lets a keyholder open a **session**: mero-auth's `account_proof`
-provider, device-key login. The session is scoped to `context:query`,
-`context:intent`, `context:subscribe` and the caller-scoped listings
-(`context:list-own`, `namespace:list-own`, `group:list-own`), and it goes
-through `auth-node` like any other token. Three things make that safe on a
-multi-tenant node, all driven by `fleet_delegated_access`:
-
-| Edge | What it does |
-| --- | --- |
-| mero-auth (`mero-auth-start.sh`) | Runs mero-auth on the baked `/etc/calimero/auth.toml`, which enables no provider, until the fleet sidecar has recorded this node's device signing key in `/mnt/data/fleet/login-node-key`; then on a `/run` copy adding `[providers] account_proof = true` and `[account_proof] node_key = …, allowed_audiences = []`. The provider refuses to start without the key, and a mero-auth that does not start takes every forwardAuth with it, so it is never enabled early. Only on an image carrying the `/etc/calimero/device-key-login` marker. |
-| merod (`calimero-init.sh.j2`) | Sets `server.proxy_identity=true` (core 0.11.0-rc.60+). In proxy auth mode core installs no guard, so without it every caller is anonymous: the listings answer **node-wide** and `/query` refuses. With it, merod takes the account and device from `X-Auth-Account` / `X-Auth-Device` and scopes each caller to its own groups. Fatal if it cannot be set. |
-| Traefik | `auth-node` lists both headers in `authResponseHeaders`, so mero-auth's answer replaces a client's on every guarded route; `strip-proxy-identity`, on **both entrypoints**, deletes them from every request before any router runs, so the exempt routes above cannot carry a forged account. |
-
-The sidecar re-reads the key from `GET /admin-api/identity` every five minutes
-and restarts mero-auth only when it changes. The value a browser has to pin is
-that same `publicKey`. `allowed_audiences = []` accepts a session for any client
-origin: the session decides who may *ask*, never what the answer contains,
-since every read re-checks membership and every write needs the member's own
-warrant. `scripts/ci/tests/traefik-proxy-identity-test.sh`,
-`mero-auth-device-login-test.sh` and `fleet-sidecar-login-key-test.sh` pin the
-three edges.
+v1's play variables `fleet_delegated_access` and `fleet_mdma_url`, the
+`auth-node` exemptions and device-key login went with mero-auth and the fleet
+sidecar.
 
 The base is Ubuntu 26.04 LTS (Resolute Raccoon), comfortably past the kernel
 6.17+ that RTMR3 sysfs support needs, installed from a pinned snapshot of the

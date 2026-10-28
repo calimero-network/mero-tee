@@ -6,14 +6,12 @@
 # these units set `UMask=`, so systemd's default 0022 applies and the file is
 # created 0644 -- the secret sits world-readable until the chmod lands.
 #
-# The sidecar's two writes are covered behaviourally by
-# fleet-sidecar-logs-token-test.sh, which shadows `chmod` to observe the mode AS
-# CREATED. calimero-init cannot be covered that way: it is a linear boot script,
+# calimero-init cannot be covered behaviourally: it is a linear boot script,
 # not a set of sourceable functions, so there is nothing to call. It is also the
 # script that writes the observability token on EVERY node at boot, which makes
 # it the one place this matters most.
 #
-# Hence a static check across BOTH templates. It is deliberately narrow: it
+# Hence a static check of the template. It is deliberately narrow: it
 # looks only at redirections into a variable whose name says it holds a token,
 # and requires the redirection to sit inside a `umask` subshell. That is the
 # exact shape of the bug and the exact shape of the fix, so it cannot drift into
@@ -25,7 +23,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TEMPLATES=(
   "${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/calimero-init.sh.j2"
-  "${REPO_ROOT}/mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2"
 )
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -61,7 +58,7 @@ for tpl in "${TEMPLATES[@]}"; do
   done < <(grep -E "$WRITES_RE" "$tpl" || true)
 done
 
-[[ "$checked" -ge 3 ]] || fail "expected at least 3 token writes across the templates, saw ${checked};
+[[ "$checked" -ge 1 ]] || fail "expected at least 1 token write in calimero-init, saw ${checked};
        the matcher has probably stopped matching -- check it before trusting a pass"
 
 echo "PASS: all ${checked} token writes are created under umask 077"

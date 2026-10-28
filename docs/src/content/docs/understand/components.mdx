@@ -98,12 +98,11 @@ that mdma's dispatcher matches on, not a claim about the base release.
 
 Driven by `playbook.yml` and `mero-tee/versions.json`:
 
-- `merod`, `meroctl`, and `mero-auth` at a pinned core tag (via the
-  `calimero-core` role).
-- Traefik reverse proxy, plus `node-exporter`, `vmagent`, and `vector` for
-  metrics/logs.
-- The **fleet HA sidecar** systemd service
-  (`ansible/roles/merotee/templates/fleet-sidecar.sh.j2`).
+- `merod` and `meroctl` at a pinned core tag (via the `calimero-core` role):
+  merod 1.0, which authenticates its own callers inside a sealed channel (core
+  1.0 has no mero-auth).
+- Traefik as a TLS front that passes every request to merod untouched, plus
+  `node-exporter`, `vmagent`, and `vector` for metrics/logs.
 - A profile marker at `/etc/calimero/image-profile`. `calimero.role`,
   `calimero.profile` and the dm-verity root hash (`roothash=`) are on the UKI's
   kernel command line, so RTMR2 covers every byte of the root and binary

@@ -93,10 +93,9 @@ fi
 # a gauge that flips between machines -- which reads as plausible data and is
 # wrong. One node hides it; the second one silently corrupts every query.
 #
-# Derived HERE rather than passed in, so both callers cannot drift: it is run by
-# `calimero-init` at boot AND by the fleet sidecar when mdma rotates the
-# observability token, and a rotation that dropped these labels would silently
-# orphan the node's metrics from that moment on.
+# Derived HERE rather than passed in, so every caller gets the same labels: a
+# caller that dropped them would silently orphan the node's metrics from that
+# moment on.
 #
 # `instance_name` and `instance_type` match what the Terraform-managed nodes
 # already emit, so one dashboard covers both kinds. `instance_name` is the FQDN,

@@ -68,13 +68,13 @@ jobs:
 
           shellcheck "${shell_files[@]}"
 
-      # The sidecar tests below substitute the template's variables with `sed`,
-      # which exercises the bash but never asks whether Jinja can parse the file.
+      # The init-script tests below slice the templates' bash out with `sed` and
+      # `awk`, which exercises the bash but never asks whether Jinja can parse
+      # the file.
       # `${#arr[@]}` opens with Jinja's comment delimiter, so a counted array
       # makes Ansible swallow the rest of the template and die with "Missing end
-      # of comment tag" -- five minutes into a packer build, on a GCP VM, and
-      # only on the read-only profiles, since the sidecar task is gated on
-      # `merod_mode == "read-only"`. That took out the 2.3.55 and 2.3.56 node
+      # of comment tag" -- minutes into an image build, and only on the
+      # profiles that render the template. That took out the 2.3.55 and 2.3.56 node
       # images and then every later `Release mero-kms` run with it, because that
       # workflow refuses to publish without the node release's published-mrtds.
       # Parsing each template here costs a second and fails on the PR instead.
@@ -114,147 +114,6 @@ jobs:
               -e node_exporter_version=0.0.0 -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
           done
 
-      # Static, because the token is optional by construction: every header is
-      # gated on a non-empty FLEET_TOKEN so an image built without one still
-      # works against a manager that requires none. A dropped header therefore
-      # changes nothing observable until the manager has a token configured, at
-      # which point the node is a TEE VM in the field returning 401s. Cheaper to
-      # assert here that every fleet-calling function offers it.
-      - name: Check the sidecar offers its fleet token on every fleet call
-        id: fleet_token_headers
-        shell: bash
-        run: python3 scripts/ci/check-fleet-token-headers.py
-
-      # Runs here rather than in a probe workflow because it needs neither a TDX
-      # node nor an MDMA: it renders the sidecar template and drives its
-      # authorship-reporting logic against stubbed `meroctl` / `curl`. That logic
-      # decides when this node tells MDMA it can serve delegated execution, and
-      # it is silent in both failure directions, so it is worth checking on every
-      # change to the template.
-      - name: Run fleet-sidecar authorship test
-        id: sidecar_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-authorship-test.sh
-
-      # Same reasoning, for the other half of what the sidecar tells MDMA. The
-      # context inventory is what makes `GET /api/cloud/contexts/{id}/relays`
-      # able to answer at all, and it is wrong quietly in two directions: a
-      # context reported under the wrong group routes a client to a relay that
-      # will refuse the write, and a `full` report assembled from partial reads
-      # makes MDMA prune rows for contexts this node is serving.
-      - name: Run fleet-sidecar inventory test
-        id: sidecar_inventory_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-inventory-test.sh
-
-      # The recovery-envelope writer (mdma#223). Every way it can be wrong is
-      # invisible until someone's last device dies and there is no retroactive
-      # fix: writing for members with no cloud login hands MDMA the membership
-      # roster the inventory half is careful never to send, a partial list at a
-      # higher version destroys a good envelope exactly as a stale copy would,
-      # a version that resets across a restart earns a permanent 409, and
-      # detecting change by comparing ciphertexts rewrites forever because every
-      # seal mints a fresh ephemeral key.
-      - name: Run fleet-sidecar recovery test
-        id: sidecar_recovery_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-recovery-test.sh
-
-      # Attested node registration (mdma#225). The binding is a hash the
-      # sidecar and MDMA compute independently, so a field-order or separator
-      # change breaks every registration in a way that looks exactly like a bad
-      # attestation. The rest is retry semantics that fail quietly: recording a
-      # registration MDMA refused, or treating its 503 ("could not EVALUATE the
-      # quote") as a verdict, each leave a healthy node unadvertised for as long
-      # as it runs.
-      - name: Run fleet-sidecar registration test
-        id: sidecar_registration_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-registration-test.sh
-
-      # The executor account's availability at boot. Its VALUE is fixed for the
-      # life of the node, which is why it is read once -- but `After=merod.service`
-      # orders this unit's start without waiting for merod to be READY, so a boot
-      # that lost that race left the account empty for the life of the process.
-      # `reconcile_registration` returns immediately without one, and everything
-      # downstream hangs off that registration: no certificate row, so no A record
-      # and no certificate, so the node's name answered NXDOMAIN and it was never
-      # advertised as a relay -- while replicating and polling perfectly happily,
-      # with nothing on either side saying why.
-      - name: Run fleet-sidecar executor-account retry test
-        id: sidecar_account_retry_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-account-retry-test.sh
-
-      # The observability credential, which is HANDED TO THE NODE BY MDMA and
-      # deliberately not baked into the image: the image is an artifact whose
-      # distribution is not fully controlled, so anything in it should be assumed
-      # readable. Secret Manager is not an alternative -- mdma creates these
-      # instances with no service account, so there is no cloud identity to fetch
-      # with. Every failure here is quiet: reporting the token instead of its
-      # fingerprint sends a secret back up the wire once a second, and printing to
-      # stdout from the install corrupts the assignments payload that drives the
-      # LEAVE path, which purges keys.
-      - name: Run fleet-sidecar observability token test
-        id: sidecar_logs_token_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-logs-token-test.sh
-
-      # Node TLS. Without it a browser cannot reach a fleet node at all -- a
-      # page on an HTTPS origin may not call `http://`, and mixed content is
-      # blocked with no override. Each failure mode here is silent: the
-      # self-signed placeholder reporting its ten-year expiry means MDMA never
-      # orders a real certificate; a chain that does not match the node's key
-      # loads in traefik and breaks every handshake on a node already
-      # advertised as a relay; and `log` tees to stdout, so a warning inside a
-      # value-returning function is captured AS the value and MDMA is asked to
-      # sign it.
-      - name: Run fleet-sidecar TLS test
-        id: sidecar_tls_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-tls-test.sh
-
-      # Direct admission. The sidecar reports where its swarm can be dialed and
-      # asks the peers MDMA names for admission, instead of only broadcasting
-      # its attestation and hoping an owner's relayed laptop hears it. Wrong
-      # quietly in several ways: an external address with no `/p2p/<peer id>`
-      # cannot be dialed; a relay-circuit address contains the RELAY's peer id,
-      # not ours; and passing `--admitter-addr` to a meroctl that predates it
-      # fails every fleet-join on an unknown flag.
-      - name: Run fleet-sidecar direct admission test
-        id: sidecar_direct_admission_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-direct-admission-test.sh
-
-      # Join status. The sidecar forwards how each fleet-join went -- the
-      # directly-asked admitters' refusals and reasons, as core returns them --
-      # to MDMA's `/api/fleet/join-status`, so a namespace owner sees why a node
-      # is not joining. Wrong quietly if refusals are read only from a flat
-      # answer (meroctl wraps it), if the worker writes the state (only the loop
-      # may), or if a failed POST is remembered as delivered.
-      - name: Run fleet-sidecar join status test
-        id: sidecar_join_status_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-join-status-test.sh
-
-      # Device-key login needs the node's own key, which only merod knows. The
-      # sidecar records it and restarts mero-auth, only when it changes.
-      - name: Test fleet-sidecar records the device-key login node key
-        id: sidecar_login_key_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-login-key-test.sh
-
-      # Secrets must be CREATED restricted, not created loose and tightened.
-      # None of these units set `UMask=`, so systemd's default 0022 makes a
-      # token 0644 and a later `chmod` closes the window only after the secret
-      # is already on disk world-readable.
-      #
-      # The sidecar's writes are covered behaviourally by the logs-token test,
-      # which shadows `chmod` to observe the mode AS CREATED. calimero-init
-      # cannot be: it is a linear boot script with nothing to source. It is also
-      # where the observability token is written on every node at boot, so it is
-      # where this matters most -- and it is exactly where the check was missing
-      # when the sidecar was fixed.
       # A KMS join refused over differing registers is diagnosed from the two
       # replicas' CCEL event logs; the tool must parse, replay and diff them.
       - name: Check the TDX event log tool parses, replays and diffs logs
@@ -305,131 +164,34 @@ jobs:
         shell: bash
         run: scripts/ci/tests/release-image-name-test.sh
 
+      # Secrets must be CREATED restricted, not created loose and tightened.
+      # None of these units set `UMask=`, so systemd's default 0022 makes a
+      # token 0644 and a later `chmod` closes the window only after the secret
+      # is already on disk world-readable. calimero-init writes the
+      # observability token on every node at boot; it is a linear boot script
+      # with nothing to source, so the check is static.
       - name: Check every token file is created under a restrictive umask
         id: secret_umask_test
         shell: bash
         run: scripts/ci/tests/secret-file-umask-test.sh
-
-      # The data disk has to be mounted before merod initialises into it, and
-      # must never be mounted over a node whose state is already sitting on the
-      # root filesystem -- that hides the state and merod mints a fresh
-      # identity. It cannot be a GCP startup script: `merod-lockdown` blocks
-      # those on `locked-read-only`.
-      # A namespace enters `confirmed` only when the local join AND mdma's
-      # /confirm both succeed, so a join whose confirm is raced by the disable
-      # itself left the node a p2p member of a namespace in neither set -- and
-      # `confirmed - desired` never named it, so it was never left.
-      - name: Check the leave diff follows admission, not mdma's record
-        id: leave_set_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-leave-set-test.sh
-
-      # Leaving purges the namespace's keys and data, so mdma no longer listing
-      # one only starts a clock: the leave waits out a grace period that survives
-      # restarts, is refused when most namespaces vanish at once, and is rate
-      # limited. Runs the whole sidecar loop against stubs.
-      - name: Check one should-join answer cannot purge a fleet node
-        id: leave_grace_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-leave-grace-test.sh
-
-      # The should-join poll is a node's only heartbeat to mdma, and it shares a
-      # loop with every `meroctl` the sidecar runs. One fleet-join that never
-      # returned (2.3.106, prod) stopped a node's heartbeats for 40+ minutes
-      # while systemd saw a healthy process. Runs the real loop against a
-      # meroctl that never returns: the poll must keep its cadence, and each
-      # call must be killed at its budget and retried.
-      - name: Check a hung meroctl never stops the heartbeat
-        id: meroctl_timeout_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-meroctl-timeout-test.sh
-
-      # fleet-join runs in one background worker so the poll never waits on it.
-      # The loop alone writes state and takes only the result of the launch it
-      # is waiting for: a stale, garbled or missing result is a failed join,
-      # and a wedged worker is killed by the watchdog.
-      - name: Check the fleet-join worker hands over only its own result
-        id: join_worker_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-join-worker-test.sh
-
-      # should-join reports the namespaces merod holds, so mdma can confirm an
-      # adopted founding relay holds the namespace it was adopted for. A list
-      # (even `[]`) is "holds exactly these" and no field is "no report", so a
-      # failed, hung or partial `meroctl namespace ls` must omit the field --
-      # and must never delay the poll. Runs the whole sidecar against stubs.
-      - name: Check should-join reports held namespaces, or nothing
-        id: held_namespaces_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-held-namespaces-test.sh
-
-      # should-join also reports the devices merod holds revoked per namespace;
-      # a namespace whose read fails is omitted from the map, never sent as [].
-      - name: Check should-join reports revoked devices, or nothing
-        id: revoked_devices_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-revoked-devices-test.sh
-
-      # The sidecar's python helpers take their inputs as argv, so a value with
-      # a quote in it cannot break them, and poll_mdma checks the shape of every
-      # group id before the loop acts on it.
-      - name: Check the sidecar's python helpers take argv
-        id: json_args_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-json-args-test.sh
-
-      # A namespace switch is complete only when the inventory reports the
-      # version its contexts run, since an application id never changes between
-      # releases. Covers the install-then-activate order, the retry spacing, and
-      # the lowest-semver rule behind running_version.
-      - name: Check the sidecar switches namespaces and reports running versions
-        id: switch_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-switch-test.sh
-
-      # The set that diff reads starts EMPTY on the first boot after the build
-      # that introduced it, and the join loop skips anything already confirmed --
-      # so nothing ever records the namespaces joined under the previous build,
-      # and a later disable never makes the node leave them. Seeding from
-      # `confirmed` (a subset of admitted, by construction) bridges that boot.
-      - name: Check the admitted set survives the upgrade that introduced it
-        id: admitted_seed_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-admitted-seed-test.sh
-
-      # server-port / swarm-port are host-set metadata that reach merod's
-      # arguments and a loopback URL, so they must be ports.
-      - name: Check port metadata is a port or the default
-        id: metadata_port_test
-        shell: bash
-        run: scripts/ci/tests/metadata-port-test.sh
-
-      # merod admits browser pages from any origin on a node that takes callers'
-      # identity from the proxy, so a relay sets no allowed_origins (that list is
-      # also the CORS allow-list, which shut every hosted app out) and drops the
-      # one 2.3.109 wrote into config.toml, which persists on the data disk.
-      - name: Check a relay pins no browser origin
-        id: no_origin_pin_test
-        shell: bash
-        run: scripts/ci/tests/calimero-init-no-origin-pin-test.sh
 
       - name: Check the data disk is mounted before use
         id: data_disk_test
         shell: bash
         run: scripts/ci/tests/calimero-init-data-disk-test.sh
 
-      # TDX protects memory, not disks, so merod's store -- the node's admitted
-      # signing identity and account root -- must be encrypted with a KMS key,
-      # and from `merod init` onwards. Runs the decision against a stub merod:
-      # locked-read-only never creates a plaintext store, and a KMS that cannot
-      # be verified (no tee-release-version) is never used.
-      - name: Check new nodes get a KMS-encrypted store
+      # merod 1.0 takes its storage key from mero-kms only and its cluster
+      # settings from instance metadata. Runs the decision against a stub merod
+      # and stub metadata: every value is checked before it becomes the node's
+      # for good, nothing that weakens TDX mode or fixes governance is passed,
+      # and locked-read-only never boots a node without a KMS.
+      - name: Check merod 1.0 is configured from checked metadata, keyed by the KMS
         id: store_encryption_test
         shell: bash
         run: scripts/ci/tests/calimero-init-store-encryption-test.sh
 
-      # The store is not the whole disk: config.toml, the TLS key, mero-auth's
-      # database and the fleet token sit beside it. So the data disk itself is
+      # The store is not the whole disk: config.toml, the TLS key and the KMS
+      # identity sit beside it. So the data disk itself is
       # LUKS2 with integrity, keyed from the KMS. Runs the disk block against
       # stub cryptsetup/blkid/mount/merod: only a disk blkid reports blank is
       # ever formatted, an existing LUKS disk is reopened from its header token,
@@ -495,16 +257,6 @@ jobs:
         shell: bash
         run: python3 scripts/ci/tests/inference-model-test.py
 
-      # A node with no fleet token must still be able to register. should-join
-      # requires a token; registration ISSUES one and takes none. Poll first and
-      # a fresh node 401s, `continue`s, and never reaches the code that would
-      # register it -- a closed, silent loop that only became reachable when the
-      # baked fleet token was removed from the image.
-      - name: Check registration runs before the should-join gate
-        id: bootstrap_order_test
-        shell: bash
-        run: scripts/ci/tests/fleet-sidecar-bootstrap-order-test.sh
-
       # Node metrics must say which node they came from. The scrape target is
       # `localhost:9100` on every node, so without identifying labels the whole
       # fleet collapses into one series and samples interleave -- plausible,
@@ -533,57 +285,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/observability-config-injection-test.sh
 
-      # Every ingress router must carry a request-rate limit, first in its
-      # chain. Two of these routes verify signatures for callers holding no
-      # credential -- deliberately, since a credential would make both features
-      # unreachable for the callers they exist for -- so an unlimited ingress is
-      # a way to spend a node's CPU from anywhere. A limit placed after
-      # `auth-node` is worse than none in one respect: it pays for a forwardAuth
-      # subrequest per flooded request, so a flood of the node becomes a flood of
-      # its auth service.
-      - name: Check every ingress router is rate limited, first in its chain
-        id: traefik_rate_limit_test
+      # Traefik is a TLS front for merod 1.0 and nothing else: one router to
+      # merod, no forwardAuth, rate limit, CORS or header middleware, since
+      # merod authenticates its callers inside the sealed channel and peers
+      # share the public URL.
+      - name: Check traefik passes every request to merod untouched
+        id: traefik_passthrough_test
         shell: bash
-        run: scripts/ci/tests/traefik-rate-limit-test.sh
-
-      # mero-auth checks a scoped token against X-Forwarded-Uri/-Method. If
-      # traefik trusts the client's values, the caller picks the route its token
-      # is checked against (mero-tee#339).
-      - name: Check forwardAuth does not trust client X-Forwarded-* headers
-        id: traefik_forward_auth_test
-        shell: bash
-        run: scripts/ci/tests/traefik-forward-auth-test.sh
-
-      # merod scopes a device-key session by X-Auth-Account / X-Auth-Device
-      # (server.proxy_identity). Only mero-auth may write them: auth-node
-      # replaces them, and every entrypoint strips a client's.
-      - name: Check a client cannot name the account merod scopes it as
-        id: traefik_proxy_identity_test
-        shell: bash
-        run: scripts/ci/tests/traefik-proxy-identity-test.sh
-
-      # mero-auth's account_proof provider refuses to start without the node's
-      # key, and a mero-auth that does not start takes forwardAuth down.
-      - name: Check mero-auth-start enables device-key login only with a node key
-        id: mero_auth_device_login_test
-        shell: bash
-        run: scripts/ci/tests/mero-auth-device-login-test.sh
-
-      # Everything under /admin-api/tee/ except info and attest is on core's
-      # protected router, which only traefik guards on these nodes.
-      - name: Check the public TEE router serves only info and attest
-        id: traefik_tee_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-tee-route-test.sh
-
-      # The sealed-transport router is exempt from auth-node because forwardAuth
-      # cannot see inside an envelope. It is safe only relay-only, on exact
-      # paths, rate limited, and in front of a merod (>= 0.11.0-rc.52) that
-      # refuses opened requests for any route a proxy guards.
-      - name: Check the sealed-transport router cannot bypass auth-node
-        id: traefik_sealed_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-sealed-route-test.sh
+        run: scripts/ci/tests/traefik-passthrough-test.sh
 
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
@@ -592,16 +301,6 @@ jobs:
         id: tcb_outofdate_gate_test
         shell: bash
         run: scripts/ci/tests/tcb-outofdate-gate-test.sh
-
-      # The delegated routers (`/intents`, `/presence-intents`,
-      # `/context-intents`, `/governance-intents`) skip auth-node
-      # on relays. Routes requests through every router the way Traefik does,
-      # so a looser pattern (uppercase hex, any id length, a trailing slash, one
-      # more segment) fails here instead of opening a protected route.
-      - name: Check the delegated routes serve exactly their own paths
-        id: traefik_delegated_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-delegated-route-test.sh
 
       # The log-auth check (staging probe, node and KMS releases) only runs on
       # real GCP; this pins what could make it lie without any cloud: the
@@ -620,14 +319,6 @@ jobs:
         id: gcp_create_instance_test
         shell: bash
         run: scripts/ci/tests/gcp-create-instance-retry-test.sh
-
-      # Relays set `server.sealed.forward_auth` so a sealed login or logged-in
-      # call is checked by the same mero-auth traefik's auth-node asks, on a
-      # merod (>= 0.11.0-rc.84) that knows the key, and never fatally.
-      - name: Check sealed requests are guarded by traefik's own mero-auth
-        id: sealed_forward_auth_test
-        shell: bash
-        run: scripts/ci/tests/sealed-forward-auth-test.sh
 
       # Every binary the image build downloads is pinned by sha256 in
       # mero-tee/build-inputs.lock.json, for the versions versions.json names,
@@ -665,18 +356,6 @@ jobs:
             --inputs-line "- Ref: ${GITHUB_REF_NAME}" \
             --checks-line "- actionlint: ${{ steps.actionlint.outcome }}" \
             --checks-line "- shellcheck: ${{ steps.shellcheck.outcome }}" \
-            --checks-line "- fleet-sidecar authorship test: ${{ steps.sidecar_test.outcome }}" \
-            --checks-line "- fleet-sidecar inventory test: ${{ steps.sidecar_inventory_test.outcome }}" \
-            --checks-line "- fleet-sidecar recovery test: ${{ steps.sidecar_recovery_test.outcome }}" \
-            --checks-line "- fleet-sidecar registration test: ${{ steps.sidecar_registration_test.outcome }}" \
-            --checks-line "- fleet-sidecar executor-account retry test: ${{ steps.sidecar_account_retry_test.outcome }}" \
-            --checks-line "- fleet-sidecar TLS test: ${{ steps.sidecar_tls_test.outcome }}" \
-            --checks-line "- fleet-sidecar direct admission test: ${{ steps.sidecar_direct_admission_test.outcome }}" \
-            --checks-line "- fleet-sidecar join status test: ${{ steps.sidecar_join_status_test.outcome }}" \
-            --checks-line "- fleet-sidecar login node key test: ${{ steps.sidecar_login_key_test.outcome }}" \
-            --checks-line "- mero-auth device-key login test: ${{ steps.mero_auth_device_login_test.outcome }}" \
-            --checks-line "- traefik proxy identity test: ${{ steps.traefik_proxy_identity_test.outcome }}" \
-            --checks-line "- fleet-sidecar observability token test: ${{ steps.sidecar_logs_token_test.outcome }}" \
             --checks-line "- TDX event log tool test: ${{ steps.tdx_event_log_test.outcome }}" \
             --checks-line "- UKI probe evidence tool test: ${{ steps.uki_probe_evidence_test.outcome }}" \
             --checks-line "- RTMR calculator test: ${{ steps.compute_rtmr_test.outcome }}" \
@@ -684,35 +363,18 @@ jobs:
             --checks-line "- KMS allowlists verified and well-formed: ${{ steps.kms_node_allowlist_test.outcome }}" \
             --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
-            --checks-line "- port metadata is a port or the default: ${{ steps.metadata_port_test.outcome }}" \
-            --checks-line "- relay pins no browser origin: ${{ steps.no_origin_pin_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
-            --checks-line "- new nodes get a KMS-encrypted store: ${{ steps.store_encryption_test.outcome }}" \
+            --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \
             --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
             --checks-line "- agent slots isolated per user: ${{ steps.agent_slots_test.outcome }}" \
             --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
-            --checks-line "- leave diff follows admission: ${{ steps.leave_set_test.outcome }}" \
-            --checks-line "- leaves wait out a grace, never en masse: ${{ steps.leave_grace_test.outcome }}" \
-            --checks-line "- hung meroctl never stops the heartbeat: ${{ steps.meroctl_timeout_test.outcome }}" \
-            --checks-line "- fleet-join worker handshake: ${{ steps.join_worker_test.outcome }}" \
-            --checks-line "- should-join reports held namespaces: ${{ steps.held_namespaces_test.outcome }}" \
-            --checks-line "- should-join reports revoked devices: ${{ steps.revoked_devices_test.outcome }}" \
-            --checks-line "- sidecar python helpers take argv: ${{ steps.json_args_test.outcome }}" \
-            --checks-line "- sidecar switches namespaces and reports running versions: ${{ steps.switch_test.outcome }}" \
-            --checks-line "- admitted set seeded on upgrade: ${{ steps.admitted_seed_test.outcome }}" \
-            --checks-line "- registration precedes the poll gate: ${{ steps.bootstrap_order_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
-            --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
-            --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
-            --checks-line "- sealed router cannot bypass auth-node: ${{ steps.traefik_sealed_route_test.outcome }}" \
-            --checks-line "- delegated routes serve exactly their own paths: ${{ steps.traefik_delegated_route_test.outcome }}" \
-            --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
+            --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
-            --checks-line "- sealed requests guarded by mero-auth: ${{ steps.sealed_forward_auth_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
             --checks-line "- release signs only the agent allowlists: ${{ steps.kms_agent_policy_signing_test.outcome }}" \
             --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \

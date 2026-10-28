@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
-# New nodes get a KMS-encrypted store, and locked-read-only never creates a
-# plaintext one.
+# merod 1.0 is configured from instance metadata, with its storage key from
+# mero-kms only, and locked-read-only never boots a node without one.
 #
-# TDX protects the VM's memory, not its disks. merod's store holds the node's
-# signing identity -- the key it was admitted under as a ReadOnlyTee -- and its
-# account root, so a plaintext store on the host-readable data disk means a
-# disk snapshot is a copy of an admitted fleet member. The store is therefore
-# encrypted with a key mero-kms releases only to an attested TD, and it
-# has to be encrypted from `merod init` onwards: init is what writes those keys,
-# and a store written in plaintext cannot later be opened encrypted.
+# In TDX mode merod 1.0 takes its storage key K_r only from mero-kms
+# (`--kms-url` + `--kms-identity`); `--storage-key[-file]` is refused without
+# `--dev`, which this image never passes. So calimero-init must hand `merod
+# init` the KMS and the cluster settings mdma stamps as instance metadata, check
+# every value before it becomes the node's identity for good, and pass nothing
+# that would weaken TDX mode or fix governance from the host.
 #
-# Unlike the data-disk test this one EXECUTES the decision: it slices the
-# storage-encryption block (and `init_node`) out of the template, runs it
-# against a stub merod, and checks what `merod init` was called with -- or that
-# it was not called at all -- for every combination that matters:
+# Like the data-disk test this one EXECUTES the decision: it slices the block
+# (and `init_node`) out of the template, runs it against a stub merod and stub
+# metadata, and checks what `merod init` was called with, or that it was not
+# called at all:
 #
-#   * a KMS URL and a release   -> init --kms-url, MERO_TEE_VERSION exported
-#   * a KMS URL, no release     -> refuse (the KMS could not be verified)
-#   * no KMS URL, locked        -> refuse; on debug profiles, plaintext + WARN
-#   * a merod without the flag  -> refuse on locked; plaintext + WARN on debug
-#   * an existing encrypted node -> no init; refuse on locked with no release
-#   * an existing plaintext node -> no init, keeps running, WARNs
-#   * a half-initialised home   -> init retried (keyed on config.toml)
-#   * no KMS, store on tmpfs    -> init without one (memory only, all profiles);
-#     refused on locked when swap is active
+#   * KMS, release, node-id, public-url, cluster -> init with the KMS identity
+#     on the data disk and each metadata key as merod's own flag
+#   * a KMS URL, no release                     -> refuse
+#   * no KMS: locked with a disk store          -> refuse; memory-only or debug
+#                                                  -> boot, merod not started
+#   * a merod that is not 1.0                    -> refuse, on every profile
+#   * no node-id / public-url; no cluster on locked -> refuse
+#   * a value that is not the shape merod takes  -> refuse
+#   * governance, --dev, storage keys, the ops token in the clear -> never passed
+#   * an existing node                           -> no init, merod started
+#   * v1 state on the disk                       -> warned about, left alone
 #
 # Usage: scripts/ci/tests/calimero-init-store-encryption-test.sh
 # shellcheck disable=SC2016
@@ -40,79 +41,82 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
 init_fn="$(awk '/^INIT_EXTRA_ARGS=\(\)$/,/^}$/' "$TEMPLATE")"
-# The block runs from NODE_CONFIG to the end of the init decision (its first
-# top-level `fi`). `fatal` and the MERO_TEE_VERSION export live earlier in the
-# script (the data disk needs both first), so the harness provides them -- and
-# checks below that the template still exports the release before init.
-decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} on{print} on && /^fi$/{n++} on && n==1{exit}' "$TEMPLATE")"
+decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} /^# TLS material for traefik\.$/{exit} on{print}' "$TEMPLATE")"
 [[ -n "$init_fn" ]] || fail "could not find init_node / INIT_EXTRA_ARGS in the template; this test slices on them"
-[[ -n "$decision" ]] || fail "could not find the storage-encryption block (NODE_CONFIG=...) in the template"
-grep -qF 'merod_can_encrypt_at_init' <<<"$decision" \
-  || fail "the sliced block does not contain the decision it is meant to test"
-grep -qF 'init_node' <<<"$decision" \
-  || fail "the sliced block does not reach init_node; the slice boundary moved"
-# `merod init --kms-url` verifies the KMS against MERO_TEE_VERSION, so the
-# template must export it (from the sanitized metadata value) before init runs.
+[[ -n "$decision" ]] || fail "could not find the merod block (NODE_CONFIG=... up to the TLS material) in the template"
+grep -qF 'merod_is_1_0' <<<"$decision" || fail "the sliced block does not contain the decision it is meant to test"
+grep -qF '  init_node' <<<"$decision" || fail "the sliced block does not reach init_node; the slice boundary moved"
+# merod verifies the KMS against MERO_TEE_VERSION, so the template must export
+# it (from the sanitized metadata value) before the decision runs.
 export_line=$(grep -nF 'export MERO_TEE_VERSION="$SANITIZED_TEE_RELEASE_VERSION"' "$TEMPLATE" | head -1 | cut -d: -f1)
 node_config_line=$(grep -nF 'NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"' "$TEMPLATE" | head -1 | cut -d: -f1)
 if [[ -z "$export_line" || -z "$node_config_line" ]] || (( export_line > node_config_line )); then
-  fail "calimero-init must export MERO_TEE_VERSION before the storage-encryption decision"
+  fail "calimero-init must export MERO_TEE_VERSION before the merod decision"
 fi
+grep -q '^CALIMERO_HOME="/mnt/data/merod"$' "$TEMPLATE" \
+  || fail "merod 1.0's home must be /mnt/data/merod, apart from v1's /mnt/data/calimero"
 
-# One scenario: metadata + profile + node-home state in, exit code and the
-# stub's record of `merod init` out.
+URL="https://kms.example:8080/"
+PUBLIC="https://n1.eu1.example.com/"
+SHA="$(printf 'ops' | sha256sum | awk '{print $1}')"
+
+# run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
+# Each KEY=VALUE is one instance metadata item.
 run_case() {
-  local name="$1" profile="$2" kms_url="$3" release="$4" merod_kms="$5" home_state="$6"
-  # Where the node home lives, and what `swapon` reports. Defaults: a disk, no swap.
-  local store_fs="${7:-ext4}" swap="${8:-}"
+  local name="$1" profile="$2" kms_url="$3" release="$4" merod="$5" home_state="$6" store_fs="$7"
+  shift 7
   local dir="$WORK/$name"
-  mkdir -p "$dir/bin" "$dir/home"
+  mkdir -p "$dir/bin" "$dir/mnt/data/merod" "$dir/meta"
+  local kv
+  for kv in "$@"; do [[ -n "$kv" ]] && printf '%s' "${kv#*=}" >"$dir/meta/${kv%%=*}"; done
 
-  # Stub merod: `init --help` advertises --kms-url only when asked to, and
-  # `init` records its arguments and the release it saw.
   cat >"$dir/bin/merod" <<STUB
 #!/usr/bin/env bash
 if [[ " \$* " == *" --help "* ]]; then
   echo "Usage: merod init [OPTIONS]"
-  [[ "$merod_kms" == yes ]] && echo "      --kms-url <URL>"
+  echo "      --kms-url <URL>"
+  if [[ "$merod" == 1.0 ]]; then
+    echo "      --node-id <N>"
+    echo "      --kms-identity <FILE>"
+  fi
   exit 0
 fi
 [[ " \$* " == *" init "* ]] || exit 0
-printf '%s\n' "\$*" >"$dir/init-args"
+printf '%s\n' "\$@" >"$dir/init-args"
 printf '%s\n' "\${MERO_TEE_VERSION:-}" >"$dir/init-release"
 STUB
   chmod +x "$dir/bin/merod"
   printf '#!/usr/bin/env bash\necho %s\n' "$store_fs" >"$dir/bin/findmnt"
-  printf '#!/usr/bin/env bash\n[[ -n "%s" ]] && echo "%s"\nexit 0\n' "$swap" "$swap" >"$dir/bin/swapon"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$dir/bin/swapon"
   chmod +x "$dir/bin/findmnt" "$dir/bin/swapon"
 
   case "$home_state" in
     fresh) ;;
-    half) mkdir -p "$dir/home/default" ;;
-    encrypted) mkdir -p "$dir/home/default"
-               printf '[identity]\n\n[tee.kms]\nurl = "https://kms/"\n' >"$dir/home/default/config.toml" ;;
-    plaintext) mkdir -p "$dir/home/default"
-               printf '[identity]\n' >"$dir/home/default/config.toml" ;;
+    existing) mkdir -p "$dir/mnt/data/merod/default"
+              printf 'node-id = 1\nkms-url = "%s"\n' "$URL" >"$dir/mnt/data/merod/default/config.toml" ;;
+    v1) mkdir -p "$dir/mnt/data/calimero/default"
+        printf '[identity]\n' >"$dir/mnt/data/calimero/default/config.toml" ;;
   esac
 
+  local block
+  block="${decision//\"\/mnt\/data\/calimero\"/\"$dir\/mnt\/data\/calimero\"}"
   cat >"$dir/run.sh" <<RUN
 set -euo pipefail
 log() { echo "\$*" >>"$dir/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
+get_meta() { cat "$dir/meta/\$1" 2>/dev/null || true; }
 if [[ -n "$release" ]]; then export MERO_TEE_VERSION="$release"; fi
 PATH="$dir/bin:\$PATH"
 BIN_DIR="$dir/bin"
-CALIMERO_HOME="$dir/home"
+CALIMERO_HOME="$dir/mnt/data/merod"
 CALIMERO_NODE="default"
 IMAGE_PROFILE="$profile"
-MEROD_MODE="read-only"
-SERVER_PORT=2428
-SWARM_PORT=2528
 KMS_URL="$kms_url"
 TEE_RELEASE_VERSION="$release"
 SANITIZED_TEE_RELEASE_VERSION="$release"
 $init_fn
-$decision
+$block
+echo "\$MEROD_READY" >"$dir/ready"
 RUN
   set +e
   bash "$dir/run.sh" >/dev/null 2>&1
@@ -121,80 +125,111 @@ RUN
 }
 
 rc() { cat "$WORK/$1/rc"; }
+ready() { cat "$WORK/$1/ready" 2>/dev/null || echo unset; }
 init_ran() { [[ -f "$WORK/$1/init-args" ]]; }
-init_args() { cat "$WORK/$1/init-args"; }
+# The argument after FLAG in merod init's argv, or nothing.
+arg() { awk -v f="$2" 'p{print; exit} $0==f{p=1}' "$WORK/$1/init-args" 2>/dev/null; }
+has_flag() { grep -qx -- "$2" "$WORK/$1/init-args" 2>/dev/null; }
 logged() { grep -qF "$2" "$WORK/$1/log" 2>/dev/null; }
 
-URL="https://kms.example:8080/"
+BASE=(node-id=1 "public-url=$PUBLIC" cluster=eu1)
 
-# --- a new node with a KMS and a release: encrypted from the first write ----
-run_case encrypt locked-read-only "$URL" 2.3.70 yes fresh
-[[ "$(rc encrypt)" == 0 ]] || fail "a fresh node with kms-url and a release should initialise (rc=$(rc encrypt))"
-init_ran encrypt || fail "merod init was not run for a fresh node"
-init_args encrypt | grep -qF -- "--kms-url $URL" \
-  || fail "merod init was not given --kms-url: $(init_args encrypt)"
-[[ "$(cat "$WORK/encrypt/init-release")" == 2.3.70 ]] \
-  || fail "MERO_TEE_VERSION was not exported to merod init; it cannot verify the KMS without it"
+# --- a new node: the KMS, its identity on the data disk, the cluster --------
+run_case full locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" \
+  "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
+  rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
+  "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+  peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3 \
+  release-approvals=operator app-upgrades=operator outbound-approvals=operator \
+  dev=true storage-key=00 storage-key-file=/x ops-token=plain allow-unsigned-bundles=true listen=0.0.0.0:1
+[[ "$(rc full)" == 0 ]] || fail "a new node with a KMS, a release and its cluster metadata should initialise (rc=$(rc full)): $(cat "$WORK/full/log")"
+init_ran full || fail "merod init was not run for a new node"
+[[ "$(arg full --kms-url)" == "$URL" ]] || fail "merod init was not given --kms-url"
+[[ "$(arg full --kms-identity)" == "$WORK/full/mnt/data/merod/kms-identity" ]] \
+  || fail "the KMS identity must live in merod's home on the data disk, got '$(arg full --kms-identity)'"
+[[ "$(cat "$WORK/full/init-release")" == 2.3.70 ]] || fail "MERO_TEE_VERSION was not exported to merod init"
+for kv in node-id=1 "public-url=$PUBLIC" cluster=eu1 \
+          "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
+          rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
+          "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+          peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3; do
+  [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "metadata ${kv%%=*} did not reach merod init as --${kv%%=*} ${kv#*=}"
+done
+for flag in --release-approvals --app-upgrades --outbound-approvals --dev --storage-key --storage-key-file \
+            --ops-token --allow-unsigned-bundles --listen --data-dir --metrics-listen; do
+  has_flag full "$flag" && fail "merod init was given $flag from instance metadata"
+done
+[[ "$(ready full)" == true ]] || fail "a node that initialised must be started"
+
+# Only the keys that are set reach merod init.
+run_case minimal debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLIC"
+[[ "$(rc minimal)" == 0 ]] || fail "a debug node with node-id and public-url should initialise: $(cat "$WORK/minimal/log")"
+[[ "$(wc -l <"$WORK/minimal/init-args")" == 13 ]] \
+  || fail "unset metadata reached merod init: $(tr '\n' ' ' <"$WORK/minimal/init-args")"
 
 # --- a KMS with no release to verify it against: refuse ---------------------
-run_case no-release locked-read-only "$URL" "" yes fresh
+run_case no-release locked-read-only "$URL" "" 1.0 fresh ext4 "${BASE[@]}"
 [[ "$(rc no-release)" != 0 ]] || fail "a KMS URL without tee-release-version must stop the boot"
 init_ran no-release && fail "merod init ran with an unverifiable KMS"
 
-# --- no KMS on locked: refuse; on debug profiles: plaintext, loudly ---------
-run_case locked-no-kms locked-read-only "" 2.3.70 yes fresh
-[[ "$(rc locked-no-kms)" != 0 ]] || fail "locked-read-only must refuse to create a node without kms-url"
-init_ran locked-no-kms && fail "locked-read-only created a plaintext node"
+# --- no KMS -------------------------------------------------------------------
+run_case locked-no-kms locked-read-only "" 2.3.70 1.0 fresh ext4 "${BASE[@]}"
+[[ "$(rc locked-no-kms)" != 0 ]] || fail "locked-read-only with its store on a disk must refuse to boot without kms-url"
+init_ran locked-no-kms && fail "merod init ran without a KMS"
 
-run_case debug-no-kms debug-read-only "" 2.3.70 yes fresh
-[[ "$(rc debug-no-kms)" == 0 ]] || fail "a debug profile without a KMS should still initialise"
-init_ran debug-no-kms || fail "merod init was not run on a debug profile without a KMS"
-init_args debug-no-kms | grep -qF -- '--kms-url' && fail "--kms-url passed with no KMS URL"
-logged debug-no-kms "UNENCRYPTED" || fail "a plaintext debug node must say so in the log"
+run_case memory-only locked-read-only "" "" 1.0 fresh tmpfs "${BASE[@]}"
+[[ "$(rc memory-only)" == 0 ]] || fail "a memory-only node without a KMS (the measurement VM) must still boot"
+init_ran memory-only && fail "merod init ran without a KMS on a memory-only node"
+[[ "$(ready memory-only)" == false ]] || fail "merod must not be started without a storage key source"
+logged memory-only "NOT started" || fail "a node that does not start merod must say so"
 
-# --- a merod that cannot encrypt at init ------------------------------------
-run_case locked-old-merod locked-read-only "$URL" 2.3.70 no fresh
-[[ "$(rc locked-old-merod)" != 0 ]] || fail "locked-read-only must refuse when merod has no init --kms-url"
-init_ran locked-old-merod && fail "locked-read-only created a plaintext node on a merod that cannot encrypt"
+run_case debug-no-kms debug-read-only "" 2.3.70 1.0 fresh ext4 "${BASE[@]}"
+[[ "$(rc debug-no-kms)" == 0 ]] || fail "a debug node without a KMS should boot (without merod)"
+[[ "$(ready debug-no-kms)" == false ]] || fail "merod 1.0 cannot run without a KMS in TDX mode; it must not be started"
 
-run_case debug-old-merod debug "$URL" 2.3.70 no fresh
-[[ "$(rc debug-old-merod)" == 0 ]] || fail "a debug profile on an old merod should still initialise"
-init_args debug-old-merod | grep -qF -- '--kms-url' && fail "--kms-url passed to a merod that does not have it"
-logged debug-old-merod "UNENCRYPTED" || fail "a plaintext debug node must say so in the log"
+# --- a merod that is not 1.0 ---------------------------------------------------
+run_case old-merod debug "$URL" 2.3.70 v1 fresh ext4 "${BASE[@]}"
+[[ "$(rc old-merod)" != 0 ]] || fail "an image whose merod is not 1.0 must refuse, on every profile"
+init_ran old-merod && fail "merod init ran on a merod that is not 1.0"
 
-# --- a store held only in memory (the release measurement VM) --------------
-run_case memory-only locked-read-only "" "" yes fresh tmpfs
-[[ "$(rc memory-only)" == 0 ]] || fail "locked-read-only on a tmpfs with no swap should initialise without a KMS (rc=$(rc memory-only))"
-init_ran memory-only || fail "merod init was not run for a memory-only node"
-init_args memory-only | grep -q -- '--kms-url' && fail "a memory-only node with no KMS URL passed --kms-url"
-logged memory-only "TDX-encrypted memory" || fail "a memory-only node must say where its store is"
+# --- required metadata ---------------------------------------------------------
+run_case no-node-id locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "public-url=$PUBLIC" cluster=eu1
+[[ "$(rc no-node-id)" != 0 ]] || fail "a node without node-id metadata must not initialise"
+run_case no-public-url locked-read-only "$URL" 2.3.70 1.0 fresh ext4 node-id=1 cluster=eu1
+[[ "$(rc no-public-url)" != 0 ]] || fail "a node without public-url metadata must not initialise"
+run_case no-cluster locked-read-only "$URL" 2.3.70 1.0 fresh ext4 node-id=1 "public-url=$PUBLIC"
+[[ "$(rc no-cluster)" != 0 ]] || fail "locked-read-only must not take merod's default cluster (dev)"
+init_ran no-cluster && fail "merod init ran on locked-read-only without a cluster"
 
-run_case memory-swap locked-read-only "" "" yes fresh tmpfs "/dev/sdb partition 4G 0B -2"
-[[ "$(rc memory-swap)" != 0 ]] || fail "a tmpfs that can page out to swap is not memory-only; locked-read-only must refuse"
-init_ran memory-swap && fail "locked-read-only created a store that swap could write to disk"
+# --- values that are not what merod takes -------------------------------------
+n=0
+for bad in "node-id=1; reboot" "node-id=-1" "public-url=javascript:alert(1)" "public-url=https://a b/" \
+           "cluster=eu 1" "peers=1=https://n1/,two=https://n2/" "bootstrap=yes" \
+           "ops-token-sha256=abc" "origins=https://a.example,ftp://b" "replicas=three" \
+           "peer-profiles=Locked" "rp-id=-bad-.example"; do
+  key="${bad%%=*}"
+  args=("${BASE[@]}")
+  args=("${args[@]/#${key}=*/}")
+  n=$((n + 1))
+  run_case "bad-$n" locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${args[@]}" "$bad"
+  last="$WORK/bad-$n"
+  [[ "$(cat "$last/rc")" != 0 ]] || fail "metadata '$bad' was accepted"
+  [[ -f "$last/init-args" ]] && fail "merod init ran with metadata '$bad'"
+done
 
-run_case memory-with-kms locked-read-only "$URL" 2.3.70 yes fresh tmpfs
-init_args memory-with-kms | grep -qF -- "--kms-url $URL" \
-  || fail "a memory-only node that is given a KMS must still use it"
+# --- an existing node is never re-initialised ---------------------------------
+run_case existing locked-read-only "$URL" 2.3.70 1.0 existing ext4 node-id=9 "public-url=$PUBLIC" cluster=eu1
+[[ "$(rc existing)" == 0 ]] || fail "an existing node should boot"
+init_ran existing && fail "merod init re-ran over an existing node"
+[[ "$(ready existing)" == true ]] || fail "an existing node must be started"
 
-# --- existing nodes are never re-initialised --------------------------------
-run_case existing-encrypted locked-read-only "$URL" 2.3.70 yes encrypted
-[[ "$(rc existing-encrypted)" == 0 ]] || fail "an existing encrypted node should boot"
-init_ran existing-encrypted && fail "merod init re-ran over an existing node"
+run_case existing-no-release locked-read-only "$URL" "" 1.0 existing ext4
+[[ "$(rc existing-no-release)" != 0 ]] || fail "an existing node with no tee-release-version must not start"
 
-run_case encrypted-no-release locked-read-only "$URL" "" yes encrypted
-[[ "$(rc encrypted-no-release)" != 0 ]] \
-  || fail "an encrypted locked node with no tee-release-version must not start: merod would take its key from an unverified KMS"
+# --- v1 state on the disk is left alone ----------------------------------------
+run_case v1-state locked-read-only "$URL" 2.3.70 1.0 v1 ext4 "${BASE[@]}"
+[[ "$(rc v1-state)" == 0 ]] || fail "a disk holding v1 state should still get a merod 1.0 node"
+logged v1-state "v1 node's state" || fail "v1 state on the disk must be reported"
+[[ -f "$WORK/v1-state/mnt/data/calimero/default/config.toml" ]] || fail "v1 state was touched"
 
-run_case existing-plaintext locked-read-only "$URL" 2.3.70 yes plaintext
-[[ "$(rc existing-plaintext)" == 0 ]] || fail "a pre-existing plaintext node must keep running"
-init_ran existing-plaintext && fail "merod init re-ran over an existing plaintext node"
-logged existing-plaintext "must be treated as exposed" \
-  || fail "a pre-existing plaintext node must warn that its keys are exposed"
-
-# --- a half-finished init is retried, not mistaken for a node ---------------
-run_case half locked-read-only "$URL" 2.3.70 yes half
-[[ "$(rc half)" == 0 ]] || fail "a node home without config.toml should be initialised"
-init_ran half || fail "a node home left without config.toml (failed KMS fetch) was not re-initialised"
-
-echo "PASS: new nodes are KMS-encrypted from init, locked-read-only never creates a plaintext store"
+echo "PASS: merod 1.0 is configured from checked metadata with its storage key from mero-kms, and never without one on locked-read-only"

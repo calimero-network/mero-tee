@@ -256,6 +256,17 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 </Steps>
 
+:::caution[Not yet adapted to merod 1.0]
+The measurement VM boots with `ephemeral-store=true` and no KMS (the release's
+KMS is published only after its image is measured), and collects the quote from
+merod's v1 routes (`/admin-api/health`, `/admin-api/tee/info`,
+`/admin-api/tee/attest`). merod 1.0 serves neither: it does not start in TDX
+mode without a KMS-held storage key, and its attestation is `GET /attestation`,
+with a different shape. Until this step collects the quote another way, a node
+release with `merodVersion` at a core 1.0 tag stops here. The staging probe and
+the post-release node e2e read the same routes.
+:::
+
 **Dispatching from a branch builds and measures, and publishes nothing.**
 Publishing runs only on `master`. Off `master`, images are named
 `…-<version>-d<run number>-<attempt>` in a separate `merotee-ubuntu-questing-<profile>-dev`

@@ -150,17 +150,16 @@
     path: /usr/local/lib/calimero/init.sh
   register: baked_init
 
-- name: Assert baked init has read-only and observability gating (R6/R7)
+- name: Assert baked init has storage and observability gating (R6/R7)
   assert:
     that:
-      - "'MEROD_MODE=\"read-only\"' in (baked_init.content | b64decode)"
-      - "'--mode read-only' in (baked_init.content | b64decode)"
       - "'if [[ -n \"${METRICS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'if [[ -n \"${LOGS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'systemctl disable vmagent vector' in (baked_init.content | b64decode)"
-      # New nodes get a KMS-encrypted store, and locked-read-only refuses
-      # to create a plaintext one.
-      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_URL\")' in (baked_init.content | b64decode)"
+      # merod 1.0 takes its storage key from mero-kms only, and
+      # locked-read-only refuses to boot a node without one.
+      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_URL\" --kms-identity \"$KMS_IDENTITY_FILE\")' in (baked_init.content | b64decode)"
+      - "'the locked-read-only profile does not keep node' in (baked_init.content | b64decode)"
       - "'The locked-read-only profile does not' in (baked_init.content | b64decode)"
       # The data disk is LUKS2 with integrity, keyed from the KMS; a blank disk
       # is the only thing ever formatted; the release cannot go below the image;
@@ -246,51 +245,51 @@
 # UKI by scripts/release/mkosi/build-image.sh.
 
 # --- Services and ingress (log hygiene, auth) ---
-- name: Read the merod / mero-auth units, mero-auth config and traefik files
+- name: Read the merod unit and traefik files
   slurp:
     path: "{{ item }}"
   register: service_files
   loop:
     - /etc/systemd/system/merod.service
-    - /etc/systemd/system/mero-auth.service
-    - /etc/calimero/auth.toml
     - /etc/traefik/config.yml
     - /etc/traefik/routing.yml
+
+# Nothing of mero-auth may be left: core 1.0 has no mero-auth, and a unit or
+# config for it would be a service the image cannot start.
+- name: Check no mero-auth is installed
+  stat:
+    path: "{{ item }}"
+  register: mero_auth_paths
+  loop:
+    - /usr/local/bin/mero-auth
+    - /etc/systemd/system/mero-auth.service
+    - /etc/calimero/auth.toml
+
+- name: Assert no mero-auth is installed
+  assert:
+    that:
+      - not item.stat.exists
+    fail_msg: "{{ item.item }} exists; core 1.0 has no mero-auth"
+  loop: "{{ mero_auth_paths.results }}"
 
 - name: Assert services cannot outrun the disk unlock and do not over-share
   assert:
     that:
       - "'Requires=calimero-init.service' in (service_files.results[0].content | b64decode)"
       - "'LimitCORE=0' in (service_files.results[0].content | b64decode)"
-      - "'Requires=calimero-init.service' in (service_files.results[1].content | b64decode)"
-      - "'LimitCORE=0' in (service_files.results[1].content | b64decode)"
-      - "'--verbose' not in (service_files.results[1].content | b64decode)"
-      - "'listen_addr = \"127.0.0.1:3001\"' in (service_files.results[2].content | b64decode)"
-      # mero-auth-start appends these tables on a relay; declared here too,
-      # TOML would refuse the result and mero-auth would not start.
-      - "'[providers]' not in (service_files.results[2].content | b64decode)"
-      - "'[account_proof]' not in (service_files.results[2].content | b64decode)"
-      - "'mero-auth-start.sh' in (service_files.results[1].content | b64decode)"
-      - "'level: DEBUG' not in (service_files.results[3].content | b64decode)"
-      - "'insecure: true' not in (service_files.results[3].content | b64decode)"
-      - "'dashboard: true' not in (service_files.results[3].content | b64decode)"
-      - "'accessLog' not in (service_files.results[3].content | b64decode)"
-      # fleet-join is a state change and must stay behind auth-node: the
-      # unauthenticated TEE router names exactly /info and /attest.
-      - "'PathPrefix(`/admin-api/tee`)' not in (service_files.results[4].content | b64decode)"
-      - "'Path(`/admin-api/tee/info`)' in (service_files.results[4].content | b64decode)"
-      - "'Path(`/admin-api/tee/attest`)' in (service_files.results[4].content | b64decode)"
-      # mero-auth checks a scoped token against X-Forwarded-Uri/-Method; a
-      # trusted client-supplied value lets it pick the route (mero-tee#339).
-      - "'trustForwardHeader: true' not in (service_files.results[4].content | b64decode)"
-      - "'trustForwardHeader: false' in (service_files.results[4].content | b64decode)"
+      - "'level: DEBUG' not in (service_files.results[1].content | b64decode)"
+      - "'insecure: true' not in (service_files.results[1].content | b64decode)"
+      - "'dashboard: true' not in (service_files.results[1].content | b64decode)"
+      - "'accessLog' not in (service_files.results[1].content | b64decode)"
+      # A pass-through: merod authenticates its callers inside the sealed
+      # channel, so traefik must not try to.
+      - "'forwardAuth' not in (service_files.results[2].content | b64decode)"
+      - "'middlewares' not in (service_files.results[2].content | b64decode)"
     fail_msg: >-
-      merod/mero-auth must Require calimero-init (so they never write to
-      /mnt/data before the encrypted disk is open) with core dumps off;
-      mero-auth must bind loopback without --verbose; traefik must not log at
-      DEBUG, keep an access log, or expose its API; only /admin-api/tee/info
-      and /attest may bypass auth; and forwardAuth must not trust the client's
-      X-Forwarded-* headers.
+      merod must Require calimero-init (so it never writes to /mnt/data before
+      the encrypted disk is open) with core dumps off; traefik must not log at
+      DEBUG, keep an access log, or expose its API, and must pass requests to
+      merod with no forwardAuth or other middleware.
 
 - name: Check that observability services are not enabled by default (R7)
   command: systemctl is-enabled {{ item }}

@@ -12,9 +12,9 @@ TOKEN_FILE="$2"
 
 case "$PROVIDER" in
   provided)
-    # The token was handed to this node by mdma over the attested fleet channel
-    # and written to disk by the sidecar. Nothing to fetch: it is already here,
-    # and there is no cloud identity on these instances to fetch it with.
+    # The token is already on this machine: stamped as instance metadata at
+    # creation and written out by the image's init script. Nothing to fetch, and
+    # there is no cloud identity on these instances to fetch it with.
     #
     # `$2` is the token file's absolute path. Read it as-is; an
     # unreadable or empty file is a hard failure, because configuring vector

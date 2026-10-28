@@ -153,158 +153,36 @@
     group: root
     mode: "0644"
 
-- name: Copy mero-auth configuration file
-  copy:
-    src: mero-auth-config.toml
-    dest: /etc/calimero/auth.toml
-    owner: root
-    group: root
-    mode: "0755"
-
-# The baked config enables no provider; this wrapper adds device-key login on
-# a relay image once the node's key is recorded (see the script's header).
-- name: Install the mero-auth start wrapper
-  copy:
-    src: mero-auth-start.sh
-    dest: /usr/local/lib/calimero/mero-auth-start.sh
-    owner: root
-    group: root
-    mode: "0755"
-
-# What makes this image a device-key-login relay, for mero-auth-start and the
-# fleet sidecar alike: its presence, nothing in it. Baked, so measured.
-- name: Mark this image as serving device-key login
-  copy:
-    content: ""
-    dest: /etc/calimero/device-key-login
-    owner: root
-    group: root
-    mode: "0644"
-  when: fleet_delegated_access | default(false) | bool
-
-- name: Create mero-auth systemd service file
-  copy:
-    content: |
-        [Unit]
-        Description=mero-auth
-        # Requires, not just After: mero-auth's database lives on /mnt/data. If
-        # calimero-init failed (the data disk could not be unlocked), starting
-        # anyway would create that database on the ROOT filesystem under
-        # /mnt/data -- in plaintext, and making the next boot mistake the
-        # directory for a pre-disk node's state.
-        Requires=calimero-init.service
-        After=calimero-init.service
-
-        [Service]
-        # Default log level, not the verbose flag it used to run with: this
-        # unit's output is shipped to an endpoint set in instance metadata, and
-        # verbose auth logging is request-level detail about who authenticates
-        # to this node.
-        #
-        # Through `mero-auth-start`, which runs mero-auth on the baked
-        # /etc/calimero/auth.toml, or on a copy with device-key login added once
-        # this relay's node key is recorded.
-        ExecStart=/usr/local/lib/calimero/mero-auth-start.sh
-        Restart=always
-        # A core dump of this process is its keys, written to disk.
-        LimitCORE=0
-
-        [Install]
-        WantedBy=multi-user.target
-    dest: /etc/systemd/system/mero-auth.service
-
 - name: Create merod systemd service file
   copy:
     content: |
         [Unit]
         Description=merod
-        # Requires: never run against /mnt/data unless calimero-init unlocked
-        # and mounted it (see mero-auth above).
+        # Requires, not just After: merod's state lives on /mnt/data. If
+        # calimero-init failed (the data disk could not be unlocked), starting
+        # anyway would create it on the ROOT filesystem under /mnt/data.
         Requires=calimero-init.service
         After=calimero-init.service
 
         [Service]
+        # MERO_TEE_VERSION, MERO_TEE_MIN_VERSION and MERO_TEE_PROFILE, written by
+        # calimero-init from tee-release-version; merod refuses TDX mode without
+        # the first and last.
         EnvironmentFile=-/etc/calimero/merod.env
-        # Plain-HTTP /metrics for vmagent, on loopback only (release-v2 merod
-        # reads MEROD_METRICS_LISTEN; a merod without it ignores the variable).
+        # The node API, on loopback: traefik is the only way in, and forwards
+        # every path here (roles/mero-traefik, traefik-routing.yml.j2).
+        Environment=MEROD_LISTEN=127.0.0.1:2528
+        # Plain-HTTP /metrics for vmagent, on loopback only. It asks for no
+        # credential, so it must never be on a public address.
         Environment=MEROD_METRICS_LISTEN=127.0.0.1:9464
-        ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
+        ExecStart=/usr/local/bin/merod --home /mnt/data/merod --node default run
         Restart=always
-        # A core dump of merod is its signing identity and every group key.
+        # A core dump of merod holds its storage key and every app's state.
         LimitCORE=0
 
         [Install]
         WantedBy=multi-user.target
     dest: /etc/systemd/system/merod.service
-
-- name: Render fleet sidecar script (bakes MDMA URL into image)
-  template:
-    src: fleet-sidecar.sh.j2
-    dest: /usr/local/lib/calimero/fleet-sidecar.sh
-    owner: root
-    group: root
-    mode: "0755"
-    # This template is a bash script, and bash's array-length form `${#arr[@]}`
-    # opens with the same two characters as a Jinja comment. Jinja then reads
-    # the rest of the file looking for `#}`, hits EOF, and the render dies with
-    # "Missing end of comment tag" -- which is what broke the 2.3.55 and 2.3.56
-    # node images. The file has no Jinja comments in it (only the two variables
-    # below), so moving the comment delimiter somewhere bash cannot produce
-    # costs nothing and retires the whole class.
-    comment_start_string: "{@#"
-    comment_end_string: "#@}"
-  when: merod_mode == "read-only"
-
-# The sidecar runs every meroctl call under coreutils `timeout` (a hung
-# fleet-join once stopped a node's heartbeats for 40+ minutes). coreutils is
-# Essential on Ubuntu, so this should never fire; checked at build time anyway,
-# because on a node without it every meroctl call would fail with 127.
-- name: Probe coreutils timeout for the fleet sidecar
-  command:
-    argv: [timeout, -k, "1", "5", "true"]
-  register: sidecar_timeout_probe
-  changed_when: false
-  failed_when: false
-  when: merod_mode == "read-only"
-
-- name: Require coreutils timeout for the fleet sidecar
-  assert:
-    that:
-      - sidecar_timeout_probe.rc == 0
-    fail_msg: >-
-      coreutils timeout is missing or broken on this image (rc
-      {{ sidecar_timeout_probe.rc | default('none') }}); the fleet sidecar
-      bounds every meroctl call with it and cannot run without it.
-  when: merod_mode == "read-only"
-
-- name: Create fleet sidecar systemd service
-  copy:
-    content: |
-        [Unit]
-        Description=Fleet HA sidecar (polls MDMA for group assignments)
-        # Requires calimero-init: the sidecar's state, fleet token included,
-        # lives on the encrypted data disk (/mnt/data/fleet), and must never be
-        # written to the root filesystem because the disk failed to unlock.
-        Requires=calimero-init.service
-        After=calimero-init.service merod.service
-        Wants=merod.service
-
-        [Service]
-        ExecStart=/usr/local/lib/calimero/fleet-sidecar.sh
-        Restart=always
-        RestartSec=5
-
-        [Install]
-        WantedBy=multi-user.target
-    dest: /etc/systemd/system/fleet-sidecar.service
-  when: merod_mode == "read-only"
-
-- name: Enable fleet sidecar at boot
-  systemd:
-    name: fleet-sidecar.service
-    enabled: true
-    daemon_reload: true
-  when: merod_mode == "read-only"
 
 # --- Nothing secret persists on the boot disk -------------------------------
 #
@@ -418,35 +296,36 @@
     - /swap.img
     - /swapfile
 
-# --- Storage-encryption conformance ------------------------------------------
+# --- merod 1.0 conformance ---------------------------------------------------
 #
-# calimero-init refuses to create a locked-read-only node without a
-# KMS-encrypted store, and it creates one with `merod init --kms-url`. A merod
-# that predates that flag cannot encrypt from the first write, so every new node
-# on such an image would stop at boot. Catch it here, at build time, instead:
-# the flag is a capability probe that needs no node, network or config.
-- name: Probe whether the baked merod can encrypt its store at init
+# calimero-init configures merod 1.0 and nothing else: `merod init` with
+# `--node-id`, `--public-url`, `--kms-url` and `--kms-identity`, the storage key
+# from mero-kms only. A baked merod from v1 knows none of that, and every node
+# on the image would stop at boot. Catch it here, at build time, on every
+# profile: `init --help` needs no node, network or config.
+- name: Probe whether the baked merod is merod 1.0
   command: /usr/local/bin/merod --node conformance init --help
-  register: merod_kms_init_help
+  register: merod_init_help
   changed_when: false
   failed_when: false
-  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
 
-- name: Assert the baked merod can create a KMS-encrypted store
+- name: Assert the baked merod is merod 1.0, with a KMS-held storage key
   assert:
     that:
-      - merod_kms_init_help.rc == 0
-      - "'--kms-url' in merod_kms_init_help.stdout"
+      - merod_init_help.rc == 0
+      - "'--node-id' in merod_init_help.stdout"
+      - "'--public-url' in merod_init_help.stdout"
+      - "'--kms-url' in merod_init_help.stdout"
+      - "'--kms-identity' in merod_init_help.stdout"
     fail_msg: >-
-      The locked-read-only profile only creates nodes with a KMS-encrypted
-      store, but the baked merod ({{ merod_version | default('unknown') }}) has
-      no `init --kms-url`, so it can only create a plaintext one. Bump
-      merodVersion in mero-tee/versions.json to a core release carrying it.
-  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+      The baked merod ({{ merod_version | default('unknown') }}) is not merod
+      1.0: its `init` lacks --node-id, --public-url, --kms-url or
+      --kms-identity, which calimero-init passes. Set merodVersion in
+      mero-tee/versions.json to a core 1.0 release.
 
 # --- Data-disk-encryption conformance ----------------------------------------
 #
-# The same shape as the store assert above. calimero-init refuses to create a
+# The same shape as the merod 1.0 assert above. calimero-init refuses to create a
 # locked-read-only node's data disk without encryption, and it encrypts with
 # `merod kms disk-key` + cryptsetup LUKS2/dm-integrity. A merod without the
 # subcommand, a missing cryptsetup, or a kernel without dm-integrity would each
@@ -501,157 +380,20 @@
       linux-modules-extra for the kernel flavour.
   when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
 
-# --- Delegated-execution conformance -----------------------------------------
-#
-# A relay image has one cross-repo dependency the build cannot infer: the baked
-# merod must actually implement `server.admin.delegated_access` and the
-# `GET .../intents` descriptor. Pin `merodVersion` at a core release that
-# predates them and the image still builds, still boots, and still reports
-# itself to MDMA — it simply never serves a client, because the config key is
-# ignored and the discovery read 404s. That failure appears in a browser, days
-# later, as "the relay does not answer".
-#
-# So the invariant is asserted here instead of documented. The flag on
-# `merod init` and the config key are the same feature, and the flag is the part
-# a CLI can be asked about without a node, a network or a config file — which
-# makes it a clean capability probe for the baked binary.
-#
-# `--delegated-access` ONLY. Core renamed `--public-intents` to it in
-# 0.11.0-rc.43, and `calimero-init` now writes the config key under its new
-# name, `server.admin.delegated_access`: writing the old name beside the
-# `delegated_access = false` that `merod init` emits is a duplicate field, and
-# merod then refuses the whole config.toml. A merod from before the rename does
-# not know the new key, silently ignores it, and never relays. So the probe
-# accepts exactly the releases the script is written for. (The old flag survives
-# only as a clap alias, which `--help` hides.)
-- name: Probe whether the baked merod supports delegated execution
-  command: /usr/local/bin/merod --node conformance init --help
-  register: merod_init_help
-  changed_when: false
-  failed_when: false
-  when: fleet_delegated_access | default(false) | bool
-
-- name: Assert the baked merod can serve delegated execution
-  assert:
-    that:
-      - merod_init_help.rc == 0
-      - "'--delegated-access' in merod_init_help.stdout"
-    fail_msg: >-
-      This image enables delegated execution (fleet_delegated_access), but the
-      baked merod ({{ merod_version | default('unknown') }}) does not list
-      --delegated-access, so it does not know the server.admin.delegated_access
-      key calimero-init writes (core 0.11.0-rc.43 or later is needed).
-      Bump merodVersion in mero-tee/versions.json, or build with
-      -e fleet_delegated_access=false.
-  when: fleet_delegated_access | default(false) | bool
-
-# Device-key login on a relay (`mero-auth-start`) is only safe with merod
-# taking each caller's account from the proxy (`server.proxy_identity`, set by
-# calimero-init). A merod without it ignores the key — silently, as it would any
-# unknown key — and answers every tenant's session node-wide: the listings return
-# every tenant's contexts, namespaces and groups. So it is asserted here, the
-# same way `--delegated-access` is.
-- name: Assert the baked merod reads the caller's identity from the proxy
-  assert:
-    that:
-      - merod_init_help.rc == 0
-      - "'--proxy-identity' in merod_init_help.stdout"
-    fail_msg: >-
-      This image enables device-key login on a relay (fleet_delegated_access),
-      but the baked merod ({{ merod_version | default('unknown') }}) does not
-      list --proxy-identity, so it does not know the server.proxy_identity key
-      calimero-init writes and would answer every tenant's session node-wide.
-      Bump merodVersion in mero-tee/versions.json, or build with
-      -e fleet_delegated_access=false.
-  when: fleet_delegated_access | default(false) | bool
-
-# The other half of the posture. Traefik is the only gate on these nodes (merod
-# runs in proxy auth mode), so an image that set the merod key but shipped a
-# routing file without the exemption would look configured and serve nothing —
-# and one with the exemption but no merod support is the case above. Asserting
-# the rendered file keeps a template regression from reaching a release.
-#
-# Read unconditionally, because one of the two exemptions below is asserted on
-# every image rather than only on relays.
+# Traefik is a TLS front and nothing else on a merod 1.0 node: merod
+# authenticates its callers inside the sealed channel, so the routing file must
+# carry no forwardAuth (there is no mero-auth to ask) and no path rules.
 - name: Read the rendered traefik routing file
   slurp:
     path: /etc/traefik/routing.yml
   register: traefik_routing
 
-# Admission is not a hosted capability and is served by EVERY node: the
-# `admitters` list is chosen by the inviter, who may name a peer's self-hosted
-# node, so gating this would make a peer-to-peer flow cloud-only. A node named
-# in no invitation refuses every request to the route, so serving it grants no
-# authority — which is why this assertion is not conditioned on the profile.
-- name: Assert traefik exempts the direct-admission path on every image
+- name: Assert traefik passes every request to merod
   assert:
     that:
-      - "'node-api-admit' in (traefik_routing.content | b64decode)"
-      - "'/admin-api/namespaces/[0-9a-f]{64}/admit' in (traefik_routing.content | b64decode)"
-      # The catch-all must stay guarded: the exemption is one anchored path, not
-      # a prefix over every namespace route.
-      - "'auth-node' in (traefik_routing.content | b64decode)"
+      - "'PathPrefix(`/`)' in (traefik_routing.content | b64decode)"
+      - "'forwardAuth' not in (traefik_routing.content | b64decode)"
+      - "'middlewares' not in (traefik_routing.content | b64decode)"
     fail_msg: >-
-      /etc/traefik/routing.yml does not carry the anchored node-api-admit
-      exemption (or has lost the auth-node guard on the catch-all), so a joiner
-      holding only an invitation cannot reach direct admission on this node.
-
-# Delegated execution IS hosted — the node authors on someone else's behalf —
-# so this half is asserted only where the image was built to relay.
-- name: Assert traefik exempts the delegated-execution path on a relay
-  assert:
-    that:
-      - "'node-api-intents' in (traefik_routing.content | b64decode)"
-      - "'/admin-api/contexts/[0-9a-f]{64}/intents' in (traefik_routing.content | b64decode)"
-      - "'node-api-presence-intents' in (traefik_routing.content | b64decode)"
-      - "'^/admin-api/contexts/[0-9a-f]{64}/presence-intents$' in (traefik_routing.content | b64decode)"
-      - "'node-api-context-intents' in (traefik_routing.content | b64decode)"
-      - "'^/admin-api/groups/[0-9a-f]{64}/context-intents$' in (traefik_routing.content | b64decode)"
-      - "'node-api-governance-intents' in (traefik_routing.content | b64decode)"
-      - "'^/admin-api/groups/[0-9a-f]{64}/governance-intents$' in (traefik_routing.content | b64decode)"
-      - "'auth-node' in (traefik_routing.content | b64decode)"
-    fail_msg: >-
-      This image enables delegated execution but /etc/traefik/routing.yml does
-      not carry the anchored node-api-intents, node-api-presence-intents,
-      node-api-context-intents and node-api-governance-intents exemptions (or has lost the auth-node guard on the catch-all).
-  when: fleet_delegated_access | default(false) | bool
-
-# --- Recovery-envelope conformance -------------------------------------------
-#
-# The same class of cross-repo dependency as the block above, for the sidecar's
-# recovery-envelope writer (calimero-network/mdma#223). It shells out to
-# `meroctl account seal-to`, which arrived in core#3918 — pin `merodVersion` at
-# a release that predates it and the image still builds, still boots, and the
-# sidecar still runs. `seal_for_account` simply fails on every pass, logs a
-# WARN, and writes nothing.
-#
-# That failure direction is the safe one, and that is exactly what makes it
-# dangerous to leave unasserted: nothing breaks, no envelope is ever written,
-# and the gap surfaces when someone loses their last device and finds there is
-# nothing to recover from — the one moment no retroactive fix exists.
-#
-# `account --help` is the part a CLI answers without a node, a network or a
-# config file, so it probes the baked binary the same way `--delegated-access`
-# probes merod. Gated on `merod_mode` because that is what gates the sidecar
-# itself.
-- name: Probe whether the baked meroctl can seal to an account root
-  command: /usr/local/bin/meroctl account --help
-  register: meroctl_account_help
-  changed_when: false
-  failed_when: false
-  when: merod_mode == "read-only"
-
-- name: Assert the baked meroctl can seal to an account root
-  assert:
-    that:
-      - meroctl_account_help.rc == 0
-      - "'seal-to' in meroctl_account_help.stdout"
-    fail_msg: >-
-      This image ships the fleet sidecar, whose recovery-envelope writer calls
-      `meroctl account seal-to`, but the baked meroctl
-      ({{ meroctl_version | default(merod_version, true) | default('unknown') }})
-      has no such subcommand. It arrived in calimero-network/core#3918
-      (0.11.0-rc.34). The sidecar would run and silently write no envelopes, so
-      device loss would stay unrecoverable. Bump merodVersion in
-      mero-tee/versions.json to a core release carrying it.
-  when: merod_mode == "read-only"
+      /etc/traefik/routing.yml is not a plain pass-through to merod: it must
+      route every path to merod with no forwardAuth or other middleware.

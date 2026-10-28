@@ -251,7 +251,7 @@ python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook.yml" --out "${work}/node" --ma
   -e merod_version=0.0.0 --role merotee --role cleanup --role merod-lockdown --role merotee-conformance \
   >/dev/null || fail "the node playbook's roles do not render"
 grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/node/usr/local/lib/calimero/init.sh" || fail "calimero-init not rendered for the profile"
-for path in etc/systemd/system/calimero-init.service usr/local/lib/calimero/fleet-sidecar.sh etc/securetty \
+for path in etc/systemd/system/calimero-init.service etc/securetty \
             etc/systemd/journald.conf.d/60-calimero-volatile.conf; do
   [[ -e "${work}/node/${path}" ]] || fail "node playbook: ${path} not rendered"
 done

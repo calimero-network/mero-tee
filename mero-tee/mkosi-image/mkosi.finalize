@@ -46,8 +46,8 @@ role="$(cat "${SRCDIR}/rendered/role")"
 case "${role}" in
   node)
     required=(/usr/lib/udev/rules.d/65-gce-disk-naming.rules /usr/lib/udev/google_nvme_id /usr/sbin/nvme
-              /usr/local/bin/merod /usr/local/bin/meroctl /usr/local/bin/mero-auth /usr/local/lib/calimero/init.sh)
-    not_at_boot=(merod.service mero-auth.service traefik.service node_exporter.service vmagent.service vector.service) ;;
+              /usr/local/bin/merod /usr/local/bin/meroctl /usr/local/lib/calimero/init.sh)
+    not_at_boot=(merod.service traefik.service node_exporter.service vmagent.service vector.service) ;;
   kms)
     required=(/usr/local/bin/mero-kms /usr/local/lib/mero-kms/init.sh /etc/mero-kms/kms.env /etc/mero-kms/image-profile)
     not_at_boot=(node_exporter.service vmagent.service vector.service) ;;

@@ -113,9 +113,9 @@ fi
 # --- what the program lets out -----------------------------------------------
 long="$(python3 -c 'print("x" * 9000)')"
 cat > "${SB}/events.json" <<EOF
-{"timestamp":"t","message":"login ok token=abc.def.ghi user=alice","unit":"mero-auth.service","hostname":"h","instance_name":"merotee","instance_type":"gcp","instance_profile":"locked-read-only","PRIORITY":"6","_CMDLINE":"/usr/local/bin/merod --password LEAK-CMDLINE","_PID":"12","_BOOT_ID":"LEAK-BOOT","_MACHINE_ID":"LEAK-MACHINE"}
+{"timestamp":"t","message":"login ok token=abc.def.ghi user=alice","unit":"merod.service","hostname":"h","instance_name":"merotee","instance_type":"gcp","instance_profile":"locked-read-only","PRIORITY":"6","_CMDLINE":"/usr/local/bin/merod --password LEAK-CMDLINE","_PID":"12","_BOOT_ID":"LEAK-BOOT","_MACHINE_ID":"LEAK-MACHINE"}
 {"timestamp":"t","message":"Authorization: Bearer LEAKbearerTOKEN0123456789 done","unit":"traefik.service"}
-{"timestamp":"t","message":"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJMRUFLIn0.LEAKsignature0123 used","unit":"mero-auth.service"}
+{"timestamp":"t","message":"jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJMRUFLIn0.LEAKsignature0123 used","unit":"merod.service"}
 {"timestamp":"t","message":"got key -----BEGIN PRIVATE KEY-----\nLEAKpem0123\n-----END PRIVATE KEY----- ok","unit":"calimero-init.service"}
 {"timestamp":"t","message":"cut -----BEGIN EC PRIVATE KEY-----\nLEAKcutoff","unit":"calimero-init.service"}
 {"timestamp":"t","message":"{\"password\":\"LEAKpw\",\"refresh_token\": \"LEAKrt\", \"api_key\":\"LEAKak\", \"client_secret\":\"LEAKcs\"} Cookie: LEAKcookie","unit":"merod.service"}
@@ -128,7 +128,7 @@ cat > "${SB}/events.json" <<EOF
 {"timestamp":"t","message":"\u001b[3merror_message\u001b[0m\u001b[2m=\u001b[0mLEAKcoloured","unit":"merod.service"}
 {"timestamp":"t","message":"panicked panic.message=LEAKpanicmsg panic.backtrace=LEAKbt","unit":"merod.service"}
 {"timestamp":"t","message":"Created the admin account (user: LEAKadmin) user=LEAKuser","unit":"merod.service"}
-{"timestamp":"t","message":"Authentication failed: invalid type: string \"LEAKserde\", unknown variant \`LEAKvariant\`","unit":"mero-auth.service"}
+{"timestamp":"t","message":"Authentication failed: invalid type: string \"LEAKserde\", unknown variant \`LEAKvariant\`","unit":"merod.service"}
 {"timestamp":"t","message":"Refresh token reuse detected for key K1 (jti LEAKjti) client_id=Some(String(\"LEAKid\"))","unit":"merod.service"}
 {"timestamp":"t","message":"KMS get-key request failed (500): Internal - LEAKkmsbody","unit":"merod.service"}
 {"timestamp":"t","message":"fetching https://LEAKuser:LEAKpass@apps.test/a.wasm?access_token=LEAKqt&x=1","unit":"merod.service"}
@@ -155,7 +155,7 @@ for e in events:
     if extra:
         failures.append(f"fields beyond the allowlist left: {sorted(extra)}")
 first = events[0] if events else {}
-for k, v in {"unit": "mero-auth.service", "hostname": "h", "instance_profile": "locked-read-only", "priority": "6"}.items():
+for k, v in {"unit": "merod.service", "hostname": "h", "instance_profile": "locked-read-only", "priority": "6"}.items():
     if first.get(k) != v:
         failures.append(f"{k} should survive as {v!r}, got {first.get(k)!r}")
 keep = events[7]["message"] if len(events) > 7 else ""

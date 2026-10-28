@@ -65,7 +65,6 @@ export default defineConfig({
             'understand/system-overview',
             'understand/trust-model',
             'understand/components',
-            'understand/fleet-sidecar',
             'understand/security',
             'understand/glossary',
           ],

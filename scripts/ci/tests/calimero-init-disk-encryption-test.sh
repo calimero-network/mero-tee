@@ -4,9 +4,8 @@
 # name a release older than the image.
 #
 # TDX protects the VM's memory, not its disks. merod's store has its own KMS
-# key, but the data disk also holds config.toml, the node's TLS private key,
-# mero-auth's database and the fleet sidecar's token -- all readable from a
-# snapshot of a plain disk. So calimero-init formats a blank data disk as LUKS2
+# key, but the data disk also holds config.toml, the node's TLS private key
+# and the KMS identity -- all readable from a snapshot of a plain disk. So calimero-init formats a blank data disk as LUKS2
 # keyed by `merod kms disk-key`, keeps the disk-unlock identity in a LUKS2
 # token, and reopens it on every boot.
 #
@@ -46,9 +45,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
-disk_block="$(awk '/^# --- The data disk ---/{on=1} /^# --- Fleet state off the boot disk ---/{exit} on{print}' "$TEMPLATE")"
+disk_block="$(awk '/^# --- The data disk ---/{on=1} /^# --- merod 1\.0: storage key and cluster configuration/{exit} on{print}' "$TEMPLATE")"
 pin_block="$(awk '/^# --- Release pinning/{on=1} /^# Extra `merod init` arguments/{exit} on{print}' "$TEMPLATE")"
-[[ -n "$disk_block" ]] || fail "could not find the data-disk block ('# --- The data disk ---' .. '# --- Fleet state off the boot disk ---')"
+[[ -n "$disk_block" ]] || fail "could not find the data-disk block ('# --- The data disk ---' .. '# --- merod 1.0: storage key and cluster configuration')"
 [[ -n "$pin_block" ]] || fail "could not find the release-pinning block ('# --- Release pinning' .. '# Extra \`merod init\` arguments')"
 grep -qF 'luksFormat' <<<"$disk_block" || fail "the sliced disk block does not contain the format it is meant to test"
 grep -qF 'MERO_TEE_MIN_VERSION' <<<"$pin_block" || fail "the sliced pinning block does not write MERO_TEE_MIN_VERSION"

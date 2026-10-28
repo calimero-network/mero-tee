@@ -9,9 +9,8 @@ TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run a
 | Component | Description |
 |-----------|-------------|
 | **mero-kms** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes. Runs as the frozen, dm-verity-sealed GCP TDX image `merotee-kms-<profile>-<version>`: one 5-replica cluster per release, whose root key exists only in the replicas' memory and is shared only by attested join. See the [design](docs/design/gcp-tdx-kms.md) |
-| **mero-tee/** | mkosi build of the merod node, KMS, agent and inference images (debug, debug-read-only, locked-read-only profiles) |
+| **mero-tee/** | mkosi build of the merod 1.0 node, KMS, agent and inference images (debug, debug-read-only, locked-read-only profiles) |
 | **mero-inference-gate** | The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
-| **Fleet HA sidecar** | systemd service baked into ReadOnly fleet node images (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`); waits for merod readiness via `meroctl --output-format json peers`, reads its own PeerId from `config.toml` (`[identity].peer_id`) and its own MRTD from `/sys/class/misc/tdx_guest/measurements/mrtd:sha384`, polls MDMA for group assignments (sending `peer_id` + `mrtd` so MDMA's MRTD-gated `should_join` can match) and joins each via `meroctl tee fleet-join <GROUP_ID>` (group id passed positionally, core >= `0.10.1-rc.27`). Confirms an assignment back to MDMA only when the join command exits 0. See [Fleet HA sidecar lifecycle](#fleet-ha-sidecar-lifecycle) for the join + leave-on-disable reconcile loop. |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start
@@ -58,76 +57,6 @@ All detailed documentation lives in the **[Documentation](https://calimero-netwo
 | All environment variables | [Config Reference](https://calimero-network.github.io/mero-tee/operate/config-reference/) |
 | ServiceError variants & HTTP codes | [Error Handling](https://calimero-network.github.io/mero-tee/operate/error-handling/) |
 | TEE terms & definitions | [Glossary](https://calimero-network.github.io/mero-tee/understand/glossary/) |
-
-## Fleet HA sidecar lifecycle
-
-The fleet HA sidecar (`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`) runs a
-one-second reconcile loop on each ReadOnly TEE fleet node. Every cycle it polls MDMA's
-`POST /api/fleet/should-join` with the node's `peer_id` + `mrtd`, then drives merod toward the
-namespace set MDMA currently assigns to it.
-
-**Join (converge toward `desired`).** For each assigned namespace not yet confirmed, the sidecar
-retries `meroctl tee fleet-join <GROUP_ID>` until core reports `admitted: true`, then `POST`s
-`/api/fleet/confirm` back to MDMA. A namespace is only recorded in the local
-`fleet-confirmed.json` once both local admission and the MDMA confirm succeed, so a transient
-MDMA blip on the confirm step is retried (fleet-join is idempotent in core) rather than lost.
-
-**Delegated execution (the node as a relay).** A fleet node is also the relay a
-Calimero Cloud account holder writes through when they run no node at all: they
-sign a warrant locally, present it to the node, and the node executes as *their*
-principal — the delta is attributed to their account, not the node's. Three
-facts have to reach that client and none is derivable off-node, so the sidecar
-reports them: its **executor account** (`meroctl account show`, the account a
-warrant's `executor` must name), its **relay URL** (from the `relay-url`
-instance metadata key — a node cannot derive its own external address), and
-whether it holds **`CAN_AUTHOR_ON_BEHALF`** on each namespace (`meroctl group
-members get-capabilities`, bit 9). The first two ride the should-join poll; the
-third rides `/confirm` and is re-reported whenever it changes, because the
-capability is granted by a namespace admin long after admission. Any failure
-degrades to "replicates but does not relay" — MDMA then never advertises the
-node, so clients are not sent to mint warrants it would refuse. The image opens
-exactly four paths for this, driven by the single Ansible variable
-`fleet_delegated_access`: Traefik routers exempting
-`/admin-api/contexts/<ctx>/intents` (delegated execution),
-`/admin-api/contexts/<ctx>/presence-intents` (delegated presence),
-`/admin-api/groups/<group>/context-intents` (delegated context creation) and
-`/admin-api/groups/<group>/governance-intents` (delegated governance) from
-forwardAuth, and merod's
-`server.admin.delegated_access`. Both from one variable because these nodes run
-merod in proxy auth mode, so Traefik is the only gate and a drift between the
-two would be silent in the unsafe direction. See [Fleet HA
-sidecar](https://calimero-network.github.io/mero-tee/understand/fleet-sidecar/#delegated-execution-the-node-as-a-relay).
-
-**Leave on disable (converge away from dropped namespaces).** When a namespace the node had
-previously confirmed (`confirmed`) is no longer in MDMA's assignment set (`desired`) — i.e. HA
-disabled, the slot reclaimed, or the node's MRTD no longer trusted — the sidecar self-leaves it
-with `meroctl namespace leave <hex_namespace_id>`. That publishes `MemberLeft` at the namespace
-root and cascades through every descendant subgroup, so **core** evicts the node from the
-namespace and all subgroups and purges its local data and keys. `namespace leave` is idempotent
-and non-fatal: leaving a namespace the node already left (or was never a direct member of) is
-treated as benign and never aborts the loop.
-
-**Leaving waits, and never happens en masse.** Leaving is irreversible, so MDMA dropping a
-namespace only starts a timer: the node leaves once it has been absent from every successful
-poll for `LEAVE_GRACE_SECONDS` (24 h; a reappearance cancels it), at most `LEAVE_MAX_PER_WINDOW`
-(4) per hour, and not at all while most of its namespaces (3 or more, over 50 %) are missing at
-once. A namespace MDMA lists under `retain` (a placement gate refused it, the node keeps it) is
-never left. Timers persist in `/mnt/data/fleet/fleet-leave-pending.json`.
-
-**Poll-success safety gate.** The entire reconcile — join, leave, and prune — runs **only** after
-a successful poll: HTTP 200 with a body that parses as an `{"assignments": [...]}` object. Any
-curl error, non-2xx, timeout, or unparseable/wrong-shape 200 body causes the cycle to skip
-reconcile and preserve `fleet-confirmed.json` untouched. This is safety-critical: because a
-missing assignment now triggers an irreversible leave + key purge, a transient MDMA outage must
-never be conflated with "all namespaces disabled" and shred keys on healthy replicas.
-
-> **Note:** this is the mero-tee side — the sidecar is the trigger. The actual eviction and
-> data/key purge are performed by **core** in response to `MemberLeft`. The key-deletion half of
-> that purge requires core ≥ `0.11.0-rc.6` — the `merodVersion` baked into these node images
-> (see `mero-tee/versions.json`, which is authoritative) satisfies this — which carries the
-> leave→purge, transparent subgroup admission,
-> and the Open-subgroup replication fix (core #2809). On older merod the sidecar will still issue
-> the leave, but keys may not be purged.
 
 ## Release Process
 

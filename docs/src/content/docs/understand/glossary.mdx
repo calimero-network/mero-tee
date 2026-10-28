@@ -84,11 +84,9 @@ error rather than different code.
 
 ## F
 
-**Fleet HA sidecar** — the systemd service baked into node images
-(`mero-tee/ansible/roles/merotee/templates/fleet-sidecar.sh.j2`). On a one-second
-loop it polls the fleet control plane (MDMA) for namespace assignments and drives
-`merod` via `meroctl tee fleet-join` / `meroctl namespace leave`. It is only the
-trigger — the actual admission, eviction, and key purge happen in Calimero Core.
+**Fleet HA sidecar** — the v1 node images' systemd service that polled MDMA for
+namespace assignments and drove a v1 `merod` with `meroctl tee fleet-join`.
+Removed with the move to merod 1.0, which has no namespaces to join.
 
 ## I
 
@@ -128,9 +126,9 @@ VPC-internal URL. MDMA sets it; `calimero-init` passes it to `merod init
 ## M
 
 **MDMA** — the fleet control plane. It deploys each release's KMS cluster and
-nodes, and decides which namespaces a fleet node should join: the fleet HA
-sidecar polls it (`/api/fleet/should-join`) with the node's `peer_id` and MRTD,
-and confirms admissions back to it.
+nodes, stamps each node's instance metadata, and drives a merod 1.0 cluster
+from outside through its sealed Ops API (placement, replica moves, quotas,
+backups).
 
 **Measurement** — a hardware-computed hash written into MRTD or an RTMR. In this
 system each is a 48-byte (96-hex-char) SHA-384 value (`HexMeasurement`).
