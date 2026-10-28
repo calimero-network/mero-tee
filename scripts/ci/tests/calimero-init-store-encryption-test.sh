@@ -45,9 +45,9 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
 init_fn="$(awk '/^INIT_EXTRA_ARGS=\(\)$/,/^}$/' "$TEMPLATE")"
-decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} /^# TLS material for traefik\.$/{exit} on{print}' "$TEMPLATE")"
+decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} /^log "Starting services\.\.\."$/{exit} on{print}' "$TEMPLATE")"
 [[ -n "$init_fn" ]] || fail "could not find init_node / INIT_EXTRA_ARGS in the template; this test slices on them"
-[[ -n "$decision" ]] || fail "could not find the merod block (NODE_CONFIG=... up to the TLS material) in the template"
+[[ -n "$decision" ]] || fail "could not find the merod block (NODE_CONFIG=... up to 'Starting services') in the template"
 grep -qF 'merod_is_1_0' <<<"$decision" || fail "the sliced block does not contain the decision it is meant to test"
 grep -qF '  init_node' <<<"$decision" || fail "the sliced block does not reach init_node; the slice boundary moved"
 # merod verifies the KMS against MERO_TEE_VERSION, so the template must export

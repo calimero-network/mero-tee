@@ -1007,6 +1007,63 @@ Refusing to start: state the host can write can carry an identity the host holds
 Recreate the node with a blank data disk."
 fi
 
+# --- TLS material for traefik ---------------------------------------------
+#
+# Before the merod configuration below, because a first boot may start traefik
+# early from there (the release-attestation gate), and traefik needs these.
+#
+# The key is generated HERE, inside the enclave, and never leaves it, so a
+# certificate for it can be issued from a CSR without any private key crossing
+# the wire: below, this boot publishes a CSR and a TDX quote binding it for
+# mdma, and calimero-tls-cert.service installs the chain mdma writes back
+# (both in $TLS_CERT_TOOL). Until a certificate is installed at
+# $TLS_DIR/cert.pem, :443 serves the self-signed placeholder below.
+#
+# The placeholder exists so traefik's TLS store always loads: its
+# `defaultCertificate` names a fixed path (see traefik-routing.yml), and this
+# runs before traefik starts, early or not.
+#
+# Both files are left alone once present: the key is the node's long-lived TLS
+# identity, and cert.pem is whatever was last installed. Regenerating either on
+# a reboot would invalidate a certificate issued for this key.
+TLS_DIR="/mnt/data/tls"
+mkdir -p "$TLS_DIR"
+chmod 0700 "$TLS_DIR"
+if [[ ! -s "$TLS_DIR/key.pem" ]]; then
+  log "Generating node TLS key (stays in the enclave)"
+  if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+      -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
+      -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1; then
+    chmod 0600 "$TLS_DIR/key.pem"
+    chmod 0644 "$TLS_DIR/cert.pem"
+  else
+    log "WARN: TLS key generation failed; traefik will fall back to its own self-signed default"
+  fi
+elif [[ ! -s "$TLS_DIR/cert.pem" ]]; then
+  # Key survived but the certificate did not (an interrupted install). Put a
+  # placeholder back so the TLS store still loads.
+  log "TLS key present but certificate missing; regenerating placeholder"
+  openssl req -x509 -new -nodes -key "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" \
+    -days 3650 -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1 \
+    || log "WARN: placeholder certificate regeneration failed"
+  chmod 0644 "$TLS_DIR/cert.pem"
+fi
+
+# Ask mdma for a certificate: a CSR over the key for the public-url host (and
+# *.<apps-domain>), and a quote whose report data is
+# SHA-256(CSR) || SHA-256("calimero.tee-attest.tls-csr.v1"), published as the
+# guest attributes calimero/tls-csr and calimero/tls-quote. The CSR is kept at
+# $TLS_DIR/csr.der and rebuilt only when those names change. Never fatal: the
+# node serves the placeholder without it, and calimero-tls-cert.service retries.
+TLS_CERT_TOOL="/usr/local/lib/calimero/tls-cert.sh"
+if [[ -s "$TLS_DIR/key.pem" ]]; then
+  if timeout 120 "$TLS_CERT_TOOL" publish 2>&1 | tee -a "$LOG"; then
+    log "Published the TLS CSR and its quote for mdma"
+  else
+    log "WARN: TLS CSR not published on this boot; calimero-tls-cert.service retries"
+  fi
+fi
+
 # --- merod 1.0: storage key and cluster configuration ----------------------
 #
 # TDX protects this VM's MEMORY, not its disks. merod 1.0 seals everything it
@@ -1041,6 +1098,9 @@ fi
 #   registry-url, apps-domain, peer-profiles, peer-min-release, replicas
 #   kms-identity       required on locked-read-only when `cluster` is set: the
 #                      cluster's shared KMS identity (see below)
+#   kms-identity-wait-sec  optional  how long a first boot waits for kms-identity
+#                      while serving its release attestation (default 1800;
+#                      see "The release-attestation gate" below)
 #
 # Not read: the governance flags (`--release-approvals`, `--app-upgrades`,
 # `--outbound-approvals`), which are fixed at genesis and stay at merod's
@@ -1145,6 +1205,159 @@ os.replace(tmp, path)
 ' "$1" "$KMS_IDENTITY_LEN"
 }
 
+# --- The release-attestation gate --------------------------------------------
+#
+# mero-kms derives the cluster's storage key for whoever presents the cluster's
+# KMS identity, so stamping `kms-identity` on an instance IS releasing that key
+# to it. mdma should do that only for a TD it has seen run this release's
+# image and merod -- and a node's own `/attestation` comes too late to show
+# it: `merod run` fetches its key before it serves anything.
+#
+# So on a first boot that needs the cluster's identity and does not have it
+# yet, this boot serves a RELEASE ATTESTATION in its place: `merod attest
+# --serve` answers `GET /attestation/release?nonce=<64 hex>` with a fresh quote
+# over the caller's nonce and what this merod is (its version and sha256,
+# MERO_TEE_VERSION, MERO_TEE_PROFILE), needing no key, store or running node
+# (core's docs/src/content/docs/operate/merod.mdx, "attest"). It listens on
+# merod's own `--listen` address, so traefik -- started early for it -- routes
+# https://<public-url>/attestation/release there without a route of its own.
+# mdma verifies the quote and only then stamps `kms-identity`, which this boot
+# waits for, long-polling the metadata server. Then the server is stopped
+# (SIGTERM, and reaped, so the port is free for `merod run`) and the boot
+# carries on exactly as before.
+#
+# The gate needs nothing from the node: an older merod without `attest`, or a
+# kms-identity already stamped when the boot starts, reads it once as before.
+# A node whose configuration (or identity) is already installed never waits.
+# Waiting is bounded by `kms-identity-wait-sec` metadata (default 1800 s);
+# past it the boot fails, before `merod init`, so the next boot tries again.
+ATTEST_LISTEN="127.0.0.1:2528"
+KMS_IDENTITY_WAIT_DEFAULT=1800
+# How long `merod attest --serve` gets to stop on SIGTERM before SIGKILL.
+ATTEST_STOP_TIMEOUT="${ATTEST_STOP_TIMEOUT:-30}"
+ATTEST_PID=""
+
+# Whether the baked merod serves release attestations (`merod attest --serve`).
+merod_can_attest() {
+  local help
+  help="$("$BIN_DIR/merod" attest --help 2>/dev/null)" || return 1
+  grep -q -- '--serve' <<<"$help"
+}
+
+# True while process $1 runs (a zombie, exited but not yet reaped, does not).
+process_running() {
+  local stat
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  stat="${stat##*) }"
+  [[ -n "$stat" && "${stat%% *}" != Z ]]
+}
+
+attest_serve_start() {
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" \
+    attest --serve "$ATTEST_LISTEN" >>"$LOG" 2>&1 &
+  ATTEST_PID=$!
+  # A fatal while it serves must not leave it holding merod's port.
+  trap 'attest_serve_stop; disk_secrets_cleanup' EXIT
+}
+
+# SIGTERM, then wait for it to exit and reap it: its listening socket is closed
+# only then, and `merod run` binds the same address.
+attest_serve_stop() {
+  [[ -n "$ATTEST_PID" ]] || return 0
+  local pid="$ATTEST_PID" waited=0
+  ATTEST_PID=""
+  kill -TERM "$pid" 2>/dev/null || true
+  while process_running "$pid"; do
+    if (( waited >= ATTEST_STOP_TIMEOUT * 10 )); then
+      log "WARN: merod attest --serve did not stop within ${ATTEST_STOP_TIMEOUT}s of SIGTERM; killing it"
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$pid" 2>/dev/null || true
+}
+
+# Set KMS_IDENTITY_META once `kms-identity` metadata is set, waiting up to $1
+# seconds; return 1 if it is not. The key itself cannot be long-polled while it
+# does not exist (the metadata server answers 404 at once), so the wait is a
+# `wait_for_change` long-poll on the attributes directory, by ETag, and the key
+# is read again after each change. The value is kept in this shell only: never
+# logged, never in argv or a file.
+await_kms_identity() {
+  local deadline=$((SECONDS + $1)) etag=NONE delay=1 remaining poll out code value headers status new
+  while :; do
+    out="$(curl -s -H "$METADATA_HEADER" --max-time 10 -w '\n%{http_code}' \
+      "${METADATA_URL}/kms-identity" 2>/dev/null || true)"
+    code="${out##*$'\n'}"
+    value="${out%$'\n'*}"
+    value="${value//$'\r'/}"
+    value="${value//$'\n'/}"
+    out=""
+    if [[ "$code" == 200 && -n "$value" ]]; then
+      KMS_IDENTITY_META="$value"
+      return 0
+    fi
+    value=""
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || return 1
+    if [[ "$code" == 200 || "$code" == 404 ]]; then
+      poll=$(( remaining < 60 ? remaining : 60 ))
+      # Headers only: the body is every attribute, kms-identity included once set.
+      headers="$(curl -s -H "$METADATA_HEADER" -D - -o /dev/null --max-time $((poll + 10)) \
+        "${METADATA_URL}/?recursive=true&wait_for_change=true&timeout_sec=${poll}&last_etag=${etag}" \
+        2>/dev/null || true)"
+      headers="${headers//$'\r'/}"
+      status="$(head -n1 <<<"$headers")"
+      new="$(sed -n 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*//p' <<<"$headers" | head -n1)"
+      if [[ "$status" =~ ^HTTP/[0-9.]+\ 200 && "$new" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+        # A change, or the poll timing out on the same ETag: read the key again.
+        etag="$new"
+        delay=1
+        continue
+      fi
+      code="watch:${status:-no answer}"
+    fi
+    log "WARN: metadata server answered ${code:-nothing} while waiting for kms-identity; retrying in ${delay}s"
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || return 1
+    sleep $(( delay < remaining ? delay : remaining ))
+    delay=$(( delay * 2 > 30 ? 30 : delay * 2 ))
+  done
+}
+
+# The gate itself; called only on a first boot that needs the cluster identity
+# and found none in metadata. Returns with KMS_IDENTITY_META set, or fails the
+# boot.
+kms_identity_gate() {
+  local wait_sec
+  wait_sec="$(get_meta kms-identity-wait-sec | tr -d '\r\n')"
+  wait_sec="${wait_sec:-$KMS_IDENTITY_WAIT_DEFAULT}"
+  [[ "$wait_sec" =~ ^[0-9]{1,6}$ ]] || fatal "instance metadata 'kms-identity-wait-sec' \
+is not a number of seconds; refusing to initialise the node"
+  if ! merod_can_attest; then
+    log "merod has no 'attest --serve'; reading kms-identity metadata once, without a release attestation"
+    return 0
+  fi
+  log "No kms-identity yet: serving this node's release attestation on $ATTEST_LISTEN \
+(GET <public-url>/attestation/release) and waiting up to ${wait_sec}s for kms-identity metadata"
+  attest_serve_start
+  # traefik waits for calimero-init (After=, for the TLS files on the data
+  # disk); those exist by now, so start it ahead of that ordering.
+  timeout 60 systemctl start --job-mode=ignore-dependencies traefik >>"$LOG" 2>&1 \
+    || log "WARN: could not start traefik early; the release attestation is not reachable at public-url"
+  if ! await_kms_identity "$wait_sec"; then
+    attest_serve_stop
+    fatal "no kms-identity metadata after ${wait_sec}s. mdma stamps the cluster's \
+KMS identity only after verifying this node's release attestation \
+(GET <public-url>/attestation/release); see why it did not. Nothing was \
+initialised, so the next boot waits again (kms-identity-wait-sec sets the wait)."
+  fi
+  attest_serve_stop
+  log "kms-identity metadata is set; stopped the release attestation server"
+}
+
 URL_RE='https?://[A-Za-z0-9._~:@%+-]+(/[A-Za-z0-9._~:@%+/-]*)?'
 HOST_RE='[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?'
 
@@ -1186,6 +1399,11 @@ and merod's default (dev) would put this node in a cluster of that name. Set \
 cluster on the instance."
   fi
   KMS_IDENTITY_META="$(get_meta kms-identity | tr -d '\r\n')"
+  if [[ -z "$KMS_IDENTITY_META" && ! -e "$KMS_IDENTITY_FILE" ]] \
+      && [[ "$IMAGE_PROFILE" == "locked-read-only" && -n "$(get_meta cluster)" ]] \
+      && ! store_is_memory_only; then
+    kms_identity_gate
+  fi
   if [[ -n "$KMS_IDENTITY_META" ]]; then
     (( $(printf '%s' "$KMS_IDENTITY_META" | wc -c) <= 4096 )) && printf '%s' "$KMS_IDENTITY_META" \
         | write_kms_identity "$KMS_IDENTITY_FILE" 2>>"$LOG" \
@@ -1222,60 +1440,6 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   # config.toml is absent so the next boot retries.
   init_node
   MEROD_READY=true
-fi
-
-# TLS material for traefik.
-#
-# The key is generated HERE, inside the enclave, and never leaves it, so a
-# certificate for it can be issued from a CSR without any private key crossing
-# the wire: below, this boot publishes a CSR and a TDX quote binding it for
-# mdma, and calimero-tls-cert.service installs the chain mdma writes back
-# (both in $TLS_CERT_TOOL). Until a certificate is installed at
-# $TLS_DIR/cert.pem, :443 serves the self-signed placeholder below.
-#
-# The placeholder exists so traefik's TLS store always loads: its
-# `defaultCertificate` names a fixed path (see traefik-routing.yml), and this
-# runs before traefik starts.
-#
-# Both files are left alone once present: the key is the node's long-lived TLS
-# identity, and cert.pem is whatever was last installed. Regenerating either on
-# a reboot would invalidate a certificate issued for this key.
-TLS_DIR="/mnt/data/tls"
-mkdir -p "$TLS_DIR"
-chmod 0700 "$TLS_DIR"
-if [[ ! -s "$TLS_DIR/key.pem" ]]; then
-  log "Generating node TLS key (stays in the enclave)"
-  if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-      -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
-      -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1; then
-    chmod 0600 "$TLS_DIR/key.pem"
-    chmod 0644 "$TLS_DIR/cert.pem"
-  else
-    log "WARN: TLS key generation failed; traefik will fall back to its own self-signed default"
-  fi
-elif [[ ! -s "$TLS_DIR/cert.pem" ]]; then
-  # Key survived but the certificate did not (an interrupted install). Put a
-  # placeholder back so the TLS store still loads.
-  log "TLS key present but certificate missing; regenerating placeholder"
-  openssl req -x509 -new -nodes -key "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" \
-    -days 3650 -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1 \
-    || log "WARN: placeholder certificate regeneration failed"
-  chmod 0644 "$TLS_DIR/cert.pem"
-fi
-
-# Ask mdma for a certificate: a CSR over the key for the public-url host (and
-# *.<apps-domain>), and a quote whose report data is
-# SHA-256(CSR) || SHA-256("calimero.tee-attest.tls-csr.v1"), published as the
-# guest attributes calimero/tls-csr and calimero/tls-quote. The CSR is kept at
-# $TLS_DIR/csr.der and rebuilt only when those names change. Never fatal: the
-# node serves the placeholder without it, and calimero-tls-cert.service retries.
-TLS_CERT_TOOL="/usr/local/lib/calimero/tls-cert.sh"
-if [[ -s "$TLS_DIR/key.pem" ]]; then
-  if timeout 120 "$TLS_CERT_TOOL" publish 2>&1 | tee -a "$LOG"; then
-    log "Published the TLS CSR and its quote for mdma"
-  else
-    log "WARN: TLS CSR not published on this boot; calimero-tls-cert.service retries"
-  fi
 fi
 
 log "Starting services..."
