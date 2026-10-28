@@ -1039,6 +1039,8 @@ fi
 #   rp-id, origins     optional   the WebAuthn relying party and its origins
 #   ops-token-sha256   optional   the Ops API token's hash (never the token)
 #   registry-url, apps-domain, peer-profiles, peer-min-release, replicas
+#   kms-identity       required on locked-read-only when `cluster` is set: the
+#                      cluster's shared KMS identity (see below)
 #
 # Not read: the governance flags (`--release-approvals`, `--app-upgrades`,
 # `--outbound-approvals`), which are fixed at genesis and stay at merod's
@@ -1050,10 +1052,28 @@ fi
 # the encrypted data disk, and metadata changed later is not applied, because a
 # different node id or cluster on the same data directory is a different node.
 #
-# The KMS identity is a file on the encrypted data disk, which merod creates if
-# it is missing. Every node of a cluster must present the SAME identity to
-# derive the same K_r; how a cluster's nodes come to share one is not decided
-# here (see docs: operate/deploy-node-image).
+# THE KMS IDENTITY IS THE CLUSTER'S, from `kms-identity` metadata. mero-kms
+# derives its key per identity, so every node of a cluster must present the
+# SAME one to derive the same K_r; mdma mints one per cluster and stamps it on
+# every node. The value is the base64 of a protobuf-encoded libp2p Ed25519
+# keypair (68 bytes: `08 01 12 40`, then secret || public), which is the file
+# `--kms-identity` reads. It is checked (strict base64, that exact shape, and
+# a public half that is the secret's) and written, 0600 and owned by root like
+# the file merod would create, to $KMS_IDENTITY_FILE on the encrypted data disk
+# before `merod init`. It is never logged, and the egress guard
+# (egress-guard.vrl) masks its shape should a line ever carry it.
+#
+# Not the data disk's identity. The LUKS key above comes from `merod kms
+# disk-key` for a SEPARATE, per-node identity kept in the LUKS2 header, which
+# is why this can wait until the disk is open: nothing before this point reads
+# the cluster identity. Keeping them apart means the disk passphrase is never
+# the raw KMS key every node of the cluster derives its K_r from, and the
+# cluster identity is not copied into a header the host can read.
+#
+# Without it, merod creates a per-node identity on first use: a node that
+# cannot share a store with its cluster. So locked-read-only refuses a node
+# with a `cluster` and no `kms-identity` unless its store is memory-only; the
+# debug profiles let merod generate one, and say so.
 NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"
 KMS_IDENTITY_FILE="$CALIMERO_HOME/kms-identity"
 V1_HOME="/mnt/data/calimero"
@@ -1085,6 +1105,44 @@ meta_arg() {
     fatal "instance metadata '$key' is not a valid value for merod --$key; refusing to initialise the node with it"
   fi
   INIT_EXTRA_ARGS+=("--$key" "$value")
+}
+
+# Check `kms-identity` metadata (base64 on stdin) and write the keypair it
+# encodes to $1, created 0600. Exit 1 for a value that is not a protobuf libp2p
+# Ed25519 keypair; nothing is written then. The value is read from stdin, never
+# argv, and no part of it is printed.
+KMS_IDENTITY_LEN=68
+write_kms_identity() {
+  python3 -c '
+import base64, binascii, os, subprocess, sys
+path, want = sys.argv[1], int(sys.argv[2])
+text = sys.stdin.read().strip()
+try:
+    raw = base64.b64decode(text, validate=True)
+except (binascii.Error, ValueError):
+    sys.exit("kms-identity is not base64")
+if len(raw) != want or raw[:4] != bytes([0x08, 0x01, 0x12, 0x40]):
+    sys.exit("kms-identity is not a protobuf-encoded libp2p Ed25519 keypair")
+secret, public = raw[4:36], raw[36:]
+# The public half must be the secret half'"'"'s, as libp2p checks on load.
+der = bytes.fromhex("302e020100300506032b657004220420") + secret
+out = subprocess.run(["openssl", "pkey", "-inform", "DER", "-pubout", "-outform", "DER"],
+                     input=der, capture_output=True)
+if out.returncode != 0 or out.stdout[-32:] != public:
+    sys.exit("kms-identity is not a consistent Ed25519 keypair")
+tmp = path + ".tmp"
+try:
+    os.unlink(tmp)
+except FileNotFoundError:
+    pass
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "wb") as f:
+    f.write(raw)
+    f.flush()
+    os.fsync(f.fileno())
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+' "$1" "$KMS_IDENTITY_LEN"
 }
 
 URL_RE='https?://[A-Za-z0-9._~:@%+-]+(/[A-Za-z0-9._~:@%+/-]*)?'
@@ -1127,6 +1185,24 @@ needs the URL clients and peers reach this node at; set public-url on the instan
 and merod's default (dev) would put this node in a cluster of that name. Set \
 cluster on the instance."
   fi
+  KMS_IDENTITY_META="$(get_meta kms-identity | tr -d '\r\n')"
+  if [[ -n "$KMS_IDENTITY_META" ]]; then
+    (( $(printf '%s' "$KMS_IDENTITY_META" | wc -c) <= 4096 )) && printf '%s' "$KMS_IDENTITY_META" \
+        | write_kms_identity "$KMS_IDENTITY_FILE" 2>>"$LOG" \
+      || fatal "instance metadata 'kms-identity' is not a base64 protobuf libp2p \
+Ed25519 keypair (${KMS_IDENTITY_LEN} bytes); refusing to initialise the node with it"
+    log "Installed the cluster KMS identity from kms-identity metadata at $KMS_IDENTITY_FILE"
+  elif [[ "$IMAGE_PROFILE" == "locked-read-only" && -n "$(get_meta cluster)" ]] \
+      && ! store_is_memory_only; then
+    fatal "no kms-identity metadata. Every node of cluster '$(get_meta cluster | tr -d '\r\n')' must \
+present the cluster's shared KMS identity to derive its storage key, and one \
+merod generated here would be this node's alone. Set kms-identity on the instance."
+  else
+    log "WARN: no kms-identity metadata; merod will generate a per-node KMS \
+identity at $KMS_IDENTITY_FILE, so this node cannot share a store with other \
+nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
+  fi
+  unset KMS_IDENTITY_META
   INIT_EXTRA_ARGS=(--kms-url "$KMS_URL" --kms-identity "$KMS_IDENTITY_FILE")
   meta_arg node-id '^[0-9]{1,19}$'
   meta_arg public-url "^${URL_RE}$"

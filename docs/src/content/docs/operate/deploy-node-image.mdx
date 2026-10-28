@@ -187,6 +187,7 @@ scripts. All are optional except where noted:
 | `node-id` | merod `--node-id`: this node's id in its cluster (a `u64`) | **required** for a new node |
 | `public-url` | merod `--public-url`: the URL clients **and peers** reach this node at; it must reach this node, not a balancer | **required** for a new node |
 | `cluster` | merod `--cluster`, mixed into the storage key: every node of a cluster needs the same one | **required** on `locked-read-only`; merod's `dev` elsewhere |
+| `kms-identity` | the cluster's shared KMS identity: base64 of a protobuf-encoded libp2p Ed25519 keypair (68 bytes), written `0600` to merod's `--kms-identity` file, `/mnt/data/merod/kms-identity`, before `merod init`. A malformed value stops the boot. Never logged. See [merod's KMS client](/operate/config-reference/#merods-kms-client) | **required** on `locked-read-only` when `cluster` is set (unless the store is memory-only); elsewhere merod generates a per-node identity and the boot logs it |
 | `peers` | merod `--peers`: the founding members, `id=url,...` | none |
 | `bootstrap` | merod `--bootstrap`: `true` on exactly one founding node's first boot | `false` |
 | `rp-id`, `origins` | merod `--rp-id` / `--origins`: the WebAuthn relying party and the origins allowed to run passkey ceremonies and call the API (CORS) | merod's (`localhost`, `http://localhost:3000`) |
@@ -208,14 +209,14 @@ read and stay at merod's default, `owner`; neither are `--dev`, storage keys,
 `swarm-port` are no longer read: merod 1.0 has one listener, on loopback behind
 Traefik.
 
-:::caution[Open: how a cluster's nodes share one KMS identity]
 merod 1.0 derives its storage key from the KMS key released for the
 `--kms-identity` it presents, and every node of a cluster must present the
-**same** identity to derive the same key. The image keeps the identity at
-`/mnt/data/merod/kms-identity` on the encrypted data disk and lets merod create
-it on the first boot, which is right for a one-node cluster or a cluster's
-first node. How further nodes receive a copy is not decided yet.
-:::
+**same** identity to derive the same key. mdma mints one identity per cluster
+and stamps it on every node as `kms-identity` metadata; the image checks it and
+writes it to `/mnt/data/merod/kms-identity` on the encrypted data disk before
+`merod init`. `locked-read-only` refuses a node with a `cluster` and no
+`kms-identity`; the debug profiles let merod create a per-node one, which only
+suits a one-node cluster.
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
@@ -347,8 +348,11 @@ script (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
    `/mnt/data` instead and the disk is untouched.
 
 6. **Initialise merod 1.0** under `/mnt/data/merod` (node `default`), on the
-   first boot only: `merod init --kms-url <kms-url> --kms-identity
-   /mnt/data/merod/kms-identity` plus the merod metadata keys above. A v1
+   first boot only: write `kms-identity` metadata, checked, to
+   `/mnt/data/merod/kms-identity` (`0600`), then `merod init --kms-url
+   <kms-url> --kms-identity /mnt/data/merod/kms-identity` plus the merod
+   metadata keys above. The data disk's own identity (step 5) is separate and
+   per node, so the cluster identity is read only once the disk is open. A v1
    node's state under `/mnt/data/calimero` is reported and left alone; merod
    1.0 cannot read it. Without `kms-url` there is no merod (merod 1.0 takes its
    storage key only from mero-kms in TDX mode): `locked-read-only` with its
