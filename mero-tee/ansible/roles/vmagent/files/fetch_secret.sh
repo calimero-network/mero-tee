@@ -12,9 +12,8 @@ TOKEN_FILE="$2"
 
 case "$PROVIDER" in
   provided)
-    # The token is already on this machine: either stamped as instance metadata
-    # at creation and written out by calimero-init, or delivered later over the
-    # attested fleet channel by the sidecar. Nothing to fetch, and nothing that
+    # The token is already on this machine: stamped as instance metadata at
+    # creation and written out by the image's init script. Nothing to fetch, and nothing that
     # could fetch it -- these instances are created with no service account, so
     # there is no cloud identity for `gcloud` or the metadata server's token
     # endpoint to use.

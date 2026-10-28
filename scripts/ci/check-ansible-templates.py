@@ -6,22 +6,22 @@ script written as a `.j2` therefore renders fine right up until someone counts
 an array, at which point Jinja swallows the rest of the file hunting for `#}`
 and the render fails with "Missing end of comment tag".
 
-That is not hypothetical. It landed in `fleet-sidecar.sh.j2` and took out the
+That is not hypothetical. It landed in the (since removed) fleet sidecar
+template and took out the
 node-image release for 2.3.55 and 2.3.56 -- and because `Release mero-kms`
 refuses to publish without `mero-tee-v<version>/published-mrtds.json`, every
 later push to master went red too, on a job whose message named a missing
 release rather than a broken template.
 
-Nothing caught it earlier, and the reason is worth stating: the four
-`fleet-sidecar-*-test.sh` harnesses do substitute the template's variables, but
-they do it with `sed`. That exercises the bash and says nothing about whether
-Jinja can parse the file. The break needed a GCP VM, a packer build and five
-minutes to surface, and only on the read-only profiles -- the sidecar task is
-`when: merod_mode == "read-only"`, so the `debug` profile went green beside it.
+Nothing caught it earlier, and the reason is worth stating: the template
+tests slice and substitute the bash with `sed` and `awk`. That exercises the
+bash and says nothing about whether Jinja can parse the file. The break needed
+an image build to surface, and only on the profiles that rendered the
+template.
 
 So this checks the one thing those harnesses cannot: that each template parses.
 It reads the delimiters out of the `template:` task itself rather than assuming
-the defaults, because a task may legitimately move them (the sidecar does), and
+the defaults, because a task may legitimately move them, and
 a checker that assumed defaults would report a failure Ansible will not have.
 """
 

@@ -18,7 +18,7 @@ LOG="${LOG_DIR}/calimero-init.log"
 mkdir -p "$LOG_DIR"
 chmod 0700 "$LOG_DIR"
 # Where this log used to be. Removed so an upgraded node stops carrying it.
-rm -f /var/log/calimero-init.log /var/log/fleet-sidecar.log
+rm -f /var/log/calimero-init.log
 BIN_DIR="/usr/local/bin"
 CALIMERO_HOME="/mnt/data/calimero"
 CALIMERO_NODE="default"
@@ -147,52 +147,31 @@ OBSERVABILITY_TOKEN=$(get_meta "observability-token" | tr -d '\r\n')
 # data disk and the KMS -- none of which vector or vmagent depend on. It used to
 # be the last thing this script did, so any `fatal` above it (a KMS that could
 # not be reached, a data disk that would not open) exited before a shipper ran:
-# the node shipped nothing, its sidecar never started, and a locked image has no
-# console. The boots that most need their journal were the ones that sent none.
+# the node shipped nothing, and a locked image has no console. The boots that most need their journal were the ones that sent none.
 # vector's journald source reads from the start of the boot, so every line this
 # script logs, before and after this point, ships.
 
 # --- Observability credential ----------------------------------------------
 #
-# THE CREDENTIAL ARRIVES AT BOOT, FROM INSTANCE METADATA, and deliberately not
-# from the fleet sidecar.
+# THE CREDENTIAL ARRIVES AT BOOT, FROM INSTANCE METADATA (`observability-token`,
+# stamped per instance by mdma). This script runs before any unit does, so
+# vector comes up authenticated, and this script's OWN journal -- which is where
+# a node that fails before merod starts says why -- ships with it.
 #
-# It used to arrive only on the sidecar's `should-join` response. That made the
-# observability path depend on the thing it observes: a poll needs a fleet
-# token, a fleet token needs attested registration, and registration needs the
-# sidecar's main loop to be running. A node whose sidecar never reached its
-# first poll could therefore never ship a log line -- which is precisely the
-# node whose logs you need. One such node cost two hours of reconstructing its
-# internal state from HTTP request counts against the manager, and the question
-# it was reconstructed to answer (why its sidecar never started) was still not
-# answerable at the end.
-#
-# Reading it here breaks that circle completely. This script runs before any
-# unit does, so vector comes up authenticated whether or not the sidecar ever
-# runs, ever registers, or can even reach mdma -- and this script's OWN journal,
-# which is where a node that fails before the sidecar says why, ships with it.
-#
-# The trade: one fleet-wide bearer token now sits in instance metadata rather
-# than being a per-node credential handed over an attested channel. That is
-# weaker, and it is a deliberate choice. It still keeps the standing rule that
-# no secret is baked into the image -- instance metadata is not the image, it
-# is per-instance and rotatable without a release or an MRTD re-allowlist --
-# and the vmauth user this token names is scoped write-only, so a node that
-# leaks it lets someone add junk to the log store, not read the fleet's
-# telemetry. Against that: a node with no logs is a node that cannot be
-# debugged at all, on a profile with no shell to debug it from.
+# The trade: one fleet-wide bearer token sits in instance metadata. It keeps the
+# standing rule that no secret is baked into the image -- instance metadata is
+# not the image, it is per-instance and rotatable without a release or an MRTD
+# re-allowlist -- and the vmauth user this token names is scoped write-only, so
+# a node that leaks it lets someone add junk to the log store, not read the
+# fleet's telemetry. Rotating it means recreating the node: instance metadata is
+# written at creation, and nothing on the node fetches a newer one.
 #
 # Not GCP Secret Manager. mdma creates these instances with no
 # `serviceAccounts` field at all, so there is no cloud identity to read a
-# secret with. The `logs-secret-name` / `metrics-secret-name` keys that used to
-# select that path are no longer read, since every node gets its credential
-# from mdma.
+# secret with.
 #
-# The same file the fleet sidecar writes on rotation, and written the same way:
-# `printf '%s'`, no trailing newline, because mdma compares SHA-256 of the token
-# against SHA-256 of this file's contents to decide whether to re-send it. A
-# newline here would make every poll disagree and put the credential on the wire
-# once a second forever.
+# Written with `printf '%s'`, no trailing newline: the file must hold exactly the
+# credential mdma holds, and a stray newline would be a different one.
 OBS_TOKEN_FILE="/etc/vector/provided_token"
 
 if [[ -n "${OBSERVABILITY_TOKEN:-}" ]]; then
@@ -202,10 +181,6 @@ if [[ -n "${OBSERVABILITY_TOKEN:-}" ]]; then
   # so systemd's default 0022 creates the file 0644 and a post-hoc chmod closes
   # the window only after the secret is already on disk world-readable. The
   # chmod stays as a belt-and-braces assertion of the final mode.
-  #
-  # Same reasoning, and the same fix, as the sidecar's two token writes. Both
-  # files are the SAME credential at the same path, so a difference in how they
-  # are created would be a difference nobody would think to look for.
   if ( umask 077; printf '%s' "$OBSERVABILITY_TOKEN" > "$OBS_TOKEN_TMP" ); then
     chmod 600 "$OBS_TOKEN_TMP"
     mv -f "$OBS_TOKEN_TMP" "$OBS_TOKEN_FILE"
@@ -1058,38 +1033,6 @@ Refusing to start: state the host can write can carry an identity the host holds
 Recreate the node with a blank data disk."
 fi
 
-# --- Fleet state off the boot disk -------------------------------------------
-#
-# The fleet sidecar used to keep its state -- including `fleet-token`, the
-# credential mdma issues on attested registration -- under /var/lib/calimero,
-# on the boot disk, which is as host-readable as any other. It now keeps it on
-# the data disk (/mnt/data/fleet), which is encrypted above and is mounted
-# before the sidecar can start (the unit Requires= this one). The token has to
-# survive reboots (re-registering costs a quote and a challenge), so /run would
-# not do; the data disk is the one persistent place the host cannot read.
-#
-# Moved once, here, because this runs after the mount and before the sidecar.
-# Copy-then-shred rather than `mv`: across filesystems `mv` is a copy and an
-# unlink, and an unlink leaves the blocks behind. shred is best effort on
-# SSD-backed ext4; a node that held a token on its boot disk should rotate it by
-# re-registering, which recreating the node does.
-FLEET_STATE_DIR="$DATA_MOUNT/fleet"
-LEGACY_FLEET_STATE_DIR="/var/lib/calimero"
-mkdir -p "$FLEET_STATE_DIR"
-chmod 0700 "$FLEET_STATE_DIR"
-if [[ -d "$LEGACY_FLEET_STATE_DIR" ]]; then
-  for legacy in "$LEGACY_FLEET_STATE_DIR"/fleet-*; do
-    [[ -f "$legacy" ]] || continue
-    dest="$FLEET_STATE_DIR/$(basename "$legacy")"
-    if [[ ! -e "$dest" ]]; then
-      cp -p "$legacy" "$dest" || { log "WARN: could not move $legacy to $FLEET_STATE_DIR"; continue; }
-    fi
-    shred -u "$legacy" 2>/dev/null || rm -f "$legacy"
-  done
-  rmdir "$LEGACY_FLEET_STATE_DIR" 2>/dev/null || true
-  log "Moved fleet sidecar state from $LEGACY_FLEET_STATE_DIR to $FLEET_STATE_DIR"
-fi
-
 # --- Storage encryption (KMS) ------------------------------------------------
 #
 # TDX protects this VM's MEMORY. It does not protect its disks: the data disk
@@ -1349,26 +1292,24 @@ fi
 
 # TLS material for traefik.
 #
-# The key is generated HERE, inside the enclave, and never leaves it: the fleet
-# sidecar builds a CSR from it and mdma returns only a signed certificate. So no
-# private key for a publicly-trusted certificate ever crosses the wire, and mdma
-# stores none.
+# The key is generated HERE, inside the enclave, and never leaves it, so a
+# certificate for it can be issued from a CSR without any private key crossing
+# the wire. Nothing on the image requests one yet: the v1 fleet sidecar did,
+# over an mdma protocol core 1.0 has no counterpart for. Until a certificate is
+# installed at $TLS_DIR/cert.pem, :443 serves the self-signed placeholder below.
 #
-# The self-signed placeholder exists so traefik's TLS store always loads. Its
+# The placeholder exists so traefik's TLS store always loads: its
 # `defaultCertificate` names a fixed path (see traefik-routing.yml), and this
-# runs before traefik starts. Until mdma issues the real chain the node serves
-# :80 as it always did and :443 with an untrusted certificate that nothing is
-# pointed at -- mdma advertises no relay URL for a node whose certificate has
-# not been issued, so no client is ever sent to it.
+# runs before traefik starts.
 #
 # Both files are left alone once present: the key is the node's long-lived TLS
-# identity, and cert.pem is whatever the sidecar last installed. Regenerating
-# either on a reboot would invalidate the certificate issued for this key.
+# identity, and cert.pem is whatever was last installed. Regenerating either on
+# a reboot would invalidate a certificate issued for this key.
 TLS_DIR="/mnt/data/tls"
 mkdir -p "$TLS_DIR"
 chmod 0700 "$TLS_DIR"
 if [[ ! -s "$TLS_DIR/key.pem" ]]; then
-  log "Generating node TLS key (stays in the enclave; only a CSR ever leaves)"
+  log "Generating node TLS key (stays in the enclave)"
   if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
       -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
       -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1; then
@@ -1379,7 +1320,7 @@ if [[ ! -s "$TLS_DIR/key.pem" ]]; then
   fi
 elif [[ ! -s "$TLS_DIR/cert.pem" ]]; then
   # Key survived but the certificate did not (an interrupted install). Put a
-  # placeholder back so the TLS store still loads; the sidecar reinstalls.
+  # placeholder back so the TLS store still loads.
   log "TLS key present but certificate missing; regenerating placeholder"
   openssl req -x509 -new -nodes -key "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" \
     -days 3650 -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1 \
@@ -1393,10 +1334,5 @@ systemctl enable merod mero-auth traefik
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
 systemctl start --no-block merod mero-auth traefik
 log "Queued non-blocking start for merod, mero-auth, and traefik"
-
-if [[ "$MEROD_MODE" == "read-only" ]] && systemctl list-unit-files fleet-sidecar.service >/dev/null 2>&1; then
-  systemctl start --no-block fleet-sidecar
-  log "Queued non-blocking start for fleet-sidecar"
-fi
 
 log "Calimero init completed"
