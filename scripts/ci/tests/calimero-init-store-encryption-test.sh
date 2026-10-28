@@ -22,6 +22,10 @@
 #   * a merod that is not 1.0                    -> refuse, on every profile
 #   * no node-id / public-url; no cluster on locked -> refuse
 #   * a value that is not the shape merod takes  -> refuse
+#   * kms-identity: valid -> written 0600 to merod's --kms-identity path and
+#     never logged; malformed -> refuse; absent on a locked cluster with a
+#     disk store -> refuse; absent on debug or memory-only -> merod generates
+#     one, and the boot says so
 #   * governance, --dev, storage keys, the ops token in the clear -> never passed
 #   * an existing node                           -> no init, merod started
 #   * v1 state on the disk                       -> warned about, left alone
@@ -59,6 +63,29 @@ grep -q '^CALIMERO_HOME="/mnt/data/merod"$' "$TEMPLATE" \
 URL="https://kms.example:8080/"
 PUBLIC="https://n1.eu1.example.com/"
 SHA="$(printf 'ops' | sha256sum | awk '{print $1}')"
+
+# kms_identity [MODE]: base64 of a protobuf libp2p Ed25519 keypair, the shape
+# mdma stamps (`new_kms_identity`). MODE `short` drops a byte, `prefix` breaks
+# the protobuf header, `mismatch` pairs the secret with another key's public.
+kms_identity() {
+  python3 - "${1:-ok}" <<'PY'
+import base64, os, subprocess, sys
+mode = sys.argv[1]
+def public(secret):
+    der = bytes.fromhex("302e020100300506032b657004220420") + secret
+    return subprocess.run(["openssl", "pkey", "-inform", "DER", "-pubout", "-outform", "DER"],
+                          input=der, capture_output=True, check=True).stdout[-32:]
+secret = os.urandom(32)
+pub = public(os.urandom(32) if mode == "mismatch" else secret)
+head = bytes([0x08, 0x02 if mode == "prefix" else 0x01, 0x12, 0x40])
+raw = head + secret + pub
+if mode == "short":
+    raw = raw[:67]
+print(base64.b64encode(raw).decode(), end="")
+PY
+}
+ID="$(kms_identity)"
+[[ "$(printf '%s' "$ID" | base64 -d | wc -c)" == 68 ]] || fail "the test's KMS identity is not 68 bytes"
 
 # run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
 # Each KEY=VALUE is one instance metadata item.
@@ -102,6 +129,7 @@ STUB
   block="${decision//\"\/mnt\/data\/calimero\"/\"$dir\/mnt\/data\/calimero\"}"
   cat >"$dir/run.sh" <<RUN
 set -euo pipefail
+LOG="$dir/log"
 log() { echo "\$*" >>"$dir/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
 get_meta() { cat "$dir/meta/\$1" 2>/dev/null || true; }
@@ -132,7 +160,7 @@ arg() { awk -v f="$2" 'p{print; exit} $0==f{p=1}' "$WORK/$1/init-args" 2>/dev/nu
 has_flag() { grep -qx -- "$2" "$WORK/$1/init-args" 2>/dev/null; }
 logged() { grep -qF "$2" "$WORK/$1/log" 2>/dev/null; }
 
-BASE=(node-id=1 "public-url=$PUBLIC" cluster=eu1)
+BASE=(node-id=1 "public-url=$PUBLIC" cluster=eu1 "kms-identity=$ID")
 
 # --- a new node: the KMS, its identity on the data disk, the cluster --------
 run_case full locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" \
@@ -160,6 +188,20 @@ for flag in --release-approvals --app-upgrades --outbound-approvals --dev --stor
   has_flag full "$flag" && fail "merod init was given $flag from instance metadata"
 done
 [[ "$(ready full)" == true ]] || fail "a node that initialised must be started"
+# The cluster's identity, byte for byte, owner-only, and never in the log.
+idf="$WORK/full/mnt/data/merod/kms-identity"
+[[ -f "$idf" ]] || fail "the kms-identity metadata was not written to merod's --kms-identity path"
+cmp -s "$idf" <(printf '%s' "$ID" | base64 -d) || fail "the KMS identity file is not the decoded kms-identity metadata"
+[[ "$(stat -c %a "$idf")" == 600 ]] || fail "the KMS identity file must be 0600, got $(stat -c %a "$idf")"
+[[ "$(stat -c %u "$idf")" == "$(id -u)" ]] || fail "the KMS identity file must be owned by the user that runs calimero-init (root)"
+[[ ! -e "$idf.tmp" ]] || fail "a temporary copy of the KMS identity was left behind"
+logged full "Installed the cluster KMS identity" || fail "installing the KMS identity must be logged"
+for f in "$WORK/full/log" "$WORK/full/init-args"; do
+  grep -qF "${ID:0:24}" "$f" && fail "the KMS identity value reached $(basename "$f")"
+done
+for name in $(cd "$WORK/full" && ls); do
+  [[ -f "$WORK/full/$name" ]] && grep -qF "${ID:0:24}" "$WORK/full/$name" && fail "the KMS identity value is in $name"
+done
 
 # Only the keys that are set reach merod init.
 run_case minimal debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLIC"
@@ -215,6 +257,43 @@ for bad in "node-id=1; reboot" "node-id=-1" "public-url=javascript:alert(1)" "pu
   last="$WORK/bad-$n"
   [[ "$(cat "$last/rc")" != 0 ]] || fail "metadata '$bad' was accepted"
   [[ -f "$last/init-args" ]] && fail "merod init ran with metadata '$bad'"
+done
+
+# --- kms-identity ----------------------------------------------------------------
+# Malformed: refused on every profile, and nothing is written.
+n=0
+for bad in "not base64!" "$(kms_identity short)" "$(kms_identity prefix)" "$(kms_identity mismatch)" \
+           "$(head -c 68 /dev/urandom | base64 -w0)" "${ID}AAAA"; do
+  for profile in locked-read-only debug; do
+    n=$((n + 1))
+    args=("${BASE[@]}")
+    args=("${args[@]/#kms-identity=*/}")
+    run_case "bad-id-$n" "$profile" "$URL" 2.3.70 1.0 fresh ext4 "${args[@]}" "kms-identity=$bad"
+    [[ "$(rc "bad-id-$n")" != 0 ]] || fail "kms-identity '$bad' was accepted on $profile"
+    init_ran "bad-id-$n" && fail "merod init ran with kms-identity '$bad' on $profile"
+    [[ -e "$WORK/bad-id-$n/mnt/data/merod/kms-identity" ]] && fail "a malformed kms-identity was written on $profile"
+    logged "bad-id-$n" "'kms-identity' is not" || fail "a refused kms-identity must say why"
+  done
+done
+
+# Absent on a locked cluster whose store is on the disk: refused, because a
+# node merod gives its own identity cannot read its cluster's store.
+NO_ID=(node-id=1 "public-url=$PUBLIC" cluster=eu1)
+run_case locked-no-id locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${NO_ID[@]}"
+[[ "$(rc locked-no-id)" != 0 ]] || fail "locked-read-only with a cluster and no kms-identity must refuse to initialise"
+init_ran locked-no-id && fail "merod init ran on a locked cluster node without the cluster's KMS identity"
+logged locked-no-id "no kms-identity metadata" || fail "a node refused for a missing kms-identity must say so"
+
+# Absent on debug, or on a memory-only store: merod generates one, and says so.
+for c in "debug-no-id debug ext4" "debug-ro-no-id debug-read-only ext4" "memory-no-id locked-read-only tmpfs"; do
+  read -r name profile fs <<<"$c"
+  run_case "$name" "$profile" "$URL" 2.3.70 1.0 fresh "$fs" "${NO_ID[@]}"
+  [[ "$(rc "$name")" == 0 ]] || fail "$profile ($fs) without kms-identity should let merod generate one: $(cat "$WORK/$name/log")"
+  init_ran "$name" || fail "merod init did not run on $profile ($fs) without kms-identity"
+  [[ "$(arg "$name" --kms-identity)" == "$WORK/$name/mnt/data/merod/kms-identity" ]] \
+    || fail "merod must still be pointed at the identity path to generate one there"
+  [[ -e "$WORK/$name/mnt/data/merod/kms-identity" ]] && fail "calimero-init wrote an identity it was never given"
+  logged "$name" "merod will generate a per-node KMS" || fail "a node whose identity merod generates must say so"
 done
 
 # --- an existing node is never re-initialised ---------------------------------

@@ -14,7 +14,7 @@
 #   * the generated vector.yaml validates and its sink reads only
 #     `guard_egress`;
 #   * configure_vector.sh refuses a partial without the guard;
-#   * the program masks the credential shapes below, keeps the fields a line
+#   * the program masks the credential shapes below (a KMS identity keypair among them), keeps the fields a line
 #     needs, drops the rest of journald's, and caps a message at 8 KiB.
 #
 # Set VECTOR_BIN to a vector binary to skip the download.
@@ -132,6 +132,7 @@ cat > "${SB}/events.json" <<EOF
 {"timestamp":"t","message":"Refresh token reuse detected for key K1 (jti LEAKjti) client_id=Some(String(\"LEAKid\"))","unit":"merod.service"}
 {"timestamp":"t","message":"KMS get-key request failed (500): Internal - LEAKkmsbody","unit":"merod.service"}
 {"timestamp":"t","message":"fetching https://LEAKuser:LEAKpass@apps.test/a.wasm?access_token=LEAKqt&x=1","unit":"merod.service"}
+{"timestamp":"t","message":"kms identity CAESQLEAKkmsidentityBase64AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= hex 080112405eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed peer 12D3KooWAbc","unit":"calimero-init.service"}
 {"timestamp":"t","message":"abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress leak","unit":"merod.service"}
 EOF
 "${VECTOR_BIN}" vrl -i "${SB}/events.json" -p "$GUARD" -o 2>/dev/null > "${SB}/shipped.json" \
@@ -142,8 +143,8 @@ import json, sys
 lines = [l for l in open(sys.argv[1]).read().splitlines() if l.startswith("{")]
 events = [json.loads(l) for l in lines]
 failures = []
-if len(events) != 20:
-    failures.append(f"expected 20 events out, got {len(events)}")
+if len(events) != 21:
+    failures.append(f"expected 21 events out, got {len(events)}")
 shipped = "\n".join(lines)
 # Every planted secret contains "leak" in some case; none may survive.
 if "leak" in shipped.lower():
@@ -162,6 +163,11 @@ keep = events[7]["message"] if len(events) > 7 else ""
 for word in ["context_id=5Hx9abc", "public_key=ed25519:AbC", "token_id=7", "tokens: 4", "secrets loaded"]:
     if word not in keep:
         failures.append(f"non-secret text was masked: {word!r} missing from {keep!r}")
+ident = events[19]["message"] if len(events) > 19 else ""
+if "5eed5eed" in shipped:
+    failures.append("a hex-encoded KMS identity keypair left the guard")
+if ident.count("[REDACTED keypair]") != 2 or "peer 12D3KooWAbc" not in ident:
+    failures.append(f"a KMS identity keypair was not masked as one, or its context went with it: {ident!r}")
 if "]]" in shipped:
     failures.append("a value was masked twice (stray ']]' in the output)")
 big = events[8]["message"] if len(events) > 8 else ""

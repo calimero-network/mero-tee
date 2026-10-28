@@ -204,7 +204,22 @@ in TDX mode, through two flags that `merod init` writes to `config.toml` as
 | Flag / key | Meaning |
 | --- | --- |
 | `--kms-url` / `kms-url` | The cluster's VPC-internal URL. Node images write it from `kms-url` metadata at the node's first boot. |
-| `--kms-identity` / `kms-identity` | The disk identity (a protobuf libp2p keypair) presented to the KMS, which derives the key per identity. Node images keep it at `/mnt/data/merod/kms-identity`, on the encrypted data disk; merod creates it if missing. Every node of a cluster must present the same one. |
+| `--kms-identity` / `kms-identity` | The identity (a protobuf-encoded libp2p Ed25519 keypair, 68 bytes) presented to the KMS, which derives the key per identity, so every node of a cluster must present the same one. Node images write it from `kms-identity` metadata (below) to `/mnt/data/merod/kms-identity`, on the encrypted data disk, `0600` and root-owned, before `merod init`; merod creates one only when that metadata is absent. |
+
+The node image reads the cluster's identity from **`kms-identity`** instance
+metadata, which mdma mints once per cluster (`new_kms_identity` in
+`shared/mdma_common/cloud_v2.py`) and stamps on every node of it:
+
+| Metadata key | Value | When absent |
+| --- | --- | --- |
+| `kms-identity` | Base64 of the protobuf-encoded libp2p Ed25519 keypair: `08 01 12 40`, then the 32-byte secret and the 32-byte public key (68 bytes decoded, `CAESQ…` in base64). Read at the first boot only. Not base64, not 68 bytes, the wrong header, or a public key that is not the secret's stops the boot, on every profile. | `locked-read-only` with `cluster` set refuses to initialise merod (unless its store is memory-only); the debug profiles let merod generate a per-node identity and log that they did. |
+
+It is not the data disk's identity: the LUKS2 key comes from `merod kms
+disk-key` for a separate, per-node identity kept in the disk's LUKS2 header,
+so the cluster identity is needed only after the disk is open, and the disk
+passphrase is never the KMS key a whole cluster derives its storage key from.
+The value is never logged, and the log egress guard masks the keypair's base64
+and hex shapes.
 
 merod trusts the KMS only if its quote matches the signed release the
 environment names (`MERO_KMS_RELEASE_TAG`, else `MERO_KMS_VERSION`, else

@@ -13,6 +13,10 @@
 #   * credential shapes in the message are masked: PEM private keys, JWTs,
 #     Bearer/Basic credentials, URL userinfo and token parameters, recovery
 #     phrases, and the value of any secret-named key;
+#   * a libp2p Ed25519 keypair (a KMS identity, such as the cluster's
+#     `kms-identity`): its protobuf encoding starts `08 01 12 40`, which is
+#     `CAESQ` in base64 and `08011240` in hex, then 64 bytes of secret and
+#     public key;
 #   * application data merod logs at its default level is masked: a guest's
 #     log lines, a method's error payload, guest panic text and the panic hook,
 #     with login names, serde-echoed client values, jti, the JSON-RPC client id
@@ -51,6 +55,10 @@ msg = replace(msg, r'([?&](?:access_)?token=)[^&\s"]+', "${1}[REDACTED]")
 # CLI secret labels and a 24-word recovery phrase.
 msg = replace(msg, r'(?m)^((?:Session-Secret|Secret):\s+)\S+', "${1}[REDACTED]")
 msg = replace(msg, r'\b(?:[a-z]{3,8}\s+){23}[a-z]{3,8}\b', "[REDACTED mnemonic]")
+# A protobuf-encoded libp2p Ed25519 keypair (a KMS identity), in base64 or hex.
+# Never logged on purpose; masked here should a line ever carry one.
+msg = replace(msg, r'CAESQ[A-Za-z0-9+/_-]{80,}={0,2}', "[REDACTED keypair]")
+msg = replace(msg, r'(?i)\b08011240[0-9a-f]{120,}', "[REDACTED keypair]")
 msg = replace(msg, r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)', "[REDACTED private key]")
 msg = replace(msg, r'\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}', "[REDACTED jwt]")
 msg = replace(msg, r'(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}', "$1 [REDACTED]")
