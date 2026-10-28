@@ -26,8 +26,8 @@
   on where it ends. :80 stays for non-browser clients, whose requests are
   sealed all the same.
 
-  The upstream port is merod's `--listen`, set by calimero-init on loopback;
-  scripts/ci/tests/traefik-passthrough-test.sh keeps the two equal.
+  The upstream is merod's `--listen` (MEROD_LISTEN in merod.service, on
+  loopback); scripts/ci/tests/traefik-passthrough-test.sh keeps the two equal.
 #}
 http:
   routers:

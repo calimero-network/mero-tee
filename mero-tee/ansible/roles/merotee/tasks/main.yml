@@ -165,13 +165,19 @@
         After=calimero-init.service
 
         [Service]
+        # MERO_TEE_VERSION, MERO_TEE_MIN_VERSION and MERO_TEE_PROFILE, written by
+        # calimero-init from tee-release-version; merod refuses TDX mode without
+        # the first and last.
         EnvironmentFile=-/etc/calimero/merod.env
-        # Plain-HTTP /metrics for vmagent, on loopback only (release-v2 merod
-        # reads MEROD_METRICS_LISTEN; a merod without it ignores the variable).
+        # The node API, on loopback: traefik is the only way in, and forwards
+        # every path here (roles/mero-traefik, traefik-routing.yml.j2).
+        Environment=MEROD_LISTEN=127.0.0.1:2528
+        # Plain-HTTP /metrics for vmagent, on loopback only. It asks for no
+        # credential, so it must never be on a public address.
         Environment=MEROD_METRICS_LISTEN=127.0.0.1:9464
-        ExecStart=/usr/local/bin/merod --home /mnt/data/calimero --node default run
+        ExecStart=/usr/local/bin/merod --home /mnt/data/merod --node default run
         Restart=always
-        # A core dump of merod is its signing identity and every group key.
+        # A core dump of merod holds its storage key and every app's state.
         LimitCORE=0
 
         [Install]
@@ -290,35 +296,36 @@
     - /swap.img
     - /swapfile
 
-# --- Storage-encryption conformance ------------------------------------------
+# --- merod 1.0 conformance ---------------------------------------------------
 #
-# calimero-init refuses to create a locked-read-only node without a
-# KMS-encrypted store, and it creates one with `merod init --kms-url`. A merod
-# that predates that flag cannot encrypt from the first write, so every new node
-# on such an image would stop at boot. Catch it here, at build time, instead:
-# the flag is a capability probe that needs no node, network or config.
-- name: Probe whether the baked merod can encrypt its store at init
+# calimero-init configures merod 1.0 and nothing else: `merod init` with
+# `--node-id`, `--public-url`, `--kms-url` and `--kms-identity`, the storage key
+# from mero-kms only. A baked merod from v1 knows none of that, and every node
+# on the image would stop at boot. Catch it here, at build time, on every
+# profile: `init --help` needs no node, network or config.
+- name: Probe whether the baked merod is merod 1.0
   command: /usr/local/bin/merod --node conformance init --help
-  register: merod_kms_init_help
+  register: merod_init_help
   changed_when: false
   failed_when: false
-  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
 
-- name: Assert the baked merod can create a KMS-encrypted store
+- name: Assert the baked merod is merod 1.0, with a KMS-held storage key
   assert:
     that:
-      - merod_kms_init_help.rc == 0
-      - "'--kms-url' in merod_kms_init_help.stdout"
+      - merod_init_help.rc == 0
+      - "'--node-id' in merod_init_help.stdout"
+      - "'--public-url' in merod_init_help.stdout"
+      - "'--kms-url' in merod_init_help.stdout"
+      - "'--kms-identity' in merod_init_help.stdout"
     fail_msg: >-
-      The locked-read-only profile only creates nodes with a KMS-encrypted
-      store, but the baked merod ({{ merod_version | default('unknown') }}) has
-      no `init --kms-url`, so it can only create a plaintext one. Bump
-      merodVersion in mero-tee/versions.json to a core release carrying it.
-  when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
+      The baked merod ({{ merod_version | default('unknown') }}) is not merod
+      1.0: its `init` lacks --node-id, --public-url, --kms-url or
+      --kms-identity, which calimero-init passes. Set merodVersion in
+      mero-tee/versions.json to a core 1.0 release.
 
 # --- Data-disk-encryption conformance ----------------------------------------
 #
-# The same shape as the store assert above. calimero-init refuses to create a
+# The same shape as the merod 1.0 assert above. calimero-init refuses to create a
 # locked-read-only node's data disk without encryption, and it encrypts with
 # `merod kms disk-key` + cryptsetup LUKS2/dm-integrity. A merod without the
 # subcommand, a missing cryptsetup, or a kernel without dm-integrity would each
@@ -372,50 +379,6 @@
       encrypt or open the data disk. On Ubuntu, dm_integrity can live in
       linux-modules-extra for the kernel flavour.
   when: lockdown_profile | default('locked-read-only') == 'locked-read-only'
-
-# --- Delegated-execution conformance -----------------------------------------
-#
-# A relay image has one cross-repo dependency the build cannot infer: the baked
-# merod must actually implement `server.admin.delegated_access` and the
-# `GET .../intents` descriptor. Pin `merodVersion` at a core release that
-# predates them and the image still builds, still boots, and still reports
-# itself to MDMA — it simply never serves a client, because the config key is
-# ignored and the discovery read 404s. That failure appears in a browser, days
-# later, as "the relay does not answer".
-#
-# So the invariant is asserted here instead of documented. The flag on
-# `merod init` and the config key are the same feature, and the flag is the part
-# a CLI can be asked about without a node, a network or a config file — which
-# makes it a clean capability probe for the baked binary.
-#
-# `--delegated-access` ONLY. Core renamed `--public-intents` to it in
-# 0.11.0-rc.43, and `calimero-init` now writes the config key under its new
-# name, `server.admin.delegated_access`: writing the old name beside the
-# `delegated_access = false` that `merod init` emits is a duplicate field, and
-# merod then refuses the whole config.toml. A merod from before the rename does
-# not know the new key, silently ignores it, and never relays. So the probe
-# accepts exactly the releases the script is written for. (The old flag survives
-# only as a clap alias, which `--help` hides.)
-- name: Probe whether the baked merod supports delegated execution
-  command: /usr/local/bin/merod --node conformance init --help
-  register: merod_init_help
-  changed_when: false
-  failed_when: false
-  when: fleet_delegated_access | default(false) | bool
-
-- name: Assert the baked merod can serve delegated execution
-  assert:
-    that:
-      - merod_init_help.rc == 0
-      - "'--delegated-access' in merod_init_help.stdout"
-    fail_msg: >-
-      This image enables delegated execution (fleet_delegated_access), but the
-      baked merod ({{ merod_version | default('unknown') }}) does not list
-      --delegated-access, so it does not know the server.admin.delegated_access
-      key calimero-init writes (core 0.11.0-rc.43 or later is needed).
-      Bump merodVersion in mero-tee/versions.json, or build with
-      -e fleet_delegated_access=false.
-  when: fleet_delegated_access | default(false) | bool
 
 # Traefik is a TLS front and nothing else on a merod 1.0 node: merod
 # authenticates its callers inside the sealed channel, so the routing file must

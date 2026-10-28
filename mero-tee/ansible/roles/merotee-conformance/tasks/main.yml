@@ -150,17 +150,16 @@
     path: /usr/local/lib/calimero/init.sh
   register: baked_init
 
-- name: Assert baked init has read-only and observability gating (R6/R7)
+- name: Assert baked init has storage and observability gating (R6/R7)
   assert:
     that:
-      - "'MEROD_MODE=\"read-only\"' in (baked_init.content | b64decode)"
-      - "'--mode read-only' in (baked_init.content | b64decode)"
       - "'if [[ -n \"${METRICS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'if [[ -n \"${LOGS_ENDPOINT:-}\" ]]; then' in (baked_init.content | b64decode)"
       - "'systemctl disable vmagent vector' in (baked_init.content | b64decode)"
-      # New nodes get a KMS-encrypted store, and locked-read-only refuses
-      # to create a plaintext one.
-      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_URL\")' in (baked_init.content | b64decode)"
+      # merod 1.0 takes its storage key from mero-kms only, and
+      # locked-read-only refuses to boot a node without one.
+      - "'INIT_EXTRA_ARGS=(--kms-url \"$KMS_URL\" --kms-identity \"$KMS_IDENTITY_FILE\")' in (baked_init.content | b64decode)"
+      - "'the locked-read-only profile does not keep node' in (baked_init.content | b64decode)"
       - "'The locked-read-only profile does not' in (baked_init.content | b64decode)"
       # The data disk is LUKS2 with integrity, keyed from the KMS; a blank disk
       # is the only thing ever formatted; the release cannot go below the image;

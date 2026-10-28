@@ -45,9 +45,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
-disk_block="$(awk '/^# --- The data disk ---/{on=1} /^# --- Storage encryption \(KMS\) ---/{exit} on{print}' "$TEMPLATE")"
+disk_block="$(awk '/^# --- The data disk ---/{on=1} /^# --- merod 1\.0: storage key and cluster configuration/{exit} on{print}' "$TEMPLATE")"
 pin_block="$(awk '/^# --- Release pinning/{on=1} /^# Extra `merod init` arguments/{exit} on{print}' "$TEMPLATE")"
-[[ -n "$disk_block" ]] || fail "could not find the data-disk block ('# --- The data disk ---' .. '# --- Storage encryption (KMS) ---')"
+[[ -n "$disk_block" ]] || fail "could not find the data-disk block ('# --- The data disk ---' .. '# --- merod 1.0: storage key and cluster configuration')"
 [[ -n "$pin_block" ]] || fail "could not find the release-pinning block ('# --- Release pinning' .. '# Extra \`merod init\` arguments')"
 grep -qF 'luksFormat' <<<"$disk_block" || fail "the sliced disk block does not contain the format it is meant to test"
 grep -qF 'MERO_TEE_MIN_VERSION' <<<"$pin_block" || fail "the sliced pinning block does not write MERO_TEE_MIN_VERSION"

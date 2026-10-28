@@ -20,11 +20,12 @@ chmod 0700 "$LOG_DIR"
 # Where this log used to be. Removed so an upgraded node stops carrying it.
 rm -f /var/log/calimero-init.log
 BIN_DIR="/usr/local/bin"
-CALIMERO_HOME="/mnt/data/calimero"
+# merod 1.0's home. Not v1's /mnt/data/calimero: a v1 store is not something
+# merod 1.0 can read, and keeping the paths apart means it never tries to.
+CALIMERO_HOME="/mnt/data/merod"
 CALIMERO_NODE="default"
 IMAGE_PROFILE="{{ lockdown_profile }}"
 IMAGE_ROLE="node"
-MEROD_MODE="{{ merod_mode }}"
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 
@@ -43,7 +44,7 @@ fatal() {
   exit 1
 }
 
-log "Starting Calimero init (profile=$IMAGE_PROFILE mode=$MEROD_MODE)"
+log "Starting Calimero init (profile=$IMAGE_PROFILE)"
 
 # --- RTMR3 --------------------------------------------------------------------
 # rtmr3-v3 begin -- the same in calimero-init, kms-init and agent-init
@@ -101,23 +102,6 @@ fi
 systemctl stop vmagent vector 2>/dev/null || true
 systemctl disable vmagent vector 2>/dev/null || true
 
-# Optional with defaults. A port is a decimal number from 1 to 65535; anything
-# else in metadata is ignored for the default rather than handed to merod.
-metadata_port() {
-  local key="$1" default="$2" value
-  value=$(get_meta "$key" | tr -d '\r\n')
-  if [[ -z "$value" ]]; then
-    echo "$default"
-  elif [[ "$value" =~ ^[0-9]{1,5}$ ]] && (( 10#$value >= 1 && 10#$value <= 65535 )); then
-    echo "$((10#$value))"
-  else
-    # `log` also writes stdout, which is this function's answer.
-    log "WARN: ignoring $key metadata that is not a port; using $default" >&2
-    echo "$default"
-  fi
-}
-SERVER_PORT=$(metadata_port "server-port" 2428)
-SWARM_PORT=$(metadata_port "swarm-port" 2528)
 TEE_RELEASE_VERSION=$(get_meta "tee-release-version")
 # The mero-kms endpoint this node's storage key comes from. Stamped by
 # mdma's dispatcher at creation. Untrusted like all metadata, and that is fine:
@@ -276,7 +260,7 @@ else
   fi
   CPU_PLATFORM=$(uname -m)
   BASE_URL="https://github.com/calimero-network/core/releases/download/${MEROD_VERSION}"
-  log "merod-version=$MEROD_VERSION server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
+  log "merod-version=$MEROD_VERSION"
   download() {
     local name="$1"
     local tar="${name}_${CPU_PLATFORM}-unknown-linux-gnu.tar.gz"
@@ -289,8 +273,6 @@ else
   download merod
   download meroctl
 fi
-
-log "server-port=$SERVER_PORT swarm-port=$SWARM_PORT"
 
 # --- Release pinning (downgrade protection) ---------------------------------
 #
@@ -389,23 +371,16 @@ fi
 
 # Extra `merod init` arguments; set by the storage-encryption decision below.
 INIT_EXTRA_ARGS=()
-INIT_ENCRYPTED=false
+# Whether merod has a configuration to run from; set by the same decision.
+MEROD_READY=false
 
+# `merod init` writes {home}/{node}/config.toml from the flags given, and only
+# those: defaults are applied when the node starts. It writes no key and opens
+# no store (`run` fetches the storage key from mero-kms before it touches the
+# data directory), so a failed init leaves nothing to clean up.
 init_node() {
-  if [[ "$MEROD_MODE" == "read-only" ]]; then
-    "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
-      --mode read-only \
-      --advertise-address \
-      --server-port "$SERVER_PORT" \
-      --swarm-port "$SWARM_PORT" \
-      ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
-  else
-    "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
-      --advertise-address \
-      --server-port "$SERVER_PORT" \
-      --swarm-port "$SWARM_PORT" \
-      ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
-  fi
+  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" init \
+    ${INIT_EXTRA_ARGS[@]+"${INIT_EXTRA_ARGS[@]}"}
 }
 
 # --- Swap -------------------------------------------------------------------
@@ -1032,184 +1007,146 @@ Refusing to start: state the host can write can carry an identity the host holds
 Recreate the node with a blank data disk."
 fi
 
-# --- Storage encryption (KMS) ------------------------------------------------
+# --- merod 1.0: storage key and cluster configuration ----------------------
 #
-# TDX protects this VM's MEMORY. It does not protect its disks: the data disk
-# is a device the host reads and writes, so whatever merod stores in plaintext
-# is readable by anyone who can snapshot or attach that disk -- the cloud
-# project, or whoever compromises it. A new node's data disk is now encrypted
-# as a whole (above); the store keeps its own KMS key as well, because the two
-# fail differently: a node created before disk encryption, or a debug node with
-# a plain disk, still gets an encrypted store, and an encrypted store never
-# depends on the disk-unlock path being right. merod's store holds
-# the node's signing identity (the key it was ADMITTED under as a TEE member),
-# its account root, and every context's replicated state. A copied disk is
-# therefore a copy of an admitted fleet member: it can pull every group key the
-# node was given, and, since admitted TEEs may vouch for new ones, admit more.
+# TDX protects this VM's MEMORY, not its disks. merod 1.0 seals everything it
+# stores under a storage key K_r = HKDF(KMS key, info = --cluster), and in TDX
+# mode (this image never runs merod with --dev) the KMS key comes ONLY from
+# mero-kms: `--storage-key` and `--storage-key-file` are refused, and a node with
+# no key source does not start. mero-kms releases the key only to a TD whose
+# quote matches the signed release policy named by MERO_TEE_VERSION (exported
+# under "Release pinning" above, with the floor and the profile), for the
+# identity in `--kms-identity`.
 #
-# So the store is encrypted with a key released by mero-kms, which only
-# hands it to a TD whose quote matches the release policy and is bound to this
-# node's peer id. The key is derived from `{namespace}/{profile}/{peerId}`, so
-# it survives image upgrades within a profile.
+# So a node needs `kms-url` and `tee-release-version`, on every profile. Without
+# a KMS there is no merod: locked-read-only refuses to boot with its store on a
+# disk, as it always has; a node whose store is memory-only (the release
+# pipeline's measurement VM) or on a debug profile boots without starting merod
+# and says why.
 #
-# It has to happen at `merod init`, not later. `init` is what writes the signing
-# identity and account root, so a store encrypted only from the first `run`
-# would already hold both in plaintext -- and could not be opened encrypted at
-# all, because every read decrypts. `merod init --kms-url` fetches the key
-# before writing anything and saves `[tee.kms]` so `run` fetches the same
-# key on every boot.
+# THE CLUSTER COMES FROM INSTANCE METADATA, read once, at the first boot. Each
+# key below is merod's own flag name, so the contract is merod's (see core's
+# docs/src/content/docs/operate/merod.mdx), and each value is checked against
+# the shape merod expects before it reaches `merod init`:
 #
-# `tee-release-version` names the signed mero-tee release whose policy the KMS
-# is verified against; `merod init --kms-url` refuses without it, because a key
-# from an unverified KMS may be known to whoever runs the endpoint.
+#   node-id            required   this node's id in the cluster (u64)
+#   public-url         required   the URL clients and peers reach THIS node at
+#   cluster            required on locked-read-only (merod's default is `dev`);
+#                                 mixed into the storage key, so every node of a
+#                                 cluster needs the same one
+#   peers              optional   founding members, `id=url,...`
+#   bootstrap          optional   `true` on exactly one founding node
+#   rp-id, origins     optional   the WebAuthn relying party and its origins
+#   ops-token-sha256   optional   the Ops API token's hash (never the token)
+#   registry-url, apps-domain, peer-profiles, peer-min-release, replicas
 #
-# Keyed on config.toml, not the node directory: config.toml is what marks a
-# node initialised, and `merod init --kms-url` fetches the key before writing
-# it, so an init that failed on an unreachable or unverifiable KMS is retried on
-# the next boot instead of being mistaken for a finished node.
+# Not read: the governance flags (`--release-approvals`, `--app-upgrades`,
+# `--outbound-approvals`), which are fixed at genesis and stay at merod's
+# default, `owner`; anything that weakens TDX mode (`--dev`, storage keys,
+# `--allow-unsigned-bundles`); and `--ops-token`, which would put the token in
+# metadata. `--listen` and `--metrics-listen` are the unit's (merod.service).
+#
+# The configuration is written once and then is the node's: config.toml is on
+# the encrypted data disk, and metadata changed later is not applied, because a
+# different node id or cluster on the same data directory is a different node.
+#
+# The KMS identity is a file on the encrypted data disk, which merod creates if
+# it is missing. Every node of a cluster must present the SAME identity to
+# derive the same K_r; how a cluster's nodes come to share one is not decided
+# here (see docs: operate/deploy-node-image).
 NODE_CONFIG="$CALIMERO_HOME/$CALIMERO_NODE/config.toml"
+KMS_IDENTITY_FILE="$CALIMERO_HOME/kms-identity"
+V1_HOME="/mnt/data/calimero"
 
-merod_can_encrypt_at_init() {
-  "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- '--kms-url'
+# Whether the baked merod is merod 1.0: `--kms-identity` and `--node-id` are its
+# flags and no v1 merod's. This script configures 1.0 only.
+merod_is_1_0() {
+  local help
+  help="$("$BIN_DIR/merod" --node probe init --help 2>/dev/null)" || return 1
+  grep -q -- '--kms-identity' <<<"$help" && grep -q -- '--node-id' <<<"$help"
 }
 
-# The one case where locked-read-only may create a node with no KMS: the store
-# is on a tmpfs and nothing can page it out, so it only ever exists in memory
-# TDX encrypts. Checked from the mount table rather than taken from the
-# `ephemeral-store` metadata, so a host that sets that key on a normal node
-# gets a node whose state vanishes at reboot, never a plaintext disk.
+# The one case where a node may go without a KMS: the store would be on a tmpfs
+# that nothing can page out. Checked from the mount table rather than taken from
+# the `ephemeral-store` metadata.
 store_is_memory_only() {
   [[ "$(findmnt -n -o FSTYPE --target "$CALIMERO_HOME" 2>/dev/null)" == tmpfs ]] \
     && [[ -z "$(swapon --noheadings 2>/dev/null)" ]]
 }
 
-# MERO_TEE_VERSION (and the floor and profile pin) were exported under
-# "Release pinning" above, for `merod init` as much as for the disk key.
+# meta_arg KEY PATTERN: when instance metadata KEY is set, check it against
+# PATTERN and append `--KEY VALUE` to merod init's arguments. A value that does
+# not match stops the boot: a typo here becomes the node's identity for good.
+meta_arg() {
+  local key="$1" pattern="$2" value
+  value="$(get_meta "$key" | tr -d '\r\n')"
+  [[ -n "$value" ]] || return 0
+  if (( $(printf '%s' "$value" | wc -c) > 4096 )) || ! [[ "$value" =~ $pattern ]]; then
+    fatal "instance metadata '$key' is not a valid value for merod --$key; refusing to initialise the node with it"
+  fi
+  INIT_EXTRA_ARGS+=("--$key" "$value")
+}
+
+URL_RE='https?://[A-Za-z0-9._~:@%+-]+(/[A-Za-z0-9._~:@%+/-]*)?'
+HOST_RE='[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?'
 
 mkdir -p "$CALIMERO_HOME"
-if [[ ! -f "$NODE_CONFIG" ]]; then
-  if [[ -n "$KMS_URL" ]]; then
-    [[ -n "${TEE_RELEASE_VERSION:-}" ]] || fatal "kms-url is set but \
-tee-release-version is not. The KMS is verified against that release's signed \
-policy, and without it merod cannot tell a real KMS from an impostor. Refusing \
-to initialise."
-    if merod_can_encrypt_at_init; then
-      INIT_EXTRA_ARGS=(--kms-url "$KMS_URL")
-      INIT_ENCRYPTED=true
-      log "Initializing Calimero node with a KMS-encrypted store (kms=$KMS_URL release=$TEE_RELEASE_VERSION)..."
-    elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-      fatal "the baked merod does not support 'init --kms-url', so it cannot \
-create an encrypted store. Refusing to create an unencrypted node on the \
-locked-read-only profile. Bump merodVersion in versions.json."
-    else
-      log "WARN: the baked merod does not support 'init --kms-url'; creating an \
-UNENCRYPTED store (allowed on profile=$IMAGE_PROFILE only)."
-    fi
-  elif store_is_memory_only; then
-    log "No kms-url metadata; the store is on a tmpfs with no swap, so it \
-exists only in TDX-encrypted memory. Initialising without a KMS (profile=$IMAGE_PROFILE)."
-  elif [[ "$IMAGE_PROFILE" == "locked-read-only" ]]; then
-    fatal "no kms-url metadata. The locked-read-only profile does not \
-create a node with an unencrypted store: its signing identity would sit in \
-plaintext on a disk the host can read. Set kms-url (and \
-tee-release-version) on the instance."
-  else
-    log "WARN: no kms-url metadata; creating an UNENCRYPTED store (allowed \
-on profile=$IMAGE_PROFILE only)."
+chmod 0700 "$CALIMERO_HOME"
+if [[ -d "$V1_HOME" ]]; then
+  log "WARN: $V1_HOME holds a v1 node's state, which merod 1.0 cannot read. \
+It is left untouched and unused; this node starts as a new merod 1.0 node."
+fi
+
+merod_is_1_0 || fatal "the baked merod is not merod 1.0 (its 'init' has no \
+--kms-identity/--node-id), and this image configures merod 1.0 only. Rebuild \
+the image with merodVersion at a core 1.0 release."
+
+if [[ -z "$KMS_URL" ]]; then
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" ]] && ! store_is_memory_only; then
+    fatal "no kms-url metadata. merod 1.0 takes its storage key only from \
+mero-kms in TDX mode, and the locked-read-only profile does not keep node \
+state anywhere else. Set kms-url (and tee-release-version) on the instance."
   fi
-  # A flag rather than bash's array-length form: this file is a Jinja
-  # template, and that form opens with Jinja's comment delimiter, which fails
-  # the render mid-image-build.
-  if [[ "$INIT_ENCRYPTED" != true ]]; then
-    log "Initializing Calimero node..."
-  fi
-  # Under `set -e` a failed init stops here, before any service starts: no
-  # plaintext fallback, and config.toml is absent so the next boot retries.
-  init_node
-elif grep -q '^\[tee' "$NODE_CONFIG"; then
-  log "Calimero node already initialized at $CALIMERO_HOME/$CALIMERO_NODE with a KMS-encrypted store; skipping init"
-  if [[ "$IMAGE_PROFILE" == "locked-read-only" && -z "${TEE_RELEASE_VERSION:-}" ]]; then
-    fatal "this node's store is KMS-encrypted but tee-release-version is \
-missing, so merod would accept its key from an unverified KMS. Refusing to \
-start."
-  fi
+  log "WARN: no kms-url metadata. merod 1.0 takes its storage key only from \
+mero-kms in TDX mode, so merod is NOT started on this boot (profile=$IMAGE_PROFILE)."
+elif [[ -z "${TEE_RELEASE_VERSION:-}" ]]; then
+  fatal "kms-url is set but tee-release-version is not. The KMS is verified \
+against that release's signed policy, and merod 1.0 refuses to run in TDX mode \
+without MERO_TEE_VERSION. Refusing to start."
+elif [[ -f "$NODE_CONFIG" ]]; then
+  log "merod node already initialized at $CALIMERO_HOME/$CALIMERO_NODE; skipping init \
+(its configuration was fixed at its first boot)"
+  MEROD_READY=true
 else
-  # A node initialised before this change. Its store is plaintext and cannot be
-  # encrypted in place (every read would fail to decrypt), and its keys have
-  # been on a host-readable disk for as long as it has run -- encrypting now
-  # would not un-expose them. It keeps running so the fleet does not lose
-  # capacity on an image upgrade; the remedy is to recreate it.
-  log "WARN: Calimero node at $CALIMERO_HOME/$CALIMERO_NODE has an UNENCRYPTED \
-store (initialised before KMS storage encryption). Its signing identity and \
-account root are readable from the data disk and must be treated as exposed. \
-Recreate this node to move it onto an encrypted store."
+  [[ -n "$(get_meta node-id)" ]] || fatal "no node-id metadata. merod 1.0 \
+needs this node's id in its cluster; set node-id (and public-url) on the instance."
+  [[ -n "$(get_meta public-url)" ]] || fatal "no public-url metadata. merod 1.0 \
+needs the URL clients and peers reach this node at; set public-url on the instance."
+  if [[ "$IMAGE_PROFILE" == "locked-read-only" && -z "$(get_meta cluster)" ]]; then
+    fatal "no cluster metadata. The cluster name is mixed into the storage key, \
+and merod's default (dev) would put this node in a cluster of that name. Set \
+cluster on the instance."
+  fi
+  INIT_EXTRA_ARGS=(--kms-url "$KMS_URL" --kms-identity "$KMS_IDENTITY_FILE")
+  meta_arg node-id '^[0-9]{1,19}$'
+  meta_arg public-url "^${URL_RE}$"
+  meta_arg cluster '^[A-Za-z0-9._-]{1,64}$'
+  meta_arg peers "^[0-9]{1,19}=${URL_RE}(,[0-9]{1,19}=${URL_RE})*$"
+  meta_arg bootstrap '^(true|false)$'
+  meta_arg rp-id "^${HOST_RE}$"
+  meta_arg origins "^${URL_RE}(,${URL_RE})*$"
+  meta_arg ops-token-sha256 '^[0-9a-f]{64}$'
+  meta_arg registry-url "^${URL_RE}$"
+  meta_arg apps-domain "^${HOST_RE}$"
+  meta_arg peer-profiles '^[a-z0-9-]+(,[a-z0-9-]+)*$'
+  meta_arg peer-min-release '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
+  meta_arg replicas '^[0-9]{1,3}$'
+  log "Initializing merod 1.0 node (kms=$KMS_URL release=$TEE_RELEASE_VERSION)..."
+  # Under `set -e` a failed init stops here, before any service starts, and
+  # config.toml is absent so the next boot retries.
+  init_node
+  MEROD_READY=true
 fi
-
-if [[ "$MEROD_MODE" == "read-only" ]]; then
-{% if fleet_delegated_access | default(false) | bool %}
-  # A relay keeps SSE: it is how a delegated client, which reads and writes
-  # through the intents routes below, learns of other members' writes. The
-  # stream sits behind traefik's `auth-node` (the `node-sse` router) and each
-  # subscription is authorized per context against the caller's own account,
-  # so it reaches only contexts that caller is a member of. JSON-RPC and
-  # WebSocket stay off, as on every read-only node.
-  log "Applying read-only merod config (jsonrpc/websocket disabled, sse kept for delegated clients)..."
-  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-    'server.jsonrpc.enabled=false' \
-    'server.sse.enabled=true' \
-    'server.websocket.enabled=false' \
-    || log "WARN: failed to apply read-only merod config"
-{% else %}
-  log "Applying read-only merod config (jsonrpc/sse/websocket disabled)..."
-  "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-    'server.jsonrpc.enabled=false' \
-    'server.sse.enabled=false' \
-    'server.websocket.enabled=false' \
-    || log "WARN: failed to apply read-only merod config"
-{% endif %}
-fi
-
-{% if fleet_delegated_access | default(false) | bool %}
-# Delegated execution: serve `GET`/`POST /admin-api/contexts/<ctx>/intents`
-# (and, on a merod that has them, `POST
-# /admin-api/contexts/<ctx>/presence-intents` for delegated presence, `GET`/`POST
-# /admin-api/groups/<group>/context-intents` for delegated context creation and
-# `GET`/`POST /admin-api/groups/<group>/governance-intents` for delegated
-# governance) without a node credential, so a keyholder that has no account
-# here can still have this node write on their behalf.
-#
-# The pair to the `node-api-intents`, `node-api-presence-intents`,
-# `node-api-context-intents` and `node-api-governance-intents` routers in traefik's routing.yml, set from the
-# same `fleet_delegated_access` variable so the edges cannot drift. Only those
-# routes are opened, and all are self-authenticating (a creation warrant is
-# checked against the AUTHOR's `CAN_CREATE_CONTEXT`, a governance warrant is
-# the member's own signed governance change, a presence statement is signed by
-# the device and changes no state, the rest as below): merod
-# refuses an intent unless the warrant is the member's, commits to this exact
-# method and arguments, is unexpired, has an unspent nonce, and this node is a
-# `RelayTee` in the owning group (a `ReadOnlyTee` is refused with a 403).
-#
-# Non-fatal on failure, deliberately: a node that cannot apply this is a node
-# that replicates but does not relay, which is a degraded fleet member rather
-# than a broken one. The `authorship_ready` the sidecar reports to mdma is what
-# keeps clients from being sent to it — mdma only advertises a relay the node
-# itself confirmed can write.
-# The CURRENT key spelling, `server.admin.delegated_access`.
-#
-# Core renamed `public_intents` to `delegated_access` in 0.11.0-rc.43 and kept
-# the old spelling as a serde alias. This used to write the old spelling, so an
-# image could pair with a merod from before the rename. That now breaks every
-# node: `merod init` writes `delegated_access = false`, adding `public_intents`
-# beside it is the same field twice, and merod refuses the whole config.toml
-# ("duplicate field `delegated_access`"). The first 2.3.86 nodes booted and
-# registered but never relayed. The image bakes its own merod, and
-# `merodVersion` is far past the rename, which the build asserts (the
-# `--delegated-access` help probe in tasks/main.yml).
-log "Enabling delegated access on the admin API..."
-"$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" config \
-  'server.admin.delegated_access=true' \
-  || log "WARN: failed to enable delegated access; this node will replicate but not relay"
-{% endif %}
 
 # TLS material for traefik.
 #
@@ -1251,9 +1188,15 @@ fi
 
 log "Starting services..."
 systemctl daemon-reload
-systemctl enable merod traefik
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
-systemctl start --no-block merod traefik
-log "Queued non-blocking start for merod and traefik"
+if [[ "$MEROD_READY" == true ]]; then
+  systemctl enable merod traefik
+  systemctl start --no-block merod traefik
+  log "Queued non-blocking start for merod and traefik"
+else
+  systemctl enable traefik
+  systemctl start --no-block traefik
+  log "Queued non-blocking start for traefik; merod is not configured on this boot"
+fi
 
 log "Calimero init completed"

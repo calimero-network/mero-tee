@@ -12,7 +12,7 @@
 #     no header rewriting -- on the routers, in the routing file, or on the
 #     static config's entrypoints;
 #   * the Host header passed on (`--apps-domain` routes on it);
-#   * pointed at merod on loopback.
+#   * pointed at the loopback address merod.service gives merod (MEROD_LISTEN).
 #
 # The template is rendered with Jinja and parsed as YAML, so what is checked is
 # the file the image ships.
@@ -20,16 +20,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 ROLE="$ROOT/mero-tee/ansible/roles/mero-traefik"
-INIT="$ROOT/mero-tee/ansible/roles/merotee/templates/calimero-init.sh.j2"
+UNIT_TASKS="$ROOT/mero-tee/ansible/roles/merotee/tasks/main.yml"
 
-python3 - "$ROLE/templates/traefik-routing.yml.j2" "$ROLE/files/traefik-config.yml" "$INIT" <<'PY'
+python3 - "$ROLE/templates/traefik-routing.yml.j2" "$ROLE/files/traefik-config.yml" "$UNIT_TASKS" <<'PY'
 import re
 import sys
 
 import jinja2
 import yaml
 
-routing_path, static_path, init_path = sys.argv[1:4]
+routing_path, static_path, unit_path = sys.argv[1:4]
 failures = []
 
 rendered = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(
@@ -71,6 +71,14 @@ upstream = urls[0] if urls else ""
 m = re.fullmatch(r"http://(127\.0\.0\.1:\d+)", upstream or "")
 if not m:
     failures.append(f"the upstream must be merod on loopback over http, got {upstream!r}")
+
+# The other half: the address merod.service gives merod.
+unit = open(unit_path, encoding="utf-8").read()
+listens = set(re.findall(r'^\s*Environment=MEROD_LISTEN=(\S+)$', unit, re.M))
+if len(listens) != 1:
+    failures.append(f"merod.service must set MEROD_LISTEN once, found {sorted(listens)}")
+elif m and listens != {m.group(1)}:
+    failures.append(f"traefik forwards to {m.group(1)} but merod listens on {listens.pop()}")
 
 if failures:
     print("FAIL: traefik is not a plain pass-through to merod:")
