@@ -188,6 +188,7 @@ scripts. All are optional except where noted:
 | `public-url` | merod `--public-url`: the URL clients **and peers** reach this node at; it must reach this node, not a balancer | **required** for a new node |
 | `cluster` | merod `--cluster`, mixed into the storage key: every node of a cluster needs the same one | **required** on `locked-read-only`; merod's `dev` elsewhere |
 | `kms-identity` | the cluster's shared KMS identity: base64 of a protobuf-encoded libp2p Ed25519 keypair (68 bytes), written `0600` to merod's `--kms-identity` file, `/mnt/data/merod/kms-identity`, before `merod init`. A malformed value stops the boot. Never logged. See [merod's KMS client](/operate/config-reference/#merods-kms-client) | **required** on `locked-read-only` when `cluster` is set (unless the store is memory-only); elsewhere merod generates a per-node identity and the boot logs it |
+| `kms-identity-wait-sec` | how long a first boot that needs `kms-identity` and finds none waits for it while serving its [release attestation](#the-release-attestation-gate); past it the boot fails before `merod init`, and the next boot waits again. A value that is not a whole number of seconds stops the boot | `1800` |
 | `peers` | merod `--peers`: the founding members, `id=url,...` | none |
 | `bootstrap` | merod `--bootstrap`: `true` on exactly one founding node's first boot | `false` |
 | `rp-id`, `origins` | merod `--rp-id` / `--origins`: the WebAuthn relying party and the origins allowed to run passkey ceremonies and call the API (CORS) | merod's (`localhost`, `http://localhost:3000`) |
@@ -218,6 +219,42 @@ writes it to `/mnt/data/merod/kms-identity` on the encrypted data disk before
 `merod init`. `locked-read-only` refuses a node with a `cluster` and no
 `kms-identity`; the debug profiles let merod create a per-node one, which only
 suits a one-node cluster.
+
+### The release-attestation gate
+
+Stamping `kms-identity` on an instance releases the cluster's storage key to
+it, so mdma should do it only for a TD it has seen run this release's image and
+merod. The node's own `/attestation` comes too late for that: `merod run`
+fetches its key before it serves anything. So a `locked-read-only` first boot
+with a `cluster`, a disk store and no `kms-identity` yet (and none installed
+from an earlier, interrupted boot), whose merod has `attest --serve`:
+
+1. starts `merod --home /mnt/data/merod --node default attest --serve
+   127.0.0.1:2528` in the background: merod's own listen address, so Traefik,
+   started early for it, routes `https://<public-url>/attestation/release` there
+   with no route of its own. Each `GET /attestation/release?nonce=<64 hex>`
+   answers with a fresh quote over the caller's nonce and what this merod is
+   (`merodVersion`, `merodSha256`, `teeRelease` = `MERO_TEE_VERSION`,
+   `teeProfile` = `MERO_TEE_PROFILE`); see core's `merod attest` reference;
+2. waits for `kms-identity` metadata: it reads the key, and while it is unset
+   (`404`) long-polls the attributes directory (`?recursive=true&
+   wait_for_change=true`, by ETag; the body is discarded), backing off up to
+   30 s on metadata errors, for at most `kms-identity-wait-sec` (default
+   1800 s). Past that the boot fails before `merod init`, with the attestation
+   server stopped;
+3. sends the server `SIGTERM` (`SIGKILL` after 30 s) and reaps it, so the port
+   is free for `merod run`, then installs the identity and continues as below.
+
+mdma's side: fetch the release attestation over its own fresh nonce, verify it
+(`meroctl attest-release`, or `verify_release`) against the release named by
+`tee-release-version`, and only then stamp `kms-identity`.
+
+A `kms-identity` already set when the boot starts is installed at once, with
+no server. An older merod without `attest`, the debug profiles and memory-only
+stores read `kms-identity` once, as before, and a node already initialised
+never waits. The data disk's own per-node identity (step 5 below) is not
+gated: it is unlocked before, and shredded from `/run` once the disk is open,
+so the release attestation binds no identity (`identity: null`).
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
@@ -348,8 +385,15 @@ script (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
    without `kms disk-key`. With `ephemeral-store=true`, a tmpfs is mounted over
    `/mnt/data` instead and the disk is untouched.
 
-6. **Initialise merod 1.0** under `/mnt/data/merod` (node `default`), on the
-   first boot only: write `kms-identity` metadata, checked, to
+6. **Prepare TLS for Traefik**: the in-enclave key and a self-signed
+   placeholder under `/mnt/data/tls`, then publish the CSR and its quote (see
+   [The node's TLS certificate](#the-nodes-tls-certificate)). This comes before
+   merod's configuration so Traefik can be started early by the next step.
+
+7. **Initialise merod 1.0** under `/mnt/data/merod` (node `default`), on the
+   first boot only: when the cluster identity is still missing, serve the
+   release attestation and wait for `kms-identity` ([the
+   gate](#the-release-attestation-gate)); then write `kms-identity` metadata, checked, to
    `/mnt/data/merod/kms-identity` (`0600`), then `merod init --kms-url
    <kms-url> --kms-identity /mnt/data/merod/kms-identity` plus the merod
    metadata keys above. The data disk's own identity (step 5) is separate and
@@ -361,8 +405,8 @@ script (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
    merod and says so. A baked merod that is not 1.0 stops the boot on every
    profile.
 
-7. **Start services.** It `daemon-reload`s, then enables and non-blocking-starts
-   `traefik`, and `merod` when it is configured. `merod.service` runs
+8. **Start services.** It `daemon-reload`s, then enables and non-blocking-starts
+   `traefik` (already running if the gate started it), and `merod` when it is configured. `merod.service` runs
    `merod --home /mnt/data/merod --node default run` with
    `MEROD_LISTEN=127.0.0.1:2528`; merod fetches its storage key from mero-kms
    before it opens its store.

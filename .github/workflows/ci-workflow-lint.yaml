@@ -304,6 +304,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tls-csr-test.sh
 
+      # A first boot gets the cluster's KMS identity only after mdma verified
+      # its release attestation: calimero-init serves `merod attest --serve` on
+      # merod's port (traefik started early), long-polls kms-identity metadata,
+      # and stops the server before merod init. Runs the decision against a
+      # mock metadata server and a stub merod that records how it was signalled.
+      - name: Check a first boot serves its release attestation before the KMS identity
+        id: kms_identity_gate_test
+        shell: bash
+        run: scripts/ci/tests/kms-identity-attest-gate-test.sh
+
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
       # name the change, so the allowlist narrows as soon as hosts are patched.
@@ -384,6 +394,7 @@ jobs:
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
+            --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
