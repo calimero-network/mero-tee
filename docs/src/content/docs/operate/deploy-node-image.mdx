@@ -33,16 +33,22 @@ versions are pinned in `mero-tee/versions.json`:
 | Component | Version key | Value at time of writing |
 | --- | --- | --- |
 | Node image | `imageVersion` | `2.3.126` |
-| merod / meroctl / mero-auth (core tag) | `merodVersion` | `0.12.0` |
+| merod / meroctl (core tag) | `merodVersion` | `0.12.0` |
 | Traefik | `traefikVersion` | `3.5.0` |
 | node-exporter | `nodeExporterVersion` | `1.9.1` |
 | vmagent | `vmagentVersion` | `1.132.0` |
 | Vector | `vectorVersion` | `0.50.0` |
 
-The `playbook.yml` applies these roles in order: `mero-traefik`,
-`calimero-core` (bakes `merod`/`meroctl`/`mero-auth` at the core tag so
-`calimero-init` skips the runtime download), `merotee` (the init script,
-systemd units, and — for read-only profiles — the fleet sidecar),
+The node image runs **merod 1.0** (core's `1.0.0` line). Core 1.0 has no
+mero-auth and no peer-to-peer swarm: merod authenticates its own callers
+(passkeys, session tokens, API keys) inside a sealed channel that clients open
+after verifying the node's TDX attestation, and each app is replicated by its
+own Raft log across the cluster's nodes. See core's
+[merod reference](https://github.com/calimero-network/core/blob/master/docs/src/content/docs/operate/merod.mdx).
+
+The `playbook.yml` applies these roles in order: `mero-traefik` (the TLS front),
+`calimero-core` (bakes `merod`/`meroctl` at the core tag so `calimero-init`
+skips the runtime download), `merotee` (the init script and systemd units),
 `node-exporter`, `vmagent`, `vector`, `cleanup`, and — **only for
 `locked-read-only`** — `merod-lockdown` followed by `merotee-conformance`.
 
@@ -51,17 +57,16 @@ systemd units, and — for read-only profiles — the fleet sidecar),
 The `PROFILE` the build is given selects one of three profiles
 (`mero-tee/mkosi-image/build.sh` accepts exactly this set):
 
-| Profile | Intended use | merod mode | Lockdown role |
-| --- | --- | --- | --- |
-| `debug` | Local / dev | `full` | not applied |
-| `debug-read-only` | Integration / pre-production | `read-only` | not applied |
-| `locked-read-only` | Production | `read-only` | applied + conformance |
+| Profile | Intended use | Lockdown role |
+| --- | --- | --- |
+| `debug` | Local / dev | not applied |
+| `debug-read-only` | Integration / pre-production | not applied |
+| `locked-read-only` | Production | applied + conformance |
 
-`merod_mode` is derived in `ansible/roles/merotee/defaults/main.yml`: it is
-`read-only` for `debug-read-only` and `locked-read-only`, and `full` for
-`debug`. In `read-only` mode the boot script initializes merod with
-`--mode read-only` and disables the client-facing servers (see
-[the boot sequence](#the-calimero-init-boot-sequence) below).
+Every profile runs merod in TDX mode (never `--dev`); the profile is what
+`MERO_TEE_PROFILE` names, which merod's attestation reports and its peers and
+clients check. v1's read-only merod mode is gone: in 1.0 every node of a
+cluster serves the same API.
 
 The `merod-lockdown` role (`ansible/roles/merod-lockdown/tasks/main.yml`)
 hardens the production image so its measurements differ from the debug
@@ -177,14 +182,40 @@ scripts. All are optional except where noted:
 
 | Metadata key | Effect | Default |
 | --- | --- | --- |
-| `server-port` | merod admin/server port (1–65535; anything else falls back to the default) | `2428` |
-| `swarm-port` | merod libp2p swarm port (1–65535; anything else falls back to the default) | `2528` |
-| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and `MERO_TEE_PROFILE` (the image's profile), so merod verifies the KMS against that profile's signed policy. **Refused if older than the image** (downgrade protection) | unset → env file removed |
-| `kms-url` | the VPC-internal URL of the release's KMS cluster, which the data-disk key and the store key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to create a node; debug profiles create an unencrypted one |
+| `tee-release-version` | written as `MERO_TEE_VERSION` into `/etc/calimero/merod.env` (sanitized/escaped), with `MERO_TEE_MIN_VERSION` (the image's own version) and `MERO_TEE_PROFILE` (the image's profile), so merod verifies the KMS against that profile's signed policy and names the release in its attestation. **Refused if older than the image** (downgrade protection). merod 1.0 does not run in TDX mode without it | unset → env file removed, merod not started |
+| `kms-url` | the VPC-internal URL of the release's KMS cluster, which the data-disk key and merod's storage key come from; verified against `tee-release-version`'s signed policy | unset → `locked-read-only` refuses to boot (unless its store is memory-only); other profiles boot without merod |
+| `node-id` | merod `--node-id`: this node's id in its cluster (a `u64`) | **required** for a new node |
+| `public-url` | merod `--public-url`: the URL clients **and peers** reach this node at; it must reach this node, not a balancer | **required** for a new node |
+| `cluster` | merod `--cluster`, mixed into the storage key: every node of a cluster needs the same one | **required** on `locked-read-only`; merod's `dev` elsewhere |
+| `peers` | merod `--peers`: the founding members, `id=url,...` | none |
+| `bootstrap` | merod `--bootstrap`: `true` on exactly one founding node's first boot | `false` |
+| `rp-id`, `origins` | merod `--rp-id` / `--origins`: the WebAuthn relying party and the origins allowed to run passkey ceremonies and call the API (CORS) | merod's (`localhost`, `http://localhost:3000`) |
+| `ops-token-sha256` | merod `--ops-token-sha256`: the Ops API token's hash; the token itself is never in metadata | unset → the Ops API answers `403` |
+| `registry-url`, `apps-domain`, `peer-profiles`, `peer-min-release`, `replicas` | the merod flags of the same names | merod's defaults |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vmagent stays off |
 | `logs-endpoint` | if set, configures and starts `vector`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vector stays off |
-| `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the node falls back to the credential MDMA delivers on a `should-join` poll |
+| `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the shippers push unauthenticated |
+| `ephemeral-store` | `true` mounts a tmpfs over `/mnt/data`, for a VM meant to live minutes | unset |
 | `merod-version` | **only** used to download binaries at boot if they were not baked into the image — debug profiles only; `locked-read-only` refuses to boot rather than run an unmeasured binary | required only when unbaked |
+
+The merod keys are merod's own flag names, read **once**, when the node is
+first initialised: `merod init` writes them to `config.toml` on the encrypted
+data disk, and later metadata changes are not applied. Each value is checked
+against the shape merod takes, and a bad one stops the boot. The governance
+flags (`--release-approvals`, `--app-upgrades`, `--outbound-approvals`) are not
+read and stay at merod's default, `owner`; neither are `--dev`, storage keys,
+`--allow-unsigned-bundles` or the plain `--ops-token`. `server-port` and
+`swarm-port` are no longer read: merod 1.0 has one listener, on loopback behind
+Traefik.
+
+:::caution[Open: how a cluster's nodes share one KMS identity]
+merod 1.0 derives its storage key from the KMS key released for the
+`--kms-identity` it presents, and every node of a cluster must present the
+**same** identity to derive the same key. The image keeps the identity at
+`/mnt/data/merod/kms-identity` on the encrypted data disk and lets merod create
+it on the first boot, which is right for a one-node cluster or a cluster's
+first node. How further nodes receive a copy is not decided yet.
+:::
 
 Observability is off by default (R7): `vmagent` and `vector` are stopped and
 disabled at boot and started only when the matching `*-endpoint` metadata is
@@ -193,13 +224,12 @@ scrape config targets it — its unit file is installed by the image but is not
 enabled, so without that it would be a dead scrape target.
 
 The scrape config's other target is merod itself (job `merod`): `merod.service`
-sets `MEROD_METRICS_LISTEN=127.0.0.1:9464`, so a release-v2 merod serves its
-request, latency, error, Raft, disk and process metrics there, in plain HTTP on
-loopback only. They carry counts, route templates and group numbers, never an
-app, account or organization id (see core's `operate/observability` page). A
-merod that does not serve them leaves the target down (`up{job="merod"} == 0`)
-and nothing else changes. vmagent adds the same `instance_name`, `instance_type`
-and `instance_profile` labels to these series as to node_exporter's.
+sets `MEROD_METRICS_LISTEN=127.0.0.1:9464`, so merod serves its request,
+latency, error, Raft, disk and process metrics there, in plain HTTP on loopback
+only, with no credential. They carry counts, route templates and group numbers,
+never an app, account or organization id (see core's `operate/observability`
+page). vmagent adds the same `instance_name`, `instance_type` and
+`instance_profile` labels to these series as to node_exporter's.
 
 :::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
 Instance metadata picks the log sink, so treat every shipped line as readable
@@ -238,29 +268,25 @@ This is a backstop. Services still must not log secrets.
 `observability-token` is the only way a node gets the token its shippers
 present, and the `provided` provider simply reads it from disk. There is no
 Secret Manager path: MDMA creates node instances with **no `serviceAccounts`
-field at all**, so a node has no cloud identity to read a secret with. The
-`logs-secret-name` and `metrics-secret-name` keys that used to select that path
-are no longer read.
+field at all**, so a node has no cloud identity to read a secret with.
 :::
 
 :::note[Instance metadata is set at creation only]
 It is never backfilled. A node created before any of these keys existed will
-never pick them up and must be **recreated**. The one exception is the
-observability credential, which MDMA also delivers on the `should-join` poll —
-that is how rotation reaches a node already running.
+never pick them up and must be **recreated**. That includes the observability
+credential: the v1 fleet sidecar delivered rotations over mdma's `should-join`
+poll, and the 1.0 image has no sidecar.
 :::
 
 ## The calimero-init boot sequence
 
 `calimero-init.service` is a `oneshot` unit that runs
-`/usr/local/lib/calimero/init.sh` after `network-online.target`; `merod`,
-`mero-auth`, `traefik`, and (in read-only profiles) `fleet-sidecar` all order
-themselves `After=calimero-init.service`, and `merod`, `mero-auth` and
-`fleet-sidecar` also `Require` it, so none of them writes to `/mnt/data` if the
-data disk could not be unlocked. Its log is `/run/calimero/calimero-init.log`
-(RAM) and the journal; the journal is volatile, so nothing it logs persists on
-the boot disk. The script
-(`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
+`/usr/local/lib/calimero/init.sh` after `network-online.target`; `merod` and
+`traefik` order themselves `After=calimero-init.service`, and `merod` also
+`Require`s it, so it never writes to `/mnt/data` if the data disk could not be
+unlocked. Its log is `/run/calimero/calimero-init.log` (RAM) and the journal;
+the journal is volatile, so nothing it logs persists on the boot disk. The
+script (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
 
 <Steps>
 
@@ -279,11 +305,11 @@ the boot disk. The script
 2. **Disable observability by default** (stops/disables `vmagent` and
    `vector`), then reads the metadata whitelist above.
 
-3. **Resolve binaries.** If `merod`/`meroctl`/`mero-auth` are baked in
-   `/usr/local/bin` (they are, for images built here), it uses them; otherwise,
-   on the debug profiles only, it downloads them from the `core` release
-   matching `merod-version` metadata. `locked-read-only` stops instead: a
-   downloaded binary is in no measurement.
+3. **Resolve binaries.** If `merod`/`meroctl` are baked in `/usr/local/bin`
+   (they are, for images built here), it uses them; otherwise, on the debug
+   profiles only, it downloads them from the `core` release matching
+   `merod-version` metadata. `locked-read-only` stops instead: a downloaded
+   binary is in no measurement.
 
 4. **Apply `tee-release-version`.** If set, it refuses a release older than the
    image's own version (`/etc/calimero/min-tee-release-version`, baked at
@@ -320,45 +346,57 @@ the boot disk. The script
    without `kms disk-key`. With `ephemeral-store=true`, a tmpfs is mounted over
    `/mnt/data` instead and the disk is untouched.
 
-6. **Initialize the node** at `/mnt/data/calimero` (node `default`) if not
-   already initialized, with `--advertise-address` and the resolved ports. In
-   `read-only` mode it passes `--mode read-only`.
+6. **Initialise merod 1.0** under `/mnt/data/merod` (node `default`), on the
+   first boot only: `merod init --kms-url <kms-url> --kms-identity
+   /mnt/data/merod/kms-identity` plus the merod metadata keys above. A v1
+   node's state under `/mnt/data/calimero` is reported and left alone; merod
+   1.0 cannot read it. Without `kms-url` there is no merod (merod 1.0 takes its
+   storage key only from mero-kms in TDX mode): `locked-read-only` with its
+   store on a disk stops the boot, and any other node boots without starting
+   merod and says so. A baked merod that is not 1.0 stops the boot on every
+   profile.
 
-7. **Apply read-only config.** In `read-only` mode it runs `merod config` to set
-   `server.jsonrpc.enabled=false`, `server.sse.enabled=false`, and
-   `server.websocket.enabled=false` — the client-facing write/subscribe
-   surfaces are turned off, leaving only the read/admin path. A relay (a
-   read-only profile built with `fleet_delegated_access`, the default for both
-   read-only profiles) keeps `server.sse.enabled=true`: delegated clients
-   subscribe there, behind `auth-node`, scoped to their own contexts. In `full`
-   (`debug`) mode these remain enabled.
-
-8. **Start services.** It `daemon-reload`s, enables and non-blocking-starts
-   `merod`, `mero-auth`, and `traefik`; in read-only mode it also starts
-   `fleet-sidecar` when that unit exists.
+7. **Start services.** It `daemon-reload`s, then enables and non-blocking-starts
+   `traefik`, and `merod` when it is configured. `merod.service` runs
+   `merod --home /mnt/data/merod --node default run` with
+   `MEROD_LISTEN=127.0.0.1:2528`; merod fetches its storage key from mero-kms
+   before it opens its store.
 
 </Steps>
 
-<Aside type="caution">
-The three servers disabled in read-only mode (`jsonrpc`, `sse`, `websocket`) are
-exactly the client mutation/subscription interfaces. Do not expect to drive a
-`locked-read-only` or `debug-read-only` node through those APIs — it is a
-replication/read node. The read-only fleet node instead converges via the fleet
-HA sidecar; see [the fleet sidecar](/understand/fleet-sidecar/).
-</Aside>
+### What Traefik does on a 1.0 node
+
+Traefik is a TLS front and nothing else. One router sends every path, on `:80`
+and `:443`, to merod on `127.0.0.1:2528`, with the Host header kept (merod's
+`--apps-domain` routes on it) and **no middleware**:
+
+- no forwardAuth: there is no mero-auth, and merod authenticates its callers
+  inside the sealed channel;
+- no path rules or rewrites: everything but `/health` and `/attestation` is a
+  sealed envelope only the attested node can open, so Traefik passes the body
+  through byte for byte;
+- no rate limit: peers reach the node at the same `public-url` for Raft
+  traffic, and a per-source limit would throttle a peer;
+- no CORS: merod's `--origins` decides.
+
+`:443` terminates TLS with a key generated in the TD under `/mnt/data/tls`.
+That TLS carries only sealed bytes, so it exists for browsers (passkeys need a
+secure context) rather than for confidentiality. Until a certificate is
+installed there, `:443` serves a self-signed placeholder: issuing one was the v1
+fleet sidecar's job, and the 1.0 image has no counterpart yet.
 
 ## Verify the booted node
 
 <Steps>
 
-1. **Confirm it reached RUNNING and answers.** After the VM is `RUNNING`, the
-   admin API is reachable on its external IP at the `admin_api_port`
-   (`80` in the CI probes). The `node-image-gcp-staging-probe.yaml` workflow
-   automates exactly this: it boots a TDX VM from a named image, waits for
-   readiness, collects a TDX quote, and verifies it against Intel Trust
-   Authority. Run it via **Actions → Node image GCP staging probe** with
-   `profile`, `image_name`, and `image_project` (see the
-   [probe entry in the runbooks](/operate/runbooks/)).
+1. **Confirm it reached RUNNING and answers.** After the VM is `RUNNING`, merod
+   answers `GET /health` and `GET /attestation` in the clear through Traefik on
+   the external IP (port `80`). Everything else needs a client that verifies
+   the attestation and opens the sealed channel, such as `meroctl --api URL
+   --tee-profiles <profile>`. The `node-image-gcp-staging-probe.yaml` and
+   release workflows still probe v1's `/admin-api/health` and
+   `/admin-api/tee/*` routes, which merod 1.0 does not serve; see the
+   [release pipeline](/operate/release-pipeline/).
 
 2. **Attest the measurements.** Confirm the node's MRTD and RTMR values (the
    RTMR3 extend from step 1 of the boot sequence, plus `calimero.role=node` /

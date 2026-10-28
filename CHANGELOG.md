@@ -8,6 +8,13 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
+- **The node image runs merod 1.0 (core's `1.0.0` line), not v1.** Core 1.0 deleted v1's peer-to-peer node and mero-auth: merod authenticates its callers itself (passkeys, session tokens, API keys) inside a sealed channel clients open after verifying its TDX attestation, and each app is replicated by its own Raft log across the cluster's nodes. **Breaking**; the image no longer runs a v1 merod.
+  - **Build inputs:** the core release publishes no `mero-auth` archive, so it is no longer pinned (`pin-build-inputs.sh`, `build-inputs.lock.json`), downloaded or required by the release gates. Core's fleet-bump job for mero-tee stopped on exactly that.
+  - **merod:** `calimero-init` runs `merod init` once, under `/mnt/data/merod`, with `--kms-url` and `--kms-identity` (on the encrypted data disk) and the cluster settings from instance metadata keys named after merod's flags: `node-id`, `public-url`, `cluster` (required on `locked-read-only`), `peers`, `bootstrap`, `rp-id`, `origins`, `ops-token-sha256`, `registry-url`, `apps-domain`, `peer-profiles`, `peer-min-release` and `replicas`. Each is checked before use. Governance flags, `--dev`, storage keys and the plain ops token are never read. `merod.service` runs `merod run` on `127.0.0.1:2528`, with metrics on `127.0.0.1:9464` as before. Without a KMS there is no merod: merod 1.0 takes its storage key only from mero-kms in TDX mode. `server-port` and `swarm-port` are no longer read.
+  - **Traefik** is a TLS front only: one router passes every path to merod, with no forwardAuth, rate limit, CORS or header middleware.
+  - **Unchanged:** the KMS-keyed LUKS2 data disk (`merod kms disk-key`), the release floor, RTMR3, metrics scraping and the log egress guard.
+  - **Not yet done:** the release measurement step still reads v1's `/admin-api/tee/*` (see the release pipeline page); how a cluster's nodes share one KMS identity; TLS certificate issuance; observability token rotation.
+
 - **The agent image bakes mero-bot 0.3.0** (was 0.2.0), pinned in `versions.json` and `build-inputs.lock.json` by the sha256 GitHub reports for the release asset, which equals the one the mero-bot release workflow published. 0.3.0 adds `"attest": "mero"` (calimero-network/mero-bot#93), so an agent whose owner picks a private inference host in mdma can reach it; with only NEAR profiles it behaves as 0.2.0. The agent image's content, and so its measurements, change with the next release.
 
 ### Fixed
@@ -17,6 +24,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 - **The inference image passes `mkosi.finalize`, and finalize checks what it serves with.** Run 39685722782 got through packages, depmod and the vLLM install, then failed finalize's library check: it ran `ldd` on every executable under `/opt`, and a wheel's extensions resolve `libtorch*.so`, `libcudart`, `libnccl` through `$ORIGIN` rpaths and earlier imports, or are optional backends (torchcodec's ffmpeg, triton's test plugins). The check now skips `/opt/mero-inference/site-packages` and, for `ROLE=inference`, imports `torch`, `vllm`, `pynvml`, `huggingface_hub` and `transformers` with the baked Python instead, runs `inference_model.py`, and requires the kernel's `nvidia` module and `nvidia-smi`. Every other path, and every other role, is checked as before.
 
 ### Removed
+
+- **mero-auth, the fleet sidecar and the relay posture.** mero-auth's unit, config and start wrapper; the fleet HA sidecar (`fleet-sidecar.sh.j2`) with its unit, its build checks and its 21 tests. It drove v1 namespace assignments, relays, inventory and recovery envelopes through `/admin-api`, none of which core 1.0 has. Also gone: `fleet_delegated_access`, `fleet_mdma_url` and `merod_mode`; merod's v1 read-only, delegated-access, proxy-identity and sealed forward-auth config; and the v1 Traefik routers with their five tests, replaced by `traefik-passthrough-test.sh`.
 
 - **The Packer image build.** 2.3.120 built every image with mkosi and its node, KMS and agent images run in production, so the Packer path is gone:
   - **Build:** `ubuntu.pkr.hcl`, `ubuntu-x86.pkrvars.hcl`, `init.sh` and `build-and-release.sh`.
