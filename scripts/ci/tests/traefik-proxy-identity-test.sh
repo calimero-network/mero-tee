@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# A client must never be able to name the account merod scopes it as.
+# A client must never be able to name the account merod scopes it as, nor the
+# permissions an app host grants it (`X-Auth-Permissions`).
 #
 # On a relay, merod runs with `server.proxy_identity`: it takes a device-key
 # session's account and device from the `X-Auth-Account` / `X-Auth-Device`
@@ -37,7 +38,7 @@ import re
 import sys
 
 template_path, static_path, versions_path = sys.argv[1:4]
-HEADERS = ("X-Auth-Account", "X-Auth-Device")
+HEADERS = ("X-Auth-Account", "X-Auth-Device", "X-Auth-Permissions")
 failures = []
 
 def strip_comments(text):
@@ -131,8 +132,8 @@ if failures:
         print(f"FAIL {line}")
     sys.exit(1)
 
-print("ok   auth-node replaces X-Auth-Account and X-Auth-Device")
-print("ok   strip-proxy-identity deletes both, on every image")
+print("ok   auth-node replaces X-Auth-Account, X-Auth-Device and X-Auth-Permissions")
+print("ok   strip-proxy-identity deletes all three, on every image")
 print("ok   every entrypoint runs strip-proxy-identity")
 print(f"ok   merod {merod} reads server.proxy_identity")
 PY

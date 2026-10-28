@@ -91,14 +91,18 @@ def routers_of(lines):
         m = re.match(r"^    ([A-Za-z0-9_-]+):\s*$", line)
         if m:
             current = m.group(1)
-            routers[current] = {"rule": None, "priority": None, "middlewares": []}
+            routers[current] = {"rule": None, "service": None, "priority": None, "middlewares": []}
             in_mw = False
             continue
         if current is None:
             continue
-        m = re.match(r'^      rule:\s*"(.*)"\s*$', line)
+        m = re.match(r'^      rule:\s*["\'](.*)["\']\s*$', line)
         if m:
             routers[current]["rule"] = m.group(1)
+            continue
+        m = re.match(r"^      service:\s*(\S+)\s*$", line)
+        if m:
+            routers[current]["service"] = m.group(1)
             continue
         m = re.match(r"^      priority:\s*(\d+)\s*$", line)
         if m:
@@ -117,7 +121,7 @@ def routers_of(lines):
 
 
 # --- the rule grammar these routers use ---------------------------------------
-TOKEN = re.compile(r"\s*(?:(\()|(\))|(&&)|(\|\|)|(Path|PathPrefix|PathRegexp|Method)\(`([^`]*)`\))")
+TOKEN = re.compile(r"\s*(?:(\()|(\))|(&&)|(\|\|)|(Path|PathPrefix|PathRegexp|Method|HostRegexp)\(`([^`]*)`\))")
 
 
 def compile_rule(rule):
@@ -142,14 +146,16 @@ def compile_rule(rule):
 
     def matcher(kind, arg):
         if kind == "Path":
-            return lambda p, meth: p == arg
+            return lambda h, p, meth: p == arg
         if kind == "PathPrefix":
-            return lambda p, meth: p.startswith(arg)
+            return lambda h, p, meth: p.startswith(arg)
         if kind == "Method":
-            return lambda p, meth: meth == arg
+            return lambda h, p, meth: meth == arg
         pattern = re.sub(r"(?<!\\)\$$", r"\\Z", arg)
         rx = re.compile(pattern)
-        return lambda p, meth: rx.search(p) is not None
+        if kind == "HostRegexp":
+            return lambda h, p, meth: rx.search(h) is not None
+        return lambda h, p, meth: rx.search(p) is not None
 
     i = 0
 
@@ -159,7 +165,7 @@ def compile_rule(rule):
         while i < len(tokens) and tokens[i][0] == "||":
             i += 1
             right = parse_and()
-            left = (lambda a, b: lambda p, m: a(p, m) or b(p, m))(left, right)
+            left = (lambda a, b: lambda h, p, m: a(h, p, m) or b(h, p, m))(left, right)
         return left
 
     def parse_and():
@@ -168,7 +174,7 @@ def compile_rule(rule):
         while i < len(tokens) and tokens[i][0] == "&&":
             i += 1
             right = parse_atom()
-            left = (lambda a, b: lambda p, m: a(p, m) and b(p, m))(left, right)
+            left = (lambda a, b: lambda h, p, m: a(h, p, m) and b(h, p, m))(left, right)
         return left
 
     def parse_atom():
@@ -191,12 +197,12 @@ def compile_rule(rule):
     return fn
 
 
-def route(routers, method, target):
+def route(routers, method, target, host="relay-07.relay.calimero.network"):
     path = target.split("?", 1)[0]  # path matchers never see the query
     matched = [
         (r["priority"] if r["priority"] is not None else len(r["rule"]), name)
         for name, r in routers.items()
-        if r["fn"](path, method)
+        if r["fn"](host, path, method)
     ]
     if not matched:
         return None
@@ -310,7 +316,7 @@ def check(label, routers, cases):
             r["fn"] = compile_rule(r["rule"])
         except (ValueError, re.error, IndexError) as exc:
             fail(f"{label}: router {name}: {exc}")
-            r["fn"] = lambda p, m: False
+            r["fn"] = lambda h, p, m: False
     if GUARDED not in routers or "auth-node" not in routers[GUARDED]["middlewares"]:
         fail(f"{label}: the {GUARDED} catch-all must exist and run auth-node")
     for method, target, want in cases:
@@ -349,6 +355,106 @@ for name in sorted(EXEMPT):
         fail(f"non-relay: {name} renders without fleet_delegated_access")
 PLAIN_CASES = [(m, t, GUARDED) for m, t, w in RELAY_CASES if w in EXEMPT]
 check("non-relay", plain, PLAIN_CASES)
+
+# --- app hosts ----------------------------------------------------------------
+# `<52 base32>.<domain>` serves an app. merod only honours the exact base domain
+# and has no guard of its own here, so for EVERY such host (its own domain or
+# not) the routers must keep merod's node-only routes out of reach and put the
+# API behind auth-node.
+APP_ID = "a" * 52
+APP_HOSTS = [f"{APP_ID}.node.example", f"{APP_ID}.x"]
+NODE_HOST = "relay-07.relay.calimero.network"
+DENIED = "deny"
+API = "auth"
+FILES = "files"
+AUTH_SERVICE = "auth-service"
+PATHS = [
+    ("GET", "/metrics", DENIED),
+    ("POST", "/metrics", DENIED),
+    ("GET", "/metrics/", DENIED),
+    ("POST", "/sealed/v2", DENIED),
+    ("POST", "/sealed/v2/handshake", DENIED),
+    ("GET", "/sealed/v2", DENIED),
+    ("GET", "/admin-api/tee/info", DENIED),
+    ("POST", "/admin-api/tee/attest", DENIED),
+    ("GET", f"/admin-api/contexts/{CTX}/intents", DENIED),
+    ("POST", f"/admin-api/contexts/{CTX}/presence-intents", DENIED),
+    ("POST", f"/admin-api/groups/{GRP}/context-intents", DENIED),
+    ("POST", f"/admin-api/groups/{GRP}/governance-intents", DENIED),
+    ("POST", f"/admin-api/namespaces/{GRP}/admit", DENIED),
+    ("GET", "/admin-api/health", API),
+    ("GET", "/admin-api/x", API),
+    ("DELETE", f"/admin-api/contexts/{CTX}", API),
+    ("POST", "/jsonrpc", API),
+    ("GET", "/ws", API),
+    ("GET", "/sse", API),
+    ("GET", "/index.html", FILES),
+    ("HEAD", "/assets/app.js", FILES),
+    ("POST", "/auth/refresh", AUTH_SERVICE),
+    ("GET", "/auth/validate", AUTH_SERVICE),
+    ("HEAD", "/auth/validate", AUTH_SERVICE),
+    ("POST", "/auth/validate", DENIED),
+    ("GET", "/auth/refresh", FILES),
+    ("GET", "/auth/login", FILES),
+    ("HEAD", "/auth/login", FILES),
+    ("POST", "/auth/login", DENIED),
+]
+UNSAFE_FILES = [(m, "/index.html") for m in ("POST", "PUT", "DELETE", "PATCH")] + [
+    (m, t) for m in ("POST", "PUT", "DELETE", "PATCH") for t in ("/auth/token", "/auth/keys", "/admin/keys", "/admin/x")
+]
+
+
+def check_app_hosts(label, routers):
+    for host in APP_HOSTS:
+        for method, target, want in PATHS:
+            got = route(routers, method, target, host)
+            r = routers.get(got) if got else None
+            what = f"{label}: {method} {host.replace(APP_ID, '<app>')}{target} -> {got}"
+            if r is None:
+                fail(f"{what} (unrouted; expected {want})")
+                continue
+            reaches_merod = r["service"] == "node-core"
+            guarded = "auth-node" in r["middlewares"]
+            if want == DENIED and reaches_merod:
+                fail(f"{what} reaches merod")
+            elif want == DENIED and r["service"] != "noop@internal":
+                fail(f"{what} is not denied by a static responder")
+            elif want == API and not (reaches_merod and guarded):
+                fail(f"{what} is not behind auth-node")
+            elif want == FILES and not (reaches_merod and not guarded):
+                fail(f"{what} is not the public file router")
+            elif want == AUTH_SERVICE and r["service"] != "auth-service":
+                fail(f"{what} does not go to mero-auth")
+            elif not got.startswith("app-"):
+                fail(f"{what} is served by a node router")
+            else:
+                print(f"ok   {what}")
+        for method, target in UNSAFE_FILES:
+            got = route(routers, method, target, host)
+            r = routers.get(got) if got else None
+            if r is not None and r["service"] == "node-core" and "auth-node" not in r["middlewares"]:
+                fail(f"{label}: {method} {host.replace(APP_ID, '<app>')}{target} reaches merod unauthenticated via {got}")
+            elif r is not None and r["service"] != "noop@internal":
+                fail(f"{label}: {method} {host.replace(APP_ID, '<app>')}{target} is served by {got}")
+    # Near misses are node hosts, which never see an app router.
+    for host in (f"{'a' * 51}.node.example", f"{'a' * 53}.node.example", f"{'a' * 51}1.node.example", f"{'A' * 52}.node.example"):
+        got = route(routers, "GET", "/metrics", host)
+        if got is not None:
+            fail(f"{label}: GET {host}/metrics -> {got}, expected no router")
+    for method, target, want in (("GET", "/admin-api/health", "node-api-health"), ("GET", "/admin-api/x", "node-api"), ("POST", "/jsonrpc", "node-api")):
+        got = route(routers, method, target, NODE_HOST)
+        if got != want:
+            fail(f"{label}: node host {method} {target} -> {got}, expected {want}")
+        else:
+            print(f"ok   {label}: node host {method} {target} -> {got}")
+
+
+for label, routers in (("relay", relay), ("non-relay", plain)):
+    check_app_hosts(label, routers)
+    if route(routers, "GET", "/admin-api/health", NODE_HOST) != "node-api-health":
+        fail(f"{label}: the node host's health must stay on node-api-health")
+    if route(routers, "GET", "/metrics", NODE_HOST) is not None:
+        fail(f"{label}: the node host must not route /metrics")
 
 if failures:
     for f in failures:

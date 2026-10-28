@@ -353,6 +353,84 @@ http:
         - rate-limit
         - cors
 
+    # App hosts: `<52-char base32 app id>.<base domain>` serves an installed
+    # app's frontend, and its API when merod runs with `server.apps.trust_proxy`.
+    # The matcher is host-agnostic because no per-node value may enter a measured
+    # file; merod checks the exact base domain. A node's own host has no such
+    # first label, so these never shadow the routers above and below it.
+    #
+    # Files are public, so no `auth-node` and no `cors` (the app is same-origin
+    # on its host), and read-only: GET and HEAD. The API routes carry
+    # `auth-node`, whose `X-Auth-Permissions` merod requires; `cors` stays off
+    # for the same reason.
+    #
+    # The matcher also matches hosts merod does not treat as app hosts, so
+    # `app-deny` blocks node-only routes there and `app-api` outranks them.
+    app-deny:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (PathPrefix(`/metrics`) || PathPrefix(`/sealed`) || PathPrefix(`/admin-api/tee`) || PathRegexp(`^/admin-api/(contexts|groups|namespaces)/[0-9a-f]{64}/(intents|presence-intents|context-intents|governance-intents|admit)$`))'
+      entryPoints:
+        - web
+        - websecure
+      service: noop@internal
+      middlewares:
+        - rate-limit
+      priority: 130
+
+    app-files:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (Method(`GET`) || Method(`HEAD`))'
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit
+      priority: 50
+
+    app-api:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && (PathPrefix(`/jsonrpc`) || PathPrefix(`/ws`) || PathPrefix(`/sse`) || PathPrefix(`/admin-api/`))'
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit
+        - auth-node
+      priority: 110
+
+    # Whatever no router above claims on an app host is refused, so a node
+    # router (`auth-public`'s write routes) never serves one. Below app-files.
+    app-catchall-deny:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`)'
+      entryPoints:
+        - web
+        - websecure
+      service: noop@internal
+      middlewares:
+        - rate-limit
+      priority: 49
+
+    # Token refresh and validation are mero-auth's, as on the node host.
+    app-auth:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && ((Method(`POST`) && Path(`/auth/refresh`)) || ((Method(`GET`) || Method(`HEAD`)) && Path(`/auth/validate`)))'
+      entryPoints:
+        - web
+        - websecure
+      service: auth-service
+      middlewares:
+        - rate-limit
+      priority: 70
+
+    # merod answers `/auth/login` with a redirect to the node's own login page.
+    app-login:
+      rule: 'HostRegexp(`^[a-z2-7]{52}\..+$`) && Path(`/auth/login`) && (Method(`GET`) || Method(`HEAD`))'
+      entryPoints:
+        - web
+        - websecure
+      service: node-core
+      middlewares:
+        - rate-limit
+      priority: 70
+
     # No public `/metrics` router. It was gated on a basicAuth users file
     # nothing ever wrote, so traefik logged `open /etc/traefik/metrics-users: no
     # such file` on every boot and the route served no one. Metrics leave the
@@ -454,7 +532,7 @@ http:
           - X-Auth-Account
           - X-Auth-Device
 
-    # Removes the two headers merod reads a caller's identity from, on EVERY
+    # Removes the headers merod reads a caller's identity and permissions from, on EVERY
     # request, before any router runs: attached to both entrypoints in
     # config.yml, not to routers, so a router added later cannot forget it.
     #
@@ -462,7 +540,9 @@ http:
     # context-intents, governance-intents, admission, the sealed envelope, the auth service itself — and on those
     # nothing else would overwrite a client's `X-Auth-Account`. merod
     # (`server.proxy_identity`) would then read it as the caller and scope the
-    # request as that account.
+    # request as that account. `X-Auth-Permissions` is what an app host's API
+    # requires of the proxy, so a client must not forge it on a route that
+    # skips `auth-node`.
     # On guarded routes `auth-node` runs after this and sets them from
     # mero-auth's answer. An empty value is Traefik's spelling of "delete".
     # Pinned by scripts/ci/tests/traefik-proxy-identity-test.sh.
@@ -471,6 +551,7 @@ http:
         customRequestHeaders:
           X-Auth-Account: ""
           X-Auth-Device: ""
+          X-Auth-Permissions: ""
 
 
 # The certificate served on `websecure`, for every hostname.
