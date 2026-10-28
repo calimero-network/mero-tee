@@ -196,6 +196,7 @@ scripts. All are optional except where noted:
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vmagent stays off |
 | `logs-endpoint` | if set, configures and starts `vector`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vector stays off |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the shippers push unauthenticated |
+| `tls-cert` | the PEM chain (leaf first) mdma issued for the node's TLS key; watched by `calimero-tls-cert.service`, which installs it as `/mnt/data/tls/cert.pem` and restarts Traefik only when every certificate parses, each is signed by the next, the leaf has not expired and its public key is the node's own. Anything else is refused and the current certificate kept. See [The node's TLS certificate](#the-nodes-tls-certificate) | unset → `:443` serves the self-signed placeholder |
 | `ephemeral-store` | `true` mounts a tmpfs over `/mnt/data`, for a VM meant to live minutes | unset |
 | `merod-version` | **only** used to download binaries at boot if they were not baked into the image — debug profiles only; `locked-read-only` refuses to boot rather than run an unmeasured binary | required only when unbaked |
 
@@ -386,8 +387,37 @@ and `:443`, to merod on `127.0.0.1:2528`, with the Host header kept (merod's
 `:443` terminates TLS with a key generated in the TD under `/mnt/data/tls`.
 That TLS carries only sealed bytes, so it exists for browsers (passkeys need a
 secure context) rather than for confidentiality. Until a certificate is
-installed there, `:443` serves a self-signed placeholder: issuing one was the v1
-fleet sidecar's job, and the 1.0 image has no counterpart yet.
+installed there, `:443` serves a self-signed placeholder.
+
+### The node's TLS certificate
+
+mdma orders a publicly trusted certificate for the node's key; the key never
+leaves the TD. The exchange rides GCE metadata rather than the node's port, so
+Traefik stays a pass-through with no route of its own for it
+(`ansible/roles/merotee/files/calimero-tls-cert.sh`):
+
+1. **CSR out.** On every boot `calimero-init` reads `public-url` and
+   `apps-domain` and keeps a CSR over `/mnt/data/tls/key.pem` at
+   `/mnt/data/tls/csr.der`, naming exactly the `public-url` host (lowercased) and,
+   when `apps-domain` is set, `*.<apps-domain>`: DNS names only, CN the host. It
+   is rebuilt only when that name set or the key changes, so its bytes are stable
+   across boots. It takes a TDX quote from configfs-tsm whose report data is
+   `SHA-256(csr.der) || SHA-256("calimero.tee-attest.tls-csr.v1")` and writes
+   both, base64, as the guest attributes `calimero/tls-csr` and
+   `calimero/tls-quote` (the instance needs `enable-guest-attributes=TRUE`,
+   which mdma sets). A failure is logged and never stops the boot; the service
+   below retries every five minutes until a publish succeeds.
+2. **mdma** verifies the quote and the node's measurements, checks the CSR's
+   names against its own record of the node, orders the certificate over ACME
+   DNS-01, and writes the chain back as `tls-cert` instance metadata.
+3. **Certificate in.** `calimero-tls-cert.service` (root, started with Traefik)
+   long-polls `tls-cert` (`wait_for_change`, with backoff while it is unset).
+   It installs a chain only for the node's own key -- the host can write
+   metadata too -- writes `cert.pem` atomically (`0644`) and restarts Traefik,
+   which does not watch its certificate files. A renewal arrives the same way.
+
+`scripts/ci/tests/tls-csr-test.sh` runs the tool against a mock metadata server
+and configfs-tsm.
 
 ## Verify the booted node
 

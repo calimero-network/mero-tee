@@ -294,6 +294,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/traefik-passthrough-test.sh
 
+      # The node's TLS certificate: calimero-tls-cert.sh publishes a CSR naming
+      # exactly the public-url host (and *.<apps-domain>) with a quote over
+      # SHA-256(CSR) || SHA-256("calimero.tee-attest.tls-csr.v1"), as mdma
+      # checks, and installs the tls-cert chain mdma writes back only for the
+      # node's own key. Runs against a mock metadata server and configfs-tsm.
+      - name: Check the node publishes its TLS CSR and installs only its own certificate
+        id: tls_csr_test
+        shell: bash
+        run: scripts/ci/tests/tls-csr-test.sh
+
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
       # name the change, so the allowlist narrows as soon as hosts are patched.
@@ -373,6 +383,7 @@ jobs:
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
+            --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
