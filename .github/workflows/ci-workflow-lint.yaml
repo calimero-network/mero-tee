@@ -292,42 +292,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/observability-config-injection-test.sh
 
-      # Every ingress router must carry a request-rate limit, first in its
-      # chain. Two of these routes verify signatures for callers holding no
-      # credential -- deliberately, since a credential would make both features
-      # unreachable for the callers they exist for -- so an unlimited ingress is
-      # a way to spend a node's CPU from anywhere. A limit placed after
-      # `auth-node` is worse than none in one respect: it pays for a forwardAuth
-      # subrequest per flooded request, so a flood of the node becomes a flood of
-      # its auth service.
-      - name: Check every ingress router is rate limited, first in its chain
-        id: traefik_rate_limit_test
+      # Traefik is a TLS front for merod 1.0 and nothing else: one router to
+      # merod, no forwardAuth, rate limit, CORS or header middleware, since
+      # merod authenticates its callers inside the sealed channel and peers
+      # share the public URL.
+      - name: Check traefik passes every request to merod untouched
+        id: traefik_passthrough_test
         shell: bash
-        run: scripts/ci/tests/traefik-rate-limit-test.sh
-
-      # mero-auth checks a scoped token against X-Forwarded-Uri/-Method. If
-      # traefik trusts the client's values, the caller picks the route its token
-      # is checked against (mero-tee#339).
-      - name: Check forwardAuth does not trust client X-Forwarded-* headers
-        id: traefik_forward_auth_test
-        shell: bash
-        run: scripts/ci/tests/traefik-forward-auth-test.sh
-
-      # Everything under /admin-api/tee/ except info and attest is on core's
-      # protected router, which only traefik guards on these nodes.
-      - name: Check the public TEE router serves only info and attest
-        id: traefik_tee_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-tee-route-test.sh
-
-      # The sealed-transport router is exempt from auth-node because forwardAuth
-      # cannot see inside an envelope. It is safe only relay-only, on exact
-      # paths, rate limited, and in front of a merod (>= 0.11.0-rc.52) that
-      # refuses opened requests for any route a proxy guards.
-      - name: Check the sealed-transport router cannot bypass auth-node
-        id: traefik_sealed_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-sealed-route-test.sh
+        run: scripts/ci/tests/traefik-passthrough-test.sh
 
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
@@ -336,16 +308,6 @@ jobs:
         id: tcb_outofdate_gate_test
         shell: bash
         run: scripts/ci/tests/tcb-outofdate-gate-test.sh
-
-      # The delegated routers (`/intents`, `/presence-intents`,
-      # `/context-intents`, `/governance-intents`) skip auth-node
-      # on relays. Routes requests through every router the way Traefik does,
-      # so a looser pattern (uppercase hex, any id length, a trailing slash, one
-      # more segment) fails here instead of opening a protected route.
-      - name: Check the delegated routes serve exactly their own paths
-        id: traefik_delegated_route_test
-        shell: bash
-        run: scripts/ci/tests/traefik-delegated-route-test.sh
 
       # The log-auth check (staging probe, node and KMS releases) only runs on
       # real GCP; this pins what could make it lie without any cloud: the
@@ -418,11 +380,7 @@ jobs:
             --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
-            --checks-line "- ingress routers rate limited: ${{ steps.traefik_rate_limit_test.outcome }}" \
-            --checks-line "- forwardAuth ignores client X-Forwarded-*: ${{ steps.traefik_forward_auth_test.outcome }}" \
-            --checks-line "- sealed router cannot bypass auth-node: ${{ steps.traefik_sealed_route_test.outcome }}" \
-            --checks-line "- delegated routes serve exactly their own paths: ${{ steps.traefik_delegated_route_test.outcome }}" \
-            --checks-line "- public TEE router serves only info and attest: ${{ steps.traefik_tee_route_test.outcome }}" \
+            --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \

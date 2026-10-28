@@ -1,9 +1,4 @@
 ---
-- name: Install apache2-utils for htpasswd
-  package:
-    name: apache2-utils
-    state: present
-
 - name: Require Traefik to be pinned for this version
   assert:
     that: build_inputs.traefik.version == traefik_version
@@ -51,10 +46,8 @@
     group: root
     mode: "0755"
 
-# A template, not a copy: the delegated-execution router is only present on an
-# image built as a relay (`fleet_delegated_access`), so the routing file is
-# profile-specific — which also means it changes the image's root hash and
-# therefore its measurements, exactly as a security-relevant edge change should.
+# A template so its header comment (why traefik only passes requests through)
+# stays in the source and out of the image.
 - name: Render traefik routing file
   template:
     src: traefik-routing.yml.j2

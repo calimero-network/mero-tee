@@ -282,19 +282,15 @@
       - "'insecure: true' not in (service_files.results[1].content | b64decode)"
       - "'dashboard: true' not in (service_files.results[1].content | b64decode)"
       - "'accessLog' not in (service_files.results[1].content | b64decode)"
-      # fleet-join is a state change and must stay behind auth-node: the
-      # unauthenticated TEE router names exactly /info and /attest.
-      - "'PathPrefix(`/admin-api/tee`)' not in (service_files.results[2].content | b64decode)"
-      - "'Path(`/admin-api/tee/info`)' in (service_files.results[2].content | b64decode)"
-      - "'Path(`/admin-api/tee/attest`)' in (service_files.results[2].content | b64decode)"
-      - "'trustForwardHeader: true' not in (service_files.results[2].content | b64decode)"
-      - "'trustForwardHeader: false' in (service_files.results[2].content | b64decode)"
+      # A pass-through: merod authenticates its callers inside the sealed
+      # channel, so traefik must not try to.
+      - "'forwardAuth' not in (service_files.results[2].content | b64decode)"
+      - "'middlewares' not in (service_files.results[2].content | b64decode)"
     fail_msg: >-
       merod must Require calimero-init (so it never writes to /mnt/data before
       the encrypted disk is open) with core dumps off; traefik must not log at
-      DEBUG, keep an access log, or expose its API; only /admin-api/tee/info
-      and /attest may bypass auth; and forwardAuth must not trust the client's
-      X-Forwarded-* headers.
+      DEBUG, keep an access log, or expose its API, and must pass requests to
+      merod with no forwardAuth or other middleware.
 
 - name: Check that observability services are not enabled by default (R7)
   command: systemctl is-enabled {{ item }}
