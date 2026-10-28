@@ -65,7 +65,6 @@ COMPONENTS = {
         "assets": [
             "merod_x86_64-unknown-linux-gnu.tar.gz",
             "meroctl_x86_64-unknown-linux-gnu.tar.gz",
-            "mero-auth_x86_64-unknown-linux-gnu.tar.gz",
         ],
     },
     "traefik": {

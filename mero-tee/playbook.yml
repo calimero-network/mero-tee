@@ -60,7 +60,7 @@
         cpu_architecture: "amd64"
         traefik_version: "{{ traefik_version }}"
 
-    # Bake merod/meroctl/mero-auth at build time (core tag). calimero-init skips download if present.
+    # Bake merod/meroctl at build time (core tag). calimero-init skips download if present.
     - role: ansible/roles/calimero-core
       vars:
         merod_version: "{{ merod_version }}"

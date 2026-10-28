@@ -66,8 +66,7 @@ fi
 
 for required_asset in \
   "merod_x86_64-unknown-linux-gnu.tar.gz" \
-  "meroctl_x86_64-unknown-linux-gnu.tar.gz" \
-  "mero-auth_x86_64-unknown-linux-gnu.tar.gz"; do
+  "meroctl_x86_64-unknown-linux-gnu.tar.gz"; do
   if ! jq -e --arg asset "${required_asset}" '.assets | any(.name == $asset)' <<< "${release_json}" >/dev/null; then
     echo "::error::Core release '${latest_merod_version}' missing required asset: ${required_asset}"
     exit 1
