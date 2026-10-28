@@ -1228,9 +1228,10 @@ fi
 #
 # The key is generated HERE, inside the enclave, and never leaves it, so a
 # certificate for it can be issued from a CSR without any private key crossing
-# the wire. Nothing on the image requests one yet: the v1 fleet sidecar did,
-# over an mdma protocol core 1.0 has no counterpart for. Until a certificate is
-# installed at $TLS_DIR/cert.pem, :443 serves the self-signed placeholder below.
+# the wire: below, this boot publishes a CSR and a TDX quote binding it for
+# mdma, and calimero-tls-cert.service installs the chain mdma writes back
+# (both in $TLS_CERT_TOOL). Until a certificate is installed at
+# $TLS_DIR/cert.pem, :443 serves the self-signed placeholder below.
 #
 # The placeholder exists so traefik's TLS store always loads: its
 # `defaultCertificate` names a fixed path (see traefik-routing.yml), and this
@@ -1262,17 +1263,32 @@ elif [[ ! -s "$TLS_DIR/cert.pem" ]]; then
   chmod 0644 "$TLS_DIR/cert.pem"
 fi
 
+# Ask mdma for a certificate: a CSR over the key for the public-url host (and
+# *.<apps-domain>), and a quote whose report data is
+# SHA-256(CSR) || SHA-256("calimero.tee-attest.tls-csr.v1"), published as the
+# guest attributes calimero/tls-csr and calimero/tls-quote. The CSR is kept at
+# $TLS_DIR/csr.der and rebuilt only when those names change. Never fatal: the
+# node serves the placeholder without it, and calimero-tls-cert.service retries.
+TLS_CERT_TOOL="/usr/local/lib/calimero/tls-cert.sh"
+if [[ -s "$TLS_DIR/key.pem" ]]; then
+  if timeout 120 "$TLS_CERT_TOOL" publish 2>&1 | tee -a "$LOG"; then
+    log "Published the TLS CSR and its quote for mdma"
+  else
+    log "WARN: TLS CSR not published on this boot; calimero-tls-cert.service retries"
+  fi
+fi
+
 log "Starting services..."
 systemctl daemon-reload
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
 if [[ "$MEROD_READY" == true ]]; then
-  systemctl enable merod traefik
-  systemctl start --no-block merod traefik
-  log "Queued non-blocking start for merod and traefik"
+  systemctl enable merod traefik calimero-tls-cert
+  systemctl start --no-block merod traefik calimero-tls-cert
+  log "Queued non-blocking start for merod, traefik and calimero-tls-cert"
 else
-  systemctl enable traefik
-  systemctl start --no-block traefik
-  log "Queued non-blocking start for traefik; merod is not configured on this boot"
+  systemctl enable traefik calimero-tls-cert
+  systemctl start --no-block traefik calimero-tls-cert
+  log "Queued non-blocking start for traefik and calimero-tls-cert; merod is not configured on this boot"
 fi
 
 log "Calimero init completed"

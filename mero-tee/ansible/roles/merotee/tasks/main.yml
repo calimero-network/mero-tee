@@ -112,6 +112,39 @@
     enabled: true
     daemon_reload: true
 
+# The node's TLS certificate (calimero-tls-cert.sh): calimero-init publishes a
+# CSR over the in-enclave key and a quote binding it as guest attributes; this
+# unit installs the chain mdma writes back as `tls-cert` instance metadata,
+# only for that key, and restarts traefik. calimero-init enables and starts it
+# alongside traefik. Root: it reads the key and takes configfs-tsm quotes.
+- name: Install the TLS certificate tool
+  copy:
+    src: calimero-tls-cert.sh
+    dest: /usr/local/lib/calimero/tls-cert.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create calimero-tls-cert systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=Calimero node TLS certificate (CSR out, tls-cert metadata in)
+      # /mnt/data/tls is on the data disk calimero-init unlocks and mounts.
+      Requires=calimero-init.service
+      After=calimero-init.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      ExecStart=/usr/local/lib/calimero/tls-cert.sh watch
+      Restart=always
+      RestartSec=30
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/calimero-tls-cert.service
+    mode: "0644"
+
 - name: Ensure traefik starts after calimero-init
   file:
     path: /etc/systemd/system/traefik.service.d

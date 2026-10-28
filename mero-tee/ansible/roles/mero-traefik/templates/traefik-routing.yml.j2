@@ -45,8 +45,9 @@ http:
           - url: "http://127.0.0.1:2528"
 
 # The node's certificate. calimero-init writes a self-signed placeholder here on
-# first boot so the store always loads; a certificate issued for the node's key
-# replaces cert.pem.
+# first boot so the store always loads; calimero-tls-cert.service replaces
+# cert.pem with the chain mdma issues for the node's key (tls-cert metadata) and
+# restarts traefik, which does not watch these files.
 tls:
   stores:
     default:
