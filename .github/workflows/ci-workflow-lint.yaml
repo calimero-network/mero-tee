@@ -276,6 +276,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/vector-image-profile-test.sh
 
+      # A locked node has no shell: a merotee service whose journal vector does
+      # not collect cannot be debugged at all (calimero-tls-cert.service was
+      # one, so a node stuck on its placeholder certificate never said why).
+      - name: Check every merotee service ships its journal
+        id: vector_units_test
+        shell: bash
+        run: scripts/ci/tests/vector-units-test.sh
+
       # The shippers' configure scripts paste instance-metadata values into
       # vector's YAML and vmagent's systemd unit. A newline there is an extra
       # ExecStart running as root, beside a node's storage key or a KMS
@@ -417,6 +425,7 @@ jobs:
             --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
+            --checks-line "- vector collects every merotee unit: ${{ steps.vector_units_test.outcome }}" \
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
