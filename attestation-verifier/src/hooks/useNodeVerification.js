@@ -6,11 +6,18 @@
  *
  * `phase` follows the work for the progress view: `attest` (the API fetches a
  * quote for its own nonce and has Intel verify it, one request), `policy` (the
- * release's published measurements are loaded), `compare`.
+ * release's published measurements are loaded), `kms` (the KMS policy of each
+ * KMS record the node's quote commits to is loaded), `compare`.
+ *
+ * A KMS record is the node's account of the KMS quote it accepted before
+ * taking a key. It is checked here only when the API found the node's quote
+ * commits to it, and then against the KMS policy this verifier loads itself
+ * for the release and profile the record names -- not taken on the node's word.
  */
 
 import { useState, useCallback } from 'react';
 import { verifyNodeAttestation, fetchNodeReleases, fetchNodePolicy } from '../services/api.js';
+import { findMatchingRelease } from '../services/compat.js';
 import {
   extractRTMRsFromClaims,
   extractMeasurementsFromMerodAttest,
@@ -18,6 +25,32 @@ import {
 } from '../utils/attestation.js';
 
 const IDLE = { status: 'idle', phase: null, error: null, result: null, request: null };
+
+/** The node's KMS records, each against the published KMS policy of the release it names. */
+async function checkKmsRecords(kmsEvidence) {
+  const checks = [];
+  for (const key of ['storage', 'disk']) {
+    const record = kmsEvidence?.[key];
+    if (!record) continue;
+    const tag = `mero-kms-v${record.release}`;
+    const measurements = {
+      mrtd: record.mrtd,
+      rtmr0: record.rtmr0,
+      rtmr1: record.rtmr1,
+      rtmr2: record.rtmr2,
+      rtmr3: record.rtmr3,
+    };
+    try {
+      const { policiesByProfile, matches } = await findMatchingRelease(measurements, tag);
+      // The record names the profile whose policy accepted it; only that one counts.
+      const allowed = record.profile ? matches.filter((p) => p === record.profile) : matches;
+      checks.push({ key, record, tag, measurements, policiesByProfile, matches: allowed, error: null });
+    } catch (e) {
+      checks.push({ key, record, tag, measurements, policiesByProfile: {}, matches: [], error: e.message || 'Could not load the KMS policy' });
+    }
+  }
+  return checks;
+}
 
 export function useNodeVerification() {
   const [state, setState] = useState(IDLE);
@@ -28,7 +61,11 @@ export function useNodeVerification() {
     setPhase('attest');
     try {
       const data = await verifyNodeAttestation(nodeUrl);
-      const { attestation, ita_claims, ita_token_verified, nonce_verified, transport_verified } = data;
+      const {
+        attestation, ita_claims, ita_token_verified, nonce_verified, transport_verified,
+        kms_evidence: kmsEvidence = null, kms_evidence_bound: kmsEvidenceBound = null,
+        kms_evidence_error: kmsEvidenceError = null,
+      } = data;
       if (!attestation) throw new Error('No attestation in response');
 
       const fromITA = extractRTMRsFromClaims(ita_claims || {});
@@ -50,6 +87,11 @@ export function useNodeVerification() {
         // Measurements are then reported as not checked, never as matching.
         policyError = e.message || 'Could not load the release measurements';
       }
+      let kmsChecks = [];
+      if (kmsEvidence && kmsEvidenceBound === true) {
+        setPhase('kms');
+        kmsChecks = await checkKmsRecords(kmsEvidence);
+      }
       setPhase('compare');
 
       setState({
@@ -67,6 +109,10 @@ export function useNodeVerification() {
           ita_token_verified,
           nonce_verified,
           transport_verified,
+          kmsEvidence,
+          kmsEvidenceBound,
+          kmsEvidenceError,
+          kmsChecks,
           quoteRtmrs,
           itaRtmrs,
           measurementSources,
