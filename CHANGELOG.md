@@ -41,6 +41,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 - **mero-auth, the fleet sidecar and the relay posture.** mero-auth's unit, config and start wrapper; the fleet HA sidecar (`fleet-sidecar.sh.j2`) with its unit, its build checks and its 21 tests. It drove v1 namespace assignments, relays, inventory and recovery envelopes through `/admin-api`, none of which core 1.0 has. Also gone: `fleet_delegated_access`, `fleet_mdma_url` and `merod_mode`; merod's v1 read-only, delegated-access, proxy-identity and sealed forward-auth config; and the v1 Traefik routers with their five tests, replaced by `traefik-passthrough-test.sh`.
 
+- **mero-auth from the design docs.** `docs/design/gcp-tdx-kms.md` and `docs/design/private-agents.md` still counted mero-auth among the code beside merod and traefik on a node; a 1.0 node runs only merod and traefik there. The roles, the operate pages and the conformance check (which asserts mero-auth's binary, unit and `auth.toml` are absent) already describe the node without it. Docs only; no image changes.
+
 - **The Packer image build.** 2.3.120 built every image with mkosi and its node, KMS and agent images run in production, so the Packer path is gone:
   - **Build:** `ubuntu.pkr.hcl`, `ubuntu-x86.pkrvars.hcl`, `init.sh` and `build-and-release.sh`.
   - **Probes:** `kms-tdx-image-probe.yaml` and `agent-tdx-image-probe.yaml`. `node-image-mkosi.yaml` does both (`role: kms`, `role: agent`), and gains `agent: mero-bot` to bake the pinned mero-bot bundle from a branch, as the release does (needs `MERO_BOT_RELEASE_TOKEN`). Building a KMS that serves an agent is now done by the release only.

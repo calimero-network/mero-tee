@@ -25,8 +25,8 @@ build and the wrong boundary:
   each agent change becomes a node release, a new KMS cluster and a fleet
   rollover.
 - **A larger trusted base.** Agent dependencies (an LLM SDK, a language
-  runtime, the tools it calls) would sit beside merod, traefik and mero-auth in
-  the code that holds node storage keys. An agent bug would expose the node.
+  runtime, the tools it calls) would sit beside merod and traefik in the code
+  that holds node storage keys. An agent bug would expose the node.
 - **Shared fate.** Nodes and agents could not scale or fail independently.
 
 An agent acts in Calimero as an author through relay nodes. It is not a node

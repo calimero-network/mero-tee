@@ -252,8 +252,8 @@ modified KMS that still attests as genuine would be handed the root:
 - **Confidential Space with Cloud KMS.** GCP project and org admins can change
   the key-release policy.
 - **Nodes sharing the release root among themselves, with no KMS.** More copies,
-  so better availability, but a bug in merod, traefik or mero-auth on any node
-  would expose every node's key. A small, separate KMS keeps a node compromise to
+  so better availability, but a bug in merod or traefik on any node would
+  expose every node's key. A small, separate KMS keeps a node compromise to
   that node.
 
 ## Work
