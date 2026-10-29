@@ -29,6 +29,22 @@ export async function verifyKmsAttestation(attestation, nonceB64 = null) {
 }
 
 /**
+ * Verify a KMS by URL: the backend asks `kmsAttestUrl` (mdma's manager, which
+ * relays a replica's `/attest`) for a quote over a nonce of its own choosing.
+ */
+export async function verifyKmsByUrl(kmsAttestUrl) {
+  const base = getApiBase();
+  const res = await fetch(`${base}/api/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kms_attest_url: kmsAttestUrl }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+/**
  * Verify a pasted mero-agent-gate `/attest` response: the quote via ITA, the
  * nonce, and that the quote commits to the two keys the gate named.
  */

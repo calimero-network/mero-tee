@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
+- **The attestation verifier checks a KMS from a link, with no paste.** `/kms?kms_attest_url=<url>` (what mdma's manager and cloud console now link) has the API POST a nonce of its own to that URL, which relays a replica's `/attest`, and verify the quote with the nonce checked in it. Allowed hosts: `KMS_ATTEST_ALLOWED_HOSTS`, default mdma's production and staging managers; HTTPS and public addresses only.
+
 - **`calimero-tls-cert.service` ships its journal.** It was missing from `include_units` in `vector-partial-merod.yaml`, so a node left on its self-signed placeholder certificate (which also keeps a new cluster from finding its leader, since mdma reads `/health` over verified TLS) said why only on the node; `calimero-init` logs the first attempt only. `scripts/ci/tests/vector-units-test.sh` now fails when any service the merotee role installs is not collected.
 
 - **The attestation verifier accepts the fleet's node names.** `NODE_ALLOWED_HOSTS` defaulted to bare IPv4 addresses only, so the "Verify" links mdma's manager and cloud console now put on every node (`https://mero-tee.vercel.app/mero-tee?node_url=https://<name>.relay.cloud.calimero.network…`) were refused. The default now also allows `<name>.relay.cloud.calimero.network` and `<name>.relay.staging.cloud.calimero.network`; a host must still resolve to public addresses only.

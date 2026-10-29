@@ -8,7 +8,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { verifyKmsAttestation } from '../services/api.js';
+import { verifyKmsAttestation, verifyKmsByUrl } from '../services/api.js';
 import { findMatchingRelease } from '../services/compat.js';
 import {
   extractRTMRsFromClaims,
@@ -23,16 +23,23 @@ export function useVerification() {
     result: null,
   });
 
+  // `attestJson` is a pasted `/attest` response, or `{ url }` to have the
+  // backend fetch one from a KMS attestation URL (`kms_attest_url`).
   const verify = useCallback(async (attestJson, nonceB64 = null, releaseTag = null, selectedProfile = null) => {
     setState({ status: 'loading', error: null, result: null });
     try {
-      let pasted;
-      try {
-        pasted = JSON.parse(attestJson);
-      } catch {
-        throw new Error('The /attest response is not valid JSON');
+      let data;
+      if (attestJson && typeof attestJson === 'object' && attestJson.url) {
+        data = await verifyKmsByUrl(attestJson.url);
+      } else {
+        let pasted;
+        try {
+          pasted = JSON.parse(attestJson);
+        } catch {
+          throw new Error('The /attest response is not valid JSON');
+        }
+        data = await verifyKmsAttestation(pasted, nonceB64);
       }
-      const data = await verifyKmsAttestation(pasted, nonceB64);
       const { attestation, ita_claims, ita_token_verified, nonce_verified } = data;
       if (!attestation) throw new Error('No attestation in response');
 

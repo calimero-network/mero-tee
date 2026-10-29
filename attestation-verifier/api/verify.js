@@ -39,6 +39,17 @@ const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || DEFAULT_NODE_ALLOW
   .map((s) => s.trim())
   .filter(Boolean);
 const NODE_ALLOW_PRIVATE = process.env.NODE_ALLOW_PRIVATE === '1';
+// Where a KMS attestation may be fetched from (`kms_attest_url`): mdma's
+// manager, which can reach the replicas this service cannot. It relays a
+// replica's `/attest` for a nonce chosen HERE, so it cannot answer with an old
+// or invented quote: Intel verifies the quote and the nonce is checked in it.
+const KMS_ATTEST_ALLOWED_HOSTS = (
+  process.env.KMS_ATTEST_ALLOWED_HOSTS ||
+  '^manager\\.cloud\\.calimero\\.network$,^manager\\.staging\\.cloud\\.calimero\\.network$'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const NODE_FETCH_TIMEOUT_MS = 20_000;
 
 // IPv4 ranges that are not the public internet: this host, private networks,
@@ -81,6 +92,27 @@ function isPublicAddress(addr) {
  * A hostname is resolved here and each address checked; the fetch resolves it
  * again, so an allowlist of hostnames is only as good as those names' DNS.
  */
+/** A `kms_attest_url`: https, on an allowed host, resolving to public addresses. */
+async function checkKmsAttestUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid KMS attestation URL');
+  }
+  if (parsed.protocol !== 'https:') throw new Error('KMS attestation URL must use HTTPS');
+  if (parsed.username || parsed.password) throw new Error('KMS attestation URL must not carry credentials');
+  const host = parsed.hostname.toLowerCase();
+  if (!KMS_ATTEST_ALLOWED_HOSTS.some((re) => new RegExp(re).test(host))) {
+    throw new Error('KMS attestation URL host not in allowed list. Set KMS_ATTEST_ALLOWED_HOSTS to override.');
+  }
+  const addresses = (await dns.lookup(host, { all: true, verbatim: true })).map((entry) => entry.address);
+  if (addresses.length === 0 || !addresses.every(isPublicAddress)) {
+    throw new Error('KMS attestation URL must name a public address');
+  }
+  return parsed;
+}
+
 async function checkNodeUrl(url) {
   let parsed;
   try {
@@ -315,8 +347,32 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
+    const kmsAttestUrl = (body?.kms_attest_url || '').trim();
 
-    if (nodeUrl) {
+    if (kmsAttestUrl) {
+      const target = await checkKmsAttestUrl(kmsAttestUrl);
+      const nonceBytes = crypto.randomBytes(32);
+      let attestRes;
+      try {
+        attestRes = await fetch(target.href, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nonceB64: nonceBytes.toString('base64') }),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
+        });
+      } catch {
+        return res.status(502).json({ error: 'The KMS attestation URL did not answer' });
+      }
+      if (!attestRes.ok) {
+        return res.status(502).json({ error: `The KMS attestation URL failed: ${attestRes.status}` });
+      }
+      const raw = await attestRes.json();
+      // Only the quote is kept, as for a node: the rest is the relay's word.
+      attestation = { quoteB64: extractQuote(raw) };
+      verifyNonceInQuote(attestation.quoteB64, nonceBytes);
+      nonceVerified = true;
+    } else if (nodeUrl) {
       const node = await checkNodeUrl(nodeUrl);
       const nonceBytes = crypto.randomBytes(32);
       const nonceHex = nonceBytes.toString('hex');
@@ -361,7 +417,7 @@ export default async function handler(req, res) {
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
-        return res.status(400).json({ error: 'Provide node_url, or attestation in request body' });
+        return res.status(400).json({ error: 'Provide node_url, kms_attest_url, or attestation in request body' });
       }
       const nonceB64 = (body?.nonce_b64 || body?.nonceB64 || '').trim();
       if (nonceB64) {
