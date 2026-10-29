@@ -232,8 +232,11 @@ at the end, and its image unless `keep_image` is set.
 `ita_appraisal_url`. It boots a TDX VM from the image, waits for readiness,
 collects a quote, and verifies it against Intel Trust Authority.
 
-The verifying happens **in CI, over the admin API** — the VM only supplies the
-quote, from `/admin-api/tee/attest`. CI picks a fresh nonce and then asserts
+The verifying happens **in CI, over HTTP** — the VM only supplies the quote,
+from `GET /attestation/release` (`merod attest --serve`, which the image runs
+when it has no KMS; see the
+[release pipeline](/operate/release-pipeline/)). CI picks a fresh nonce, reads
+`report_data` from the quote bytes rather than the node's copy, and then asserts
 four things (`scripts/ci/probes/node_anti_fake_http.py`, artifact
 `node-client-verification.json`):
 

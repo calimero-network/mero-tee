@@ -1,5 +1,5 @@
 # After a successful "Release mero-tee" run, boots fresh GCP TDX VMs (one per profile)
-# and verifies that measurement-policy-candidates from /admin-api/tee/attest are covered
+# and verifies that measurement-policy-candidates from /attestation/release are covered
 # by published-mrtds.json from the same GitHub release — without waiting for mero-kms.
 #
 # Complements post-release-kms-node-e2e.yaml (which also runs these node probes after KMS

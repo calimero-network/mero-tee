@@ -314,6 +314,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/kms-identity-attest-gate-test.sh
 
+      # The release and staging probes measure a merod 1.0 image from its
+      # release attestation (no KMS on the probe VM, so merod does not run):
+      # the probe must hand the verifiers the quote over CI's nonce, refuse a
+      # mock or another nonce, and the anti-fake check must read REPORTDATA
+      # from the quote itself. Runs against a fake node over HTTP.
+      - name: Check the probes read a merod 1.0 release attestation
+        id: node_release_attestation_test
+        shell: bash
+        run: scripts/ci/tests/node-release-attestation-test.sh
+
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
       # name the change, so the allowlist narrows as soon as hosts are patched.
@@ -395,6 +405,7 @@ jobs:
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
+            --checks-line "- probes read a merod 1.0 release attestation: ${{ steps.node_release_attestation_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \

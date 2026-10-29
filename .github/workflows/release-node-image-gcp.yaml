@@ -503,21 +503,17 @@ jobs:
             --format='json(name,status,networkInterfaces,tags,creationTimestamp,lastStartTimestamp)' \
             > "${artifacts_dir}/instance.json"
 
-          max_attempts=90
-          timeout_seconds=$((max_attempts * 5))
-          if ! python3 scripts/ci/polling/wait_for_http.py \
-            --url "${base_url}/admin-api/health" \
-            --timeout-seconds "${timeout_seconds}" \
-            --interval-seconds 5 \
-            --request-timeout-seconds 5 \
-            --expected-status 200 \
-            --output-body "${artifacts_dir}/health.json" \
-            --output-json "${artifacts_dir}/health-wait.json" \
-            --heartbeat-interval 12 \
-            --label "/admin-api/health" \
-            --verbosity "${CI_LOG_VERBOSITY}"; then
-            observed_attempts="$(jq -r '.attempts // "unknown"' "${artifacts_dir}/health-wait.json" 2>/dev/null || echo "unknown")"
-            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/admin-api/health after ${observed_attempts} attempts (timeout ${timeout_seconds}s)"
+          # merod 1.0 runs only with a KMS, which this VM has none of, so the
+          # image serves its release attestation instead (`merod attest --serve`,
+          # calimero-init): a quote over our nonce that needs no key or store.
+          timeout_seconds=450
+          set +e
+          bash scripts/ci/probes/node_release_attestation.sh "${base_url}" "${artifacts_dir}" "${timeout_seconds}"
+          attest_exit=$?
+          set -e
+          if [[ "${attest_exit}" -eq 2 ]]; then
+            observed_attempts="$(jq -r '.attempts // "unknown"' "${artifacts_dir}/release-attestation-wait.json" 2>/dev/null || echo "unknown")"
+            ci_fail "HEALTH_TIMEOUT" "Timed out waiting for ${base_url}/attestation/release after ${observed_attempts} attempts (timeout ${timeout_seconds}s)"
             ci_group_start "Failure diagnostics (bounded)"
             ci_info "Capturing serial console logs for diagnostics..."
             for serial_port in 1 2 3 4; do
@@ -534,35 +530,10 @@ jobs:
             ci_artifact "full serial logs are stored in workflow artifacts (serial-port-*.log)"
             ci_group_end
             exit 1
-          fi
-
-          tee_info_code="$(curl -sS --max-time 10 -o "${artifacts_dir}/tee-info.json" -w "%{http_code}" "${base_url}/admin-api/tee/info" || true)"
-          if [[ "${tee_info_code}" != "200" ]]; then
-            echo "Failed to fetch ${base_url}/admin-api/tee/info (HTTP ${tee_info_code:-error})"
+          elif [[ "${attest_exit}" -ne 0 ]]; then
             exit 1
           fi
-          if ! jq -e . "${artifacts_dir}/tee-info.json" >/dev/null 2>&1; then
-            echo "TEE info response was not valid JSON."
-            exit 1
-          fi
-          echo "Fetched /admin-api/tee/info (HTTP 200). Keys: $(jq -r 'keys | join(",")' "${artifacts_dir}/tee-info.json")"
-
-          nonce="$(openssl rand -hex 32)"
-          jq -n --arg nonce "${nonce}" '{nonce: $nonce}' > "${artifacts_dir}/tee-attest-request.json"
-
-          attest_code="$(curl -sS --max-time 20 -o "${artifacts_dir}/tee-attest-response.json" -w "%{http_code}" \
-            -X POST "${base_url}/admin-api/tee/attest" \
-            -H "Content-Type: application/json" \
-            -d @"${artifacts_dir}/tee-attest-request.json" || true)"
-          if [[ "${attest_code}" != "200" ]]; then
-            echo "Failed to fetch ${base_url}/admin-api/tee/attest (HTTP ${attest_code:-error})"
-            exit 1
-          fi
-          if ! jq -e . "${artifacts_dir}/tee-attest-response.json" >/dev/null 2>&1; then
-            echo "TEE attest response was not valid JSON."
-            exit 1
-          fi
-          echo "Fetched /admin-api/tee/attest (HTTP 200). Keys: $(jq -r 'keys | join(",")' "${artifacts_dir}/tee-attest-response.json")"
+          nonce="$(jq -r .nonce "${artifacts_dir}/tee-attest-request.json")"
 
           jq -n \
             --arg base_url "${base_url}" \
@@ -595,7 +566,7 @@ jobs:
           fi
           echo "Booted the dm-verity root."
 
-      # Runs once the admin API answers, so vector has been up for a while and
+      # Runs once /attestation/release answers, so vector has been up for a while and
       # the first poll usually passes. A failure fails this profile, and so
       # "Publish profile MRTDs", which needs every profile. Skipped on
       # locked-read-only (see LOG_AUTH_CHECK above).
@@ -617,7 +588,7 @@ jobs:
           artifacts_dir="${{ steps.params.outputs.artifacts_dir }}"
           profile="${{ steps.params.outputs.profile }}"
           cp "${artifacts_dir}/instance.json" "${artifacts_dir}/instance-${profile}.json"
-          cp "${artifacts_dir}/health.json" "${artifacts_dir}/health-${profile}.json"
+          cp "${artifacts_dir}/release-attestation.json" "${artifacts_dir}/release-attestation-${profile}.json"
           cp "${artifacts_dir}/tee-info.json" "${artifacts_dir}/tee-info-${profile}.json"
           cp "${artifacts_dir}/tee-attest-request.json" "${artifacts_dir}/tee-attest-request-${profile}.json"
           cp "${artifacts_dir}/tee-attest-response.json" "${artifacts_dir}/tee-attest-response-${profile}.json"
@@ -634,17 +605,17 @@ jobs:
             --base-dir "${artifacts_dir}" \
             --output "${index_file}" \
             --entry "instance.json|VM metadata snapshot" \
-            --entry "health.json|Latest /admin-api/health response" \
-            --entry "tee-info.json|TEE info payload" \
-            --entry "tee-attest-request.json|TEE attest request" \
-            --entry "tee-attest-response.json|TEE attest response" \
+            --entry "release-attestation.json|The node's /attestation/release answer (merod attest --serve)" \
+            --entry "tee-info.json|MRTD the node read from its quote, and its release claim" \
+            --entry "tee-attest-request.json|Nonce sent to /attestation/release" \
+            --entry "tee-attest-response.json|Release attestation with quoteB64 for the verifiers" \
             --entry "attestation-context.json|Context and endpoint details" \
             --entry "measurement-policy-candidates.json|Derived policy candidates" \
             --entry "mrtd.json|MRTD from external verification" \
             --entry "profile-provenance-${{ steps.params.outputs.profile }}.json|Per-profile provenance record" \
             --entry "node-log-auth-result.json|Log-auth check: pushes seen by the receiver" \
             --entry "log-auth-receiver-serial.log|Log-auth receiver serial console" \
-            --entry "serial-port-1.log|Serial logs when health probe fails"
+            --entry "serial-port-1.log|Serial logs when /attestation/release never answered"
           ci_artifact "artifact index saved to ${index_file}"
 
       - name: Require Intel Trust Authority API key

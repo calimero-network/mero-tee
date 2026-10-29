@@ -1358,6 +1358,23 @@ initialised, so the next boot waits again (kms-identity-wait-sec sets the wait).
   log "kms-identity metadata is set; stopped the release attestation server"
 }
 
+# A boot with no kms-url never runs merod (below), so nothing would answer on
+# merod's address and traefik would answer 502. The release and staging probes
+# boot the image exactly so (no KMS, a memory-only store) and measure it from a
+# quote: serve the release attestation there, for as long as the VM runs, as a
+# unit of its own so it outlives this script. It needs no key or store, and
+# listens on merod's `--listen`, so traefik routes /attestation/release to it.
+attest_serve_unit() {
+  local env=(--setenv=MERO_TEE_PROFILE="$IMAGE_PROFILE")
+  [[ -n "${TEE_RELEASE_VERSION:-}" ]] && env+=(--setenv=MERO_TEE_VERSION="$TEE_RELEASE_VERSION")
+  # --no-block, as for the units started below: from inside a unit's start, a
+  # job that waits on ordering could deadlock.
+  systemd-run --no-block --unit=merod-attest --description="merod release attestation (no KMS on this boot)" \
+    --property=Restart=on-failure --property=LimitCORE=0 "${env[@]}" \
+    "$BIN_DIR/merod" --home "$CALIMERO_HOME" --node "$CALIMERO_NODE" attest --serve "$ATTEST_LISTEN" \
+    >>"$LOG" 2>&1
+}
+
 URL_RE='https?://[A-Za-z0-9._~:@%+-]+(/[A-Za-z0-9._~:@%+/-]*)?'
 HOST_RE='[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?'
 
@@ -1380,6 +1397,14 @@ state anywhere else. Set kms-url (and tee-release-version) on the instance."
   fi
   log "WARN: no kms-url metadata. merod 1.0 takes its storage key only from \
 mero-kms in TDX mode, so merod is NOT started on this boot (profile=$IMAGE_PROFILE)."
+  if merod_can_attest; then
+    if attest_serve_unit; then
+      log "Serving this node's release attestation on $ATTEST_LISTEN \
+(GET <public-url>/attestation/release) instead"
+    else
+      log "WARN: could not start merod-attest; nothing answers on $ATTEST_LISTEN"
+    fi
+  fi
 elif [[ -z "${TEE_RELEASE_VERSION:-}" ]]; then
   fatal "kms-url is set but tee-release-version is not. The KMS is verified \
 against that release's signed policy, and merod 1.0 refuses to run in TDX mode \

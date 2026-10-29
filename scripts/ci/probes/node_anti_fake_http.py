@@ -34,6 +34,8 @@ import json
 import os
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
 sys.path.insert(
@@ -41,6 +43,11 @@ sys.path.insert(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "attestation", "shared"),
 )
 
+from extract_tdx_policy_candidates import (  # noqa: E402
+    MRTD_LEN,
+    MRTD_OFFSET_V4,
+    MRTD_OFFSET_V5,
+)
 from verify_tdx_quote_ita import (  # noqa: E402
     decode_base64_flexible,
     find_token,
@@ -55,14 +62,41 @@ def fail(code: str, message: str) -> None:
     print(f"[FAIL] code={code} {message}")
 
 
+# merod 1.0's release attestation (`merod attest --serve`, which the image runs
+# when it has no KMS): a quote whose report data is
+# `nonce || SHA-256(release claim)`. v1's `POST /admin-api/tee/attest` is gone.
+ATTEST_PATH = "/attestation/release"
+
+
 def attest(base_url: str, nonce_hex: str, timeout: int) -> Tuple[int, str]:
-    status, _headers, body = post_json(
-        url=f"{base_url.rstrip('/')}/admin-api/tee/attest",
-        api_key="",
-        payload={"nonce": nonce_hex},
-        timeout=timeout,
-    )
-    return status, body
+    url = f"{base_url.rstrip('/')}{ATTEST_PATH}?nonce={nonce_hex}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as e:
+        return 0, str(e)
+
+
+# After MRTD in the TD report body: MRCONFIGID, MROWNER, MROWNERCONFIG and
+# RTMR0-3 (7 x 48 bytes), then REPORTDATA.
+REPORT_DATA_FROM_MRTD = MRTD_LEN + 7 * 48
+REPORT_DATA_LEN = 64
+
+
+def report_data_of(quote: bytes) -> Optional[str]:
+    """REPORTDATA hex read from the quote itself (v4 or v5), not the node's copy."""
+    if len(quote) < 2:
+        return None
+    version = quote[0] | (quote[1] << 8)
+    mrtd = {4: MRTD_OFFSET_V4, 5: MRTD_OFFSET_V5}.get(version)
+    if mrtd is None:
+        return None
+    start = mrtd + REPORT_DATA_FROM_MRTD
+    if len(quote) < start + REPORT_DATA_LEN:
+        return None
+    return quote[start : start + REPORT_DATA_LEN].hex()
 
 
 # ITA has taken more than one request shape across API versions, so the shared
@@ -159,7 +193,7 @@ def main() -> int:
 
     status, body = attest(args.base_url, nonce_hex, args.timeout)
     if status < 200 or status >= 300:
-        fail("ANTI_FAKE_ATTEST_HTTP", f"/admin-api/tee/attest returned HTTP {status}: {body[:300]}")
+        fail("ANTI_FAKE_ATTEST_HTTP", f"{ATTEST_PATH} returned HTTP {status}: {body[:300]}")
         return 1
     try:
         resp = json.loads(body)
@@ -167,14 +201,13 @@ def main() -> int:
         fail("ANTI_FAKE_ATTEST_PARSE", "attest response was not JSON")
         return 1
 
-    data = resp.get("data") if isinstance(resp, dict) else None
-    if not isinstance(data, dict):
-        fail("ANTI_FAKE_ATTEST_PARSE", "attest response has no `data` object")
+    quote_b64 = resp.get("quote") if isinstance(resp, dict) else None
+    if not isinstance(quote_b64, str) or not quote_b64:
+        fail("ANTI_FAKE_ATTEST_PARSE", "attest response has no `quote`")
         return 1
-    quote_b64 = data.get("quoteB64") or data.get("quote_b64") or ""
-    report_data = ((data.get("quote") or {}).get("body") or {}).get("reportdata") or ""
-    if not quote_b64 or not report_data:
-        fail("ANTI_FAKE_ATTEST_PARSE", "attest response is missing quoteB64 or quote.body.reportdata")
+    report_data = report_data_of(decode_base64_flexible(quote_b64) or b"")
+    if report_data is None:
+        fail("ANTI_FAKE_ATTEST_PARSE", "the quote is not a TDX v4/v5 quote with report data")
         return 1
 
     bound = report_data.strip().lower().removeprefix("0x")[: NONCE_BYTES * 2]
