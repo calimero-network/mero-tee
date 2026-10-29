@@ -1102,11 +1102,56 @@ fi
 #                      while serving its release attestation (default 1800;
 #                      see "The release-attestation gate" below)
 #
-# Not read: the governance flags (`--release-approvals`, `--app-upgrades`,
-# `--outbound-approvals`), which are fixed at genesis and stay at merod's
-# default, `owner`; anything that weakens TDX mode (`--dev`, storage keys,
+#   release-approvals, app-upgrades, outbound-approvals
+#                      optional, `owner` or `operator`: the cluster's deployment
+#                      governance, read on a FIRST BOOT only (see "Deployment
+#                      governance" below)
+#
+# Not read: anything that weakens TDX mode (`--dev`, storage keys,
 # `--allow-unsigned-bundles`); and `--ops-token`, which would put the token in
 # metadata. `--listen` and `--metrics-listen` are the unit's (merod.service).
+#
+# --- Deployment governance -----------------------------------------------------
+#
+# WHO MAY LET NEW CODE OR A NEW DESTINATION REACH AN APP'S DATA. merod 1.0 gives
+# each of three decisions to exactly one party (core's
+# docs/src/content/docs/protocol/governance.mdx):
+#
+#   release-approvals   which mero-tee releases (node images) may hold the apps'
+#                       data, i.e. who approves a cluster upgrade to a new image
+#   app-upgrades        who moves an app to another bundle
+#   outbound-approvals  who approves the URL prefixes an app may call out to
+#
+# `operator` gives the decision to the operator (Calimero, through the Ops
+# API) for every app on the cluster; `owner` gives it to each app's owner or
+# publisher, with a passkey, and the operator cannot. Unset is merod's default,
+# `owner`. mdma chooses per cluster when it creates it, and the choice means
+# the same on a dedicated cluster and a shared one: nothing here looks at which
+# kind of cluster this is.
+#
+# FIXED AT GENESIS, ATTESTED, IMMUTABLE. The first node to lead the cluster's
+# system group writes the governance IT was configured with into the system
+# state (`SystemCmd::Genesis`), before any account exists. After that a second
+# genesis is refused, every node's receipt-key attestation binds the state's
+# governance, and `verify_app_cluster` returns it, so a user can check from
+# hardware quotes who may change their app's code, image or destinations.
+#
+# So the keys are read only where they can still decide something: on a first
+# boot, into the `merod init` that writes this node's config.toml. Every node
+# gets them there, not just the one with `bootstrap=true`: the bootstrap node
+# forms the group and normally leads first, but should it fail before genesis
+# commits, another founding voter leads and writes ITS configuration. mdma
+# stamps the same three values on every node of a cluster, as it does
+# `cluster` and `kms-identity`; on a node that joins later they change nothing,
+# because genesis is already in the state it reads.
+#
+# On every later boot they are ignored, and the boot says so: config.toml is
+# never rewritten, and a node restarted with other values would change nothing
+# anyway, so a metadata edit after creation must not look as if it had. A
+# value outside the allowlist on a first boot stops the boot before `merod
+# init`: a typo here would be the cluster's governance for good. Allowed on
+# every profile, locked-read-only included -- the choice is attested and
+# visible to every verifier -- and logged on its own line.
 #
 # The configuration is written once and then is the node's: config.toml is on
 # the encrypted data disk, and metadata changed later is not applied, because a
@@ -1165,6 +1210,51 @@ meta_arg() {
     fatal "instance metadata '$key' is not a valid value for merod --$key; refusing to initialise the node with it"
   fi
   INIT_EXTRA_ARGS+=("--$key" "$value")
+}
+
+# merod's accepted values for the governance flags (core's `Authority`). One
+# list for all three: a value merod adds goes here.
+GOVERNANCE_KEYS=(release-approvals app-upgrades outbound-approvals)
+GOVERNANCE_AUTHORITIES=(owner operator)
+
+governance_value_ok() {
+  local v
+  for v in "${GOVERNANCE_AUTHORITIES[@]}"; do
+    [[ "$1" == "$v" ]] && return 0
+  done
+  return 1
+}
+
+# On a first boot: check each governance key against the allowlist, append it to
+# merod init's arguments, and log the governance this node will found the
+# cluster with should it lead first.
+governance_args() {
+  local key value summary=""
+  for key in "${GOVERNANCE_KEYS[@]}"; do
+    value="$(get_meta "$key" | tr -d '\r\n')"
+    if [[ -n "$value" ]]; then
+      governance_value_ok "$value" || fatal "instance metadata '$key' must be one of: \
+${GOVERNANCE_AUTHORITIES[*]}; refusing to initialise the node with it (the cluster's \
+governance is fixed at genesis)"
+      INIT_EXTRA_ARGS+=("--$key" "$value")
+      summary+=" $key=$value"
+    else
+      summary+=" $key=owner(merod default)"
+    fi
+  done
+  log "GOVERNANCE (fixed at the cluster's genesis, attested with every receipt key):${summary}"
+}
+
+# On a later boot: the governance keys change nothing; say so if any is set.
+governance_ignored() {
+  local key value set=""
+  for key in "${GOVERNANCE_KEYS[@]}"; do
+    value="$(get_meta "$key" | tr -d '\r\n')"
+    [[ -n "$value" ]] && set+=" $key"
+  done
+  [[ -z "$set" ]] || log "Governance metadata ignored on this boot (${set# }): the \
+cluster's governance was fixed at its genesis and is read from its attested system \
+state, never from metadata again"
 }
 
 # Check `kms-identity` metadata (base64 on stdin) and write the keypair it
@@ -1412,6 +1502,7 @@ without MERO_TEE_VERSION. Refusing to start."
 elif [[ -f "$NODE_CONFIG" ]]; then
   log "merod node already initialized at $CALIMERO_HOME/$CALIMERO_NODE; skipping init \
 (its configuration was fixed at its first boot)"
+  governance_ignored
   MEROD_READY=true
 else
   [[ -n "$(get_meta node-id)" ]] || fatal "no node-id metadata. merod 1.0 \
@@ -1460,6 +1551,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   meta_arg peer-profiles '^[a-z0-9-]+(,[a-z0-9-]+)*$'
   meta_arg peer-min-release '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
   meta_arg replicas '^[0-9]{1,3}$'
+  governance_args
   log "Initializing merod 1.0 node (kms=$KMS_URL release=$TEE_RELEASE_VERSION)..."
   # Under `set -e` a failed init stops here, before any service starts, and
   # config.toml is absent so the next boot retries.
