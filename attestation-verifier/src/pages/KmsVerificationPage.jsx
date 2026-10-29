@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useVerification } from '../hooks/useVerification.js';
 import { VerificationResults } from '../components/verification/VerificationResults.jsx';
@@ -5,11 +6,27 @@ import { KmsVerifierForm } from '../components/forms/KmsVerifierForm.jsx';
 import { DocsSection } from '../components/docs/DocsSection.jsx';
 import './VerificationPage.css';
 
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 export function KmsVerificationPage() {
   const [searchParams] = useSearchParams();
   const releaseTagParam = searchParams.get('release_tag');
   const profileParam = searchParams.get('profile');
+  // Set by mdma's manager and cloud console: verify at once, with no paste.
+  const attestUrlParam = searchParams.get('kms_attest_url');
   const { status, error, result, verify } = useVerification();
+
+  useEffect(() => {
+    if (attestUrlParam) {
+      verify({ url: attestUrlParam }, null, releaseTagParam || null, profileParam || null);
+    }
+  }, [attestUrlParam, releaseTagParam, profileParam, verify]);
 
   return (
     <section className="verification-page">
@@ -20,6 +37,12 @@ export function KmsVerificationPage() {
         is verified by Intel Trust Authority and its MRTD/RTMR0–3 are matched against the KMS
         allowlists of the signed <code>kms-attestation-policy</code> of each mero-kms release.
       </p>
+      {attestUrlParam ? (
+        <p className="hint">
+          Fetching a fresh attestation through <code>{hostOf(attestUrlParam)}</code>, which relays a
+          replica&apos;s <code>/attest</code> for a nonce this verifier chose.
+        </p>
+      ) : null}
       <KmsVerifierForm
         initialReleaseTag={releaseTagParam}
         initialProfile={profileParam}

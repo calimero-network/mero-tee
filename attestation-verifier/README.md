@@ -15,6 +15,10 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 1. Node: the user gives a node URL and the API fetches `/admin-api/tee/attest` with a fresh nonce.
    KMS: mero-kms replicas are reachable only inside their VPC, so the operator calls a replica's
    `/attest` there and pastes the response (optionally with the nonce they sent).
+   Or, from mdma's consoles, `/kms?kms_attest_url=…` verifies at once: the API POSTs a nonce it
+   chose to that URL (mdma's manager, which relays a replica's `/attest`; hosts in
+   `KMS_ATTEST_ALLOWED_HOSTS`, default `manager.cloud.calimero.network` and its staging twin) and
+   checks the nonce in the quote, so the relay cannot answer with an old or invented one.
 2. Quote sent to ITA for verification
 3. Nonce binding and JWT verification
 4. MRTD/RTMR0-3 compared with the release policy: `kms-attestation-policy.<profile>.json`
