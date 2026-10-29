@@ -323,7 +323,14 @@ image was built from `08f6344`); trust `commit_sha` for those.
   whose TEE policy trusts signed releases has its admitters download this file
   and its `.bundle.json` and verify the signature against the `Release mero-tee`
   workflow identity before comparing a joining TEE's quote with it.
-- `release-provenance.json`
+- `release-provenance.json` — the build commit, each profile's image and
+  verification record, and `merod: {version, sha256}`: the merod every profile
+  runs and the SHA-256 of its executable, from the probes' release
+  attestations (`merod-from-release-attestations.sh`; the release fails unless
+  the three profiles agree with each other and with `versions.json`). mdma pins
+  these on each cluster it creates on the release and refuses a node whose
+  release attestation names another merod. Releases up to 2.3.128 have no
+  `merod` block.
 - `node-image-gcp-release-sbom.spdx.json`
 - `node-image-gcp-checksums.txt`
 

@@ -127,6 +127,7 @@ validate_measurement_policy_file "artifacts/measurement-policy-candidates-locked
 ensure_policy_matches_mrtd "artifacts/mrtd-debug.json" "artifacts/measurement-policy-candidates-debug.json" "debug"
 ensure_policy_matches_mrtd "artifacts/mrtd-debug-read-only.json" "artifacts/measurement-policy-candidates-debug-read-only.json" "debug-read-only"
 ensure_policy_matches_mrtd "artifacts/mrtd-locked-read-only.json" "artifacts/measurement-policy-candidates-locked-read-only.json" "locked-read-only"
+merod="$(bash "$(dirname "${BASH_SOURCE[0]}")/merod-from-release-attestations.sh" artifacts mero-tee/versions.json)"
 
 # MRTD is firmware-only (TDVF) per GCP TDX docs; identical for all profiles.
 # RTMR[2] includes kernel cmdline; we inject calimero.role=node + calimero.profile=<profile> so each profile
@@ -268,6 +269,7 @@ jq -n \
   --slurpfile debug_ro artifacts/profile-provenance-debug-read-only.json \
   --slurpfile locked_ro artifacts/profile-provenance-locked-read-only.json \
   --slurpfile mrtds artifacts/published-mrtds.json \
+  --argjson merod "${merod}" \
   '{
     role: "node",
     tag: $tag,
@@ -282,6 +284,7 @@ jq -n \
       kms_policy_url: $kms_policy_url,
       node_policy_url: $node_policy_url
     },
+    merod: $merod,
     profiles: {
       debug: $debug[0],
       "debug-read-only": $debug_ro[0],
