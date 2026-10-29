@@ -324,6 +324,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/node-release-attestation-test.sh
 
+      # release-provenance.json names the merod the images run, from the
+      # probes' release attestations, so mdma pins it without a hand-made hash.
+      - name: Check the release names the attested merod
+        id: merod_release_provenance_test
+        shell: bash
+        run: scripts/ci/tests/merod-release-provenance-test.sh
+
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
       # name the change, so the allowlist narrows as soon as hosts are patched.
@@ -406,6 +413,7 @@ jobs:
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
             --checks-line "- probes read a merod 1.0 release attestation: ${{ steps.node_release_attestation_test.outcome }}" \
+            --checks-line "- release names the attested merod: ${{ steps.merod_release_provenance_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \

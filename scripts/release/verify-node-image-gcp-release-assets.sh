@@ -276,7 +276,8 @@ jq -e --arg tag "${logical_tag}" '
   (.mrtds.profiles.debug.mrtd == .profiles.debug.external_verification.mrtd) and
   (.mrtds.profiles["debug-read-only"].mrtd == .profiles["debug-read-only"].external_verification.mrtd) and
   (.mrtds.profiles["locked-read-only"].mrtd == .profiles["locked-read-only"].external_verification.mrtd) and
-  (.measurement_policy.tag == $tag)
+  (.measurement_policy.tag == $tag) and
+  ((has("merod") | not) or ((.merod.version | type == "string" and length > 0) and (.merod.sha256 | type == "string" and test("^[0-9a-f]{64}$"))))
 ' "${tmp_dir}/release-provenance.json" >/dev/null
 
 cert_identity_regex="${COSIGN_CERTIFICATE_IDENTITY_REGEXP:-^https://github.com/${repo}/.github/workflows/release-node-image-gcp.yaml@refs/heads/master$}"
