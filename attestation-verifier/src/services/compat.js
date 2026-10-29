@@ -6,25 +6,11 @@
  */
 
 import { fetchKmsReleases, fetchAttestationPolicy, fetchCompatibilityMap } from './api.js';
-
-export const PROFILES = ['debug', 'debug-read-only', 'locked-read-only'];
-const REGISTERS = ['mrtd', 'rtmr0', 'rtmr1', 'rtmr2', 'rtmr3'];
-
-function norm(v) {
-  return typeof v === 'string' ? v.replace(/\s/g, '').toLowerCase() : '';
-}
+import { PROFILES, fullyMatchingProfiles } from '../lib/registers.js';
 
 /** Profiles whose KMS allowlists contain every one of MRTD and RTMR0-3. */
 export function matchingProfiles(measurements, policiesByProfile) {
-  return PROFILES.filter((profile) => {
-    const policy = policiesByProfile?.[profile];
-    if (!policy) return false;
-    return REGISTERS.every((reg) => {
-      const value = norm(measurements?.[reg]);
-      const list = policy[`kms_allowed_${reg}`];
-      return value && Array.isArray(list) && list.some((a) => norm(a) === value);
-    });
-  });
+  return fullyMatchingProfiles(measurements, policiesByProfile, 'kms');
 }
 
 async function loadRelease(tag) {
