@@ -18,6 +18,13 @@ sources:
     # the sidecar makes to merod goes through it, so a node that looks like it
     # is refusing its own credentials is diagnosed here and nowhere else.
     #
+    # `calimero-tls-cert.service` turns the in-enclave key into a publicly
+    # trusted certificate: it retries publishing the CSR and quote mdma orders
+    # from, and installs the chain mdma writes back. A node left serving its
+    # self-signed placeholder says why only here (calimero-init logs just the
+    # first attempt), and that placeholder is also what stops a new cluster
+    # finding its leader, since mdma reads /health over verified TLS.
+    #
     # `vector.service` and `vmagent.service` collect themselves. That is less
     # circular than it sounds: a shipper that fails at startup leaves nothing
     # behind, but one that starts and then degrades -- a rejected write, a full
@@ -27,6 +34,7 @@ sources:
     include_units:
       [
         "calimero-init.service",
+        "calimero-tls-cert.service",
         "merod.service",
         "traefik.service",
         "vector.service",

@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
+- **`calimero-tls-cert.service` ships its journal.** It was missing from `include_units` in `vector-partial-merod.yaml`, so a node left on its self-signed placeholder certificate (which also keeps a new cluster from finding its leader, since mdma reads `/health` over verified TLS) said why only on the node; `calimero-init` logs the first attempt only. `scripts/ci/tests/vector-units-test.sh` now fails when any service the merotee role installs is not collected.
+
 - **The umbrella release `VERSION` is published, unique and Latest.** Release mero-tee created it as a draft, which has no tag, so Release mero-kms could not see it and created a second, published release; the draft could then never be published (an immutable release held its tag), which left drafts behind for 2.3.11 to 2.3.130. Both workflows now share `scripts/release/upsert-umbrella-release.sh`: it creates the umbrella published, treats losing the race as success, deletes drafts named `VERSION`, and marks it the repository's Latest release once `mero-kms-vVERSION` and `mero-tee-vVERSION` are both published, unless a higher umbrella version is published. Component releases stay `--latest=false`. Tested by `scripts/ci/tests/umbrella-release-test.sh`.
 
 - **The mero-bot launcher test no longer reads the previous run's environment.** Its stand-in mero-bot wrote `env-names`, which the test waits for, before `env`, and `env` was not removed between runs, so a slow runner could read the last run's keys ("the owner's NEAR key did not win over the operator's"). `env-names` now lands last and `env` is removed between runs.
