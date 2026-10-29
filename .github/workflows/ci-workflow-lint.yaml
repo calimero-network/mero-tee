@@ -331,6 +331,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/merod-release-provenance-test.sh
 
+      # The umbrella release VERSION is created published (a draft is invisible
+      # to the other release workflow, which then made a second release), its
+      # orphan drafts are deleted, and it becomes Latest once both components are.
+      - name: Check the umbrella release is published and Latest
+        id: umbrella_release_test
+        shell: bash
+        run: scripts/ci/tests/umbrella-release-test.sh
+
       # Releases accept TCB status `outofdate` only while GCP's TDX hosts report
       # it; the first probe that reports `uptodate` must fail the release and
       # name the change, so the allowlist narrows as soon as hosts are patched.
@@ -414,6 +422,7 @@ jobs:
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
             --checks-line "- probes read a merod 1.0 release attestation: ${{ steps.node_release_attestation_test.outcome }}" \
             --checks-line "- release names the attested merod: ${{ steps.merod_release_provenance_test.outcome }}" \
+            --checks-line "- umbrella release published and Latest: ${{ steps.umbrella_release_test.outcome }}" \
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \

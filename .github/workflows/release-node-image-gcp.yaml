@@ -77,6 +77,7 @@ jobs:
           bash -n scripts/release/node-image-gcp/sign-release-assets.sh
           bash -n scripts/release/node-image-gcp/verify-generated-signatures.sh
           bash -n scripts/release/node-image-gcp/upsert-umbrella-release-links.sh
+          bash -n scripts/release/upsert-umbrella-release.sh
           bash -n scripts/ci/probes/node_log_auth_probe.sh
           python3 -m py_compile scripts/ci/probes/log_auth_receiver.py
           python3 -m py_compile scripts/attestation/shared/verify_tdx_quote_ita.py

@@ -1019,7 +1019,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GHCR_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          KMS_TAG: ${{ needs.prepare.outputs.kms_release_tag }}
           TARGET_COMMIT: ${{ needs.prepare.outputs.target_commit }}
         run: bash scripts/release/kms/upsert-umbrella-release-links.sh
 
