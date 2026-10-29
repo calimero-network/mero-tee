@@ -33,7 +33,7 @@ claims() { # version sha [profile version sha]
 claims 1.0.0-rc.2 "$SHA"
 out="$(bash "$SCRIPT" "$WORK" "$WORK/versions.json")"
 [[ "$(jq -r .version <<<"$out")" == "1.0.0-rc.2" ]] || fail "version: $out"
-[[ "$(jq -r .sha256 <<<"$out")" == "$(tr 'A-Z' 'a-z' <<<"$SHA")" ]] || fail "sha256: $out"
+[[ "$(jq -r .sha256 <<<"$out")" == "$(tr '[:upper:]' '[:lower:]' <<<"$SHA")" ]] || fail "sha256: $out"
 
 refused() { # label
   if bash "$SCRIPT" "$WORK" "$WORK/versions.json" >/dev/null 2>"$WORK/err"; then
