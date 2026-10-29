@@ -41,8 +41,11 @@ cat >"${WORK}/node/bin/node" <<EOF
 echo "\$\$" >"${WORK}/pid"
 printf '%s\n' "\$@" >"${WORK}/argv"
 # PWD, SHLVL and _ are set by bash for this stand-in itself, not by the launcher.
-env | sed 's/=.*//' | grep -vxE 'PWD|OLDPWD|SHLVL|_' | sort >"${WORK}/env-names"
+env | sed 's/=.*//' | grep -vxE 'PWD|OLDPWD|SHLVL|_' | sort >"${WORK}/env-names.tmp"
 env >"${WORK}/env"
+# env-names is what the test waits for, so it lands last, whole: env is
+# already this run's when the test reads it.
+mv "${WORK}/env-names.tmp" "${WORK}/env-names"
 trap 'echo stopped >"${WORK}/stopped"; exit 0' TERM
 while :; do sleep 0.1; done
 EOF
@@ -136,7 +139,7 @@ set -e
 grep -q "secrets changed" "${WORK}/log" || fail "no restart line: $(cat "${WORK}/log")"
 
 # --- SIGTERM stops it cleanly -------------------------------------------------------
-rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/stopped"
+rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/env" "${WORK}/stopped"
 bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
 launcher=$!
 wait_file "${WORK}/env-names"
@@ -148,7 +151,7 @@ wait "${launcher}"
 code=$?
 set -e
 [[ ${code} -eq 75 ]] || fail "after the owner's key the launcher exited ${code}, not 75"
-rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/stopped"
+rm -f "${WORK}/argv" "${WORK}/env-names" "${WORK}/env" "${WORK}/stopped"
 bash "${LAUNCHER}" >"${WORK}/log" 2>&1 &
 launcher=$!
 wait_file "${WORK}/env-names"
