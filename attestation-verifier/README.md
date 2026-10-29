@@ -24,6 +24,27 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 4. MRTD/RTMR0-3 compared with the release policy: `kms-attestation-policy.<profile>.json`
    (KMS allowlists) or `published-mrtds.json` (nodes)
 
+## Pages
+
+- `/` — what attestation proves, and the two ways in (verify a node, verify a KMS).
+- `/mero-tee?node_url=<url>&release_tag=<mero-tee tag>` — verifies a node at once (the Verify links
+  of mdma's manager and cloud console); without `node_url`, a form. `nodeUrl` and `releaseTag` are
+  accepted too.
+- `/kms?kms_attest_url=<url>&release_tag=<mero-kms tag>&profile=<profile>` — verifies a KMS at once;
+  without `kms_attest_url`, a form to paste a replica's `/attest` response. `/?kms_url=…` still
+  forwards to `/kms`.
+- `/agent` — a pasted mero-agent-gate `/attest` response and agent policy.
+- `/docs` — the steps, the measurement registers and the terms.
+
+A result page leads with the verdict: **Verified**, **Not verified** (a check failed) or
+**Could not verify** (a required check could not run, or an error stopped the run, with what it
+means and what to do). Below it, a checklist of every check the verifier makes
+(`src/lib/checks.js` lists each and where it comes from); a check that did not run is shown as not
+checked, never as passed. Then the measurements table (expected from the release, actual from the
+quote) and the raw claims, quote, token and policy, folded, with copy buttons.
+
+The page is plain CSS (`src/index.css`): light, or dark from the system setting.
+
 ## Development
 
 ```bash

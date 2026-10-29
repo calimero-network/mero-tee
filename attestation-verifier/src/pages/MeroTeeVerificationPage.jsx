@@ -1,110 +1,116 @@
 import { useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useVerification } from '../hooks/useVerification.js';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useNodeVerification } from '../hooks/useNodeVerification.js';
-import { VerificationResults } from '../components/verification/VerificationResults.jsx';
-import { MeroTeeVerifierForm } from '../components/forms/MeroTeeVerifierForm.jsx';
-import { DocsSection } from '../components/docs/DocsSection.jsx';
-import './VerificationPage.css';
+import { ResultView } from '../components/result/ResultView.jsx';
 
+/**
+ * A node (merod). `/mero-tee?node_url=…&release_tag=…` (the console's and the
+ * manager's Verify links) verifies at once; the form verifies another node.
+ */
 export function MeroTeeVerificationPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const nodeUrlParam = searchParams.get('node_url') || searchParams.get('nodeUrl');
-  const nodeReleaseTagParam = searchParams.get('release_tag') || searchParams.get('releaseTag');
-  const { status, error, result, verify } = useVerification();
-  const {
-    status: nodeStatus,
-    error: nodeError,
-    result: nodeResult,
-    verify: verifyNode,
-  } = useNodeVerification();
+  const releaseTagParam = searchParams.get('release_tag') || searchParams.get('releaseTag');
+  const node = useNodeVerification();
+  const { verify } = node;
 
   useEffect(() => {
     if (nodeUrlParam) {
-      verifyNode(nodeUrlParam, nodeReleaseTagParam || undefined);
+      verify(nodeUrlParam, releaseTagParam || undefined);
     }
-  }, [nodeUrlParam, nodeReleaseTagParam, verifyNode]);
+  }, [nodeUrlParam, releaseTagParam, verify]);
 
-  const handleVerifyByUrl = (kmsUrl, releaseTag) => {
-    verify(kmsUrl, releaseTag || undefined);
+  const onSubmit = (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const url = form.node_url.value.trim();
+    const tag = form.node_release_tag.value.trim();
+    if (!url) return;
+    const next = new URLSearchParams({ node_url: url });
+    if (tag) next.set('release_tag', tag);
+    if (url === nodeUrlParam && (tag || null) === (releaseTagParam || null)) {
+      verify(url, tag || undefined);
+    } else {
+      // The URL carries what is verified, so the page can be shared and reloaded.
+      setSearchParams(next);
+    }
   };
 
-  const handleVerifyNode = (nodeUrl, releaseTag) => {
-    verifyNode(nodeUrl, releaseTag || undefined);
-  };
-
-  const activeStatus = nodeStatus !== 'idle' ? nodeStatus : status;
-  const activeError = nodeStatus !== 'idle' ? nodeError : error;
-  const activeResult = nodeStatus === 'success' ? nodeResult : result;
+  // A Verify link shows progress from the first paint, not an empty form.
+  const view = node.status === 'idle' && nodeUrlParam
+    ? { ...node, status: 'loading', phase: 'attest', request: { nodeUrl: nodeUrlParam, releaseTag: releaseTagParam } }
+    : node;
+  const ran = view.status !== 'idle';
+  // After an error the form stays open, to correct what was entered.
+  const failedToRun = view.status === 'error';
+  const loading = view.status === 'loading';
+  const form = (
+    <form className="form" onSubmit={onSubmit}>
+      <div className="form__grid">
+        <div className="field">
+          <label htmlFor="node_url" className="lbl">Node URL</label>
+          <input
+            id="node_url"
+            name="node_url"
+            type="url"
+            required
+            className="inp inp--mono"
+            placeholder="https://<name>.relay.cloud.calimero.network"
+            defaultValue={nodeUrlParam || ''}
+            disabled={loading}
+          />
+          <span className="field__hint">The node’s public URL. The verifier asks it for a quote over a nonce of its own.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="node_release_tag" className="lbl">Release (optional)</label>
+          <input
+            id="node_release_tag"
+            name="node_release_tag"
+            type="text"
+            className="inp inp--mono"
+            placeholder="mero-tee-v2.3.131"
+            defaultValue={releaseTagParam || ''}
+            disabled={loading}
+          />
+          <span className="field__hint">The mero-tee release to compare with. Empty: the latest.</span>
+        </div>
+      </div>
+      <div className="form__actions">
+        <button type="submit" className="btn" disabled={loading}>Verify node</button>
+      </div>
+    </form>
+  );
 
   return (
-    <section className="verification-page">
-      <h2>Mero TEE Verification</h2>
-      <p className="hint">
-        Verify mero-tee node attestations (GCP TDX nodes) or KMS instances. Enter a node URL (e.g.{' '}
-        <code>http://public-ip:80</code>) or KMS URL.
+    <>
+      {!ran && (
+        <header className="page-head">
+          <div className="eyebrow">Node attestation</div>
+          <h1>Verify a node</h1>
+          <p className="lede">
+            Check that a Calimero node runs on genuine Intel TDX hardware, boots exactly the software a
+            mero-tee release published, and answers at its URL itself.
+          </p>
+        </header>
+      )}
+
+      {ran && (
+        <ResultView
+          kind="node"
+          state={view}
+          onRetry={() => node.request && verify(node.request.nodeUrl, node.request.releaseTag || undefined)}
+        />
+      )}
+
+      {/* One element throughout, so what was typed or pasted survives a run. */}
+      <details className="fold" open={!ran || failedToRun}>
+        <summary>{ran ? 'Verify something else' : 'Enter a node URL'}</summary>
+        <div className="fold__body">{form}</div>
+      </details>
+
+      <p className="muted small">
+        Verifying a KMS? Use <Link to="/kms">KMS</Link>. What each check means: <Link to="/docs">How it works</Link>.
       </p>
-      <MeroTeeVerifierForm
-        status={status === 'loading' || nodeStatus === 'loading' ? 'loading' : status}
-        onVerifyByUrl={handleVerifyByUrl}
-      />
-      <div className="verifier-form" style={{ marginTop: '1.5rem' }}>
-        <h3>Node (merod) verification</h3>
-        <p className="hint">
-          Verify a Calimero node at its admin API base URL. The node must be reachable (http://public-ip:80).
-          MRTD/RTMR measurements are compared against published release policy (like KMS).
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const form = e.target;
-            const urlInput = form.querySelector('input[name="node_url"]');
-            const tagInput = form.querySelector('input[name="node_release_tag"]');
-            if (urlInput?.value?.trim()) {
-              handleVerifyNode(urlInput.value.trim(), tagInput?.value?.trim() || undefined);
-            }
-          }}
-          className="verifier-form"
-        >
-          <div className="input-row">
-            <input
-              type="url"
-              name="node_url"
-              placeholder="http://34.65.123.45:80"
-              disabled={nodeStatus === 'loading' || status === 'loading'}
-              defaultValue={nodeUrlParam || ''}
-            />
-            <button type="submit" disabled={nodeStatus === 'loading' || status === 'loading'}>
-              {nodeStatus === 'loading' && <span className="spinner" />}
-              {nodeStatus === 'loading' ? 'Verifying…' : 'Verify node'}
-            </button>
-          </div>
-          <div className="input-row input-row--col" style={{ marginTop: '0.5rem' }}>
-            <label htmlFor="node_release_tag" className="hint">
-              Release tag (optional, e.g. mero-tee-v2.2.4)
-            </label>
-            <input
-              type="text"
-              id="node_release_tag"
-              name="node_release_tag"
-              placeholder="mero-tee-v2.2.4"
-              disabled={nodeStatus === 'loading' || status === 'loading'}
-              defaultValue={nodeReleaseTagParam || ''}
-              style={{ width: '100%', maxWidth: '16rem' }}
-            />
-          </div>
-        </form>
-      </div>
-      {(nodeStatus === 'loading' || status === 'loading') && (
-        <p className="status-loading">Fetching attestation and verifying…</p>
-      )}
-      {(activeError || nodeError || error) && (
-        <div className="error-banner">{activeError || nodeError || error}</div>
-      )}
-      {activeStatus === 'success' && activeResult && (
-        <VerificationResults result={activeResult} />
-      )}
-      <DocsSection />
-    </section>
+    </>
   );
 }

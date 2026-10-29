@@ -71,7 +71,9 @@ export function extractRTMRsFromClaims(claims) {
     }
     for (const [k, v] of Object.entries(obj)) {
       const key = k.toLowerCase();
-      if (typeof v === 'string') {
+      if (key === 'attester_tcb_status' && typeof v === 'string') {
+        result.tcb_status = v;
+      } else if (typeof v === 'string') {
         const norm = v.trim().toLowerCase();
         if (RTMR_HEX_RE.test(norm) && /rtmr|rt_mr/.test(key)) {
           if (key.includes('rtmr3') || key.includes('rt_mr3')) result.rtmr3 = norm;
@@ -81,8 +83,6 @@ export function extractRTMRsFromClaims(claims) {
         } else if (key.includes('mrtd') && (/^[a-f0-9]{96}$/.test(norm) || /^[a-f0-9]{64}$/.test(norm))) {
           result.mrtd = norm; // TDX MRTD is 48 bytes (96 hex); some sources use 64
         }
-      } else if (key === 'attester_tcb_status' && typeof v === 'string') {
-        result.tcb_status = v;
       }
       walk(v);
     }

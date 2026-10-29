@@ -1,10 +1,13 @@
 /**
  * Hook for KMS attestation verification.
- * Encapsulates verification flow, state, and side effects.
  *
  * The input is a mero-kms `/attest` response pasted by the operator (the KMS listens
- * only inside its VPC). Intel Trust Authority verifies the quote; MRTD/RTMR0-3 parsed
- * from it are then matched against the KMS allowlists of the release policies.
+ * only inside its VPC), or `{ url }` for a KMS attestation URL (`kms_attest_url`)
+ * that the API asks for a quote over a nonce of its own. Intel Trust Authority
+ * verifies the quote; MRTD/RTMR0-3 parsed from it are then matched against the KMS
+ * allowlists of the release policies.
+ *
+ * `phase`: `attest` (the API call), `policy` (release policies), `compare`.
  */
 
 import { useState, useCallback } from 'react';
@@ -16,20 +19,24 @@ import {
   mergeQuoteFirstMeasurements,
 } from '../utils/attestation.js';
 
-export function useVerification() {
-  const [state, setState] = useState({
-    status: 'idle', // idle | loading | success | error
-    error: null,
-    result: null,
-  });
+const IDLE = { status: 'idle', phase: null, error: null, result: null, request: null };
 
-  // `attestJson` is a pasted `/attest` response, or `{ url }` to have the
-  // backend fetch one from a KMS attestation URL (`kms_attest_url`).
+export function useVerification() {
+  const [state, setState] = useState(IDLE);
+
   const verify = useCallback(async (attestJson, nonceB64 = null, releaseTag = null, selectedProfile = null) => {
-    setState({ status: 'loading', error: null, result: null });
+    const byUrl = Boolean(attestJson && typeof attestJson === 'object' && attestJson.url);
+    const request = {
+      attestUrl: byUrl ? attestJson.url : null,
+      nonceGiven: Boolean(nonceB64),
+      releaseTag: releaseTag || null,
+      profile: selectedProfile || null,
+    };
+    const setPhase = (phase) => setState({ status: 'loading', phase, error: null, result: null, request });
+    setPhase('attest');
     try {
       let data;
-      if (attestJson && typeof attestJson === 'object' && attestJson.url) {
+      if (byUrl) {
         data = await verifyKmsByUrl(attestJson.url);
       } else {
         let pasted;
@@ -52,25 +59,39 @@ export function useVerification() {
         fromITA
       );
 
-      const { tag, policiesByProfile, compatMap, matches: allMatches } = await findMatchingRelease(
-        quoteRtmrs,
-        releaseTag
-      );
+      setPhase('policy');
+      let release = { tag: releaseTag || null, policiesByProfile: {}, compatMap: null, matches: [] };
+      let policyError = null;
+      try {
+        release = await findMatchingRelease(quoteRtmrs, releaseTag);
+      } catch (e) {
+        // Measurements are then reported as not checked, never as matching.
+        policyError = e.message || 'Could not load the release policies';
+      }
+      setPhase('compare');
+      const { tag, policiesByProfile, compatMap, matches: allMatches } = release;
       const matches = selectedProfile
         ? allMatches.filter((p) => p === selectedProfile)
         : allMatches;
 
       setState({
         status: 'success',
+        phase: null,
         error: null,
+        request,
         result: {
+          kind: 'kms',
+          attestUrl: request.attestUrl,
+          checkedAt: new Date().toISOString(),
           attestation,
+          ita_token: data.ita_token || null,
           ita_claims: ita_claims || null,
           ita_token_verified,
           nonce_verified,
           itaRtmrs,
           selectedProfile: selectedProfile || null,
           tagToUse: tag,
+          policyError,
           matches,
           matchedImage: matches.length > 0
             ? compatMap?.compatibility?.profiles?.[matches[0]]?.kms_image ?? null
@@ -83,15 +104,15 @@ export function useVerification() {
     } catch (e) {
       setState({
         status: 'error',
+        phase: null,
         error: e.message || 'Verification failed',
         result: null,
+        request,
       });
     }
   }, []);
 
-  const reset = useCallback(() => {
-    setState({ status: 'idle', error: null, result: null });
-  }, []);
+  const reset = useCallback(() => setState(IDLE), []);
 
   return { ...state, verify, reset };
 }
