@@ -8,6 +8,8 @@ Public web tool for verifying KMS and node attestations via Intel Trust Authorit
 
 Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALLOWED_HOSTS`.
 
+`NODE_ALLOWED_HOSTS` (comma-separated regexes) defaults to bare IPv4 addresses and the fleet's node names, `<name>.relay.cloud.calimero.network` and `<name>.relay.staging.cloud.calimero.network`, which mdma's manager and cloud console link here. Setting it replaces that default. Either way a host must resolve to public addresses only.
+
 ## Flow
 
 1. Node: the user gives a node URL and the API fetches `/admin-api/tee/attest` with a fresh nonce.

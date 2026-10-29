@@ -24,7 +24,17 @@ const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
 // address. Whatever this allows, the address fetched must be a public one (see
 // `isPublicAddress`) unless NODE_ALLOW_PRIVATE=1, which is for local
 // development against a node on localhost or a private network.
-const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || '^\\d+\\.\\d+\\.\\d+\\.\\d+$')
+// Bare IPv4 addresses, and the Calimero fleet's node names: mdma names every
+// node `<name>.relay.cloud.calimero.network` (staging:
+// `<name>.relay.staging.cloud.calimero.network`) and the manager and cloud
+// console link each one here. Every host must still resolve to public
+// addresses only (below).
+const DEFAULT_NODE_ALLOWED_HOSTS = [
+  '^\\d+\\.\\d+\\.\\d+\\.\\d+$',
+  '^[a-z0-9-]+\\.relay\\.cloud\\.calimero\\.network$',
+  '^[a-z0-9-]+\\.relay\\.staging\\.cloud\\.calimero\\.network$',
+].join(',');
+const NODE_ALLOWED_HOSTS = (process.env.NODE_ALLOWED_HOSTS || DEFAULT_NODE_ALLOWED_HOSTS)
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
