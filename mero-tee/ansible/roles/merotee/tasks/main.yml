@@ -200,7 +200,8 @@
         [Service]
         # MERO_TEE_VERSION, MERO_TEE_MIN_VERSION and MERO_TEE_PROFILE, written by
         # calimero-init from tee-release-version; merod refuses TDX mode without
-        # the first and last.
+        # the first and last. MEROD_KMS_DISK_EVIDENCE, when this boot's
+        # data-disk key fetch recorded the KMS it verified.
         EnvironmentFile=-/etc/calimero/merod.env
         # The node API, on loopback: traefik is the only way in, and forwards
         # every path here (roles/mero-traefik, traefik-routing.yml.j2).

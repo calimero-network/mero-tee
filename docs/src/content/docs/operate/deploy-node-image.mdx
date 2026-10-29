@@ -380,6 +380,16 @@ script (`ansible/roles/merotee/templates/calimero-init.sh.j2`) runs, in order:
    - **anything else**, a failed probe, a LUKS header with no token, or an
      opened volume without ext4: the boot stops. Nothing is ever formatted.
 
+   When the baked merod's `kms disk-key` has `--evidence-out` (core 1.0,
+   #4768), each fetch also writes a record of the KMS it verified (its quote's
+   registers, TCB status, signed release and profile, the quote's SHA-256 and
+   the time) to `/run/calimero/kms-disk-evidence.json`, on tmpfs, and
+   `MEROD_KMS_DISK_EVIDENCE` pointing at it is appended to
+   `/etc/calimero/merod.env`. `merod run` then reports that KMS, bound into the
+   node's quote, beside the storage key's at `GET /attestation?purpose=kms`. An
+   older merod, a fetch that wrote no record, or a boot that fetched no disk
+   key (a plain or memory-only disk) names none, and the boot goes on.
+
    The key is shredded as soon as the disk is open. `locked-read-only` refuses a
    blank disk without `kms-url` + `tee-release-version`, or on a merod
    without `kms disk-key`. With `ephemeral-store=true`, a tmpfs is mounted over

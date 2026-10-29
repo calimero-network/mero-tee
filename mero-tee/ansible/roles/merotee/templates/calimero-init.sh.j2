@@ -473,8 +473,69 @@ DISK_KEY_RETRY_DELAY="${DISK_KEY_RETRY_DELAY:-6}"
 # ephemeral | encrypted | plaintext | root-legacy | none.
 DATA_DISK_STATE="none"
 
+# The help is read whole before it is searched: `grep -q` stops reading at the
+# first match, and under `pipefail` a merod still writing would then fail the
+# pipeline with SIGPIPE, turning "supported" into "not supported".
+disk_key_help() {
+  "$BIN_DIR/merod" kms disk-key --help 2>/dev/null
+}
+
 merod_can_unlock_disk() {
-  "$BIN_DIR/merod" kms disk-key --help 2>/dev/null | grep -q -- '--key-out'
+  local help
+  help="$(disk_key_help)" || return 1
+  grep -q -- '--key-out' <<<"$help"
+}
+
+# --- What the disk-key fetch verified of the KMS ------------------------------
+#
+# `merod kms disk-key --evidence-out PATH` (core 1.0, #4768) also writes a
+# record of the KMS whose key unlocked the data disk: its quote's registers,
+# TCB status, the signed release and profile, the quote's SHA-256 and the time.
+# `merod run` reads it from `MEROD_KMS_DISK_EVIDENCE` and reports it, bound into
+# the node's quote, beside the storage key's KMS at `GET
+# /attestation?purpose=kms`, so a verifier sees which KMS released BOTH keys.
+#
+# It is not secret, but merod reads it only from tmpfs or ramfs, where only the
+# TD could have written it: /run/calimero, this script's own 0700 directory on
+# /run. NOT the key's tmpfs, which is unmounted as soon as the disk is open.
+# /run is cleared on every reboot, so a record is always this boot's; merod.env
+# is rewritten on every boot too, so a boot that fetched no disk key (a plain
+# or memory-only disk) names no record. A merod without `--evidence-out` gets
+# neither, and runs as before. Without a record merod logs a warning and
+# reports none; the record is never a reason to stop the boot.
+KMS_DISK_EVIDENCE_DIR="/run/calimero"
+KMS_DISK_EVIDENCE_FILE="${KMS_DISK_EVIDENCE_DIR}/kms-disk-evidence.json"
+MEROD_ENV_FILE="/etc/calimero/merod.env"
+
+# Whether to ask disk-key for the record: merod supports it, and the directory
+# is on a RAM filesystem (merod would refuse the whole fetch otherwise).
+disk_evidence_wanted() {
+  local help
+  help="$(disk_key_help)" || return 1
+  grep -q -- '--evidence-out' <<<"$help" || return 1
+  mkdir -p "$KMS_DISK_EVIDENCE_DIR"
+  chmod 0700 "$KMS_DISK_EVIDENCE_DIR"
+  local fstype
+  fstype="$(findmnt -n -o FSTYPE --target "$KMS_DISK_EVIDENCE_DIR" 2>/dev/null || true)"
+  if [[ "$fstype" != tmpfs && "$fstype" != ramfs ]]; then
+    log "WARN: $KMS_DISK_EVIDENCE_DIR is on '${fstype:-unknown}', not tmpfs; not recording the data-disk KMS evidence"
+    return 1
+  fi
+}
+
+# After a fetch that wrote the record: point `merod run` at it.
+record_disk_evidence() {
+  if [[ ! -s "$KMS_DISK_EVIDENCE_FILE" ]]; then
+    log "WARN: merod kms disk-key wrote no KMS evidence to $KMS_DISK_EVIDENCE_FILE; the node will not report the data-disk KMS"
+    return 0
+  fi
+  if [[ ! -f "$MEROD_ENV_FILE" ]]; then
+    log "WARN: no $MEROD_ENV_FILE to name the data-disk KMS evidence in"
+    return 0
+  fi
+  sed -i '/^MEROD_KMS_DISK_EVIDENCE=/d' "$MEROD_ENV_FILE"
+  printf 'MEROD_KMS_DISK_EVIDENCE="%s"\n' "$KMS_DISK_EVIDENCE_FILE" >>"$MEROD_ENV_FILE"
+  log "Recorded the data-disk KMS evidence at $KMS_DISK_EVIDENCE_FILE for merod run (MEROD_KMS_DISK_EVIDENCE)"
 }
 
 # Shred the key (and drop the identity copy) the moment it is no longer
@@ -514,11 +575,18 @@ fetch_disk_key() {
   if [[ "${1:-}" == create ]]; then
     args+=(--create-identity)
   fi
+  local evidence=false
+  if disk_evidence_wanted; then
+    evidence=true
+    args+=(--evidence-out "$KMS_DISK_EVIDENCE_FILE")
+  fi
   local attempt out why
   for attempt in $(seq 1 "$DISK_KEY_ATTEMPTS"); do
-    rm -f "$DISK_KEY_FILE"
+    # Both outputs must not exist yet: disk-key creates them, never overwrites.
+    rm -f "$DISK_KEY_FILE" "$KMS_DISK_EVIDENCE_FILE"
     out="$("$BIN_DIR/merod" "${args[@]}" 2>&1)" && [[ -s "$DISK_KEY_FILE" ]] && {
       printf '%s\n' "$out" >>"$LOG"
+      [[ "$evidence" == true ]] && record_disk_evidence
       return 0
     }
     printf '%s\n' "$out" >>"$LOG"

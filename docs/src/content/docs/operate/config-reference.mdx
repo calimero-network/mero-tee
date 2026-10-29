@@ -230,6 +230,11 @@ It fetches and verifies that release's signed
 [below](#attestation-policy-json)). `merod kms disk-key` is the same client,
 used by the image's boot script to unlock the data disk.
 
+| Flag / env | Meaning |
+| --- | --- |
+| `kms disk-key --evidence-out PATH` | Also write a record of the KMS the fetch verified (JSON, at most 16 KiB; tmpfs or ramfs only, and the file must not exist yet). The node images pass `/run/calimero/kms-disk-evidence.json` when the baked merod has the flag. |
+| `run --kms-disk-evidence PATH` / `MEROD_KMS_DISK_EVIDENCE` | Report that record, bound into the node's quote, beside the storage key's KMS at `GET /attestation?purpose=kms`. The node images set the variable in `/etc/calimero/merod.env` after a fetch that wrote the record. Missing or unreadable: merod logs a warning and reports none. |
+
 ## Image build inputs
 
 The node, KMS and agent images are built with mkosi from the Ansible roles, by
