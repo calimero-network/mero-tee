@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
+- **The mero-bot launcher test no longer reads the previous run's environment.** Its stand-in mero-bot wrote `env-names`, which the test waits for, before `env`, and `env` was not removed between runs, so a slow runner could read the last run's keys ("the owner's NEAR key did not win over the operator's"). `env-names` now lands last and `env` is removed between runs.
+
 - **`release-provenance.json` names the merod the release runs:** `merod: {version, sha256}`, the SHA-256 of the merod executable. The values come from the probe VMs' release attestations (the claim bound into each quote's report data), and the release fails unless all three profiles agree with each other and with `merodVersion` in `versions.json` (`merod-from-release-attestations.sh`). mdma pins them on each cluster from the release it runs, so an operator no longer hashes merod by hand (`MDMA_MEROD_SHA256`). `verify-node-image-gcp-release-assets.sh` checks the block when present; releases up to 2.3.128 have none. Image 2.3.129.
 
 - **The node image runs merod 1.0 (core's `1.0.0` line), not v1.** Core 1.0 deleted v1's peer-to-peer node and mero-auth: merod authenticates its callers itself (passkeys, session tokens, API keys) inside a sealed channel clients open after verifying its TDX attestation, and each app is replicated by its own Raft log across the cluster's nodes. **Breaking**; the image no longer runs a v1 merod.
