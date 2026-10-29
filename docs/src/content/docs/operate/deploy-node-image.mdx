@@ -471,10 +471,10 @@ and configfs-tsm.
    answers `GET /health` and `GET /attestation` in the clear through Traefik on
    the external IP (port `80`). Everything else needs a client that verifies
    the attestation and opens the sealed channel, such as `meroctl --api URL
-   --tee-profiles <profile>`. The `node-image-gcp-staging-probe.yaml` and
-   release workflows still probe v1's `/admin-api/health` and
-   `/admin-api/tee/*` routes, which merod 1.0 does not serve; see the
-   [release pipeline](/operate/release-pipeline/).
+   --tee-profiles <profile>`. A VM booted without `kms-url` does not run merod;
+   it answers `GET /attestation/release?nonce=<64 hex>` instead (`merod attest
+   --serve`, unit `merod-attest`), which is how the release and staging probes
+   measure an image; see the [release pipeline](/operate/release-pipeline/).
 
 2. **Attest the measurements.** Confirm the node's MRTD and RTMR values (the
    RTMR3 extend from step 1 of the boot sequence, plus `calimero.role=node` /

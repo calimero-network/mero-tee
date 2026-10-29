@@ -256,15 +256,22 @@ Workflow name **Release mero-tee**. Triggers: push to `master` touching
 
 </Steps>
 
-:::caution[Not yet adapted to merod 1.0]
+:::note[How the quote is collected from a merod 1.0 image]
 The measurement VM boots with `ephemeral-store=true` and no KMS (the release's
-KMS is published only after its image is measured), and collects the quote from
-merod's v1 routes (`/admin-api/health`, `/admin-api/tee/info`,
-`/admin-api/tee/attest`). merod 1.0 serves neither: it does not start in TDX
-mode without a KMS-held storage key, and its attestation is `GET /attestation`,
-with a different shape. Until this step collects the quote another way, a node
-release with `merodVersion` at a core 1.0 tag stops here. The staging probe and
-the post-release node e2e read the same routes.
+KMS is published only after its image is measured), and merod 1.0 does not run
+in TDX mode without a KMS-held storage key. So with no `kms-url`, calimero-init
+runs `merod attest --serve` on merod's address instead, as the unit
+`merod-attest`, and traefik routes to it. CI fetches
+`GET /attestation/release?nonce=<64 hex>` with a fresh nonce
+(`scripts/ci/probes/node_release_attestation.sh`): a quote whose report data is
+`nonce || SHA-256(release claim)`, made without any key or store, refused if it
+is a mock or over another nonce. The script writes it as
+`tee-attest-response.json` (with `quoteB64`) and the node's own MRTD as
+`tee-info.json`, which the ITA verification and the policy extraction read as
+before; the RTMR comparison compares the registers only (the answer carries no
+event log). This needs a merod with `attest --serve` (core 1.0.0-rc.2 or
+later); with an older one nothing answers and the step times out, printing the
+serial console. The staging probe collects the same way.
 :::
 
 **Dispatching from a branch builds and measures, and publishes nothing.**

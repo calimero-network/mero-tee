@@ -18,7 +18,10 @@
 #     on the data disk and each metadata key as merod's own flag
 #   * a KMS URL, no release                     -> refuse
 #   * no KMS: locked with a disk store          -> refuse; memory-only or debug
-#                                                  -> boot, merod not started
+#                                                  -> boot, merod not started; a
+#                                                  merod with `attest --serve`
+#                                                  serves the release attestation
+#                                                  on merod's address instead
 #   * a merod that is not 1.0                    -> refuse, on every profile
 #   * no node-id / public-url; no cluster on locked -> refuse
 #   * a value that is not the shape merod takes  -> refuse
@@ -87,7 +90,7 @@ PY
 ID="$(kms_identity)"
 [[ "$(printf '%s' "$ID" | base64 -d | wc -c)" == 68 ]] || fail "the test's KMS identity is not 68 bytes"
 
-# run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
+# run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|1.0-attest|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
 # Each KEY=VALUE is one instance metadata item.
 run_case() {
   local name="$1" profile="$2" kms_url="$3" release="$4" merod="$5" home_state="$6" store_fs="$7"
@@ -99,10 +102,16 @@ run_case() {
 
   cat >"$dir/bin/merod" <<STUB
 #!/usr/bin/env bash
+if [[ " \$* " == *" attest "* && " \$* " == *" --help "* ]]; then
+  [[ "$merod" == 1.0-attest ]] || { echo "error: unrecognized subcommand 'attest'" >&2; exit 2; }
+  echo "Usage: merod attest [OPTIONS]"
+  echo "      --serve <ADDR>"
+  exit 0
+fi
 if [[ " \$* " == *" --help "* ]]; then
   echo "Usage: merod init [OPTIONS]"
   echo "      --kms-url <URL>"
-  if [[ "$merod" == 1.0 ]]; then
+  if [[ "$merod" == 1.0* ]]; then
     echo "      --node-id <N>"
     echo "      --kms-identity <FILE>"
   fi
@@ -115,7 +124,8 @@ STUB
   chmod +x "$dir/bin/merod"
   printf '#!/usr/bin/env bash\necho %s\n' "$store_fs" >"$dir/bin/findmnt"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$dir/bin/swapon"
-  chmod +x "$dir/bin/findmnt" "$dir/bin/swapon"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s/systemd-run-args"\n' "$dir" >"$dir/bin/systemd-run"
+  chmod +x "$dir/bin/findmnt" "$dir/bin/swapon" "$dir/bin/systemd-run"
 
   case "$home_state" in
     fresh) ;;
@@ -224,6 +234,23 @@ run_case memory-only locked-read-only "" "" 1.0 fresh tmpfs "${BASE[@]}"
 init_ran memory-only && fail "merod init ran without a KMS on a memory-only node"
 [[ "$(ready memory-only)" == false ]] || fail "merod must not be started without a storage key source"
 logged memory-only "NOT started" || fail "a node that does not start merod must say so"
+[[ ! -f "$WORK/memory-only/systemd-run-args" ]] || fail "a merod without 'attest' must not be started as merod-attest"
+
+# The release and staging probes boot exactly so, and measure the image from
+# its release attestation: with a merod that has `attest --serve`, serve it on
+# merod's address, as a unit that outlives calimero-init.
+run_case memory-attest debug "" "" 1.0-attest fresh tmpfs "${BASE[@]}"
+[[ "$(rc memory-attest)" == 0 ]] || fail "a memory-only node with merod attest must boot: $(cat "$WORK/memory-attest/log")"
+[[ "$(ready memory-attest)" == false ]] || fail "merod run must still not be started without a KMS"
+sr="$WORK/memory-attest/systemd-run-args"
+[[ -f "$sr" ]] || fail "no KMS and a merod with attest: merod-attest was not started"
+grep -qx -- '--unit=merod-attest' "$sr" || fail "the attestation server must run as unit merod-attest: $(tr '\n' ' ' <"$sr")"
+grep -qx -- '--setenv=MERO_TEE_PROFILE=debug' "$sr" || fail "merod attest must claim the image's profile"
+grep -qx -- '--property=LimitCORE=0' "$sr" || fail "merod attest must not dump core"
+grep -qx -- '--no-block' "$sr" || fail "calimero-init must not wait on merod-attest's start job"
+[[ "$(tail -2 "$sr" | tr '\n' ' ')" == "--serve 127.0.0.1:2528 " ]] || fail "merod attest must serve on merod's --listen: $(tr '\n' ' ' <"$sr")"
+grep -qx -- 'attest' "$sr" || fail "merod-attest must run 'merod attest'"
+logged memory-attest "release attestation" || fail "serving the release attestation must be logged"
 
 run_case debug-no-kms debug-read-only "" 2.3.70 1.0 fresh ext4 "${BASE[@]}"
 [[ "$(rc debug-no-kms)" == 0 ]] || fail "a debug node without a KMS should boot (without merod)"

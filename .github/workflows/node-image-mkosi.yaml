@@ -486,7 +486,7 @@ jobs:
           build="$(echo evidence/mkosi-build-*)"
           # The attest response of the booted image, as compute_rtmr.py reads
           # evidence: quoteB64, and eventLogB64 when it returns one. The node's
-          # /admin-api/tee/attest, the bootstrap KMS replica's /attest, the
+          # /attestation/release, the bootstrap KMS replica's /attest, the
           # agent gate's /attest.
           case "${ROLE}" in
             node) attest="$(echo evidence/node-gcp-staging-probe-*)/tee-attest-response.json" ;;
