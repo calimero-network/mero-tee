@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Changed
 
+- **The attestation verifier accepts the fleet's node names.** `NODE_ALLOWED_HOSTS` defaulted to bare IPv4 addresses only, so the "Verify" links mdma's manager and cloud console now put on every node (`https://mero-tee.vercel.app/mero-tee?node_url=https://<name>.relay.cloud.calimero.network…`) were refused. The default now also allows `<name>.relay.cloud.calimero.network` and `<name>.relay.staging.cloud.calimero.network`; a host must still resolve to public addresses only.
+
 - **The umbrella release `VERSION` is published, unique and Latest.** Release mero-tee created it as a draft, which has no tag, so Release mero-kms could not see it and created a second, published release; the draft could then never be published (an immutable release held its tag), which left drafts behind for 2.3.11 to 2.3.130. Both workflows now share `scripts/release/upsert-umbrella-release.sh`: it creates the umbrella published, treats losing the race as success, deletes drafts named `VERSION`, and marks it the repository's Latest release once `mero-kms-vVERSION` and `mero-tee-vVERSION` are both published, unless a higher umbrella version is published. Component releases stay `--latest=false`. Tested by `scripts/ci/tests/umbrella-release-test.sh`.
 
 - **The mero-bot launcher test no longer reads the previous run's environment.** Its stand-in mero-bot wrote `env-names`, which the test waits for, before `env`, and `env` was not removed between runs, so a slow runner could read the last run's keys ("the owner's NEAR key did not win over the operator's"). `env-names` now lands last and `env` is removed between runs.
