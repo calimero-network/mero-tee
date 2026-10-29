@@ -4,7 +4,7 @@ import { REGISTERS, REGISTER_INFO } from '../lib/registers.js';
 const STEPS = [
   {
     step: 'Get a fresh quote',
-    text: 'For a node, the verifier’s API asks the node’s /admin-api/tee/attest for a quote over a random nonce of its own. For a KMS from a console link, it asks the manager, which relays a replica’s /attest, with its own nonce. A pasted response carries the nonce you sent, if you give it.',
+    text: 'For a node, the verifier’s API asks the node’s /attestation (merod 1.0; /admin-api/tee/attest on an older merod) for a quote over a random nonce of its own. For a KMS from a console link, it asks the manager, which relays a replica’s /attest, with its own nonce. A pasted response carries the nonce you sent, if you give it.',
   },
   {
     step: 'Check the nonce',
@@ -13,6 +13,10 @@ const STEPS = [
   {
     step: 'Tie the node to its URL',
     text: 'The rest of report_data must commit to the node’s transport key, and the server at the URL must complete a sealed handshake with that key. A node without sealed transport cannot be checked this way, and the result says so.',
+  },
+  {
+    step: 'See which KMS gave the node its keys',
+    text: 'A merod 1.0 node reports the KMS quote it accepted before taking its keys: the KMS’s measurements, TCB status and the signed mero-kms release and profile it matched. Its own quote commits to that record, so nothing between the node and this page can swap it. The verifier then checks the KMS’s measurements against that release’s published KMS policy itself. An older node reports none, and the row says so.',
   },
   {
     step: 'Have Intel verify the quote',

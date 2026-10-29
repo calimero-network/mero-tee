@@ -12,6 +12,11 @@
  *              node's transport key and this URL completed a sealed handshake with it.
  *   keys       api/verify.js `agent_keys_verified` (agents): report_data[32..64]
  *              commits to the agent id and keys the gate named.
+ *   kms        (nodes) api/verify.js `kms_evidence_bound`: the node's quote commits
+ *              to its record of the KMS quote it accepted before taking its keys;
+ *              hooks/useNodeVerification.js then checks the record's MRTD and
+ *              RTMR0-3 against kms_allowed_* of the release and profile it names.
+ *              Not reported (an older node): not checked, never a failure.
  *   measure    hooks + lib/registers.js: MRTD and RTMR0-3 parsed from the quote are
  *              in the release's published lists (node: published-mrtds.json; KMS:
  *              kms_allowed_* of kms-attestation-policy.<profile>.json; agent: the
@@ -55,6 +60,7 @@ const TITLES = {
   nonce: 'Fresh quote',
   identity: 'This URL is the attested machine',
   keys: 'Quote commits to the agent’s keys',
+  kms: 'Keys from a verified KMS',
   measure: 'Software matches the release',
   tcb: 'Platform patch level (TCB)',
 };
@@ -71,6 +77,8 @@ const MEANINGS = {
   identity:
     'The quote commits to the node’s transport key, and the server at this URL completed a sealed handshake with that key, so it is the attested machine and not a relay forwarding another node’s quote.',
   keys: 'The quote’s report data commits to the agent id and the provisioning, signing and owner keys the gate named.',
+  kms:
+    'This node accepted keys only from a KMS whose quote matched the signed mero-kms release policy. Its own quote commits to the KMS it accepted, and this verifier checks that KMS’s measurements against the policy the release published.',
   measure:
     'MRTD and RTMR0–3 record the firmware, boot path, kernel, command line and image profile that booted. All five must equal values the release published.',
   tcb: 'Intel’s assessment of the platform’s firmware and microcode patch level. Shown for reference: this verifier does not fail on it.',
@@ -116,6 +124,80 @@ function measurementCheck({ quoteRtmrs, policiesByProfile, policyError, tagToUse
   };
 }
 
+const KEY_LABEL = { storage: 'Storage key', disk: 'Data-disk key' };
+
+/** Seconds since the epoch as `2026-10-29 10:00 UTC`. */
+export function formatUnix(secs) {
+  if (!Number.isFinite(secs)) return 'an unknown time';
+  return `${new Date(secs * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/** The KMS of one key (or of several that agree), as a sentence: release, profile, MRTD, TCB, time. */
+function kmsSentence(check, label = KEY_LABEL[check.key]) {
+  const r = check.record;
+  const parts = [
+    `mero-kms v${r.release}`,
+    r.profile ? `profile ${r.profile}` : null,
+    `MRTD ${r.mrtd.slice(0, 12)}…`,
+    r.tcbStatus ? `TCB ${r.tcbStatus}` : null,
+  ].filter(Boolean);
+  return `${label}: from a KMS matching ${parts.join(', ')}, verified at ${formatUnix(r.verifiedAt)}`;
+}
+
+/** Both keys from one KMS image (release, profile, registers) read as one sentence. */
+function kmsSummary(checks) {
+  const same = (a, b) => ['release', 'profile', 'mrtd', 'rtmr0', 'rtmr1', 'rtmr2', 'rtmr3', 'tcbStatus']
+    .every((f) => a.record[f] === b.record[f]);
+  if (checks.length === 2 && same(checks[0], checks[1])) {
+    const latest = checks[0].record.verifiedAt >= checks[1].record.verifiedAt ? checks[0] : checks[1];
+    return kmsSentence(latest, 'Storage and data-disk keys');
+  }
+  return checks.map((c) => kmsSentence(c)).join('. ');
+}
+
+/** The KMS a node took its keys from: reported, bound into its quote, and in the published policy. */
+function kmsRow(result) {
+  if (result.kmsEvidenceError) {
+    return row('kms', 'skip', {
+      reason: `The node sent a KMS record this verifier does not accept (${result.kmsEvidenceError}), so which KMS it used was not checked.`,
+    });
+  }
+  if (!result.kmsEvidence) {
+    return row('kms', 'skip', {
+      reason: 'Not reported by this node. Nodes before merod 1.0, and nodes whose KMS is pinned by configuration rather than a signed release, do not report which KMS they verified.',
+    });
+  }
+  if (result.kmsEvidenceBound !== true) {
+    return row('kms', 'skip', {
+      reason: 'Reported, not bound: the node’s quote does not commit to the KMS record sent with it, so the record could have been added on the way and is not trusted.',
+      kms: [],
+    });
+  }
+  const checks = (result.kmsChecks || []).map((c) => {
+    const profile = c.record.profile || c.matches[0] || null;
+    return {
+      ...c,
+      profile,
+      registers: compareRegisters(c.measurements, profile ? c.policiesByProfile[profile] : null, 'kms'),
+    };
+  });
+  const unloaded = checks.filter((c) => c.error || !hasAnyPolicy(c.policiesByProfile));
+  if (unloaded.length) {
+    return row('kms', 'skip', {
+      reason: `The node’s quote commits to its KMS record, but the KMS policy of ${unloaded.map((c) => c.tag).join(', ')} could not be loaded${unloaded[0].error ? ` (${unloaded[0].error})` : ''}, so the KMS was not checked against it.`,
+      kms: checks,
+    });
+  }
+  const mismatched = checks.filter((c) => c.matches.length === 0);
+  if (mismatched.length) {
+    return row('kms', 'fail', {
+      result: mismatched.map((c) => `${KEY_LABEL[c.key]}: the KMS the node accepted is not in the KMS policy of ${c.tag}${c.record.profile ? ` for ${c.record.profile}` : ''}`).join('. '),
+      kms: checks,
+    });
+  }
+  return row('kms', 'pass', { result: kmsSummary(checks), kms: checks });
+}
+
 function tcbRow(quoteRtmrs) {
   const tcb = quoteRtmrs?.tcb_status;
   if (!tcb) return null;
@@ -157,6 +239,8 @@ export function modelFromResult(result) {
       }));
     }
   }
+
+  if (kind === 'node') rows.push(kmsRow(result));
 
   const { row: measureRow, comparison } = measurementCheck({ ...result, kind });
   rows.push(measureRow);
@@ -226,7 +310,7 @@ function verdictOf(rows, required) {
 /** The checks a flow makes, in order, as "not run" rows (an error stopped the run). */
 export function plannedRows(kind, { paste = false } = {}) {
   const ids = kind === 'node'
-    ? ['intel', 'token', 'nonce', 'identity', 'measure']
+    ? ['intel', 'token', 'nonce', 'identity', 'kms', 'measure']
     : kind === 'agent'
       ? ['intel', 'token', 'nonce', 'keys', 'measure']
       : ['intel', 'token', 'nonce', 'measure'];

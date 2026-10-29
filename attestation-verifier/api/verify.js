@@ -1,7 +1,10 @@
 /**
  * POST /api/verify
  * Accepts either:
- *   - { node_url } — backend fetches a fresh attestation from a merod node, verifies via ITA
+ *   - { node_url } — backend fetches a fresh attestation from a merod node, verifies via ITA.
+ *     merod 1.0 answers `GET /attestation?nonce=&purpose=kms` (and reports, bound into its
+ *     quote, what it verified of the KMS its keys came from); an older merod answers
+ *     `POST /admin-api/tee/attest`, which is asked when the first is not served.
  *   - { attestation, nonce_b64? } — a pasted attestation, e.g. a mero-kms `/attest` response.
  *     mero-kms replicas listen only inside their VPC, so this service cannot fetch from
  *     them: the operator calls `/attest` from inside the VPC and pastes the response. When
@@ -223,18 +226,94 @@ function verifyNonceInQuote(quoteB64, nonceBytes) {
 
 /**
  * The node's transport key, if its quote commits to it: report_data[32..64]
- * must be core's `attest_transport_binding(zeros, key)`. `null` when the node
- * reports no key (it predates sealed transport).
+ * must be core's `attest_transport_binding(zeros, key)`, or, when the node
+ * reported what it verified of its KMS, core's `kms_evidence_binding` around
+ * it. `null` key when the node reports none (it predates sealed transport).
+ *
+ * `kmsBound` says what became of a KMS record: `true` when the quote commits
+ * to it (so it is as trustworthy as the node's own code), `false` when the
+ * quote commits to the transport key alone (the record came from somewhere
+ * else: a relay, the host), `null` when there is no record to judge.
  */
-async function boundTransportKey(quoteB64, transportKeyHex) {
-  if (typeof transportKeyHex !== 'string' || !transportKeyHex) return null;
+async function boundTransportKey(quoteB64, transportKeyHex, kms) {
+  if (typeof transportKeyHex !== 'string' || !transportKeyHex) return { key: null, kmsBound: null };
   const key = Buffer.from(transportKeyHex, 'hex');
   if (key.length !== 32) throw new Error('Node reported a malformed transportPublicKey');
-  const expected = Buffer.from(await transportKeyBinding(new Uint8Array(32), key));
-  if (!quoteReportData(quoteB64).subarray(32, 64).equals(expected)) {
+  const inner = Buffer.from(await transportKeyBinding(new Uint8Array(32), key));
+  const actual = quoteReportData(quoteB64).subarray(32, 64);
+  if (kms && actual.equals(kmsEvidenceBinding(inner, kms))) return { key, kmsBound: true };
+  if (!actual.equals(inner)) {
     throw new Error('Quote does not commit to the transport key the node reported');
   }
-  return key;
+  return { key, kmsBound: kms ? false : null };
+}
+
+// core's `calimero_client::attest::kms_evidence_binding` (crates/client/src/attest.rs).
+const KMS_BINDING_DOMAIN = Buffer.from('calimero.tee-attest.kms-evidence.v1');
+// A record is a few hundred bytes; a node's answer holds two at most.
+const MAX_KMS_EVIDENCE_BYTES = 16 * 1024;
+const KMS_RECORD_FIELDS = {
+  kmsHost: 'host',
+  release: 'release',
+  profile: 'profile',
+  mrtd: 'register',
+  rtmr0: 'register',
+  rtmr1: 'register',
+  rtmr2: 'register',
+  rtmr3: 'register',
+  tcbStatus: 'text',
+  quoteSha256: 'digest',
+  verifiedAt: 'time',
+  mock: 'flag',
+};
+const KMS_FIELD_OK = {
+  host: (v) => typeof v === 'string' && /^[A-Za-z0-9.\-:[\]]{1,255}$/.test(v),
+  release: (v) => typeof v === 'string' && /^\d+\.\d+\.\d+[0-9A-Za-z.+-]{0,32}$/.test(v),
+  profile: (v) => typeof v === 'string' && /^[a-z0-9-]{1,64}$/.test(v),
+  register: (v) => typeof v === 'string' && /^[0-9a-f]{96}$/.test(v),
+  text: (v) => typeof v === 'string' && v.length <= 64,
+  digest: (v) => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v),
+  time: (v) => Number.isSafeInteger(v) && v >= 0,
+  flag: (v) => typeof v === 'boolean',
+};
+const KMS_REQUIRED = ['kmsHost', 'release', 'mrtd', 'rtmr0', 'rtmr1', 'rtmr2', 'rtmr3', 'quoteSha256', 'verifiedAt'];
+
+/**
+ * The node's KMS record (`{ storage?, disk? }`), if it has the shape core
+ * writes; `null` when the node sent none. Anything else is refused here,
+ * before it is hashed or shown, so a record is either core's or nothing.
+ */
+export function kmsRecordOf(kms) {
+  if (kms == null) return null;
+  if (typeof kms !== 'object' || Array.isArray(kms)) throw new Error('Node reported a malformed kms record');
+  if (JSON.stringify(kms).length > MAX_KMS_EVIDENCE_BYTES) throw new Error('Node reported an oversized kms record');
+  const keys = Object.keys(kms);
+  if (keys.length === 0 || !keys.every((k) => k === 'storage' || k === 'disk')) {
+    throw new Error('Node reported a malformed kms record');
+  }
+  for (const k of keys) {
+    const record = kms[k];
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Node reported a malformed kms record');
+    for (const [field, value] of Object.entries(record)) {
+      const kind = KMS_RECORD_FIELDS[field];
+      if (!kind || !KMS_FIELD_OK[kind](value)) throw new Error(`Node reported a malformed kms record (${k}.${field})`);
+    }
+    if (!KMS_REQUIRED.every((f) => f in record)) throw new Error(`Node reported an incomplete kms record (${k})`);
+  }
+  return kms;
+}
+
+/** RFC 8785 (JCS) for JSON values: keys sorted by UTF-16 code units, ES number and string forms. */
+export function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+
+/** SHA-256(domain ‖ inner ‖ SHA-256(JCS(kms))), as core binds the record. */
+export function kmsEvidenceBinding(inner, kms) {
+  const digest = crypto.createHash('sha256').update(canonicalJson(kms), 'utf8').digest();
+  return crypto.createHash('sha256').update(KMS_BINDING_DOMAIN).update(inner).update(digest).digest();
 }
 
 /**
@@ -248,12 +327,12 @@ async function boundTransportKey(quoteB64, transportKeyHex) {
  * node serves no sealed transport (only relay nodes do), so this cannot be
  * told either way.
  */
-async function answersAsTheAttestedKey(base, key) {
+async function answersAsTheAttestedKey(base, key, healthPath) {
   const guardedFetch = (input, init = {}) =>
     fetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS) });
   const sealed = createSealedFetch({ baseUrl: base, transportPublicKey: key, fetch: guardedFetch });
   try {
-    const response = await sealed(`${base}/admin-api/health`);
+    const response = await sealed(`${base}${healthPath}`);
     return response.ok;
   } catch (e) {
     // No sealed endpoint at all (404/405 at the handshake) is "cannot tell";
@@ -344,6 +423,12 @@ export default async function handler(req, res) {
   let nonceVerified = null;
   let transportVerified = null;
   let agentKeys = null;
+  // Node mode only: what the node verified of its KMS, and whether the quote
+  // commits to it (see `boundTransportKey`). Both null: not reported.
+  let kmsEvidence = null;
+  let kmsEvidenceBound = null;
+  let kmsEvidenceError = null;
+  let nodeApi = null;
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const nodeUrl = (body?.node_url || body?.nodeUrl || '').trim();
@@ -377,6 +462,12 @@ export default async function handler(req, res) {
       const nonceBytes = crypto.randomBytes(32);
       const nonceHex = nonceBytes.toString('hex');
       const base = `${node.origin}${node.pathname.replace(/\/$/, '')}`;
+      const attestV2 = () =>
+        fetch(`${base}/attestation?nonce=${nonceHex}&purpose=kms`, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
+        });
       const attest = (body) =>
         fetch(`${base}/admin-api/tee/attest`, {
           method: 'POST',
@@ -387,33 +478,62 @@ export default async function handler(req, res) {
           signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
         });
       let attestRes;
+      let raw = null;
       try {
-        attestRes = await attest({ nonce: nonceHex, bindTransportKey: true });
-        // A merod from before sealed transport refuses the unknown field; ask
-        // it again without, and report the transport check as undecided.
-        if (attestRes.status === 400) {
-          attestRes = await attest({ nonce: nonceHex });
+        // merod 1.0 first. A node that answers it with anything but a quote
+        // document (404, a page of HTML) is an older merod, asked the way it
+        // always was; a 5xx is merod 1.0 failing, and is reported as such.
+        attestRes = await attestV2();
+        nodeApi = 'v2';
+        if (attestRes.ok) {
+          raw = await attestRes.json().catch(() => null);
+        }
+        const isDoc = raw && typeof raw === 'object' && typeof raw.quote === 'string';
+        if (!isDoc && attestRes.status < 500) {
+          nodeApi = 'v1';
+          raw = null;
+          attestRes = await attest({ nonce: nonceHex, bindTransportKey: true });
+          // A merod from before sealed transport refuses the unknown field; ask
+          // it again without, and report the transport check as undecided.
+          if (attestRes.status === 400) {
+            attestRes = await attest({ nonce: nonceHex });
+          }
         }
       } catch {
-        return res.status(502).json({ error: 'Node /admin-api/tee/attest did not answer' });
+        return res.status(502).json({ error: 'Node attestation endpoint did not answer' });
       }
+      const endpoint = nodeApi === 'v2' ? '/attestation' : '/admin-api/tee/attest';
       if (!attestRes.ok) {
         // The status only: the body is the node's, and is not echoed.
-        return res.status(502).json({ error: `Node /admin-api/tee/attest failed: ${attestRes.status}` });
+        return res.status(502).json({ error: `Node ${endpoint} failed: ${attestRes.status}` });
       }
-      const raw = await attestRes.json();
-      const data = raw?.data ?? raw;
-      const quoteB64 = data?.quote_b64 ?? data?.quoteB64;
+      if (raw == null) raw = await attestRes.json();
+      const data = nodeApi === 'v2' ? raw : (raw?.data ?? raw);
+      const quoteB64 = nodeApi === 'v2' ? data?.quote : (data?.quote_b64 ?? data?.quoteB64);
       if (typeof quoteB64 !== 'string' || !quoteB64.trim()) {
-        return res.status(400).json({ error: 'Node attest response missing quote_b64' });
+        return res.status(400).json({ error: `Node ${endpoint} response missing its quote` });
       }
       // Only the quote is kept. Everything else the node returns beside it is
-      // its own description of the quote, and is not what Intel verifies.
+      // its own description of the quote, and is not what Intel verifies --
+      // except a KMS record the quote is found to commit to, below.
       attestation = { quoteB64: quoteB64.trim() };
       verifyNonceInQuote(attestation.quoteB64, nonceBytes);
       nonceVerified = true;
-      const transportKey = await boundTransportKey(attestation.quoteB64, data?.transportPublicKey);
-      transportVerified = transportKey ? await answersAsTheAttestedKey(base, transportKey) : null;
+      // A record not in core's shape is dropped and said so, rather than
+      // failing the node: the node's own checks below stand on the quote.
+      let kms = null;
+      try {
+        kms = nodeApi === 'v2' ? kmsRecordOf(data?.kms) : null;
+      } catch (e) {
+        kmsEvidenceError = e.message;
+      }
+      const transportKeyHex = nodeApi === 'v2' ? data?.transportKey : data?.transportPublicKey;
+      const { key: transportKey, kmsBound } = await boundTransportKey(attestation.quoteB64, transportKeyHex, kms);
+      transportVerified = transportKey
+        ? await answersAsTheAttestedKey(base, transportKey, nodeApi === 'v2' ? '/health' : '/admin-api/health')
+        : null;
+      kmsEvidence = kms;
+      kmsEvidenceBound = kmsBound;
     } else {
       attestation = body?.attestation ?? body;
       if (!attestation || typeof attestation !== 'object') {
@@ -480,6 +600,12 @@ export default async function handler(req, res) {
     ita_claims: itaClaims,
     nonce_verified: nonceVerified,
     transport_verified: transportVerified,
+    ...(nodeApi ? {
+      node_api: nodeApi,
+      kms_evidence: kmsEvidence,
+      kms_evidence_bound: kmsEvidenceBound,
+      ...(kmsEvidenceError ? { kms_evidence_error: kmsEvidenceError } : {}),
+    } : {}),
     ...(agentKeys ? { agent_keys_verified: true, agent_keys: agentKeys } : {}),
   });
 }

@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
 import { StatusTag } from './StatusTag.jsx';
 import { RegisterTable } from './RegisterTable.jsx';
+import { formatUnix, releaseUrl } from '../../lib/checks.js';
 
 /** What each check expects, and how the verifier establishes it. */
 const EXPECTED = {
@@ -18,7 +19,11 @@ const EXPECTED = {
   },
   identity: {
     expected: 'report_data[32..64] commits to the node’s transport key, and this URL completes a sealed handshake with it',
-    how: 'The API checks the commitment, then makes one sealed request to /admin-api/health over the given URL.',
+    how: 'The API checks the commitment, then makes one sealed request to /health (/admin-api/health on an older merod) over the given URL.',
+  },
+  kms: {
+    expected: 'The node’s quote commits to its record of the KMS it accepted, and that KMS’s MRTD and RTMR0–3 are in the KMS policy of the release and profile the record names',
+    how: 'The API recomputes report_data[32..64] as SHA-256("calimero.tee-attest.kms-evidence.v1" ‖ transport binding ‖ SHA-256(JCS(record))). The page then loads kms-attestation-policy.<profile>.json of that mero-kms release and compares the record’s registers with its kms_allowed_* lists.',
   },
   keys: {
     expected: 'report_data[32..64] = SHA-256 of the agent id and the provisioning, signing and owner keys',
@@ -33,6 +38,41 @@ const EXPECTED = {
     how: 'The attester_tcb_status claim in Intel’s token.',
   },
 };
+
+const KEY_TITLE = { storage: 'Storage key', disk: 'Data-disk key' };
+
+/** One key's KMS record: what the node accepted, and how it compares with the published policy. */
+function KmsRecord({ check }) {
+  const r = check.record;
+  return (
+    <div className="kms-record">
+      <h4>{KEY_TITLE[check.key]}</h4>
+      <dl className="kv">
+        <dt>Release</dt>
+        <dd>
+          <a href={releaseUrl(check.tag)} target="_blank" rel="noopener noreferrer" className="mono">{check.tag}</a>
+          {check.profile && <> · <span className="mono">{check.profile}</span></>}
+        </dd>
+        <dt>KMS</dt>
+        <dd className="mono">{r.kmsHost}</dd>
+        <dt>TCB</dt>
+        <dd>{r.tcbStatus || <span className="muted">not reported</span>}</dd>
+        <dt>Verified at</dt>
+        <dd>{formatUnix(r.verifiedAt)}</dd>
+        <dt>KMS quote</dt>
+        <dd className="hex">SHA-256 {r.quoteSha256}</dd>
+      </dl>
+      {check.registers?.length > 0 && (
+        <RegisterTable
+          registers={check.registers}
+          expectedLabel={check.profile ? `${check.tag} · ${check.profile}` : check.tag}
+          actualLabel="the node’s KMS record"
+          compact
+        />
+      )}
+    </div>
+  );
+}
 
 function Detail({ row, context }) {
   const e = EXPECTED[row.id] || {};
@@ -67,6 +107,7 @@ function Detail({ row, context }) {
         <dt>How</dt>
         <dd className="muted">{e.how}</dd>
       </dl>
+      {row.id === 'kms' && row.kms?.map((c) => <KmsRecord key={c.key} check={c} />)}
       {row.id === 'measure' && row.registers && (
         <RegisterTable registers={row.registers} sources={context?.sources} compact />
       )}
