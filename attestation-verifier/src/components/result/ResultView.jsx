@@ -39,6 +39,7 @@ function progressSteps(kind, request) {
     return [
       { phase: 'attest', label: `Fetch a fresh quote from ${hostOf(request?.nodeUrl)} and verify it with Intel Trust Authority` },
       { phase: 'policy', label: `Load the measurements published for ${request?.releaseTag || 'the latest mero-tee release'}` },
+      { phase: 'kms', label: 'Load the KMS policy of the release the node’s KMS record names' },
       { phase: 'compare', label: 'Check MRTD and RTMR0–3 against them' },
     ];
   }
@@ -58,7 +59,10 @@ function summaryFor(kind, model, result, noun) {
   const profile = model.comparison?.profile;
   if (model.verdict === 'pass') {
     const what = kind === 'node' ? 'This node' : 'This KMS replica';
-    return `${what} is genuine Intel TDX hardware running the software published in ${result.tagToUse}${profile ? ` for the ${profile} profile` : ''}.`;
+    const base = `${what} is genuine Intel TDX hardware running the software published in ${result.tagToUse}${profile ? ` for the ${profile} profile` : ''}.`;
+    const kms = model.rows.find((r) => r.id === 'kms' && r.status === 'pass');
+    const tags = kms ? [...new Set(kms.kms.map((c) => c.tag))] : [];
+    return tags.length ? `${base} It took its keys from a KMS in the published policy of ${tags.join(' and ')}.` : base;
   }
   if (model.verdict === 'fail') {
     const n = model.counts.failed;

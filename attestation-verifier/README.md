@@ -12,7 +12,9 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 
 ## Flow
 
-1. Node: the user gives a node URL and the API fetches `/admin-api/tee/attest` with a fresh nonce.
+1. Node: the user gives a node URL and the API asks it for a quote over a fresh nonce:
+   `GET /attestation?nonce=<hex>&purpose=kms` (merod 1.0), else, when that is not served,
+   `POST /admin-api/tee/attest` (older merod).
    KMS: mero-kms replicas are reachable only inside their VPC, so the operator calls a replica's
    `/attest` there and pastes the response (optionally with the nonce they sent).
    Or, from mdma's consoles, `/kms?kms_attest_url=…` verifies at once: the API POSTs a nonce it
@@ -23,6 +25,18 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 3. Nonce binding and JWT verification
 4. MRTD/RTMR0-3 compared with the release policy: `kms-attestation-policy.<profile>.json`
    (KMS allowlists) or `published-mrtds.json` (nodes)
+5. Node only, **Keys from a verified KMS**: a merod 1.0 node reports what it verified of the
+   mero-kms replica it took each key from (its storage key, and its data disk's when the image
+   recorded it): the KMS's MRTD and RTMR0-3, TCB status, the signed mero-kms release and profile
+   whose policy it matched, the KMS quote's SHA-256 and when. The API accepts the record only if
+   the node's quote commits to it: `report_data[32..64] = SHA-256("calimero.tee-attest.kms-evidence.v1"
+   ‖ attest_transport_binding(zeros, transport key) ‖ SHA-256(JCS(kms)))` (core's
+   `calimero_client::attest::kms_evidence_binding`), so a relay or the host cannot substitute it,
+   and the record is as trustworthy as the node's own code. The page then loads that release's
+   `kms-attestation-policy.<profile>.json` itself (as `/kms` does) and checks the record's registers
+   against its `kms_allowed_*` lists. A node that reports no record (older merod, or a KMS pinned by
+   config rather than a release) shows the row as not checked, never failed; a record the quote does
+   not commit to is "reported, not bound" and not trusted.
 
 ## Pages
 
