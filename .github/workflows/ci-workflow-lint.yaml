@@ -137,6 +137,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/compute-rtmr-test.sh
 
+      # build_timing.py ends every image build's log with how long each mkosi
+      # phase took.
+      - name: Check the build timing summary
+        id: build_timing_test
+        shell: bash
+        run: scripts/ci/tests/build-timing-test.sh
+
       # render_role_tree.py gives the mkosi images the files the Ansible roles
       # write; it must do what Ansible does, and render every node role.
       - name: Check the role renderer
