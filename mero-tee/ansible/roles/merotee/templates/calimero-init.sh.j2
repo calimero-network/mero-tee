@@ -116,6 +116,21 @@ KMS_URL=$(get_meta "kms-url" | tr -d '\r\n')
 # The storage decision below checks that the store IS in memory before it
 # allows a node without a KMS. See "The data disk" and "Storage encryption".
 EPHEMERAL_STORE=$(get_meta "ephemeral-store" | tr -d '\r\n')
+# A job node runs compute for a cluster and holds none of it: no store, no KMS
+# key, no data disk, so its scratch lives in RAM. Only the exact value `true`
+# makes one; anything else, and a stray identity, stops the boot rather than
+# quietly starting a normal node. Checked here, before the data disk.
+JOB_NODE=$(get_meta "job-node")
+JOB_CLUSTER_IDENTITY=$(get_meta "cluster-identity")
+if [[ "$JOB_NODE" == true ]]; then
+  [[ "$JOB_CLUSTER_IDENTITY" =~ ^[0-9a-f]{64}$ ]] \
+    || fatal "job-node is true but cluster-identity metadata is not 64 lowercase hex digits"
+  EPHEMERAL_STORE=true
+elif [[ -n "$JOB_NODE" ]]; then
+  fatal "instance metadata 'job-node' must be exactly 'true' or absent"
+elif [[ -n "$JOB_CLUSTER_IDENTITY" ]]; then
+  fatal "cluster-identity metadata is set without job-node=true; refusing to ignore it"
+fi
 METRICS_ENDPOINT=$(get_meta "metrics-endpoint")
 LOGS_ENDPOINT=$(get_meta "logs-endpoint")
 # The bearer token vector and vmagent present to the observability front end.
@@ -1179,6 +1194,12 @@ fi
 #                      governance, read on a FIRST BOOT only (see "Deployment
 #                      governance" below)
 #
+# A JOB NODE is `job-node=true` with `cluster-identity` (the cluster's identity
+# key, 64 lowercase hex digits), `node-id`, `cluster` and `tee-release-version`.
+# It runs no `merod init` and takes no KMS: kms-url, kms-identity, peers,
+# bootstrap and the governance keys are refused with it, other replica-only
+# keys ignored and named.
+#
 # Not read: anything that weakens TDX mode (`--dev`, storage keys,
 # `--allow-unsigned-bundles`); and `--ops-token`, which would put the token in
 # metadata. `--listen` and `--metrics-listen` are the unit's (merod.service).
@@ -1537,7 +1558,44 @@ attest_serve_unit() {
     >>"$LOG" 2>&1
 }
 
+# A job node has no `merod init`: merod refuses the cluster flags with
+# --job-node, so its settings go to merod.env beside the TEE release it attests
+# itself with, and a drop-in drops the metrics address the unit always sets.
+job_node_settings() {
+  local key stray=() JOB_NODE_ID JOB_CLUSTER
+  [[ -n "${TEE_RELEASE_VERSION:-}" ]] || fatal "job-node needs tee-release-version: \
+a TDX job node attests itself against that release."
+  for key in kms-url kms-identity peers bootstrap "${GOVERNANCE_KEYS[@]}"; do
+    [[ -z "$(get_meta "$key")" ]] || fatal "instance metadata '$key' is for a replica, \
+and job-node=true is set: the manager is creating a replica and a job node at once."
+  done
+  JOB_NODE_ID="$(get_meta node-id)"
+  [[ "$JOB_NODE_ID" =~ ^[0-9]{1,19}$ ]] || fatal "job-node needs node-id metadata \
+(a number): merod --job-node takes its id from it."
+  JOB_CLUSTER="$(get_meta cluster)"
+  [[ -n "$JOB_CLUSTER" ]] || fatal "no cluster metadata. A job node takes work only \
+from its cluster, and merod's default (dev) would name another. Set cluster on the instance."
+  [[ "$JOB_CLUSTER" =~ ^${CLUSTER_RE}$ ]] \
+    || fatal "instance metadata 'cluster' is not a valid value for merod --cluster"
+  for key in public-url rp-id origins ops-token-sha256 registry-url apps-domain peer-profiles peer-min-release replicas; do
+    [[ -z "$(get_meta "$key")" ]] || stray+=("$key")
+  done
+  [[ -z "${stray[*]-}" ]] || log "WARN: job-node ignores replica-only metadata: ${stray[*]}"
+  {
+    printf 'MEROD_JOB_NODE="true"\n'
+    printf 'MEROD_CLUSTER_IDENTITY="%s"\n' "$JOB_CLUSTER_IDENTITY"
+    printf 'MEROD_NODE_ID="%s"\n' "$JOB_NODE_ID"
+    printf 'MEROD_CLUSTER="%s"\n' "$JOB_CLUSTER"
+  } >> /etc/calimero/merod.env
+  mkdir -p /run/systemd/system/merod.service.d
+  printf '[Service]\nUnsetEnvironment=MEROD_METRICS_LISTEN\n' >/run/systemd/system/merod.service.d/job-node.conf
+  mkdir -p "$CALIMERO_HOME/$CALIMERO_NODE/data"
+  log "Job node for cluster identity $JOB_CLUSTER_IDENTITY: no KMS, no store; merod --job-node starts from merod.env"
+  MEROD_READY=true
+}
+
 URL_RE='https?://[A-Za-z0-9._~:@%+-]+(/[A-Za-z0-9._~:@%+/-]*)?'
+CLUSTER_RE='[A-Za-z0-9._-]{1,64}'
 HOST_RE='[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?'
 
 mkdir -p "$CALIMERO_HOME"
@@ -1551,7 +1609,9 @@ merod_is_1_0 || fatal "the baked merod is not merod 1.0 (its 'init' has no \
 --kms-identity/--node-id), and this image configures merod 1.0 only. Rebuild \
 the image with merodVersion at a core 1.0 release."
 
-if [[ -z "$KMS_URL" ]]; then
+if [[ "$JOB_NODE" == true ]]; then
+  job_node_settings
+elif [[ -z "$KMS_URL" ]]; then
   if [[ "$IMAGE_PROFILE" == "locked-read-only" ]] && ! store_is_memory_only; then
     fatal "no kms-url metadata. merod 1.0 takes its storage key only from \
 mero-kms in TDX mode, and the locked-read-only profile does not keep node \
@@ -1612,7 +1672,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   INIT_EXTRA_ARGS=(--kms-url "$KMS_URL" --kms-identity "$KMS_IDENTITY_FILE")
   meta_arg node-id '^[0-9]{1,19}$'
   meta_arg public-url "^${URL_RE}$"
-  meta_arg cluster '^[A-Za-z0-9._-]{1,64}$'
+  meta_arg cluster "^${CLUSTER_RE}$"
   meta_arg peers "^[0-9]{1,19}=${URL_RE}(,[0-9]{1,19}=${URL_RE})*$"
   meta_arg bootstrap '^(true|false)$'
   meta_arg rp-id "^${HOST_RE}$"

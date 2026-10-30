@@ -36,6 +36,13 @@
 #     genesis), and logged; any other value -> refuse, before merod init; on a
 #     later boot -> ignored, even if invalid, and the boot says so
 #   * --dev, storage keys, the ops token in the clear -> never passed
+#   * job-node=true + cluster-identity           -> no init, no KMS, memory-only
+#     store; merod.env gets MEROD_JOB_NODE, MEROD_CLUSTER_IDENTITY, the node id
+#     and cluster, and a drop-in unsets the unit's MEROD_METRICS_LISTEN; any
+#     other job-node value, a bad or missing identity, a missing cluster or
+#     node-id, replica-only keys (kms-url, kms-identity, peers, bootstrap, the
+#     governance keys), or an identity without job-node -> refuse; a replica boot after a job boot
+#     leaves no job line in merod.env and no drop-in
 #   * an existing node                           -> no init, merod started
 #   * v1 state on the disk                       -> warned about, left alone
 #
@@ -54,8 +61,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- slice the code under test out of the template --------------------------
 init_fn="$(awk '/^INIT_EXTRA_ARGS=\(\)$/,/^}$/' "$TEMPLATE")"
+job_gate="$(awk '/^JOB_NODE=/,/^fi$/' "$TEMPLATE")"
+release_block="$(awk '/^MIN_TEE_RELEASE_FILE=/{on=1} /^# Extra `merod init` arguments/{exit} on{print}' "$TEMPLATE")"
 decision="$(awk '/^NODE_CONFIG="\$CALIMERO_HOME\/\$CALIMERO_NODE\/config.toml"$/{on=1} /^log "Starting services\.\.\."$/{exit} on{print}' "$TEMPLATE")"
 [[ -n "$init_fn" ]] || fail "could not find init_node / INIT_EXTRA_ARGS in the template; this test slices on them"
+[[ -n "$job_gate" ]] || fail "could not find the job-node gate (JOB_NODE=... up to its fi) in the template; this test slices on it"
+[[ -n "$release_block" ]] || fail "could not find the release block (MIN_TEE_RELEASE_FILE=... up to INIT_EXTRA_ARGS) in the template; this test slices on it"
 [[ -n "$decision" ]] || fail "could not find the merod block (NODE_CONFIG=... up to 'Starting services') in the template"
 grep -qF 'merod_is_1_0' <<<"$decision" || fail "the sliced block does not contain the decision it is meant to test"
 grep -qF '  init_node' <<<"$decision" || fail "the sliced block does not reach init_node; the slice boundary moved"
@@ -71,6 +82,7 @@ grep -q '^CALIMERO_HOME="/mnt/data/merod"$' "$TEMPLATE" \
 
 URL="https://kms.example:8080/"
 PUBLIC="https://n1.eu1.example.com/"
+JID="$(printf 'job' | sha256sum | awk '{print $1}')"
 SHA="$(printf 'ops' | sha256sum | awk '{print $1}')"
 
 # kms_identity [MODE]: base64 of a protobuf libp2p Ed25519 keypair, the shape
@@ -143,6 +155,10 @@ STUB
 
   local block
   block="${decision//\"\/mnt\/data\/calimero\"/\"$dir\/mnt\/data\/calimero\"}"
+  block="${block//\/etc\/calimero\/merod.env/$dir/merod.env}"
+  block="${block//\/run\/systemd\/system\/merod.service.d/$dir/dropin}"
+  local rblock="${release_block//\/etc\/calimero\//$dir/}"
+  [[ -z "${STALE_ENV:-}" ]] || printf 'MEROD_JOB_NODE="true"\nMEROD_CLUSTER_IDENTITY="%s"\n' "$JID" >"$dir/merod.env"
   cat >"$dir/run.sh" <<RUN
 set -euo pipefail
 LOG="$dir/log"
@@ -158,6 +174,10 @@ IMAGE_PROFILE="$profile"
 KMS_URL="$kms_url"
 TEE_RELEASE_VERSION="$release"
 SANITIZED_TEE_RELEASE_VERSION="$release"
+EPHEMERAL_STORE=""
+$job_gate
+$rblock
+echo "\$EPHEMERAL_STORE" >"$dir/ephemeral"
 $init_fn
 $block
 echo "\$MEROD_READY" >"$dir/ready"
@@ -381,6 +401,91 @@ for c in "debug-no-id debug ext4" "debug-ro-no-id debug-read-only ext4" "memory-
   [[ -e "$WORK/$name/mnt/data/merod/kms-identity" ]] && fail "calimero-init wrote an identity it was never given"
   logged "$name" "merod will generate a per-node KMS" || fail "a node whose identity merod generates must say so"
 done
+
+# --- a job node: no KMS, no store, no init; merod gets it through merod.env ----
+JOB=(job-node=true "cluster-identity=$JID" node-id=3 cluster=eu1)
+run_case job locked-read-only "" 2.3.70 1.0 fresh ext4 "${JOB[@]}"
+[[ "$(rc job)" == 0 ]] || fail "a job node should boot: $(cat "$WORK/job/log")"
+init_ran job && fail "merod init ran for a job node"
+[[ "$(ready job)" == true ]] || fail "a job node must start merod"
+[[ "$(cat "$WORK/job/ephemeral")" == true ]] || fail "a job node holds no state and must use a memory-only store"
+[[ "$(cat "$WORK/job/merod.env")" == "$(printf '%s\n' 'MERO_TEE_VERSION="2.3.70"' 'MERO_TEE_PROFILE="locked-read-only"' \
+    'MEROD_JOB_NODE="true"' "MEROD_CLUSTER_IDENTITY=\"$JID\"" 'MEROD_NODE_ID="3"' 'MEROD_CLUSTER="eu1"')" ]] \
+  || fail "a job node's merod.env is not exactly the TEE release and the job-node settings: $(cat "$WORK/job/merod.env")"
+[[ -d "$WORK/job/mnt/data/merod/default/data" ]] || fail "a job node's data directory was not created"
+# merod refuses --metrics-listen with --job-node and the unit always sets it.
+[[ "$(cat "$WORK/job/dropin/job-node.conf")" == "$(printf '%s\n' '[Service]' 'UnsetEnvironment=MEROD_METRICS_LISTEN')" ]] \
+  || fail "a job node must unset MEROD_METRICS_LISTEN through a merod.service drop-in"
+
+# Replica-only keys are refused: the manager thinks it is creating a replica.
+n=0
+for extra in "kms-identity=$ID" "peers=1=https://n1.example.com/" bootstrap=true \
+  release-approvals=operator app-upgrades=operator outbound-approvals=operator; do
+  n=$((n + 1))
+  run_case "job-replica-$n" locked-read-only "" 2.3.70 1.0 fresh ext4 "${JOB[@]}" "$extra"
+  [[ "$(rc "job-replica-$n")" != 0 ]] || fail "a job node with '${extra%%=*}' must refuse"
+  init_ran "job-replica-$n" && fail "merod init ran for a job node with '${extra%%=*}'"
+  logged "job-replica-$n" "is for a replica" || fail "a job node refused for '${extra%%=*}' must say why"
+  [[ ! -e "$WORK/job-replica-$n/dropin" ]] || fail "a refused job node left a drop-in"
+done
+run_case job-kms-url locked-read-only "" 2.3.70 1.0 fresh ext4 "${JOB[@]}" "kms-url=$URL"
+[[ "$(rc job-kms-url)" != 0 ]] || fail "a job node with kms-url must refuse"
+logged job-kms-url "is for a replica" || fail "a job node refused for kms-url must say why"
+
+# Other replica-only keys are not passed, and the boot names them.
+run_case job-stray locked-read-only "" 2.3.70 1.0 fresh ext4 "${JOB[@]}" "public-url=$PUBLIC" replicas=3
+[[ "$(rc job-stray)" == 0 ]] || fail "a job node with stray replica metadata should boot: $(cat "$WORK/job-stray/log")"
+grep -qE 'PUBLIC|PEERS|REPLICAS|KMS|STORAGE' "$WORK/job-stray/merod.env" && fail "replica-only metadata reached a job node's merod.env"
+logged job-stray "WARN: job-node ignores replica-only metadata: public-url replicas" || fail "ignored replica-only keys must be named"
+
+for bad in "job-node=yes" "job-node=TRUE" "job-node=false" "job-node=true " "job-node=1"; do
+  run_case job-bad locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" "${bad}"
+  [[ "$(rc job-bad)" != 0 ]] || fail "'$bad' booted a node instead of refusing"
+  init_ran job-bad && fail "merod init ran with '$bad'"
+  logged job-bad "must be exactly 'true' or absent" || fail "'$bad' must be refused for its value"
+done
+
+for bad in "${JID:0:63}" "${JID}0" "$(printf %s "$JID" | tr a-f A-F)" "${JID:0:63}g" "$JID $JID" "\$(touch $WORK/pwned)" "${JID:0:60};rm" "0x${JID:2}"; do
+  run_case job-bad-id locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true "cluster-identity=$bad" node-id=3 cluster=eu1
+  [[ "$(rc job-bad-id)" != 0 ]] || fail "cluster-identity '$bad' was accepted"
+  init_ran job-bad-id && fail "merod init ran with cluster-identity '$bad'"
+  logged job-bad-id "not 64 lowercase hex digits" || fail "cluster-identity '$bad' must be refused for its shape"
+done
+[[ ! -e "$WORK/pwned" ]] || fail "a cluster-identity was executed"
+
+run_case job-no-id locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true node-id=3 cluster=eu1
+[[ "$(rc job-no-id)" != 0 ]] || fail "job-node without cluster-identity must refuse"
+logged job-no-id "not 64 lowercase hex digits" || fail "a missing cluster-identity must be refused for its shape"
+for extra in "" job-node=false; do
+  run_case id-no-job locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" "cluster-identity=$JID" "$extra"
+  [[ "$(rc id-no-job)" != 0 ]] || fail "cluster-identity without job-node=true ('$extra') must refuse"
+  init_ran id-no-job && fail "merod init ran with a stray cluster-identity"
+  logged id-no-job "set without job-node=true" || fail "a stray cluster-identity must be refused as such"
+done
+
+run_case job-no-release locked-read-only "" "" 1.0 fresh ext4 "${JOB[@]}"
+[[ "$(rc job-no-release)" != 0 ]] || fail "a job node without tee-release-version cannot attest and must refuse"
+logged job-no-release "job-node needs tee-release-version" || fail "a missing release must be refused as such"
+run_case job-no-node-id locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true "cluster-identity=$JID" cluster=eu1
+[[ "$(rc job-no-node-id)" != 0 ]] || fail "a job node without node-id must refuse"
+logged job-no-node-id "job-node needs node-id" || fail "a missing node-id must be refused as such"
+run_case job-bad-node-id locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true "cluster-identity=$JID" "node-id=3; reboot" cluster=eu1
+[[ "$(rc job-bad-node-id)" != 0 ]] || fail "a job node with a malformed node-id must refuse"
+logged job-bad-node-id "job-node needs node-id" || fail "a malformed node-id must be refused as such"
+run_case job-no-cluster locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true "cluster-identity=$JID" node-id=3
+[[ "$(rc job-no-cluster)" != 0 ]] || fail "a job node without cluster must refuse"
+logged job-no-cluster "no cluster metadata" || fail "a missing cluster must be refused as such"
+run_case job-bad-cluster locked-read-only "" 2.3.70 1.0 fresh ext4 job-node=true "cluster-identity=$JID" node-id=3 "cluster=eu 1"
+[[ "$(rc job-bad-cluster)" != 0 ]] || fail "a job node with a malformed cluster must refuse"
+logged job-bad-cluster "'cluster' is not a valid value" || fail "a malformed cluster must be refused as such"
+
+# A replica boot after a job boot (same merod.env) keeps no job line, and no drop-in.
+STALE_ENV=1 run_case after-job locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}"
+[[ "$(rc after-job)" == 0 ]] || fail "a replica boot over a job merod.env should boot: $(cat "$WORK/after-job/log")"
+grep -q 'MEROD_JOB_NODE\|MEROD_CLUSTER_IDENTITY' "$WORK/after-job/merod.env" && fail "a replica's merod.env kept a job-node line"
+[[ ! -e "$WORK/after-job/dropin" ]] || fail "a replica boot wrote the job-node drop-in"
+[[ ! -e "$WORK/full/dropin" ]] || fail "a replica boot wrote the job-node drop-in"
+grep -q JOB "$WORK/full/merod.env" && fail "a replica's merod.env mentions the job node"
 
 # --- an existing node is never re-initialised ---------------------------------
 run_case existing locked-read-only "$URL" 2.3.70 1.0 existing ext4 node-id=9 "public-url=$PUBLIC" cluster=eu1
