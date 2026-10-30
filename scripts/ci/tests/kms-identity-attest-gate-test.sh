@@ -254,6 +254,7 @@ CALIMERO_HOME="$dir/mnt/data/merod"
 CALIMERO_NODE="default"
 IMAGE_PROFILE="$profile"
 KMS_URL="$URL"
+JOB_NODE=""
 TEE_RELEASE_VERSION=2.4.0
 ATTEST_STOP_TIMEOUT=1
 $init_fn
