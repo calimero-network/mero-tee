@@ -53,8 +53,12 @@ if [[ "${EVENT_NAME}" == "push" && -f "${GITHUB_EVENT_PATH:-}" ]]; then
   ci_info "Release mero-tee workflow state for commit ${GITHUB_SHA}: ${node_release_workflow_state}"
 fi
 
+# 30s apart. The image build has taken 33 minutes (2.3.133), so wait up to 90:
+# the node-policy job's timeout-minutes (120) in release-kms.yaml is the outer bound.
+MAX_ATTEMPTS=180
+
 ci_group_start "Node release polling"
-for attempt in $(seq 1 60); do
+for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
   if gh release view "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
     # The release action uploads assets one by one, so wait for the bundle too.
     if gh release download "${NODE_TAG}" --repo "${GITHUB_REPOSITORY}" \
@@ -94,12 +98,12 @@ for attempt in $(seq 1 60); do
         ;;
     esac
   fi
-  if [[ "${attempt}" -eq 60 ]]; then
+  if [[ "${attempt}" -eq "${MAX_ATTEMPTS}" ]]; then
     ci_fail "NODE_RELEASE_TIMEOUT" "Timed out waiting for node release ${NODE_TAG} with published-mrtds.json"
     exit 1
   fi
   if [[ "${attempt}" -eq 1 || $(( attempt % 5 )) -eq 0 ]]; then
-    ci_info "Waiting for node release ${NODE_TAG} (attempt ${attempt}/60)"
+    ci_info "Waiting for node release ${NODE_TAG} (attempt ${attempt}/${MAX_ATTEMPTS})"
   fi
   sleep 30
 done

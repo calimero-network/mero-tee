@@ -56,6 +56,9 @@ release's jobs instead, which keeps the original push event.
    measurements the KMS will release keys to, so the file's Sigstore bundle must
    verify against `release-node-image-gcp.yaml` on `master`
    (`verify-node-policy.sh`): editing the GitHub release does not change them.
+   It polls every 30 seconds for up to 90 minutes (the image build took 33
+   for 2.3.133), and fails at once if that commit's `Release mero-tee` run
+   fails. If it times out anyway, re-run the job once the node release is out.
 
 3. **`build-binary`** — build the `mero-kms` binary (`x86_64`) from the release
    commit.
