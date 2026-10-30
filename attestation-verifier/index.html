@@ -8,6 +8,17 @@
   <meta name="description" content="Verify mero-kms and mero-tee node attestations against official Calimero release policy using Intel Trust Authority.">
   <meta name="theme-color" content="#111111">
   <meta name="color-scheme" content="light dark">
+  <script>
+    // The saved theme before first paint (Layout.jsx's switch writes it): light
+    // unless someone chose dark. Storage can throw when blocked.
+    (function () {
+      try {
+        if (localStorage.getItem('calimero-verifier-theme') === 'dark') {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
