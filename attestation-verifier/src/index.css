@@ -1,7 +1,9 @@
 /*
  * The verifier in the Calimero consoles' design: paper ground, cream surfaces,
  * hairline rules, ink and seal red; square corners; Inter Tight with JetBrains
- * Mono for labels and values. Light by default, dark from the system setting.
+ * Mono for labels and values. Light by default for everyone; dark only when
+ * chosen with the switch in the bar (html[data-theme="dark"], kept in
+ * localStorage; see index.html and Layout.jsx).
  */
 
 :root {
@@ -39,37 +41,35 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #121211;
-    --card: #1c1b18;
-    --sunken: #171715;
-    --line: #3a3833;
-    --line-soft: #2a2925;
-    --field: #6b665d;
-    --ink: #f1ede4;
-    --ink-2: #cdc7ba;
-    --ink-3: #a29d91;
-    --seal: #ef6150;
-    --seal-hover: #ff8676;
-    --ok: #62c792;
-    --ok-bg: rgba(98, 199, 146, 0.1);
-    --ok-line: rgba(98, 199, 146, 0.4);
-    --warn: #e3ac45;
-    --warn-bg: rgba(227, 172, 69, 0.1);
-    --warn-line: rgba(227, 172, 69, 0.4);
-    --err: #ff7a9c;
-    --err-bg: rgba(255, 122, 156, 0.1);
-    --err-line: rgba(255, 122, 156, 0.45);
-    --info: #7fb4f0;
-    --info-bg: rgba(127, 180, 240, 0.1);
-    --info-line: rgba(127, 180, 240, 0.4);
-    --wash: rgba(241, 237, 228, 0.05);
-    --bar: #0a0a09;
-    --bar-line: #34322d;
-    --on-ink: #121211;
-    color-scheme: dark;
-  }
+:root[data-theme="dark"] {
+  --paper: #121211;
+  --card: #1c1b18;
+  --sunken: #171715;
+  --line: #3a3833;
+  --line-soft: #2a2925;
+  --field: #6b665d;
+  --ink: #f1ede4;
+  --ink-2: #cdc7ba;
+  --ink-3: #a29d91;
+  --seal: #ef6150;
+  --seal-hover: #ff8676;
+  --ok: #62c792;
+  --ok-bg: rgba(98, 199, 146, 0.1);
+  --ok-line: rgba(98, 199, 146, 0.4);
+  --warn: #e3ac45;
+  --warn-bg: rgba(227, 172, 69, 0.1);
+  --warn-line: rgba(227, 172, 69, 0.4);
+  --err: #ff7a9c;
+  --err-bg: rgba(255, 122, 156, 0.1);
+  --err-line: rgba(255, 122, 156, 0.45);
+  --info: #7fb4f0;
+  --info-bg: rgba(127, 180, 240, 0.1);
+  --info-line: rgba(127, 180, 240, 0.4);
+  --wash: rgba(241, 237, 228, 0.05);
+  --bar: #0a0a09;
+  --bar-line: #34322d;
+  --on-ink: #121211;
+  color-scheme: dark;
 }
 
 *,
@@ -238,6 +238,40 @@ pre {
 .bar__nav a.active {
   color: var(--bar-ink);
   border-bottom-color: var(--seal);
+}
+
+.bar__end {
+  display: flex;
+  align-items: center;
+  gap: 4px 18px;
+  flex-wrap: wrap;
+}
+
+.bar__theme {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--bar-ink-2);
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.bar__theme:hover {
+  color: var(--bar-ink);
+  border-color: var(--bar-line);
+}
+
+.bar__theme svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .bar :focus-visible {

@@ -220,7 +220,13 @@ export function ResultView({ kind, state, onRetry }) {
           }
           token={result.ita_token}
           policy={profile ? result.policiesByProfile?.[profile] : null}
-          policyTitle={profile ? `Published policy · ${tag} · ${profile}` : undefined}
+          policyTitle={
+            profile
+              ? model.comparison?.matched
+                ? `Published policy · ${tag} · ${profile}`
+                : `Closest published policy · ${tag} · ${profile} (no profile matches)`
+              : undefined
+          }
         />
       </section>
     </>
