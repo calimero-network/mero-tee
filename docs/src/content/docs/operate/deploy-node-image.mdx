@@ -194,6 +194,7 @@ scripts. All are optional except where noted:
 | `rp-id`, `origins` | merod `--rp-id` / `--origins`: the WebAuthn relying party and the origins allowed to run passkey ceremonies and call the API (CORS) | merod's (`localhost`, `http://localhost:3000`) |
 | `ops-token-sha256` | merod `--ops-token-sha256`: the Ops API token's hash; the token itself is never in metadata | unset → the Ops API answers `403` |
 | `registry-url`, `apps-domain`, `peer-profiles`, `peer-min-release`, `replicas` | the merod flags of the same names | merod's defaults |
+| `release-approvals`, `app-upgrades`, `outbound-approvals` | merod's governance flags of the same names, `owner` or `operator`: who approves new node images, app upgrades and outbound hosts for the cluster. Read on a **first boot only** and fixed at the cluster's genesis; set the same values on every node of a cluster. Any other value stops the boot. See [Deployment governance](/operate/config-reference/#deployment-governance) | unset → merod's default, `owner` |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vmagent stays off |
 | `logs-endpoint` | if set, configures and starts `vector`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vector stays off |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the shippers push unauthenticated |
@@ -205,9 +206,10 @@ The merod keys are merod's own flag names, read **once**, when the node is
 first initialised: `merod init` writes them to `config.toml` on the encrypted
 data disk, and later metadata changes are not applied. Each value is checked
 against the shape merod takes, and a bad one stops the boot. The governance
-flags (`--release-approvals`, `--app-upgrades`, `--outbound-approvals`) are not
-read and stay at merod's default, `owner`; neither are `--dev`, storage keys,
-`--allow-unsigned-bundles` or the plain `--ops-token`. `server-port` and
+keys are checked against merod's values (`owner`, `operator`), logged on the
+first boot as the line `GOVERNANCE (fixed at the cluster's genesis, ...)`, and
+on every later boot ignored, with a line saying so. Not read: `--dev`, storage
+keys, `--allow-unsigned-bundles` and the plain `--ops-token`. `server-port` and
 `swarm-port` are no longer read: merod 1.0 has one listener, on loopback behind
 Traefik.
 

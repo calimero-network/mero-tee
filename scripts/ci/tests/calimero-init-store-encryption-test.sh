@@ -7,7 +7,8 @@
 # `--dev`, which this image never passes. So calimero-init must hand `merod
 # init` the KMS and the cluster settings mdma stamps as instance metadata, check
 # every value before it becomes the node's identity for good, and pass nothing
-# that would weaken TDX mode or fix governance from the host.
+# that would weaken TDX mode. Governance is passed on a first boot only, from
+# an allowlist, because genesis fixes it for good.
 #
 # Like the data-disk test this one EXECUTES the decision: it slices the block
 # (and `init_node`) out of the template, runs it against a stub merod and stub
@@ -29,7 +30,12 @@
 #     never logged; malformed -> refuse; absent on a locked cluster with a
 #     disk store -> refuse; absent on debug or memory-only -> merod generates
 #     one, and the boot says so
-#   * governance, --dev, storage keys, the ops token in the clear -> never passed
+#   * governance (release-approvals, app-upgrades, outbound-approvals):
+#     owner|operator -> passed to merod init on a first boot, the bootstrap
+#     node's and every other node's (whichever founding node leads first writes
+#     genesis), and logged; any other value -> refuse, before merod init; on a
+#     later boot -> ignored, even if invalid, and the boot says so
+#   * --dev, storage keys, the ops token in the clear -> never passed
 #   * an existing node                           -> no init, merod started
 #   * v1 state on the disk                       -> warned about, left alone
 #
@@ -176,7 +182,7 @@ BASE=(node-id=1 "public-url=$PUBLIC" cluster=eu1 "kms-identity=$ID")
 run_case full locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" \
   "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
   rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
-  "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+  "ops-token-sha256=$SHA" "operator-key=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
   peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3 \
   release-approvals=operator app-upgrades=operator outbound-approvals=operator \
   dev=true storage-key=00 storage-key-file=/x ops-token=plain allow-unsigned-bundles=true listen=0.0.0.0:1
@@ -189,11 +195,16 @@ init_ran full || fail "merod init was not run for a new node"
 for kv in node-id=1 "public-url=$PUBLIC" cluster=eu1 \
           "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
           rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
-          "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+          "ops-token-sha256=$SHA" "operator-key=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
           peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3; do
   [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "metadata ${kv%%=*} did not reach merod init as --${kv%%=*} ${kv#*=}"
 done
-for flag in --release-approvals --app-upgrades --outbound-approvals --dev --storage-key --storage-key-file \
+for kv in release-approvals=operator app-upgrades=operator outbound-approvals=operator; do
+  [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "governance metadata ${kv%%=*} did not reach the bootstrap node's merod init"
+done
+logged full "GOVERNANCE (fixed at the cluster's genesis, attested with every receipt key): release-approvals=operator app-upgrades=operator outbound-approvals=operator" \
+  || fail "the governance a node is initialised with must be logged: $(cat "$WORK/full/log")"
+for flag in --dev --storage-key --storage-key-file \
             --ops-token --allow-unsigned-bundles --listen --data-dir --metrics-listen; do
   has_flag full "$flag" && fail "merod init was given $flag from instance metadata"
 done
@@ -218,6 +229,54 @@ run_case minimal debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLI
 [[ "$(rc minimal)" == 0 ]] || fail "a debug node with node-id and public-url should initialise: $(cat "$WORK/minimal/log")"
 [[ "$(wc -l <"$WORK/minimal/init-args")" == 13 ]] \
   || fail "unset metadata reached merod init: $(tr '\n' ' ' <"$WORK/minimal/init-args")"
+
+logged minimal "release-approvals=owner(merod default)" || fail "unset governance must be logged as merod's default"
+
+# --- governance ------------------------------------------------------------------
+# A founding node that is not the bootstrap node gets the same values: should
+# the bootstrap node fail before genesis commits, it may lead first and write
+# genesis from its own configuration. Mixed values, each its own flag.
+run_case gov-founder locked-read-only "$URL" 2.3.70 1.0 fresh ext4 node-id=2 "public-url=$PUBLIC" cluster=eu1 \
+  "kms-identity=$ID" "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" \
+  release-approvals=operator app-upgrades=owner outbound-approvals=operator
+[[ "$(rc gov-founder)" == 0 ]] || fail "a non-bootstrap first boot with valid governance should initialise: $(cat "$WORK/gov-founder/log")"
+has_flag gov-founder --bootstrap && fail "the test's founding node must not be the bootstrap node"
+[[ "$(arg gov-founder --release-approvals)" == operator && "$(arg gov-founder --app-upgrades)" == owner \
+   && "$(arg gov-founder --outbound-approvals)" == operator ]] \
+  || fail "governance did not reach a founding node's merod init: $(tr '\n' ' ' <"$WORK/gov-founder/init-args")"
+
+# Only the keys that are set: one key, one flag.
+run_case gov-one debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLIC" release-approvals=operator
+[[ "$(arg gov-one --release-approvals)" == operator ]] || fail "release-approvals alone did not reach merod init"
+has_flag gov-one --app-upgrades && fail "an unset app-upgrades reached merod init"
+has_flag gov-one --outbound-approvals && fail "an unset outbound-approvals reached merod init"
+
+# Not on the allowlist: refused on every profile, before merod init, saying why.
+n=0
+for bad in release-approvals=publisher release-approvals=Owner "app-upgrades=owner " app-upgrades=operator,owner \
+           "outbound-approvals=owner; reboot" outbound-approvals=1 outbound-approvals=none; do
+  for profile in locked-read-only debug; do
+    n=$((n + 1))
+    run_case "gov-bad-$n" "$profile" "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" bootstrap=true "$bad"
+    [[ "$(rc "gov-bad-$n")" != 0 ]] || fail "governance metadata '$bad' was accepted on $profile"
+    init_ran "gov-bad-$n" && fail "merod init ran with governance metadata '$bad' on $profile"
+    logged "gov-bad-$n" "'${bad%%=*}' must be one of: owner operator" || fail "a refused governance value must say why: $(cat "$WORK/gov-bad-$n/log")"
+  done
+done
+
+# A later boot: the configuration exists, genesis has been written. Valid or
+# not, the keys change nothing and stop nothing, and the boot says they were
+# ignored.
+for c in "gov-restart operator" "gov-restart-bad publisher"; do
+  read -r name value <<<"$c"
+  run_case "$name" locked-read-only "$URL" 2.3.70 1.0 existing ext4 node-id=1 "public-url=$PUBLIC" cluster=eu1 \
+    bootstrap=true "release-approvals=$value" "app-upgrades=$value" "outbound-approvals=$value"
+  [[ "$(rc "$name")" == 0 ]] || fail "governance metadata ($value) must not stop a later boot: $(cat "$WORK/$name/log")"
+  init_ran "$name" && fail "merod init re-ran over an existing node with governance metadata"
+  [[ "$(ready "$name")" == true ]] || fail "an existing node with governance metadata must be started"
+  logged "$name" "Governance metadata ignored on this boot (release-approvals app-upgrades outbound-approvals)" \
+    || fail "a later boot must say the governance metadata was ignored: $(cat "$WORK/$name/log")"
+done
 
 # --- a KMS with no release to verify it against: refuse ---------------------
 run_case no-release locked-read-only "$URL" "" 1.0 fresh ext4 "${BASE[@]}"
@@ -274,7 +333,7 @@ init_ran no-cluster && fail "merod init ran on locked-read-only without a cluste
 n=0
 for bad in "node-id=1; reboot" "node-id=-1" "public-url=javascript:alert(1)" "public-url=https://a b/" \
            "cluster=eu 1" "peers=1=https://n1/,two=https://n2/" "bootstrap=yes" \
-           "ops-token-sha256=abc" "origins=https://a.example,ftp://b" "replicas=three" \
+           "ops-token-sha256=abc" "operator-key=xyz" "origins=https://a.example,ftp://b" "replicas=three" \
            "peer-profiles=Locked" "rp-id=-bad-.example"; do
   key="${bad%%=*}"
   args=("${BASE[@]}")
@@ -328,6 +387,7 @@ run_case existing locked-read-only "$URL" 2.3.70 1.0 existing ext4 node-id=9 "pu
 [[ "$(rc existing)" == 0 ]] || fail "an existing node should boot"
 init_ran existing && fail "merod init re-ran over an existing node"
 [[ "$(ready existing)" == true ]] || fail "an existing node must be started"
+logged existing "Governance metadata ignored" && fail "a later boot with no governance metadata must not claim to ignore any"
 
 run_case existing-no-release locked-read-only "$URL" "" 1.0 existing ext4
 [[ "$(rc existing-no-release)" != 0 ]] || fail "an existing node with no tee-release-version must not start"
