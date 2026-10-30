@@ -183,8 +183,9 @@ jobs:
       # merod 1.0 takes its storage key from mero-kms only and its cluster
       # settings from instance metadata. Runs the decision against a stub merod
       # and stub metadata: every value is checked before it becomes the node's
-      # for good, nothing that weakens TDX mode or fixes governance is passed,
-      # and locked-read-only never boots a node without a KMS.
+      # for good, nothing that weakens TDX mode is passed, governance is passed
+      # from an allowlist on a first boot only, and locked-read-only never
+      # boots a node without a KMS.
       - name: Check merod 1.0 is configured from checked metadata, keyed by the KMS
         id: store_encryption_test
         shell: bash

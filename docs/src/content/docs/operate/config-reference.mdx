@@ -235,6 +235,44 @@ used by the image's boot script to unlock the data disk.
 | `kms disk-key --evidence-out PATH` | Also write a record of the KMS the fetch verified (JSON, at most 16 KiB; tmpfs or ramfs only, and the file must not exist yet). The node images pass `/run/calimero/kms-disk-evidence.json` when the baked merod has the flag. |
 | `run --kms-disk-evidence PATH` / `MEROD_KMS_DISK_EVIDENCE` | Report that record, bound into the node's quote, beside the storage key's KMS at `GET /attestation?purpose=kms`. The node images set the variable in `/etc/calimero/merod.env` after a fetch that wrote the record. Missing or unreadable: merod logs a warning and reports none. |
 
+## Deployment governance
+
+merod 1.0 gives each of three decisions, the ones that let new code or a new
+destination reach an app's data, to exactly one party (core's
+[deployment governance](https://github.com/calimero-network/core/blob/master/docs/src/content/docs/protocol/governance.mdx)):
+
+| Metadata key | merod flag | Decides | Values |
+| --- | --- | --- | --- |
+| `release-approvals` | `--release-approvals` | which mero-tee releases (node images) may hold the apps' data, so who approves a cluster upgrade to a new image | `owner` (default) or `operator` |
+| `app-upgrades` | `--app-upgrades` | who moves an app to another bundle | `owner` (default) or `operator` |
+| `outbound-approvals` | `--outbound-approvals` | who approves the URL prefixes an app may call out to | `owner` (default) or `operator` |
+
+`operator` gives the decision to the operator, Calimero, through the Ops API,
+for every app on the cluster. `owner` gives it to the parties around each app,
+with a passkey, and the operator cannot: release approvals to the app's
+publisher (the organization its package's signing key is bound to, else the
+app's own organization or account), app upgrades to whoever the package's
+signed manifest names (`upgrades: owner`, the default, or `publisher`), and
+outbound approvals to the app's owning organization or account. Who upgrades
+an app is thus chosen per package, by its manifest, not per cluster: there is
+no `publisher` value for these keys. mdma chooses per cluster when it creates
+it, and the keys mean the same on a dedicated cluster and a shared one.
+
+The values are **fixed at the cluster's genesis**: the first node to lead the
+system group writes the governance it was configured with into the system
+state, a second genesis is refused, and every node's receipt-key attestation
+binds the state's governance, which `verify_app_cluster` returns. So
+`calimero-init` reads the keys on a node's first boot only, into the `merod
+init` that writes its `config.toml`, on every node of the cluster, the
+bootstrap node and the others alike: should the bootstrap node fail before
+genesis commits, another founding node leads first and writes its own
+configuration. Set the same values on every node of a cluster. On a node that
+joins later they change nothing, and on every later boot they are ignored and
+the boot logs that they were. A value other than `owner` or `operator` on a
+first boot stops the boot before `merod init`, on every profile; the first
+boot logs the governance it initialised with on one line, `GOVERNANCE (fixed
+at the cluster's genesis, attested with every receipt key): ...`.
+
 ## Image build inputs
 
 The node, KMS and agent images are built with mkosi from the Ansible roles, by
