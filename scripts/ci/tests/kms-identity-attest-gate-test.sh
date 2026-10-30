@@ -242,6 +242,7 @@ set -euo pipefail
 LOG="$dir/log"
 log() { echo "\$*" >>"$dir/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
+stage() { echo "\$1: \$2" >>"$dir/stages"; }
 disk_secrets_cleanup() { :; }
 METADATA_URL="http://127.0.0.1:${PORT}/${name}/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"

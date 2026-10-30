@@ -148,6 +148,7 @@ set -euo pipefail
 LOG="$dir/log"
 log() { echo "\$*" >>"$dir/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
+stage() { echo "\$1: \$2" >>"$dir/stages"; }
 get_meta() { cat "$dir/meta/\$1" 2>/dev/null || true; }
 if [[ -n "$release" ]]; then export MERO_TEE_VERSION="$release"; fi
 PATH="$dir/bin:\$PATH"

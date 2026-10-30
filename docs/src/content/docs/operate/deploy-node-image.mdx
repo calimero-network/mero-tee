@@ -475,6 +475,24 @@ Traefik stays a pass-through with no route of its own for it
 `scripts/ci/tests/tls-csr-test.sh` runs the tool against a mock metadata server
 and configfs-tsm.
 
+### The boot stage mdma shows
+
+Until the data disk is ready nothing on the node listens (Traefik serves from
+it), and a first boot spends minutes on the integrity wipe, so mdma's probes
+see only refused connections. `calimero-init` therefore writes where the boot
+is as the guest attribute `calimero/boot-stage`, as `KEY: text`, at each step:
+`init`, `disk-wait`, `disk-key` (fetching the disk key from mero-kms),
+`disk-wipe` (with its percentage every 30 seconds), `disk-mkfs`, `disk-ready`,
+`tls`, `attest` (serving the release attestation, then the KMS identity
+received), `merod-init`, `services`, `done`, and `failed: <reason>` from any
+fatal error. mdma's dispatcher shows it as the node's status line while the
+node does not answer yet.
+
+It is the same channel as the TLS CSR above, and as untrusted: the host can
+read and write guest attributes, so the stage is progress for people only.
+Nothing secret goes in it, and nothing decides on it. Writing it is best effort
+(a 3-second timeout, errors ignored) and never holds the boot.
+
 ## Verify the booted node
 
 <Steps>

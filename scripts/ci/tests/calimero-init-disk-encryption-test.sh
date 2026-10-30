@@ -288,6 +288,7 @@ PATH="$BIN:\$PATH"
 LOG="$T/log"
 log() { echo "\$*" >>"\$LOG"; }
 fatal() { log "ERROR: \$*"; exit 1; }
+stage() { echo "\$1: \$2" >>"\$T/stages"; }
 BIN_DIR="$BIN"
 CALIMERO_HOME="$T/mnt/data/calimero"
 IMAGE_PROFILE="$profile"
@@ -336,6 +337,13 @@ grep -qF -- '--integrity-no-wipe' <<<"$fmt" && fail "luksFormat must not skip th
 grep -qF -- '--progress-json' <<<"$fmt" || fail "luksFormat must report wipe progress (--progress-json; --batch-mode silences the text form)"
 logged fresh 'Integrity wipe: 25% (50 of 200 GB, 1m30s left)' \
   || fail "the integrity wipe's progress did not reach the log"
+# The same progress reaches mdma's console as the boot-stage guest attribute,
+# in order: key, wipe (with its percentage), filesystem, mounted.
+stages="$(cut -d: -f1 "$(T_ fresh)/stages" | uniq | tr '\n' ' ')"
+[[ "$stages" == "disk-key disk-wipe disk-mkfs disk-ready " ]] \
+  || fail "the first boot reported stages '$stages', want 'disk-key disk-wipe disk-mkfs disk-ready'"
+grep -qF 'disk-wipe: formatting the encrypted data disk: 25% (50 of 200 GB, about 2 min left)' "$(T_ fresh)/stages" \
+  || fail "the wipe's percentage did not reach the boot stage: $(cat "$(T_ fresh)/stages")"
 grep -qF -- "$(T_ fresh)/dev/google-data" <<<"$fmt" || fail "luksFormat did not target the data disk"
 token="$(head -1 "$(T_ fresh)/state/tokens")"
 python3 - "$token" <<'PY' || fail "the imported LUKS2 token is not a calimero-kms-identity token holding the identity: $token"
@@ -519,6 +527,7 @@ run_pin() {
 set -euo pipefail
 log() { echo "\$*" >>"$P/log"; }
 fatal() { log "ERROR: \$*"; exit 1; }
+stage() { echo "\$1: \$2" >>"$P/stages"; }
 IMAGE_PROFILE="$profile"
 TEE_RELEASE_VERSION="$release"
 $block

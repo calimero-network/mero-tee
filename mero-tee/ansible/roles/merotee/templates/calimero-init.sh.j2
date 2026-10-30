@@ -37,14 +37,28 @@ get_meta() {
 
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
+# stage KEY TEXT: where this boot is, for mdma's console. Written as the guest
+# attribute calimero/boot-stage ("KEY: TEXT"), which the dispatcher reads while
+# the node is being created, attested or started, so a first boot that spends
+# minutes wiping the encrypted disk reads as that rather than as a hung node
+# (traefik, and so every port, is down until the disk is ready). Guest
+# attributes are the host's to read and write: this is progress for people,
+# never something anything trusts. Best effort: it never fails or holds the boot.
+stage() {
+  printf '%s: %s' "$1" "$2" | curl -sS --max-time 3 -X PUT -H "$METADATA_HEADER" --data-binary @- \
+    "${METADATA_URL%/attributes}/guest-attributes/calimero/boot-stage" >/dev/null 2>&1 || true
+}
+
 # Defined up front because the data-disk and release-floor checks below refuse
 # the boot as well as the storage-encryption decision does.
 fatal() {
   log "ERROR: $*"
+  stage failed "$*"
   exit 1
 }
 
 log "Starting Calimero init (profile=$IMAGE_PROFILE)"
+stage init "starting the node's init (profile $IMAGE_PROFILE)"
 
 # --- RTMR3 --------------------------------------------------------------------
 # rtmr3-v3 begin -- the same in calimero-init, kms-init and agent-init
@@ -692,6 +706,8 @@ log_wipe_progress() {
       (( size_b > 0 )) || continue
       log "Integrity wipe: $(( done_b * 100 / size_b ))% ($(( done_b / 1000000000 )) of \
 $(( size_b / 1000000000 )) GB, $(( eta_ms / 60000 ))m$(( eta_ms / 1000 % 60 ))s left)"
+      stage disk-wipe "formatting the encrypted data disk: $(( done_b * 100 / size_b ))% \
+($(( done_b / 1000000000 )) of $(( size_b / 1000000000 )) GB, about $(( eta_ms / 60000 + 1 )) min left)"
     elif [[ -n "$line" ]]; then
       echo "$line" >>"$LOG"
     fi
@@ -702,9 +718,11 @@ format_encrypted_data_disk() {
   log "Data disk is blank; creating an encrypted LUKS2 volume (aes-xts-plain64, \
 hmac-sha256 integrity) keyed from the KMS. The integrity wipe covers the whole \
 device and can take a long time on the first boot."
+  stage disk-key "creating the encrypted data disk: fetching its key from the KMS"
   prepare_disk_key_dir
   rm -f "$DISK_IDENTITY_FILE"
   fetch_disk_key create
+  stage disk-wipe "formatting the encrypted data disk (first boot only; can take several minutes)"
   [[ -s "$DISK_IDENTITY_FILE" ]] || fatal "merod kms disk-key did not create the disk identity"
 
   # Re-probe immediately before formatting. Nothing else should have touched
@@ -747,6 +765,7 @@ print(json.dumps({
   log "Stored the data-disk identity in the LUKS2 header (token type $DISK_TOKEN_TYPE)"
 
   open_data_mapper
+  stage disk-mkfs "creating the filesystem on the encrypted data disk"
   mkfs.ext4 -q "$DATA_MAPPER" >>"$LOG" 2>&1 || fatal "mkfs.ext4 failed on $DATA_MAPPER"
   log "Created ext4 on the encrypted data disk"
 }
@@ -754,6 +773,7 @@ print(json.dumps({
 # EVERY LATER BOOT: open the volume with the key for the identity in its header.
 unlock_encrypted_data_disk() {
   log "Data disk is LUKS-encrypted; fetching its key from the KMS"
+  stage disk-key "unlocking the encrypted data disk: fetching its key from the KMS"
   prepare_disk_key_dir
   local identity_b64
   identity_b64="$(read_disk_token_identity)" || fatal "$DATA_DEVICE is a LUKS \
@@ -782,6 +802,7 @@ boot or tampering. Recreate the node."
     || fatal "$DATA_MAPPER could not be mounted at $DATA_MOUNT; see $LOG"
   DATA_DISK_STATE="encrypted"
   log "Mounted the encrypted data disk at $DATA_MOUNT ($(df -h --output=size "$DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' '))"
+  stage disk-ready "encrypted data disk mounted"
 }
 
 # The encryption decision for a BLANK disk, mirroring the store's below: a KMS
@@ -982,6 +1003,7 @@ else
     waited=$((waited + 1))
     if (( waited % 30 == 0 )); then
       log "Waiting for the data disk at $DATA_DEVICE (${waited}s of ${DATA_DEVICE_WAIT_SECS}s)"
+      stage disk-wait "waiting for the data disk to attach (${waited}s of ${DATA_DEVICE_WAIT_SECS}s)"
     fi
   done
 
@@ -1099,6 +1121,7 @@ mkdir -p "$TLS_DIR"
 chmod 0700 "$TLS_DIR"
 if [[ ! -s "$TLS_DIR/key.pem" ]]; then
   log "Generating node TLS key (stays in the enclave)"
+  stage tls "generating the node's TLS key"
   if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
       -keyout "$TLS_DIR/key.pem" -out "$TLS_DIR/cert.pem" -days 3650 \
       -subj "/CN=calimero-fleet-node" >>"$LOG" 2>&1; then
@@ -1127,6 +1150,7 @@ TLS_CERT_TOOL="/usr/local/lib/calimero/tls-cert.sh"
 if [[ -s "$TLS_DIR/key.pem" ]]; then
   if timeout 120 "$TLS_CERT_TOOL" publish 2>&1 | tee -a "$LOG"; then
     log "Published the TLS CSR and its quote for mdma"
+    stage tls "TLS certificate requested; waiting for mdma to issue it"
   else
     log "WARN: TLS CSR not published on this boot; calimero-tls-cert.service retries"
   fi
@@ -1505,6 +1529,7 @@ is not a number of seconds; refusing to initialise the node"
   log "No kms-identity yet: serving this node's release attestation on $ATTEST_LISTEN \
 (GET <public-url>/attestation/release) and waiting up to ${wait_sec}s for kms-identity metadata"
   attest_serve_start
+  stage attest "serving the release attestation; waiting for mdma to verify it and send the KMS identity"
   # traefik waits for calimero-init (After=, for the TLS files on the data
   # disk); those exist by now, so start it ahead of that ordering.
   timeout 60 systemctl start --job-mode=ignore-dependencies traefik >>"$LOG" 2>&1 \
@@ -1598,6 +1623,7 @@ cluster on the instance."
       || fatal "instance metadata 'kms-identity' is not a base64 protobuf libp2p \
 Ed25519 keypair (${KMS_IDENTITY_LEN} bytes); refusing to initialise the node with it"
     log "Installed the cluster KMS identity from kms-identity metadata at $KMS_IDENTITY_FILE"
+    stage attest "release attestation verified; KMS identity received"
   elif [[ "$IMAGE_PROFILE" == "locked-read-only" && -n "$(get_meta cluster)" ]] \
       && ! store_is_memory_only; then
     fatal "no kms-identity metadata. Every node of cluster '$(get_meta cluster | tr -d '\r\n')' must \
@@ -1626,6 +1652,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   meta_arg replicas '^[0-9]{1,3}$'
   governance_args
   log "Initializing merod 1.0 node (kms=$KMS_URL release=$TEE_RELEASE_VERSION)..."
+  stage merod-init "initializing merod"
   # Under `set -e` a failed init stops here, before any service starts, and
   # config.toml is absent so the next boot retries.
   init_node
@@ -1633,6 +1660,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
 fi
 
 log "Starting services..."
+stage services "starting merod and traefik"
 systemctl daemon-reload
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
 if [[ "$MEROD_READY" == true ]]; then
@@ -1646,3 +1674,4 @@ else
 fi
 
 log "Calimero init completed"
+stage done "init complete; merod is starting"
