@@ -182,7 +182,7 @@ BASE=(node-id=1 "public-url=$PUBLIC" cluster=eu1 "kms-identity=$ID")
 run_case full locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" \
   "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
   rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
-  "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+  "ops-token-sha256=$SHA" "operator-key=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
   peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3 \
   release-approvals=operator app-upgrades=operator outbound-approvals=operator \
   dev=true storage-key=00 storage-key-file=/x ops-token=plain allow-unsigned-bundles=true listen=0.0.0.0:1
@@ -195,7 +195,7 @@ init_ran full || fail "merod init was not run for a new node"
 for kv in node-id=1 "public-url=$PUBLIC" cluster=eu1 \
           "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" bootstrap=true \
           rp-id=example.com "origins=https://app.example.com,https://cloud.example.com" \
-          "ops-token-sha256=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
+          "ops-token-sha256=$SHA" "operator-key=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
           peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3; do
   [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "metadata ${kv%%=*} did not reach merod init as --${kv%%=*} ${kv#*=}"
 done
@@ -333,7 +333,7 @@ init_ran no-cluster && fail "merod init ran on locked-read-only without a cluste
 n=0
 for bad in "node-id=1; reboot" "node-id=-1" "public-url=javascript:alert(1)" "public-url=https://a b/" \
            "cluster=eu 1" "peers=1=https://n1/,two=https://n2/" "bootstrap=yes" \
-           "ops-token-sha256=abc" "origins=https://a.example,ftp://b" "replicas=three" \
+           "ops-token-sha256=abc" "operator-key=xyz" "origins=https://a.example,ftp://b" "replicas=three" \
            "peer-profiles=Locked" "rp-id=-bad-.example"; do
   key="${bad%%=*}"
   args=("${BASE[@]}")

@@ -1095,6 +1095,10 @@ fi
 #   bootstrap          optional   `true` on exactly one founding node
 #   rp-id, origins     optional   the WebAuthn relying party and its origins
 #   ops-token-sha256   optional   the Ops API token's hash (never the token)
+#   operator-key       optional   the operator's Ed25519 public key (hex), which
+#                      signs every operator decision; recorded at the cluster's
+#                      genesis, so it must be set on the founding nodes' first
+#                      boot (never the secret seed, which only mdma holds)
 #   registry-url, apps-domain, peer-profiles, peer-min-release, replicas
 #   kms-identity       required on locked-read-only when `cluster` is set: the
 #                      cluster's shared KMS identity (see below)
@@ -1546,6 +1550,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   meta_arg rp-id "^${HOST_RE}$"
   meta_arg origins "^${URL_RE}(,${URL_RE})*$"
   meta_arg ops-token-sha256 '^[0-9a-f]{64}$'
+  meta_arg operator-key '^[0-9a-f]{64}$'
   meta_arg registry-url "^${URL_RE}$"
   meta_arg apps-domain "^${HOST_RE}$"
   meta_arg peer-profiles '^[a-z0-9-]+(,[a-z0-9-]+)*$'
