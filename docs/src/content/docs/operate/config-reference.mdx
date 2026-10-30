@@ -243,10 +243,15 @@ destination reach an app's data, to exactly one party (core's
 | `outbound-approvals` | `--outbound-approvals` | who approves the URL prefixes an app may call out to | `owner` (default) or `operator` |
 
 `operator` gives the decision to the operator, Calimero, through the Ops API,
-for every app on the cluster; `owner` gives it to each app's owner (its
-publisher), with a passkey, and the operator cannot. mdma chooses per cluster
-when it creates it, and the keys mean the same on a dedicated cluster and a
-shared one.
+for every app on the cluster. `owner` gives it to the parties around each app,
+with a passkey, and the operator cannot: release approvals to the app's
+publisher (the organization its package's signing key is bound to, else the
+app's own organization or account), app upgrades to whoever the package's
+signed manifest names (`upgrades: owner`, the default, or `publisher`), and
+outbound approvals to the app's owning organization or account. Who upgrades
+an app is thus chosen per package, by its manifest, not per cluster: there is
+no `publisher` value for these keys. mdma chooses per cluster when it creates
+it, and the keys mean the same on a dedicated cluster and a shared one.
 
 The values are **fixed at the cluster's genesis**: the first node to lead the
 system group writes the governance it was configured with into the system
