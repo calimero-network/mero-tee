@@ -27,10 +27,6 @@
 #   * a KMS URL with no release -> refuse on every profile
 #   * the KMS unreachable   -> refuse, and the disk is not formatted
 #   * the key file never outlives the script, and is written only to the tmpfs
-#   * a merod whose disk-key has --evidence-out -> the KMS evidence is written
-#     to /run/calimero (tmpfs), outlives the key, and merod.env names it once
-#     as MEROD_KMS_DISK_EVIDENCE; an older merod, a /run/calimero off tmpfs, or
-#     a fetch that wrote none -> no flag / no line, and the boot goes on
 #   * tee-release-version below the baked floor -> refuse; merod.env carries
 #     MERO_TEE_MIN_VERSION, and MERO_TEE_PROFILE (the image's profile) on
 #     every profile
@@ -80,19 +76,15 @@ echo "merod $*" >>"$T/calls"
 if [[ "$*" == "kms disk-key --help" ]]; then
   [[ "$(cat "$T/state/merod_disk_key")" == yes ]] || { echo "error: unrecognized subcommand 'kms'" >&2; exit 2; }
   echo "      --key-out <PATH>"
-  [[ "$(cat "$T/state/merod_evidence")" == yes ]] && echo "      --evidence-out <PATH>"
   exit 0
 fi
 [[ "$1 $2" == "kms disk-key" ]] || exit 0
 shift 2
-identity="" key_out="" evidence_out="" create=no
+identity="" key_out="" create=no
 while (( $# )); do
   case "$1" in
     --identity) identity="$2"; shift ;;
     --key-out) key_out="$2"; shift ;;
-    --evidence-out)
-      [[ "$(cat "$T/state/merod_evidence")" == yes ]] || { echo "error: unexpected argument '--evidence-out'" >&2; exit 2; }
-      evidence_out="$2"; shift ;;
     --create-identity) create=yes ;;
   esac
   shift
@@ -112,14 +104,6 @@ if [[ ! -e "$identity" ]]; then
 fi
 ( umask 077; printf 'key-for:%s' "$(cat "$identity")" >"$key_out" )
 echo "$key_out" >>"$T/key-paths"
-if [[ -n "$evidence_out" ]]; then
-  # The real command checks this before the network, like --key-out.
-  [[ "$(dirname "$evidence_out")" == "$T/run/calimero" && ! -e "$evidence_out" ]] \
-    || { echo "evidence-out $evidence_out exists or is not on the tmpfs" >&2; exit 1; }
-  if [[ "$(cat "$T/state/evidence_written")" == yes ]]; then
-    printf '{"release":"%s","tcbStatus":"UpToDate"}' "${MERO_TEE_VERSION:-}" >"$evidence_out"
-  fi
-fi
 STUB
 
 cat >"$BIN/cryptsetup" <<'STUB'
@@ -219,7 +203,6 @@ if [[ "$last" == "$T/run/calimero-disk"* ]]; then
   [[ -e "$T/state/keydir-mounted" ]] && echo tmpfs || echo ext4
   exit 0
 fi
-if [[ "$last" == "$T/run/calimero" ]]; then cat "$T/state/evidencefs"; exit 0; fi
 if [[ "$*" == *SOURCE* ]]; then cat "$T/state/mounted-source" 2>/dev/null; exit 0; fi
 echo ext4
 STUB
@@ -244,12 +227,9 @@ for tool in merod cryptsetup blkid mount umount mountpoint findmnt mkfs.ext4 mod
 done
 
 # --- one scenario -----------------------------------------------------------
-#   run_disk NAME PROFILE KMS_URL RELEASE MEROD_DISK_KEY DEVICE_STATE [KMS_STATE] [EVIDENCE]
-# EVIDENCE: yes (disk-key has --evidence-out and writes the record), no (an
-# older merod without the flag), silent (has the flag, writes nothing), or
-# notmpfs (has the flag, but /run/calimero is not on a RAM filesystem).
+#   run_disk NAME PROFILE KMS_URL RELEASE MEROD_DISK_KEY DEVICE_STATE [KMS_STATE]
 run_disk() {
-  local name="$1" profile="$2" kms_url="$3" release="$4" merod_dk="$5" device="$6" kms="${7:-up}" ev="${8:-yes}"
+  local name="$1" profile="$2" kms_url="$3" release="$4" merod_dk="$5" device="$6" kms="${7:-up}"
   local T="$WORK/$name"
   mkdir -p "$T/state" "$T/dev" "$T/mnt/data" "$T/run" "$T/home"
   : >"$T/dev/google-data"
@@ -257,12 +237,6 @@ run_disk() {
   echo "$device" >"$T/state/device"
   echo "$merod_dk" >"$T/state/merod_disk_key"
   echo "$kms" >"$T/state/kms"
-  [[ "$ev" == no ]] && echo no >"$T/state/merod_evidence" || echo yes >"$T/state/merod_evidence"
-  [[ "$ev" == silent ]] && echo no >"$T/state/evidence_written" || echo yes >"$T/state/evidence_written"
-  [[ "$ev" == notmpfs ]] && echo ext4 >"$T/state/evidencefs" || echo tmpfs >"$T/state/evidencefs"
-  # As the release-pinning block leaves it: written when a release is named.
-  rm -f "$T/merod.env"
-  [[ -n "$release" ]] && printf 'MERO_TEE_VERSION="%s"\n' "$release" >"$T/merod.env"
   : >"$T/calls"
 
   local block
@@ -270,14 +244,12 @@ run_disk() {
     -e "s@/dev/disk/by-id/google-data@$T/dev/google-data@g" \
     -e "s@/dev/mapper/@$T/dev/mapper/@g" \
     -e "s@/run/calimero-disk@$T/run/calimero-disk@g" \
-    -e "s@KMS_DISK_EVIDENCE_DIR=\"/run/calimero\"@KMS_DISK_EVIDENCE_DIR=\"$T/run/calimero\"@" \
-    -e "s@/etc/calimero/merod.env@$T/merod.env@g" \
     -e "s@DATA_MOUNT=\"/mnt/data\"@DATA_MOUNT=\"$T/mnt/data\"@" \
     -e "s@/etc/fstab@$T/fstab@g" \
     -e 's@-b "\$DATA_DEVICE"@-e "$DATA_DEVICE"@g' \
     -e 's@-b "\$DATA_MAPPER"@-e "$DATA_MAPPER"@g' \
     <<<"$disk_block")"
-  if grep -nE '/dev/disk/by-id|"/run/calimero-disk|"/run/calimero"|"/etc/calimero|"/mnt/data"|[^/]/etc/fstab|"/dev/mapper' <<<"$block" | grep -v '^[0-9]*:[[:space:]]*#'; then
+  if grep -nE '/dev/disk/by-id|"/run/calimero-disk|"/mnt/data"|[^/]/etc/fstab|"/dev/mapper' <<<"$block" | grep -v '^[0-9]*:[[:space:]]*#'; then
     fail "$name: the sliced disk block still points at a real system path"
   fi
 
@@ -359,14 +331,6 @@ grep -q 'MERO_TEE_VERSION=2.3.70 MERO_TEE_MIN_VERSION=2.3.70 MERO_TEE_PROFILE=lo
   || fail "disk-key did not see MERO_TEE_VERSION/MIN_VERSION/PROFILE: $(cat "$(T_ fresh)/disk-key-env")"
 logged fresh "LUKS2 dm-crypt mapping with integrity" || fail "the boot-time disk check did not run"
 no_key_left fresh
-# The KMS evidence: asked for on /run/calimero, kept after the key is gone,
-# and named for merod run in merod.env.
-EV="$(T_ fresh)/run/calimero/kms-disk-evidence.json"
-called fresh "^merod kms disk-key .*--evidence-out $EV" || fail "disk-key was not asked for the KMS evidence: $(grep '^merod kms disk-key --kms' "$(T_ fresh)/calls")"
-[[ -s "$EV" ]] || fail "the KMS evidence did not outlive the script"
-grep -qx "MEROD_KMS_DISK_EVIDENCE=\"$EV\"" "$(T_ fresh)/merod.env" || fail "merod.env does not name the KMS evidence: $(cat "$(T_ fresh)/merod.env")"
-grep -qx 'MERO_TEE_VERSION="2.3.70"' "$(T_ fresh)/merod.env" || fail "recording the evidence lost merod.env's other lines"
-logged fresh "Recorded the data-disk KMS evidence" || fail "recording the KMS evidence must be logged"
 
 # --- 2. a later boot: existing LUKS disk -> reopened, never reformatted -----
 run_disk existing locked-read-only "$URL" 2.3.70 yes luks
@@ -385,26 +349,6 @@ called existing '^merod kms disk-key .*--create-identity' && fail "an existing d
 called existing '^cryptsetup open' || fail "the existing disk was not opened"
 [[ "$(cat "$E/state/mounted-source")" == "$E/dev/mapper/calimero-data" ]] || fail "the existing disk was not mounted from the mapper"
 no_key_left existing
-# Every boot that opens the disk records this boot's KMS, once: the script ran
-# twice over this case's merod.env and must not have named it twice.
-called existing '^merod kms disk-key .*--evidence-out ' || fail "a later boot must record the KMS that opened the disk too"
-[[ "$(grep -c '^MEROD_KMS_DISK_EVIDENCE=' "$E/merod.env")" == 1 ]] || fail "merod.env must name the KMS evidence exactly once: $(cat "$E/merod.env")"
-
-# An older merod (no --evidence-out): no flag, no line, the disk opens as before.
-for c in "evidence-old-merod no" "evidence-silent silent" "evidence-not-tmpfs notmpfs"; do
-  read -r name ev <<<"$c"
-  run_disk "$name" locked-read-only "$URL" 2.3.70 yes blank up "$ev"
-  [[ "$(rc "$name")" == 0 ]] || fail "$name: the KMS evidence must never stop the boot (rc=$(rc "$name")): $(cat "$(T_ "$name")/log")"
-  called "$name" '^cryptsetup open' || fail "$name: the disk was not opened"
-  grep -q '^MEROD_KMS_DISK_EVIDENCE=' "$(T_ "$name")/merod.env" && fail "$name: merod.env names KMS evidence that was not written"
-  [[ -e "$(T_ "$name")/run/calimero/kms-disk-evidence.json" ]] && fail "$name: a KMS evidence file exists"
-  no_key_left "$name"
-done
-called evidence-old-merod '--evidence-out' && fail "a merod without --evidence-out was given it"
-called evidence-not-tmpfs '--evidence-out' && fail "--evidence-out was passed for a directory that is not on tmpfs"
-logged evidence-not-tmpfs "not recording the data-disk KMS evidence" || fail "skipping the evidence off tmpfs must be logged"
-called evidence-silent '--evidence-out' || fail "evidence-silent: the flag should have been passed"
-logged evidence-silent "wrote no KMS evidence" || fail "a fetch that wrote no evidence must be logged"
 
 # --- 3. a plain ext4 disk ---------------------------------------------------
 # On locked-read-only a plain disk is refused: host-written state can carry a
@@ -420,7 +364,6 @@ run_disk legacy debug-read-only "$URL" 2.3.70 yes ext4
 never_formatted legacy
 called legacy '^merod kms disk-key' && fail "a plain disk needs no disk key"
 [[ "$(cat "$(T_ legacy)/state/mounted-source")" == "$(T_ legacy)/dev/google-data" ]] || fail "the plain disk was not mounted"
-grep -q '^MEROD_KMS_DISK_EVIDENCE=' "$(T_ legacy)/merod.env" && fail "a plain disk fetched no key, so merod.env must name no KMS evidence"
 logged legacy "UNENCRYPTED" || fail "a plain data disk must warn that it is unencrypted"
 grep -q 'nofail' "$(T_ legacy)/fstab" || fail "a plain disk keeps its fstab entry as before"
 
@@ -493,7 +436,6 @@ never_formatted kms-down
 # cannot show anyone: every attempt's WARN carries merod's own error.
 grep -q 'key fetch attempt 1/2 failed .*: kms unreachable' "$(T_ kms-down)/log" \
   || fail "a failed key fetch must log merod's error with the attempt, not just that it failed"
-grep -q '^MEROD_KMS_DISK_EVIDENCE=' "$(T_ kms-down)/merod.env" && fail "a failed fetch must not name KMS evidence"
 no_key_left kms-down
 
 run_disk luks-kms-down locked-read-only "$URL" 2.3.70 yes luks down
