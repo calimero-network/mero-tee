@@ -17,7 +17,9 @@
 #   EVIDENCE_DIR/                  the UKI, mkosi's and the renderer's manifests,
 #     cmdline.txt, computed.json (RTMR1-3 before boot, for compute_rtmr.py
 #     compare against the image's quote), root.digest and initrd.digest
-#     (scripts/image/image_digest.py, to diff against another build).
+#     (scripts/image/image_digest.py, to diff against another build), and
+#     mkosi-build.log, the build's output with each line's UTC time.
+#   On stdout, last: how long each mkosi phase took (build_timing.py).
 #
 # Needs root through sudo, mkosi v26, and install-tools.sh's tools.
 set -euo pipefail
@@ -39,8 +41,16 @@ fi
 # id to root, and the image came out with every file root's: /etc/shadow not
 # group shadow, dbus's launch helper not group messagebus,
 # /var/lib/systemd/network not systemd-network's.
+#
+# Each line goes out with the UTC time it was printed, and the log is kept in
+# the evidence (mkosi-build.log): the build has taken from 5 to 23 minutes for
+# the same inputs, and build_timing.py (at the end of this script) says which
+# stretch it was.
+build_log="${EVIDENCE_DIR}/mkosi-build.log"
 sudo --preserve-env=PROFILE,ROLE,MERO_KMS_BINARY,KMS_NODE_POLICY_FILE,KMS_AGENT_POLICY_FILE,MERO_AGENT_GATE_BINARY,MERO_AGENT_BINARY,MERO_BOT_BUNDLE,MERO_INFERENCE_GATE_BINARY,DOWNLOAD_CACHE \
-  env "PATH=${PATH}" "${repo}/mero-tee/mkosi-image/build.sh" "${MKOSI_OUT}" -- "${extra[@]}"
+  env "PATH=${PATH}" "${repo}/mero-tee/mkosi-image/build.sh" "${MKOSI_OUT}" -- "${extra[@]}" 2>&1 \
+  | perl -MPOSIX -ne 'BEGIN { $| = 1 } print strftime("%H:%M:%S ", gmtime), $_' \
+  | tee "${build_log}"
 sudo chown -R "$(id -u):$(id -g)" "${MKOSI_OUT}"
 ls -la "${MKOSI_OUT}"
 efi="${EVIDENCE_DIR}/merotee-${ROLE}.efi"
@@ -114,11 +124,15 @@ if [[ -z "$(sudo find "${scratch}/root" \( ! -uid 0 -o ! -gid 0 \) -print -quit)
   echo "::error::every file in the root is owned by root:root; the build lost the packages' ownership"
   exit 1
 fi
-echo "::group::root digests"
+# Thousands of lines each: into the evidence only, not the step's log (where
+# they pushed the mkosi build out of the API's log tail).
 sudo python3 "${repo}/scripts/image/image_digest.py" root "${scratch}/root" \
-  --files-under /etc --files-under /var --files-under /usr/lib/dbus-1.0 | tee "${EVIDENCE_DIR}/root.digest"
-echo "::endgroup::"
-echo "::group::initrd digests"
-python3 "${repo}/scripts/image/image_digest.py" uki "${efi}" --files-under /etc | tee "${EVIDENCE_DIR}/initrd.digest"
-echo "::endgroup::"
+  --files-under /etc --files-under /var --files-under /usr/lib/dbus-1.0 | tee "${EVIDENCE_DIR}/root.digest" >/dev/null
+python3 "${repo}/scripts/image/image_digest.py" uki "${efi}" --files-under /etc > "${EVIDENCE_DIR}/initrd.digest"
+for digest in root initrd; do
+  echo "${digest}.digest: $(wc -l < "${EVIDENCE_DIR}/${digest}.digest") lines, sha256 $(sha256sum "${EVIDENCE_DIR}/${digest}.digest" | cut -c1-16)"
+done
 sudo rm -rf "${scratch}"
+
+# Last, so it is in the last lines of the step's log.
+python3 "${repo}/scripts/release/mkosi/build_timing.py" "${build_log}"

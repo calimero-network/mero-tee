@@ -556,9 +556,19 @@ on every build: nvme-cli's random host NQN and host id, `alternatives.log`
 and ldconfig's aux cache. It also runs mkosi as root, because as an
 unprivileged user mkosi's user namespace gave every file root as its owner,
 and the run fails when no file in the root is owned by anyone else. To find
-what differs between two builds, the run logs per-directory digests of the
-root and the initrd (`scripts/image/image_digest.py`); run the same on the
-other build and diff the two. Build locally as root, as CI does.
+what differs between two builds, the run writes per-directory digests of the
+root and the initrd (`scripts/image/image_digest.py`) to `root.digest` and
+`initrd.digest` in the build evidence (the step's log shows only their line
+counts and hashes); run the same on the other build and diff the two. Build
+locally as root, as CI does.
+
+When a build is slow, the last lines of its step say why: `build-image.sh`
+stamps each line of mkosi's output with its UTC time, keeps it as
+`mkosi-build.log` in the evidence (and the release uploads it as the
+`mkosi-build-log-<profile>-<run>` artifact), and ends with
+`build_timing.py`'s summary, each mkosi phase and the longest silences. The
+build has taken from 5 to 23 minutes for the same inputs, nearly all of it
+fetching packages from the snapshot mirror with no cache.
 
 A `locked-read-only` image writes nothing to the serial console, because it has
 no `console=`. When it never comes up, run the workflow with `serial_console`

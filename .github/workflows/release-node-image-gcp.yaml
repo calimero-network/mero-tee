@@ -328,13 +328,16 @@ jobs:
           tail -80 /tmp/mkosi-build.log 2>/dev/null >> "${GITHUB_STEP_SUMMARY}" || echo "(no log)" >> "${GITHUB_STEP_SUMMARY}"
           echo '```' >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload the build log on failure
-        if: ${{ failure() && steps.build_image.outcome == 'failure' }}
+      # On every build, not only a failed one: its lines carry their UTC time
+      # (build-image.sh), so a slow build can be read afterwards.
+      - name: Upload the build log
+        if: ${{ always() && steps.build_image.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mkosi-build-log-${{ matrix.profile }}-${{ github.run_id }}
           path: /tmp/mkosi-build.log
           if-no-files-found: ignore
+          retention-days: 14
 
       - name: Resolve image and VM parameters
         id: params
