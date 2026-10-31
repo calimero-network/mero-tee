@@ -1202,6 +1202,10 @@ fi
 #                      optional, `owner` or `operator`: the cluster's deployment
 #                      governance, read on a FIRST BOOT only (see "Deployment
 #                      governance" below)
+#   deployments        optional, `open` or `granted`; and
+#   deployers          optional, `operator` or `owner`: who may install apps on
+#                      the cluster, also governance, read on a FIRST BOOT only
+#                      (see "Who may deploy" below)
 #
 # Not read: anything that weakens TDX mode (`--dev`, storage keys,
 # `--allow-unsigned-bundles`); and `--ops-token`, which would put the token in
@@ -1248,6 +1252,22 @@ fi
 # init`: a typo here would be the cluster's governance for good. Allowed on
 # every profile, locked-read-only included -- the choice is attested and
 # visible to every verifier -- and logged on its own line.
+#
+# WHO MAY DEPLOY. Two more governance values, fixed and attested the same way
+# (core's docs/specs/org-owned-deployments.md, "Who may deploy"):
+#
+#   deployments  `open` (merod's default): any account may install apps;
+#                `granted`: only accounts and orgs holding a deployer grant
+#   deployers    who grants deployers on a `granted` cluster: `operator`
+#                (merod's default; mdma, with the cluster's operator key) or
+#                `owner` (the cluster's owner, once the operator names it)
+#
+# mdma gives a shared cluster `granted` + `operator`, so only Cloud workspaces
+# deploy on it, and a dedicated one `granted` + `owner`, so only the customer
+# who bought it does. The operator may later move `open` to `granted` through
+# the Ops API, never back. Unlike the three above, these are newer than the
+# first merod 1.0: a value set for a merod that does not take the flag stops
+# the boot rather than founding a cluster that is silently `open`.
 #
 # The configuration is written once and then is the node's: config.toml is on
 # the encrypted data disk, and metadata changed later is not applied, because a
@@ -1308,34 +1328,52 @@ meta_arg() {
   INIT_EXTRA_ARGS+=("--$key" "$value")
 }
 
-# merod's accepted values for the governance flags (core's `Authority`). One
-# list for all three: a value merod adds goes here.
-GOVERNANCE_KEYS=(release-approvals app-upgrades outbound-approvals)
-GOVERNANCE_AUTHORITIES=(owner operator)
+# The governance flags and merod's accepted values for each, the first being
+# merod's default: core's `Authority` for the approvals, `Deployments` and
+# `Deployers` for who may deploy. A value merod adds goes here.
+GOVERNANCE_KEYS=(release-approvals app-upgrades outbound-approvals deployments deployers)
+
+# governance_values KEY: the values merod takes for KEY, its default first.
+governance_values() {
+  case "$1" in
+    deployments) echo "open granted" ;;
+    deployers) echo "operator owner" ;;
+    *) echo "owner operator" ;;
+  esac
+}
 
 governance_value_ok() {
   local v
-  for v in "${GOVERNANCE_AUTHORITIES[@]}"; do
-    [[ "$1" == "$v" ]] && return 0
+  for v in $(governance_values "$1"); do
+    [[ "$2" == "$v" ]] && return 0
   done
   return 1
+}
+
+# Whether the baked merod's `init` takes FLAG.
+merod_init_takes() {
+  "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- "$1 "
 }
 
 # On a first boot: check each governance key against the allowlist, append it to
 # merod init's arguments, and log the governance this node will found the
 # cluster with should it lead first.
 governance_args() {
-  local key value summary=""
+  local key value values summary=""
   for key in "${GOVERNANCE_KEYS[@]}"; do
     value="$(get_meta "$key" | tr -d '\r\n')"
+    values="$(governance_values "$key")"
     if [[ -n "$value" ]]; then
-      governance_value_ok "$value" || fatal "instance metadata '$key' must be one of: \
-${GOVERNANCE_AUTHORITIES[*]}; refusing to initialise the node with it (the cluster's \
-governance is fixed at genesis)"
+      governance_value_ok "$key" "$value" || fatal "instance metadata '$key' must be one of: \
+$values; refusing to initialise the node with it (the cluster's governance is fixed \
+at genesis)"
+      merod_init_takes "--$key" || fatal "instance metadata '$key' is set but this \
+image's merod does not take --$key; refusing to found a cluster without it (the \
+cluster's governance is fixed at genesis)"
       INIT_EXTRA_ARGS+=("--$key" "$value")
       summary+=" $key=$value"
     else
-      summary+=" $key=owner(merod default)"
+      summary+=" $key=${values%% *}(merod default)"
     fi
   done
   log "GOVERNANCE (fixed at the cluster's genesis, attested with every receipt key):${summary}"

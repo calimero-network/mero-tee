@@ -30,10 +30,12 @@
 #     never logged; malformed -> refuse; absent on a locked cluster with a
 #     disk store -> refuse; absent on debug or memory-only -> merod generates
 #     one, and the boot says so
-#   * governance (release-approvals, app-upgrades, outbound-approvals):
-#     owner|operator -> passed to merod init on a first boot, the bootstrap
+#   * governance (release-approvals, app-upgrades, outbound-approvals:
+#     owner|operator; deployments: open|granted; deployers: operator|owner)
+#     -> passed to merod init on a first boot, the bootstrap
 #     node's and every other node's (whichever founding node leads first writes
-#     genesis), and logged; any other value -> refuse, before merod init; on a
+#     genesis), and logged; any other value -> refuse, before merod init; a
+#     value for a flag the merod does not take -> refuse; on a
 #     later boot -> ignored, even if invalid, and the boot says so
 #   * --dev, storage keys, the ops token in the clear -> never passed
 #   * an existing node                           -> no init, merod started
@@ -96,8 +98,9 @@ PY
 ID="$(kms_identity)"
 [[ "$(printf '%s' "$ID" | base64 -d | wc -c)" == 68 ]] || fail "the test's KMS identity is not 68 bytes"
 
-# run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|1.0-attest|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
-# Each KEY=VALUE is one instance metadata item.
+# run_case NAME PROFILE KMS_URL RELEASE MEROD(1.0|1.0-attest|1.0-nogrants|v1) HOME(fresh|existing|v1) STORE_FS [KEY=VALUE...]
+# Each KEY=VALUE is one instance metadata item. `1.0-nogrants` is a merod 1.0
+# from before --deployments and --deployers (1.0.0-rc.5 and earlier).
 run_case() {
   local name="$1" profile="$2" kms_url="$3" release="$4" merod="$5" home_state="$6" store_fs="$7"
   shift 7
@@ -120,6 +123,13 @@ if [[ " \$* " == *" --help "* ]]; then
   if [[ "$merod" == 1.0* ]]; then
     echo "      --node-id <N>"
     echo "      --kms-identity <FILE>"
+    echo "      --release-approvals <RELEASE_APPROVALS>"
+    echo "      --app-upgrades <APP_UPGRADES>"
+    echo "      --outbound-approvals <OUTBOUND_APPROVALS>"
+  fi
+  if [[ "$merod" == 1.0 || "$merod" == 1.0-attest ]]; then
+    echo "      --deployments <DEPLOYMENTS>"
+    echo "      --deployers <DEPLOYERS>"
   fi
   exit 0
 fi
@@ -186,6 +196,7 @@ run_case full locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" \
   "ops-token-sha256=$SHA" "operator-key=$SHA" "registry-url=https://registry.example.com/" apps-domain=apps.example.com \
   peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3 \
   release-approvals=operator app-upgrades=operator outbound-approvals=operator \
+  deployments=granted deployers=operator \
   dev=true storage-key=00 storage-key-file=/x ops-token=plain allow-unsigned-bundles=true listen=0.0.0.0:1
 [[ "$(rc full)" == 0 ]] || fail "a new node with a KMS, a release and its cluster metadata should initialise (rc=$(rc full)): $(cat "$WORK/full/log")"
 init_ran full || fail "merod init was not run for a new node"
@@ -200,10 +211,11 @@ for kv in node-id=1 "public-url=$PUBLIC" cluster=eu1 \
           peer-profiles=locked-read-only peer-min-release=2.3.120 replicas=3; do
   [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "metadata ${kv%%=*} did not reach merod init as --${kv%%=*} ${kv#*=}"
 done
-for kv in release-approvals=operator app-upgrades=operator outbound-approvals=operator; do
+for kv in release-approvals=operator app-upgrades=operator outbound-approvals=operator \
+          deployments=granted deployers=operator; do
   [[ "$(arg full "--${kv%%=*}")" == "${kv#*=}" ]] || fail "governance metadata ${kv%%=*} did not reach the bootstrap node's merod init"
 done
-logged full "GOVERNANCE (fixed at the cluster's genesis, attested with every receipt key): release-approvals=operator app-upgrades=operator outbound-approvals=operator" \
+logged full "GOVERNANCE (fixed at the cluster's genesis, attested with every receipt key): release-approvals=operator app-upgrades=operator outbound-approvals=operator deployments=granted deployers=operator" \
   || fail "the governance a node is initialised with must be logged: $(cat "$WORK/full/log")"
 for flag in --dev --storage-key --storage-key-file \
             --ops-token --allow-unsigned-bundles --listen --data-dir --metrics-listen; do
@@ -231,7 +243,9 @@ run_case minimal debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLI
 [[ "$(wc -l <"$WORK/minimal/init-args")" == 13 ]] \
   || fail "unset metadata reached merod init: $(tr '\n' ' ' <"$WORK/minimal/init-args")"
 
-logged minimal "release-approvals=owner(merod default)" || fail "unset governance must be logged as merod's default"
+for kv in release-approvals=owner deployments=open deployers=operator; do
+  logged minimal "$kv(merod default)" || fail "unset governance must be logged as merod's default ($kv): $(cat "$WORK/minimal/log")"
+done
 
 # --- governance ------------------------------------------------------------------
 # A founding node that is not the bootstrap node gets the same values: should
@@ -239,11 +253,12 @@ logged minimal "release-approvals=owner(merod default)" || fail "unset governanc
 # genesis from its own configuration. Mixed values, each its own flag.
 run_case gov-founder locked-read-only "$URL" 2.3.70 1.0 fresh ext4 node-id=2 "public-url=$PUBLIC" cluster=eu1 \
   "kms-identity=$ID" "peers=1=https://n1.eu1.example.com/,2=https://n2.eu1.example.com/" \
-  release-approvals=operator app-upgrades=owner outbound-approvals=operator
+  release-approvals=operator app-upgrades=owner outbound-approvals=operator deployments=granted deployers=owner
 [[ "$(rc gov-founder)" == 0 ]] || fail "a non-bootstrap first boot with valid governance should initialise: $(cat "$WORK/gov-founder/log")"
 has_flag gov-founder --bootstrap && fail "the test's founding node must not be the bootstrap node"
 [[ "$(arg gov-founder --release-approvals)" == operator && "$(arg gov-founder --app-upgrades)" == owner \
-   && "$(arg gov-founder --outbound-approvals)" == operator ]] \
+   && "$(arg gov-founder --outbound-approvals)" == operator \
+   && "$(arg gov-founder --deployments)" == granted && "$(arg gov-founder --deployers)" == owner ]] \
   || fail "governance did not reach a founding node's merod init: $(tr '\n' ' ' <"$WORK/gov-founder/init-args")"
 
 # Only the keys that are set: one key, one flag.
@@ -251,6 +266,22 @@ run_case gov-one debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLI
 [[ "$(arg gov-one --release-approvals)" == operator ]] || fail "release-approvals alone did not reach merod init"
 has_flag gov-one --app-upgrades && fail "an unset app-upgrades reached merod init"
 has_flag gov-one --outbound-approvals && fail "an unset outbound-approvals reached merod init"
+has_flag gov-one --deployments && fail "an unset deployments reached merod init"
+has_flag gov-one --deployers && fail "an unset deployers reached merod init"
+
+# A merod from before deployer grants: unset, it boots as before; set, the boot
+# stops rather than founding a cluster that is silently open to every account.
+run_case gov-old-unset locked-read-only "$URL" 2.3.70 1.0-nogrants fresh ext4 "${BASE[@]}" bootstrap=true \
+  release-approvals=operator
+[[ "$(rc gov-old-unset)" == 0 ]] || fail "a merod without --deployments must still boot when no one asks for it: $(cat "$WORK/gov-old-unset/log")"
+has_flag gov-old-unset --deployments && fail "--deployments reached a merod that does not take it"
+for kv in deployments=granted deployers=owner; do
+  name="gov-old-${kv%%=*}"
+  run_case "$name" locked-read-only "$URL" 2.3.70 1.0-nogrants fresh ext4 "${BASE[@]}" bootstrap=true "$kv"
+  [[ "$(rc "$name")" != 0 ]] || fail "$kv was accepted for a merod that does not take --${kv%%=*}"
+  init_ran "$name" && fail "merod init ran without the $kv it was asked for"
+  logged "$name" "this image's merod does not take --${kv%%=*}" || fail "the refusal must say why: $(cat "$WORK/$name/log")"
+done
 
 # Not on the allowlist: refused on every profile, before merod init, saying why.
 n=0
@@ -264,6 +295,15 @@ for bad in release-approvals=publisher release-approvals=Owner "app-upgrades=own
     logged "gov-bad-$n" "'${bad%%=*}' must be one of: owner operator" || fail "a refused governance value must say why: $(cat "$WORK/gov-bad-$n/log")"
   done
 done
+for c in "deployments=Granted|open granted" "deployments=closed|open granted" "deployments=owner|open granted" \
+         "deployers=open|operator owner" "deployers=operator |operator owner" "deployers=publisher|operator owner"; do
+  bad="${c%%|*}" allowed="${c#*|}"
+  n=$((n + 1))
+  run_case "gov-bad-$n" locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" bootstrap=true "$bad"
+  [[ "$(rc "gov-bad-$n")" != 0 ]] || fail "governance metadata '$bad' was accepted"
+  init_ran "gov-bad-$n" && fail "merod init ran with governance metadata '$bad'"
+  logged "gov-bad-$n" "'${bad%%=*}' must be one of: $allowed" || fail "a refused value must say why: $(cat "$WORK/gov-bad-$n/log")"
+done
 
 # A later boot: the configuration exists, genesis has been written. Valid or
 # not, the keys change nothing and stop nothing, and the boot says they were
@@ -271,11 +311,12 @@ done
 for c in "gov-restart operator" "gov-restart-bad publisher"; do
   read -r name value <<<"$c"
   run_case "$name" locked-read-only "$URL" 2.3.70 1.0 existing ext4 node-id=1 "public-url=$PUBLIC" cluster=eu1 \
-    bootstrap=true "release-approvals=$value" "app-upgrades=$value" "outbound-approvals=$value"
+    bootstrap=true "release-approvals=$value" "app-upgrades=$value" "outbound-approvals=$value" \
+    "deployments=$value" "deployers=$value"
   [[ "$(rc "$name")" == 0 ]] || fail "governance metadata ($value) must not stop a later boot: $(cat "$WORK/$name/log")"
   init_ran "$name" && fail "merod init re-ran over an existing node with governance metadata"
   [[ "$(ready "$name")" == true ]] || fail "an existing node with governance metadata must be started"
-  logged "$name" "Governance metadata ignored on this boot (release-approvals app-upgrades outbound-approvals)" \
+  logged "$name" "Governance metadata ignored on this boot (release-approvals app-upgrades outbound-approvals deployments deployers)" \
     || fail "a later boot must say the governance metadata was ignored: $(cat "$WORK/$name/log")"
 done
 
