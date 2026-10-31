@@ -273,6 +273,25 @@ first boot stops the boot before `merod init`, on every profile; the first
 boot logs the governance it initialised with on one line, `GOVERNANCE (fixed
 at the cluster's genesis, attested with every receipt key): ...`.
 
+### Who may deploy
+
+Two more governance keys decide who may install apps on the cluster (core's
+[org-owned deployments spec](https://github.com/calimero-network/core/blob/master/docs/specs/org-owned-deployments.md)).
+They are read, fixed, attested and logged exactly like the three above:
+
+| Metadata key | merod flag | Decides | Values |
+| --- | --- | --- | --- |
+| `deployments` | `--deployments` | whether any account may install apps, or only accounts and organizations holding a deployer grant | `open` (default) or `granted` |
+| `deployers` | `--deployers` | who grants deployers on a `granted` cluster: the operator, with the cluster's operator key, or the cluster's owner, once the operator names it | `operator` (default) or `owner` |
+
+mdma sets `granted` and `operator` on a shared cluster, so only Cloud
+workspaces deploy on it, and `granted` and `owner` on a dedicated one, so only
+the customer who bought it does. The operator may later move `open` to
+`granted` through the Ops API, never back. These flags are newer than the
+first merod 1.0 (merod 1.0.0-rc.5 and earlier do not take them): with either
+key set and a merod that does not take its flag, the first boot stops before
+`merod init` rather than found a cluster that is open to every account.
+
 ## Image build inputs
 
 The node, KMS and agent images are built with mkosi from the Ansible roles, by
