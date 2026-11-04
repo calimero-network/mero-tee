@@ -64,6 +64,15 @@ pub enum ServiceError {
     PolicyNotReady(String),
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
+    /// A rollback counter request or answer whose MAC does not check out.
+    #[error("invalid MAC: {0}")]
+    InvalidMac(String),
+    /// Too few replicas answered, or this one has not synced its counters.
+    #[error("counters unavailable: {0}")]
+    CountersUnavailable(String),
+    /// A counter limit (`MAX_COUNTER_*`) is reached.
+    #[error("counter limit: {0}")]
+    CounterLimit(String),
 }
 
 impl ServiceError {
@@ -135,6 +144,13 @@ impl ServiceError {
                 "key_derivation_failed",
                 Some(msg),
             ),
+            Self::InvalidMac(msg) => (StatusCode::UNAUTHORIZED, "invalid_mac", Some(msg)),
+            Self::CountersUnavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "counters_unavailable",
+                Some(msg),
+            ),
+            Self::CounterLimit(msg) => (StatusCode::FORBIDDEN, "counter_limit", Some(msg)),
         }
     }
 }

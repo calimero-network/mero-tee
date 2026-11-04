@@ -11,7 +11,9 @@ use libp2p_identity::PublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, warn};
+use zeroize::Zeroizing;
 
+use crate::counters::session_key_info;
 use crate::policy::{AttestationPolicy, Role};
 use crate::sealed;
 use crate::stateless_challenge;
@@ -40,6 +42,25 @@ pub struct GetKeyRequest {
     /// report data commits to it, and so does the signature.
     #[serde(default)]
     pub seal_to_b64: Option<String>,
+    /// The node id (merod's `--node-id`) whose rollback counter to release with
+    /// the key (`counters`). The quote and the signature both commit to it, and
+    /// the answer is a sealed v2 record. Needs `sealToB64`.
+    #[serde(default)]
+    pub rollback_node_id: Option<u64>,
+}
+
+/// What a v2 release seals: the key, the node's counter and a session key for
+/// its later `/rollback/*` calls. No `Debug`: it holds both keys.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseRecord<'a> {
+    key_hex: &'a str,
+    epoch: u64,
+    generation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mark: Option<u64>,
+    session_id_b64: String,
+    session_key_hex: &'a str,
 }
 
 /// Response body for the get-key endpoint.
@@ -114,6 +135,11 @@ async fn release_key(
         .as_deref()
         .map(|value| super::attest::decode_fixed_b64_32("sealToB64", value))
         .transpose()?;
+    if request.rollback_node_id.is_some() && seal_to.is_none() {
+        return Err(ServiceError::InvalidAttestationRequest(
+            "rollbackNodeId needs sealToB64".to_owned(),
+        ));
+    }
     if seal_to.is_none() && state.config.require_sealed_key_release {
         return Err(ServiceError::InvalidAttestationRequest(
             "this KMS releases keys sealed only; the request carries no sealToB64. \
@@ -124,7 +150,7 @@ async fn release_key(
 
     let (challenge_nonce, challenge_expires_at) = open_challenge(state, request)?;
 
-    verify_peer_signature(
+    verify_peer_signature_for(
         &request.peer_id,
         &request.peer_public_key_b64,
         &request.signature_b64,
@@ -132,13 +158,16 @@ async fn release_key(
         &challenge_nonce,
         &quote_bytes,
         seal_to.as_ref(),
+        request.rollback_node_id,
     )?;
 
     // What the quote's report data must carry after the nonce: the peer id
-    // alone for a legacy request, the peer id and the seal key for a sealed one.
-    let binding = match &seal_to {
-        Some(seal_to) => sealed::request_binding(seal_to, &request.peer_id),
-        None => hash_peer_id(&request.peer_id),
+    // alone for a legacy request, the peer id and the seal key for a sealed
+    // one, and the node id too for one that asks for its rollback counter.
+    let binding = match (&seal_to, request.rollback_node_id) {
+        (Some(seal_to), Some(node)) => sealed::request_binding_v2(seal_to, &request.peer_id, node),
+        (Some(seal_to), None) => sealed::request_binding(seal_to, &request.peer_id),
+        (None, _) => hash_peer_id(&request.peer_id),
     };
     let role = verify_and_enforce_attestation(
         &state.config,
@@ -149,9 +178,21 @@ async fn release_key(
     )
     .await?;
 
+    let key_path = key_path_for_peer(&state.config, role, &request.peer_id);
+    // Read before the challenge is spent: a node refused for want of a
+    // majority of replicas asks again with the same challenge.
+    let counters = match request.rollback_node_id {
+        Some(_) if role != Role::Node => {
+            return Err(ServiceError::InvalidAttestationRequest(
+                "rollback counters are kept for nodes only".to_owned(),
+            ));
+        }
+        Some(node) => Some((node, state.counters.read(&state.backend, &key_path).await?)),
+        None => None,
+    };
+
     spend_challenge(state, request, challenge_expires_at)?;
 
-    let key_path = key_path_for_peer(&state.config, role, &request.peer_id);
     let key_hex = state.backend.derive_key_hex(&key_path)?;
 
     info!(peer_id = %request.peer_id, %role, "Key derived successfully");
@@ -167,6 +208,45 @@ async fn release_key(
         }));
     };
     let transport = state.backend.transport_key()?;
+    if let Some((node, counters)) = counters {
+        let entry = counters.nodes.get(&node).copied();
+        let session_id: [u8; 16] = rand::random();
+        let session_key =
+            state
+                .backend
+                .rollback_session_key(&session_key_info(&key_path, node, &session_id))?;
+        let session_key_hex = Zeroizing::new(hex::encode(*session_key));
+        let record = ReleaseRecord {
+            key_hex: &key_hex,
+            epoch: counters.epoch,
+            generation: entry.map_or(counters.epoch, |e| e.generation),
+            mark: entry.map(|e| e.mark),
+            session_id_b64: BASE64.encode(session_id),
+            session_key_hex: &session_key_hex,
+        };
+        let plaintext = Zeroizing::new(serde_json::to_vec(&record).map_err(|_| {
+            ServiceError::KeyDerivationFailed("serializing the release failed".to_owned())
+        })?);
+        let (seal_nonce, sealed_record) = sealed::seal_v2(
+            &transport,
+            &seal_to,
+            &challenge_nonce,
+            &request.peer_id,
+            &plaintext,
+        )?;
+        info!(
+            peer_id = %request.peer_id,
+            node,
+            epoch = counters.epoch,
+            mark = ?entry.map(|e| e.mark),
+            "Released the key with the node's rollback counter"
+        );
+        return Ok(Json(GetKeyResponse {
+            key: None,
+            sealed_key_b64: Some(BASE64.encode(sealed_record)),
+            seal_nonce_b64: Some(BASE64.encode(seal_nonce)),
+        }));
+    }
     let (seal_nonce, sealed_key) = sealed::seal(
         &transport,
         &seal_to,
@@ -333,6 +413,7 @@ pub(crate) fn key_path_for_peer(config: &Config, role: Role, peer_id: &str) -> S
 /// Verify that the claimed peer ID owns the supplied public key and that the
 /// signature covers a deterministic payload binding the challenge, quote, and peer ID.
 /// This prevents a node from requesting keys for a different peer ID.
+#[cfg(test)]
 pub(crate) fn verify_peer_signature(
     peer_id: &str,
     peer_public_key_b64: &str,
@@ -341,6 +422,31 @@ pub(crate) fn verify_peer_signature(
     challenge_nonce: &[u8; 32],
     quote_bytes: &[u8],
     seal_to: Option<&[u8; 32]>,
+) -> Result<(), ServiceError> {
+    verify_peer_signature_for(
+        peer_id,
+        peer_public_key_b64,
+        signature_b64,
+        challenge_id,
+        challenge_nonce,
+        quote_bytes,
+        seal_to,
+        None,
+    )
+}
+
+/// [`verify_peer_signature`] for a request that may name a node id
+/// (`rollbackNodeId`), which the signed payload then covers too.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_peer_signature_for(
+    peer_id: &str,
+    peer_public_key_b64: &str,
+    signature_b64: &str,
+    challenge_id: &str,
+    challenge_nonce: &[u8; 32],
+    quote_bytes: &[u8],
+    seal_to: Option<&[u8; 32]>,
+    rollback_node_id: Option<u64>,
 ) -> Result<(), ServiceError> {
     let public_key_bytes = BASE64
         .decode(peer_public_key_b64)
@@ -356,8 +462,14 @@ pub(crate) fn verify_peer_signature(
         return Err(ServiceError::PeerIdentityMismatch);
     }
 
-    let payload =
-        build_signature_payload(challenge_id, challenge_nonce, quote_bytes, peer_id, seal_to)?;
+    let payload = signature_payload(
+        challenge_id,
+        challenge_nonce,
+        quote_bytes,
+        peer_id,
+        seal_to,
+        rollback_node_id,
+    )?;
     if !public_key.verify(&payload, &signature_bytes) {
         return Err(ServiceError::InvalidSignature(
             "signature verification failed".to_owned(),
@@ -372,12 +484,32 @@ pub(crate) fn verify_peer_signature(
 ///
 /// A sealed request also signs `sealToHex`, so the seal key cannot be changed
 /// without the node's identity key, on top of its quote committing to it.
+#[cfg(test)]
 pub(crate) fn build_signature_payload(
     challenge_id: &str,
     challenge_nonce: &[u8; 32],
     quote_bytes: &[u8],
     peer_id: &str,
     seal_to: Option<&[u8; 32]>,
+) -> Result<Vec<u8>, ServiceError> {
+    signature_payload(
+        challenge_id,
+        challenge_nonce,
+        quote_bytes,
+        peer_id,
+        seal_to,
+        None,
+    )
+}
+
+/// The signed payload; a request naming `rollbackNodeId` signs it too.
+pub(crate) fn signature_payload(
+    challenge_id: &str,
+    challenge_nonce: &[u8; 32],
+    quote_bytes: &[u8],
+    peer_id: &str,
+    seal_to: Option<&[u8; 32]>,
+    rollback_node_id: Option<u64>,
 ) -> Result<Vec<u8>, ServiceError> {
     let quote_hash = Sha256::digest(quote_bytes);
     let mut payload = serde_json::json!({
@@ -388,6 +520,9 @@ pub(crate) fn build_signature_payload(
     });
     if let Some(seal_to) = seal_to {
         payload["sealToHex"] = serde_json::Value::String(hex::encode(seal_to));
+    }
+    if let Some(node) = rollback_node_id {
+        payload["rollbackNodeId"] = serde_json::Value::from(node);
     }
     serde_json::to_vec(&payload)
         .map_err(|e| ServiceError::InvalidSignature(format!("failed to serialize payload: {}", e)))

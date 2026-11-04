@@ -4,6 +4,7 @@ mod attest;
 mod challenge;
 pub mod errors;
 mod get_key;
+mod rollback;
 
 use axum::extract::{DefaultBodyLimit, State};
 use axum::response::IntoResponse;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 
 use crate::backend::TdxBackend;
 use crate::cluster::{self, JoinNonces};
+use crate::counters::{Counters, Signed};
 use crate::stateless_challenge::SpentChallenges;
 use crate::Config;
 
@@ -32,15 +34,33 @@ pub struct AppState {
     pub(crate) join_nonces: Arc<JoinNonces>,
     /// The stateless challenges this replica has already accepted.
     pub(crate) spent_challenges: Arc<SpentChallenges>,
+    /// The nodes' rollback counters (`counters`).
+    pub(crate) counters: Arc<Counters>,
 }
 
-/// Create the router with all endpoints.
+/// The router of a replica that already holds its root and, with it, every
+/// counter there is (a bootstrapping replica, or a test's).
+#[cfg(test)]
 pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router {
+    let counters = Arc::new(Counters::new(config.replicas, config.cluster_peers.clone()));
+    if backend.has_root() {
+        counters.bootstrap();
+    }
+    create_router_with(config, backend, counters)
+}
+
+/// Create the router with all endpoints, over `counters`.
+pub(crate) fn create_router_with(
+    config: Config,
+    backend: Arc<TdxBackend>,
+    counters: Arc<Counters>,
+) -> Router {
     let state = AppState {
         config,
         backend,
         join_nonces: Arc::new(JoinNonces::default()),
         spent_challenges: Arc::new(SpentChallenges::default()),
+        counters,
     };
 
     Router::new()
@@ -50,8 +70,34 @@ pub(crate) fn create_router(config: Config, backend: Arc<TdxBackend>) -> Router 
         .route("/attest", post(attest::attest_kms_handler))
         .route("/cluster/nonce", post(cluster::join_nonce_handler))
         .route("/cluster/join", post(cluster::join_handler))
+        .route("/cluster/counters/read", post(counters_read_handler))
+        .route("/cluster/counters/merge", post(counters_merge_handler))
+        .route("/rollback/raise", post(rollback::raise_handler))
+        .route("/rollback/reset", post(rollback::reset_handler))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
+}
+
+/// Another replica reads counters (`counters`); MACed both ways.
+async fn counters_read_handler(
+    State(state): State<AppState>,
+    Json(request): Json<Signed>,
+) -> Result<Json<Signed>, errors::ServiceError> {
+    state
+        .counters
+        .answer_read(&state.backend, &request)
+        .map(Json)
+}
+
+/// Another replica writes counters (`counters`); MACed both ways.
+async fn counters_merge_handler(
+    State(state): State<AppState>,
+    Json(request): Json<Signed>,
+) -> Result<Json<Signed>, errors::ServiceError> {
+    state
+        .counters
+        .answer_merge(&state.backend, &request)
+        .map(Json)
 }
 
 /// Health check endpoint. Also reports whether this replica holds its
@@ -63,6 +109,7 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
         "status": "alive",
         "service": "mero-kms",
         "clusterRootReady": state.backend.has_root(),
+        "countersReady": state.counters.is_ready(),
     });
     if let Some(error) = state.backend.last_join_error() {
         health["lastJoinError"] = serde_json::Value::String(error);
