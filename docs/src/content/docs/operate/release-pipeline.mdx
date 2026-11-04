@@ -145,9 +145,8 @@ Uploaded to the `mero-kms-v<version>` release, each trust asset with `.sig`,
   archives), `kms-binaries-sbom.spdx.json`, `kms-rekor-index.json`, and
   `kms-trust-bundle.tar.gz` (all of the above, for offline transfer).
 
-Releases up to the retirement of the agent and inference images also carry
-`kms-agent-attestation-policy.<profile>.json` and
-`kms-inference-attestation-policy.<profile>.json`; later ones carry neither.
+Releases up to the retirement of the agent image also carry
+`kms-agent-attestation-policy.<profile>.json`; later ones do not.
 
 The KMS images themselves live in the images project, named
 `merotee-kms-<profile>-<version>`; MDMA deploys clusters from them.

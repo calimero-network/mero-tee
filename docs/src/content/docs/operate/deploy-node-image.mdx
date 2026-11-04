@@ -111,7 +111,7 @@ KMS release keys only to a matching profile — see
    ```
 
    It writes `OUT/merotee-node.raw` (the disk), `merotee-node.efi` (the UKI)
-   and mkosi's package manifest. `ROLE` is `node` or `kms`.
+   and mkosi's package manifest. `ROLE` is `node`, `kms` or `inference`.
 
 2. **Compute the measurements and upload**, as the releases do:
    `scripts/release/mkosi/build-image.sh` builds, checks the command line,

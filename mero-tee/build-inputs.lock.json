@@ -29,5 +29,11 @@
     "sha256": {
       "vector-0.50.0-x86_64-unknown-linux-gnu.tar.gz": "951ceb14f2382c1438696552745221c5584d6895f9aa2b0e12ff0e30271d4b0e"
     }
+  },
+  "meroBot": {
+    "version": "0.3.0",
+    "sha256": {
+      "mero-bot-0.3.0-linux-x64.tar.gz": "bc8f620a51895a98671a091ba22b2b1cb792fa790854aef0ec2ab73e1de363f4"
+    }
   }
 }

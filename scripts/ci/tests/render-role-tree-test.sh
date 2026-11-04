@@ -280,4 +280,29 @@ if kms_render kms-empty "${work}/kms-empty.json" >/dev/null 2>&1; then
   fail "a KMS image with an empty RTMR3 allowlist rendered"
 fi
 
+# --- the real inference playbook ----------------------------------------------
+echo stub > "${work}/mero-inference-gate"
+python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook-inference.yml" --out "${work}/inference" \
+  --manifest "${work}/inference.json" --cache "${work}/empty" -e lockdown_profile=locked-read-only \
+  -e image_version=0.0.0 -e "mero_inference_gate_binary=${work}/mero-inference-gate" \
+  --role mero-inference --role cleanup --role merod-lockdown \
+  >/dev/null || fail "the inference playbook's roles do not render"
+grep -q '^IMAGE_PROFILE="locked-read-only"$' "${work}/inference/usr/local/lib/mero-inference/init.sh" \
+  || fail "inference-init not rendered for the profile"
+for path in etc/mero-inference/gate.env etc/systemd/system/mero-inference-gate.service \
+            etc/systemd/system/mero-inference-vllm.service usr/local/bin/mero-inference-gate \
+            usr/local/lib/mero-inference/inference_model.py usr/local/lib/mero-inference/gpu-evidence; do
+  [[ -e "${work}/inference/${path}" ]] || fail "inference playbook: ${path} not rendered"
+done
+# vLLM is started by inference-init, never enabled: the measurement VM has no model.
+jq -e '.enable | index("mero-inference-vllm.service") | not' "${work}/inference.json" >/dev/null \
+  || fail "mero-inference-vllm.service must not be enabled"
+jq -e '[.packages[].names[]] | index("linux-modules-nvidia-580-server-open-gcp")' "${work}/inference.json" >/dev/null \
+  || fail "the inference image does not install the NVIDIA open modules"
+if python3 "${TOOL}" "${REPO_ROOT}/mero-tee/playbook-inference.yml" --out "${work}/inference-nogate" \
+    --manifest "${work}/inference-nogate.json" --cache "${work}/empty" -e lockdown_profile=locked-read-only \
+    -e image_version=0.0.0 -e mero_inference_gate_binary= --role mero-inference >/dev/null 2>&1; then
+  fail "an inference image without its gate rendered"
+fi
+
 echo "PASS: render role tree"

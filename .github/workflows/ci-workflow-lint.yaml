@@ -8,6 +8,7 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
+      - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
   push:
@@ -19,6 +20,7 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
+      - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
   workflow_dispatch:
@@ -55,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh mero-tee/**/*.sh
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/inference/**/*.sh mero-tee/**/*.sh
                        mero-tee/mkosi-*/mkosi.postinst mero-tee/mkosi-*/mkosi.finalize)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
@@ -102,6 +104,12 @@ jobs:
               -e merod_version=0.0.0 -e cpu_architecture=amd64 \
               -e traefik_version=0.0.0 -e node_exporter_version=0.0.0 \
               -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
+          done
+          # The inference image's playbook too (docs/design/private-inference.md).
+          for profile in locked-read-only debug-read-only debug; do
+            ansible-playbook -i localhost, --syntax-check playbook-inference.yml \
+              -e lockdown_profile="${profile}" -e image_version=0.0.0 -e cpu_architecture=amd64 \
+              -e node_exporter_version=0.0.0 -e vmagent_version=0.0.0 -e vector_version=0.0.0 </dev/null
           done
 
       # A KMS join refused over differing registers is diagnosed from the two
@@ -202,12 +210,32 @@ jobs:
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
       # Each image's RTMR3 extend is what its KMS policy entry matches, so the
-      # node and KMS init scripts' one shared block is executed and the v3
-      # event (role, profile, dm-verity roothash) checked byte for byte.
-      - name: Check calimero-init and kms-init extend RTMR3 (v3)
+      # node, KMS and inference init scripts' one shared block is
+      # executed and the v3 event (role, profile, dm-verity roothash) checked
+      # byte for byte.
+      - name: Check calimero-init, kms-init and inference-init extend RTMR3 (v3)
         id: init_rtmr3_test
         shell: bash
         run: scripts/ci/tests/init-rtmr3-test.sh
+
+      # inference-init against stubs: measure-only extends RTMR3 with the image
+      # alone; a model's configuration is measured as its second event; code
+      # from a repository, a moving revision, an open gate or weights that do
+      # not hash to model-sha256 stop the boot before vLLM starts; a GPU outside
+      # confidential-computing mode stops a locked-read-only boot.
+      - name: Check inference-init measures the model and refuses what it must
+        id: inference_init_test
+        shell: bash
+        run: scripts/ci/tests/inference-init-test.sh
+
+      # The inference image's model configuration (docs/design/private-inference.md):
+      # metadata can set only allowlisted vLLM flags, never remote code; the
+      # canonical bytes measured into RTMR3 match mdma's; the weights digest
+      # covers exactly the files kept; vLLM listens on loopback only.
+      - name: Check the inference image's model configuration
+        id: inference_model_test
+        shell: bash
+        run: python3 scripts/ci/tests/inference-model-test.py
 
       # Node metrics must say which node they came from. The scrape target is
       # `localhost:9100` on every node, so without identifying labels the whole
@@ -333,6 +361,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/build-inputs-pinned-test.sh
 
+      # Release mero-kms signs each inference allowlist and verifies what it signed.
+      # Signing writes a .bundle.json beside each, which the allowlists' glob
+      # also matches: 2.3.114 verified its bundles as assets and published nothing.
+      - name: Check the release signs and verifies only the inference allowlists
+        id: kms_inference_policy_signing_test
+        shell: bash
+        run: scripts/ci/tests/kms-inference-policy-signing-test.sh
+
       # Logs leave the TEE for an endpoint the VM operator chooses. Every image
       # routes them through egress-guard.vrl first; runs it with the pinned
       # Vector release and validates each generated config.
@@ -376,6 +412,7 @@ jobs:
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
+            --checks-line "- release signs only the inference allowlists: ${{ steps.kms_inference_policy_signing_test.outcome }}" \
             --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \

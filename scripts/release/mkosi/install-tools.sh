@@ -8,3 +8,5 @@ set -euo pipefail
 sudo apt-get update -q >/dev/null
 sudo apt-get install -y -q python3-jinja2 python3-yaml gdisk erofs-utils >/dev/null
 sudo python3 -m pip install --quiet --break-system-packages zstandard==0.25.0
+# uv installs the inference image's hash-locked wheels (scripts/inference/install-runtime.sh).
+sudo python3 -m pip install --quiet --break-system-packages uv==0.11.32

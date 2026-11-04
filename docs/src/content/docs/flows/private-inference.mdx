@@ -1,0 +1,62 @@
+---
+title: Private Inference
+description: How the inference image serves a model chosen at deploy time, measures it into every quote, and lets a client check the engine, the model and the GPU before it sends a prompt.
+sidebar:
+  order: 6
+---
+
+A private inference TD is a fourth TDX image role, `inference`: vLLM on an H100 in
+confidential-computing mode, inside a TDX confidential VM. mero-bot sends prompts to it
+with `"attest": "mero"` instead of to NEAR AI Cloud. The rationale, the risks and the
+details are in the
+[design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-inference.md).
+
+## One image, any model
+
+The image holds the engine, not the weights. Whoever runs the VM names the model in
+instance metadata:
+
+| Key | Value |
+| --- | --- |
+| `model-repo` | Hugging Face `owner/name` |
+| `model-revision` | 40-hex commit (never a branch or tag) |
+| `model-sha256` | the weights digest, from `scripts/inference/model-digest.sh` |
+| `served-model-name` | optional: the name clients ask for |
+| `engine-args` | optional: allowlisted vLLM flags, as JSON |
+| `access-token-sha256` | hashes of the bearer tokens the gate accepts |
+
+Changing the model is a new VM, not a new image or release.
+
+## Boot
+
+`inference-init`:
+
+1. extends RTMR3 with the image event every role uses,
+   `calimero-rtmr3-v3:inference:<profile>:<roothash>`;
+2. validates the model configuration, writes it canonically, and extends RTMR3 again with
+   `SHA-384("calimero-inference-config-v1:" ‖ hex(SHA-256(config.json)))`;
+3. checks the GPU is in confidential-computing mode and that NVIDIA's attestation service
+   accepts it, and only then sets it ready;
+4. downloads the weights onto a scratch disk encrypted with integrity under a key made in
+   the TD, and refuses them unless they hash to `model-sha256`;
+5. starts vLLM on loopback and `mero-inference-gate` on port 8443.
+
+With `measure-only=true` it stops after step 1: that is how the release measures the
+image, so the published allowlist's RTMR3 is the image event alone.
+
+## What a client checks
+
+`POST /attest` with a fresh nonce returns a quote, the gate's TLS key hash, the
+configuration and the GPU's evidence for the same nonce. A client:
+
+1. checks the TLS key of the connection is the one named;
+2. verifies the quote with DCAP, and MRTD and RTMR0-2 against the release's signed
+   `kms-inference-attestation-policy.<profile>.json`;
+3. replays RTMR3: `SHA-384(base ‖ SHA-384("calimero-inference-config-v1:" ‖ digest))`
+   for a `base` in the allowlist;
+4. checks the report data binds the nonce, the TLS key, the configuration and the GPU
+   evidence, and that the configuration serves the model it wants;
+5. has NVIDIA's NRAS verify the GPU evidence;
+
+and then sends every request over a connection with that TLS key. The operator can see
+neither prompts nor answers.

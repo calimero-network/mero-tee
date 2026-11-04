@@ -4,5 +4,6 @@
   "vmagentVersion": "1.132.0",
   "vectorVersion": "0.50.0",
   "imageVersion": "2.3.137",
-  "merodVersion": "1.0.0-rc.8"
+  "merodVersion": "1.0.0-rc.8",
+  "meroBotVersion": "0.3.0"
 }

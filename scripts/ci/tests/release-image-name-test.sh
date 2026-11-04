@@ -2,7 +2,7 @@
 # scripts/release/mkosi/release-image-name.sh names the release images. The
 # rest of the release finds them by names it builds itself:
 # resolve-image-vm-parameters.sh (node), release-kms.yaml's probe and record
-# steps (kms), and mdma's dispatcher by the same prefixes. Check that
+# steps (kms, inference), and mdma's dispatcher by the same prefixes. Check that
 # the names agree, release and dev, for every role and profile.
 #
 # Usage: scripts/ci/tests/release-image-name-test.sh
@@ -22,10 +22,12 @@ for profile in locked-read-only debug-read-only debug; do
     # resolve-image-vm-parameters.sh's image_name.
     [[ "$(get name <<< "${out}")" == "merotee-ubuntu-questing-25-10-${profile}-${v}${suffix}" ]] || fail "node name: ${out}"
     [[ "$(get family <<< "${out}")" == "merotee-ubuntu-questing-${profile}${dev}" ]] || fail "node family: ${out}"
-    out="$("${tool}" kms "${profile}" "${version}" "${suffix}")"
-    # release-kms.yaml: "merotee-kms-${PROFILE}-${VERSION//./-}".
-    [[ "$(get name <<< "${out}")" == "merotee-kms-${profile}-${v}${suffix}" ]] || fail "kms name: ${out}"
-    [[ "$(get family <<< "${out}")" == "merotee-kms-${profile}${dev}" ]] || fail "kms family: ${out}"
+    for role in kms inference; do
+      out="$("${tool}" "${role}" "${profile}" "${version}" "${suffix}")"
+      # release-kms.yaml: "merotee-${role}-${PROFILE}-${VERSION//./-}".
+      [[ "$(get name <<< "${out}")" == "merotee-${role}-${profile}-${v}${suffix}" ]] || fail "${role} name: ${out}"
+      [[ "$(get family <<< "${out}")" == "merotee-${role}-${profile}${dev}" ]] || fail "${role} family: ${out}"
+    done
   done
 done
 

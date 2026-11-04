@@ -1,0 +1,50 @@
+---
+# Private inference TDX image (docs/design/private-inference.md). Same base,
+# lockdown and dm-verity root as the agent image (playbook-agent.yml), plus the
+# GCE disk naming its scratch disk needs. Built by mkosi with ROLE=inference
+# (mero-tee/mkosi-image/build.sh), which also installs vLLM from
+# mero-tee/inference/requirements.lock.
+- hosts: all
+  become: true
+  pre_tasks:
+    - name: Refresh apt metadata cache only (avoid non-deterministic full upgrades)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    # Shippers first: the mero-inference role writes its config into the
+    # directories they create. Off until inference-init finds an endpoint.
+    - role: ansible/roles/node-exporter
+      vars:
+        version: "{{ node_exporter_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vmagent
+      vars:
+        vmagent_version: "{{ vmagent_version }}"
+        cpu_architecture: "amd64"
+
+    - role: ansible/roles/vector
+      vars:
+        version: "{{ vector_version }}"
+
+    - role: ansible/roles/mero-inference
+
+    - role: ansible/roles/cleanup
+
+    - role: ansible/roles/merod-lockdown
+      when: lockdown_profile == 'locked-read-only'
+
+  post_tasks:
+    # Last, after merod-lockdown (see the same task in playbook.yml).
+    - name: Install the GCE disk-naming udev rule and helper
+      copy:
+        src: "ansible/roles/merotee/files/gce-udev/{{ item.name }}"
+        dest: "{{ item.dest }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { name: 65-gce-disk-naming.rules, dest: /usr/lib/udev/rules.d, mode: "0644" }
+        - { name: google_nvme_id, dest: /usr/lib/udev, mode: "0755" }

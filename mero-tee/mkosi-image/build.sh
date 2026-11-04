@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build one mkosi image: a role (node or kms) in one profile.
+# Build one mkosi image: a role (node, kms or inference) in one profile.
 #
-#   ROLE=node|kms PROFILE=locked-read-only|debug-read-only|debug \
+#   ROLE=node|kms|inference PROFILE=locked-read-only|debug-read-only|debug \
 #     mero-tee/mkosi-image/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
 #
 # ROLE defaults to node, PROFILE to locked-read-only. The output is
@@ -9,6 +9,9 @@
 #
 # The role's inputs are environment variables:
 #   kms:   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, optional KMS_AGENT_POLICY_FILE
+#   inference: MERO_INFERENCE_GATE_BINARY; vLLM comes from
+#          mero-tee/inference/requirements.lock (scripts/inference/install-runtime.sh,
+#          which needs uv)
 # The roles' own asserts refuse a build without them.
 #
 # The debug profiles also get openssh-server and the GCE guest environment (SSH
@@ -45,7 +48,8 @@ role="${ROLE:-node}"
 case "${role}" in
   node) playbook="playbook.yml" ;;
   kms) playbook="playbook-kms.yml" ;;
-  *) echo "build.sh: ROLE must be node or kms, not '${role}'" >&2; exit 2 ;;
+  inference) playbook="playbook-inference.yml" ;;
+  *) echo "build.sh: ROLE must be node, kms or inference, not '${role}'" >&2; exit 2 ;;
 esac
 # An input given is a file on this host; empty is "not given" (the role decides).
 input() {
@@ -57,7 +61,7 @@ input() {
 mero_kms_binary="$(input MERO_KMS_BINARY "${MERO_KMS_BINARY:-}")"
 kms_node_policy_file="$(input KMS_NODE_POLICY_FILE "${KMS_NODE_POLICY_FILE:-}")"
 kms_agent_policy_file="$(input KMS_AGENT_POLICY_FILE "${KMS_AGENT_POLICY_FILE:-}")"
-
+mero_inference_gate_binary="$(input MERO_INFERENCE_GATE_BINARY "${MERO_INFERENCE_GATE_BINARY:-}")"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 cp -a "${here}/." "${work}/"
@@ -78,7 +82,8 @@ python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../${playbook}" \
   -e "vector_version=$(version vectorVersion)" \
   -e "mero_kms_binary=${mero_kms_binary}" \
   -e "kms_node_policy_file=${kms_node_policy_file}" \
-  -e "kms_agent_policy_file=${kms_agent_policy_file}"
+  -e "kms_agent_policy_file=${kms_agent_policy_file}" \
+  -e "mero_inference_gate_binary=${mero_inference_gate_binary}"
 
 # No empty directories in the image, except one a role makes on purpose
 # (`file: state=directory`): a program fills it at run time. Vector's journald
@@ -94,6 +99,37 @@ for path, _, _ in os.walk(tree, topdown=False):
     if path != tree and not os.listdir(path) and "/" + os.path.relpath(path, tree) not in made:
         os.rmdir(path)
 PY
+
+# The inference image's Python packages (vLLM): not a role's files but the
+# hash-locked wheels of mero-tee/inference/requirements.lock, for the image's
+# own Python, into the same tree.
+if [[ "${role}" == inference ]]; then
+  UV_CACHE_DIR="${cache}/uv" "${repo}/scripts/inference/install-runtime.sh" \
+    "${work}/rendered/tree" /opt/mero-inference/site-packages
+  # Ubuntu ships the NVIDIA driver (linux-modules-nvidia-*-open-gcp and its
+  # user space) in `restricted`. Only this role adds it: mkosi merges the list
+  # with mkosi.conf's main,universe, and the other roles' images stay as they are.
+  printf '[Distribution]\nRepositories=restricted\n' > "${work}/mkosi.conf.d/40-inference-restricted.conf"
+  # linux-modules-nvidia-*-open-<kver>-gcp also ships an empty
+  # /lib/modules/kernel/nvidia-*-open/ beside the real <kver> directory, and
+  # mkosi takes every non-empty directory there for a kernel: "depmod --all
+  # kernel" fails the build ("Bad version passed kernel"). mkosi runs
+  # mkosi.prepare after the packages and before that depmod. It removes the
+  # directory only while it holds nothing but empty directories.
+  cat > "${work}/mkosi.prepare" <<'PREPARE'
+#!/bin/bash
+set -euo pipefail
+stray="${BUILDROOT}/usr/lib/modules/kernel"
+[[ "${1:-}" == final && -d "${stray}" ]] || exit 0
+if [[ -n "$(find "${stray}" -mindepth 1 ! -type d -print -quit)" ]]; then
+  echo "mkosi.prepare: ${stray} holds files, not just empty directories; refusing to remove it" >&2
+  exit 1
+fi
+rm -r "${stray}"
+echo "mkosi.prepare: removed the empty /usr/lib/modules/kernel the NVIDIA module package ships"
+PREPARE
+  chmod 0755 "${work}/mkosi.prepare"
+fi
 
 printf '%s\n' "${profile}" > "${work}/rendered/profile"
 printf '%s\n' "${role}" > "${work}/rendered/role"
