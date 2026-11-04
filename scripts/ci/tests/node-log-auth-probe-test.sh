@@ -228,17 +228,16 @@ echo "ok   configure_vector.sh still allows plain http on debug and debug-read-o
 # The KMS release runs the same check, on the same profiles, because its init
 # script reads the same two keys and hands them to the same
 # configure_vector.sh, pointing it at the profile its role pins.
-for role in mero-kms:kms-init; do
-  dir="${REPO_ROOT}/mero-tee/ansible/roles/${role%%:*}"
-  init="${dir}/templates/${role#*:}.sh.j2"
-  for want in 'get_meta logs-endpoint' 'get_meta observability-token' \
-    "export OBS_PROFILE_FILE=/etc/${role%%:*}/image-profile" '/etc/vector/configure_vector.sh '; do
-    grep -qF "${want}" "${init}" || fail "${role#*:} no longer has '${want}'; the log-auth check assumes it"
-  done
-  grep -qF "dest: /etc/${role%%:*}/image-profile" "${dir}/tasks/main.yml" \
-    || fail "the ${role%%:*} role no longer writes /etc/${role%%:*}/image-profile"
+role="mero-kms:kms-init"
+dir="${REPO_ROOT}/mero-tee/ansible/roles/${role%%:*}"
+init="${dir}/templates/${role#*:}.sh.j2"
+for want in 'get_meta logs-endpoint' 'get_meta observability-token' \
+  "export OBS_PROFILE_FILE=/etc/${role%%:*}/image-profile" '/etc/vector/configure_vector.sh '; do
+  grep -qF "${want}" "${init}" || fail "${role#*:} no longer has '${want}'; the log-auth check assumes it"
 done
-echo "ok   kms-init takes the log keys and ship through configure_vector.sh"
+grep -qF "dest: /etc/${role%%:*}/image-profile" "${dir}/tasks/main.yml" \
+  || fail "the ${role%%:*} role no longer writes /etc/${role%%:*}/image-profile"
+echo "ok   kms-init takes the log keys and ships through configure_vector.sh"
 
 # --- setup without a subnetwork puts the receiver on VM_NETWORK ---------------
 # The KMS probe creates its VMs with neither --network nor --subnet,
@@ -318,18 +317,17 @@ run_vm_probe() {
     OUT_DIR="${SB}/vm-out" PROVISION_MODE=skip "$@" bash "${script}") > "${SB}/vm.out" 2>&1 || true
   grep -m1 '^compute instances create ' "${SB}/vm-calls" || true
 }
-for probe in "scripts/release/kms/run-cluster-probe.sh|kms-bootstrap=true"; do
-  script="${REPO_ROOT}/${probe%%|*}" base="${probe#*|}"
-  create="$(run_vm_probe "${script}")"
-  [[ "${create}" == *"--metadata ${base} "* ]] \
-    || fail "${probe%%|*} changed its VM's metadata without the check: ${create} $(cat "${SB}/vm.out")"
-  create="$(run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 OBSERVABILITY_TOKEN_FILE="${SB}/obs-token")"
-  [[ "${create}" == *"--metadata ${base},logs-endpoint=http://10.0.0.5:9200,observability-token=abc123 "* ]] \
-    || fail "${probe%%|*} did not give its VM the two log keys: ${create} $(cat "${SB}/vm.out")"
-  run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 >/dev/null
-  [[ ! -s "${SB}/vm-calls" ]] || fail "${probe%%|*} touched GCP with a half-set log-auth check: $(cat "${SB}/vm-calls")"
-  echo "ok   ${probe%%|*} passes the log keys to its VM, and only when asked"
-done
+probe="scripts/release/kms/run-cluster-probe.sh|kms-bootstrap=true"
+script="${REPO_ROOT}/${probe%%|*}" base="${probe#*|}"
+create="$(run_vm_probe "${script}")"
+[[ "${create}" == *"--metadata ${base} "* ]] \
+  || fail "${probe%%|*} changed its VM's metadata without the check: ${create} $(cat "${SB}/vm.out")"
+create="$(run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 OBSERVABILITY_TOKEN_FILE="${SB}/obs-token")"
+[[ "${create}" == *"--metadata ${base},logs-endpoint=http://10.0.0.5:9200,observability-token=abc123 "* ]] \
+  || fail "${probe%%|*} did not give its VM the two log keys: ${create} $(cat "${SB}/vm.out")"
+run_vm_probe "${script}" LOGS_ENDPOINT=http://10.0.0.5:9200 >/dev/null
+[[ ! -s "${SB}/vm-calls" ]] || fail "${probe%%|*} touched GCP with a half-set log-auth check: $(cat "${SB}/vm-calls")"
+echo "ok   ${probe%%|*} passes the log keys to its VM, and only when asked"
 
 # The KMS release names its receivers kms-attest-rcv-<profile>-<run>-<attempt>.
 # The longest must be a valid GCE name, and the node release's sweep must catch
