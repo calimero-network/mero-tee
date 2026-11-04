@@ -292,6 +292,21 @@ first merod 1.0 (merod 1.0.0-rc.5 and earlier do not take them): with either
 key set and a merod that does not take its flag, the first boot stops before
 `merod init` rather than found a cluster that is open to every account.
 
+### Who may sign up
+
+One more key, read and fixed the same way, decides who may create an account
+on the cluster:
+
+| Metadata key | merod flag | Decides | Values |
+| --- | --- | --- | --- |
+| `sign-up` | `--sign-up` | whether anyone may create an account, only holders of an invite, or no one | `open` (default), `invite` or `closed` |
+
+mdma sets `invite` or `closed` and leaves the key unset for `open`. The flag is
+newer than `--deployments` (merod 1.0.0-rc.8 and earlier do not take it): with
+the key unset nothing is passed, so such a merod boots as before; with it set
+and a merod that does not take the flag, the first boot stops before `merod
+init` rather than found a cluster anyone may sign up to.
+
 ## Image build inputs
 
 The node, KMS and agent images are built with mkosi from the Ansible roles, by

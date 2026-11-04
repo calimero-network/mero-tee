@@ -1206,6 +1206,9 @@ fi
 #   deployers          optional, `operator` or `owner`: who may install apps on
 #                      the cluster, also governance, read on a FIRST BOOT only
 #                      (see "Who may deploy" below)
+#   sign-up            optional, `open`, `invite` or `closed`: who may create an
+#                      account on the cluster, read on a FIRST BOOT only, like
+#                      `deployments` (see "Who may sign up" below)
 #
 # Not read: anything that weakens TDX mode (`--dev`, storage keys,
 # `--allow-unsigned-bundles`); and `--ops-token`, which would put the token in
@@ -1269,6 +1272,18 @@ fi
 # first merod 1.0: a value set for a merod that does not take the flag stops
 # the boot rather than founding a cluster that is silently `open`.
 #
+# WHO MAY SIGN UP. One more value, fixed at the node's first start the same way
+# (merod `--sign-up`, core's sign-up policy):
+#
+#   sign-up  `open` (merod's default): anyone may create an account;
+#            `invite`: only with an invite; `closed`: no one signs up
+#
+# mdma stamps `invite` or `closed`, and leaves the key unset for `open`. It is
+# newer than `--deployments` (merod 1.0.0-rc.8 and earlier do not take it):
+# unset, nothing is passed and such a merod boots as before; set for a merod
+# that does not take the flag, the boot stops rather than found a cluster
+# anyone may sign up to.
+#
 # The configuration is written once and then is the node's: config.toml is on
 # the encrypted data disk, and metadata changed later is not applied, because a
 # different node id or cluster on the same data directory is a different node.
@@ -1330,14 +1345,16 @@ meta_arg() {
 
 # The governance flags and merod's accepted values for each, the first being
 # merod's default: core's `Authority` for the approvals, `Deployments` and
-# `Deployers` for who may deploy. A value merod adds goes here.
-GOVERNANCE_KEYS=(release-approvals app-upgrades outbound-approvals deployments deployers)
+# `Deployers` for who may deploy, and the sign-up policy. A value merod adds
+# goes here.
+GOVERNANCE_KEYS=(release-approvals app-upgrades outbound-approvals deployments deployers sign-up)
 
 # governance_values KEY: the values merod takes for KEY, its default first.
 governance_values() {
   case "$1" in
     deployments) echo "open granted" ;;
     deployers) echo "operator owner" ;;
+    sign-up) echo "open invite closed" ;;
     *) echo "owner operator" ;;
   esac
 }
