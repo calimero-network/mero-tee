@@ -80,8 +80,7 @@ replaced by a new VM that joins. See the [runbooks](/operate/runbooks/).
 
 `mero-tee/` · mkosi + Ansible roles · builds GCP TDX Confidential VM images
 containing `merod`. The same build makes the KMS image (`ROLE=kms`,
-`playbook-kms.yml`: the same base and lockdown, none of the node's services) and
-the private agent image (`ROLE=agent`, `playbook-agent.yml`).
+`playbook-kms.yml`: the same base and lockdown, none of the node's services).
 
 `mero-tee/mkosi-image/build.sh` renders the role's playbook into a file tree
 (`scripts/image/render_role_tree.py`), drops the empty directories no role made

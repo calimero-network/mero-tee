@@ -25,10 +25,6 @@ const EXPECTED = {
     expected: 'The node’s quote commits to its record of the KMS it accepted, and that KMS’s MRTD and RTMR0–3 are in the KMS policy of the release and profile the record names',
     how: 'The API recomputes report_data[32..64] as SHA-256("calimero.tee-attest.kms-evidence.v1" ‖ transport binding ‖ SHA-256(JCS(record))). The page then loads kms-attestation-policy.<profile>.json of that mero-kms release and compares the record’s registers with its kms_allowed_* lists.',
   },
-  keys: {
-    expected: 'report_data[32..64] = SHA-256 of the agent id and the provisioning, signing and owner keys',
-    how: 'Recomputed by the API from the response the gate returned.',
-  },
   measure: {
     expected: 'MRTD and RTMR0–3 are each in the release’s published list',
     how: 'Parsed from the quote bytes and compared with the release’s published measurements.',

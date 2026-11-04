@@ -5,7 +5,6 @@ import calimeroLogo from '../assets/calimero-logo.svg';
 const NAV = [
   { to: '/mero-tee', label: 'Node' },
   { to: '/kms', label: 'KMS' },
-  { to: '/agent', label: 'Agent' },
   { to: '/docs', label: 'How it works' },
 ];
 

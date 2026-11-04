@@ -130,48 +130,6 @@ release's jobs instead, which keeps the original push event.
 
 </Steps>
 
-### Agents in the KMS release
-
-[Private agents](/flows/private-agents/) ride the KMS release, best effort.
-Alongside the node-policy wait, `agent-image` builds the reference agent image
-for each profile: `mero-agent-gate` plus the reference agent, named
-`merotee-agent-<profile>-<version>`. The reference agent is mero-bot when
-`versions.json` pins `meroBotVersion`: the job downloads that release's bundle
-with the `MERO_BOT_RELEASE_TOKEN` secret (mero-bot is a private repository) and
-checks it against its sha256 in `build-inputs.lock.json`. Without a pin, it is
-the stub agent. It boots that image once with
-`ephemeral-store=true` and has Intel Trust Authority measure it. On `debug` and
-`debug-read-only` that VM also gets the two log keys, and the job fails unless
-it pushed its logs with its token, as the KMS image must (the
-[log-auth check](/operate/runbooks/#log-auth-check-log_auth_check)). A measured
-profile's KMS image then also bakes that agent allowlist (`kms_agent_policy_file`,
-with the node allowlist's TCB statuses, held to the same shapes by
-`extract-node-allowlist.sh --check` and the `mero-kms` role). Release-metadata publishes it as
-`kms-agent-attestation-policy.<profile>.json`, signed like the other assets.
-
-If an agent build or measurement fails, nothing else changes: that profile's KMS
-image is built node-only, exactly as before agents, and the release goes on.
-`kms-image` and `release-metadata` check their real dependencies' results
-explicitly for this. Every profile gets an agent image. None bakes a
-provisioner: each running agent is claimed by its first owner
-([owner claim](/flows/private-agents/#provisioning-secrets)), so no repository
-variable or secret decides who sets an agent's secrets.
-
-After a successful release, **Post-release agent e2e**
-(`post-release-agent-e2e.yaml`) proves the chain on fresh TDX VMs:
-1. It boots a one-replica KMS from the release image, and the agent image with a
-   blank data disk pointed at it.
-2. merod verifies that KMS against the signed release policy, and the KMS
-   releases the agent's disk key under the `mero-agent/` prefix.
-3. It verifies the gate against the signed agent policy, claims the agent with a
-   throwaway owner key made on the runner, provisions a secret, and checks a
-   second key is refused.
-4. It resets the agent and checks the disk reopens with the same signing key and
-   owner, the owner provisions again, and the second key is still refused.
-
-It runs for every profile the release published an agent policy for, and skips
-the others.
-
 ### KMS release assets
 
 Uploaded to the `mero-kms-v<version>` release, each trust asset with `.sig`,
@@ -186,9 +144,10 @@ Uploaded to the `mero-kms-v<version>` release, each trust asset with `.sig`,
 - `kms-release-manifest.json`, `kms-checksums.txt` (SHA-256 of the binary
   archives), `kms-binaries-sbom.spdx.json`, `kms-rekor-index.json`, and
   `kms-trust-bundle.tar.gz` (all of the above, for offline transfer).
-- `kms-agent-attestation-policy.<profile>.json`, for each profile whose KMS image
-  serves agents: the agent allowlist that image bakes in, which a provisioner or
-  account owner verifies an agent's quote against.
+
+Releases up to the retirement of the agent and inference images also carry
+`kms-agent-attestation-policy.<profile>.json` and
+`kms-inference-attestation-policy.<profile>.json`; later ones carry neither.
 
 The KMS images themselves live in the images project, named
 `merotee-kms-<profile>-<version>`; MDMA deploys clusters from them.
@@ -286,7 +245,7 @@ boots a branch image. Before this, a branch dispatch at the current
 ## Branch builds — `node-image-mkosi.yaml`
 
 Manual only (`workflow_dispatch`), and it publishes nothing. It builds one
-image (`role`: node, kms or agent) for one profile from the dispatched commit,
+image (`role`: node or kms) for one profile from the dispatched commit,
 as the releases do, boots it on TDX and runs that role's probe:
 
 - **node:** the staging probe.
@@ -295,18 +254,13 @@ as the releases do, boots it on TDX and runs that role's probe:
   does. It checks that both replicas come to
   hold the root and report the same transport key, and that Intel Trust Authority
   verifies both quotes with identical measurements.
-- **agent:** Intel Trust Authority, then a throwaway secret provisioned with a
-  throwaway owner key. The agent is the stub, or with `agent: mero-bot` the
-  mero-bot release `versions.json` pins (needs the `MERO_BOT_RELEASE_TOKEN`
-  secret).
 
 It then compares the quote's RTMR1–3 with the values computed from the build.
 With `log_auth_check` on a debug profile, it also runs the releases'
 [log-auth check](/operate/runbooks/#log-auth-check-log_auth_check) for any
-role; it is the way to try that check on a KMS or agent image from a branch.
+role; it is the way to try that check on a KMS image from a branch.
 Its image carries a suffix and its own family, so it can never be mistaken for
-a release, and it is deleted afterwards unless `keep_image` is set. A KMS that
-serves an agent is built only by the release. See
+a release, and it is deleted afterwards unless `keep_image` is set. See
 [Build the images with mkosi](/operate/runbooks/#build-the-images-with-mkosi).
 
 ### Node-image release assets

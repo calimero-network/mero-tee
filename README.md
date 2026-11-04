@@ -1,6 +1,6 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node, KMS, agent and GPU inference images with TDX attestation).
+TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node and KMS images with TDX attestation).
 
 > **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
 
@@ -9,8 +9,7 @@ TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run a
 | Component | Description |
 |-----------|-------------|
 | **mero-kms** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes. Runs as the frozen, dm-verity-sealed GCP TDX image `merotee-kms-<profile>-<version>`: one 5-replica cluster per release, whose root key exists only in the replicas' memory and is shared only by attested join. See the [design](docs/design/gcp-tdx-kms.md) |
-| **mero-tee/** | mkosi build of the merod 1.0 node, KMS, agent and inference images (debug, debug-read-only, locked-read-only profiles) |
-| **mero-inference-gate** | The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
+| **mero-tee/** | mkosi build of the merod 1.0 node and KMS images (debug, debug-read-only, locked-read-only profiles) |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start

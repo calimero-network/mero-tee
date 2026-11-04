@@ -9,7 +9,7 @@
 # points the sink at nothing else. This checks, with the Vector release the
 # image bakes (sha256 from build-inputs.lock.json):
 #
-#   * node, KMS and agent configs each carry `guard_egress` reading `add_labels`
+#   * node and KMS configs each carry `guard_egress` reading `add_labels`
 #     and dropping, never passing, a line it cannot process;
 #   * the generated vector.yaml validates and its sink reads only
 #     `guard_egress`;
@@ -27,7 +27,6 @@ CONFIGURE="${ROLES}/vector/files/configure_vector.sh"
 PARTIALS=(
   "${ROLES}/merotee/files/vector-partial-merod.yaml"
   "${ROLES}/mero-kms/files/vector-partial-kms.yaml"
-  "${ROLES}/mero-agent/files/vector-partial-agent.yaml"
 )
 
 SB="$(mktemp -d)"
@@ -177,5 +176,5 @@ if failures:
     for f in failures:
         print(f"FAIL: {f}")
     sys.exit(1)
-print("OK: node, KMS and agent logs leave only through the egress guard; credentials masked, fields allowlisted, messages capped")
+print("OK: node and KMS logs leave only through the egress guard; credentials masked, fields allowlisted, messages capped")
 PY

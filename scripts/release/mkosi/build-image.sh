@@ -8,9 +8,7 @@
 #   EVIDENCE_DIR         where the evidence goes
 # Optional env:
 #   SERIAL_CONSOLE=true  diagnostic build: kernel and journal on ttyS0 (changes RTMR2)
-#   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, KMS_AGENT_POLICY_FILE,
-#   MERO_AGENT_GATE_BINARY, MERO_AGENT_BINARY, MERO_BOT_BUNDLE,
-#   MERO_INFERENCE_GATE_BINARY                                   build.sh's inputs
+#   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, KMS_AGENT_POLICY_FILE  build.sh's inputs
 #
 # Output:
 #   MKOSI_OUT/merotee-ROLE.tar.gz  the disk as GCE imports it (create-gce-image.sh)
@@ -47,7 +45,7 @@ fi
 # the same inputs, and build_timing.py (at the end of this script) says which
 # stretch it was.
 build_log="${EVIDENCE_DIR}/mkosi-build.log"
-sudo --preserve-env=PROFILE,ROLE,MERO_KMS_BINARY,KMS_NODE_POLICY_FILE,KMS_AGENT_POLICY_FILE,MERO_AGENT_GATE_BINARY,MERO_AGENT_BINARY,MERO_BOT_BUNDLE,MERO_INFERENCE_GATE_BINARY,DOWNLOAD_CACHE \
+sudo --preserve-env=PROFILE,ROLE,MERO_KMS_BINARY,KMS_NODE_POLICY_FILE,KMS_AGENT_POLICY_FILE,DOWNLOAD_CACHE \
   env "PATH=${PATH}" "${repo}/mero-tee/mkosi-image/build.sh" "${MKOSI_OUT}" -- "${extra[@]}" 2>&1 \
   | perl -MPOSIX -ne 'BEGIN { $| = 1 } print strftime("%H:%M:%S ", gmtime), $_' \
   | tee "${build_log}"

@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 This page enumerates every knob that shapes a Mero TEE deployment: the runtime
 environment of the `mero-kms` key-management service, the instance metadata a
 KMS replica reads, merod's `[tee.kms]` client section, and the build inputs, Ansible variables and
-`versions.json` that produce the node, KMS and agent images. Defaults are taken
+`versions.json` that produce the node and KMS images. Defaults are taken
 directly from the code and vars files, not from convention.
 
 <Aside type="note">
@@ -100,8 +100,9 @@ There is no shared store and no Redis.
 
 ### Agent allowlist (baked, optional)
 
-A KMS that also serves [private agent](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md)
-images has a second allowlist. Set all five or none: a partial agent allowlist
+mero-kms can also serve a second image role, `agent`, from a second allowlist.
+No release image bakes one: the agent image was retired with Calimero Cloud 1.0,
+so release KMS images serve nodes only. Set all five or none: a partial agent allowlist
 refuses startup, with enforcement on or off. Unset, the KMS serves nodes only.
 The TCB status list above applies to agents too.
 
@@ -294,7 +295,7 @@ key set and a merod that does not take its flag, the first boot stops before
 
 ## Image build inputs
 
-The node, KMS and agent images are built with mkosi from the Ansible roles, by
+The node and KMS images are built with mkosi from the Ansible roles, by
 one build (`mero-tee/mkosi-image/build.sh`; `ROLE` picks which). Build inputs
 come from `versions.json` and the build's environment variables.
 
@@ -323,8 +324,7 @@ The single source of pinned component versions (`mero-tee/versions.json`):
 
 `mero-tee/build-inputs.lock.json` pins the sha256 of every archive the image
 build downloads, for the versions `versions.json` names: merod and meroctl
-from the core release (core 1.0 publishes no mero-auth), Traefik, node_exporter, vmagent and Vector, and, for the
-agent image, Node and the mero-bot bundle (`meroBotVersion`).
+from the core release (core 1.0 publishes no mero-auth), Traefik, node_exporter, vmagent and Vector.
 `group_vars/all.yml` loads it as `build_inputs`. Every download in the Ansible
 roles is a `get_url` with `checksum:` taken from it, so an archive replaced
 upstream fails the build instead of being baked into an image. The same happens
@@ -335,21 +335,15 @@ release archive, not by piping `sh.vector.dev` into a shell.
 scripts/release/pin-build-inputs.sh             # rewrite the lock from versions.json
 scripts/release/pin-build-inputs.sh --check     # exit 1 if the lock is stale
 scripts/release/pin-build-inputs.sh --download  # also hash each archive
-scripts/release/pin-build-inputs.sh --check --skip-private  # keep mero-bot's pin unchecked
 ```
 
 The script reads the checksum file each publisher ships with the release, such
-as core's `SHA256SUMS`. mero-bot is a private repository, so its release is read
-through `gh`, which needs read access to it. Review the lock change like code.
+as core's `SHA256SUMS`. Review the lock change like code.
 
 Two checks enforce the lock:
 - CI's `build-inputs-pinned-test.sh` refuses a lock that disagrees with
   `versions.json`, and any download in the roles without a pinned checksum.
-- The node-image release preflight runs `--check` against the publishers. It
-  checks mero-bot too when the `MERO_BOT_RELEASE_TOKEN` secret is set, and
-  otherwise keeps its pin unchecked (`--skip-private`): the node image does not
-  bake mero-bot, and the agent build checks the bundle it downloads against the
-  same lock.
+- The node-image release preflight runs `--check` against the publishers.
 
 ### Build environment
 
@@ -358,14 +352,11 @@ Read by `mero-tee/mkosi-image/build.sh` (and passed through by
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ROLE` | `node` | `node` builds the node image (`playbook.yml`); `kms` the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`; `agent` the [private agent](/flows/private-agents/) image (`playbook-agent.yml`), named `merotee-agent-<profile>-<version>` in family `merotee-agent-<profile>`. |
+| `ROLE` | `node` | `node` builds the node image (`playbook.yml`); `kms` the KMS cluster image (`playbook-kms.yml`), named `merotee-kms-<profile>-<version>` (dots in the version become dashes) in family `merotee-kms-<profile>`. |
 | `PROFILE` | `locked-read-only` | `debug`, `debug-read-only` or `locked-read-only`. Selects which Ansible roles run (lockdown and conformance only on `locked-read-only`) and the kernel command line. |
 | `MERO_KMS_BINARY` | none | `kms` only: the `mero-kms` binary to bake in, built from the release commit. |
 | `KMS_NODE_POLICY_FILE` | none | `kms` only: JSON with the node allowlist (`allowed_tcb_statuses`, `allowed_mrtd`, `allowed_rtmr0..3`) baked into `/etc/mero-kms/kms.env`, so it is part of the KMS image's measurements. Each field holds 1-32 strings: 96 hex characters each, or TCB status names; the role refuses anything else. |
-| `KMS_AGENT_POLICY_FILE` | none | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Unset bakes no agent entry. |
-| `MERO_AGENT_GATE_BINARY` | none | `agent` only: the `mero-agent-gate` binary, built from this repository. |
-| `MERO_AGENT_BINARY` | none | `agent` only: the agent program baked as `/usr/local/bin/mero-agent`. |
-| `MERO_BOT_BUNDLE` | none | `agent` only, instead of `MERO_AGENT_BINARY`: the mero-bot release bundle, which must hash to its pin in `build-inputs.lock.json`. The agent is then the launcher, `scripts/agent/mero-bot-agent.sh`. No provisioner is baked; the first owner claims a running agent. |
+| `KMS_AGENT_POLICY_FILE` | none | `kms` only, optional: JSON with the agent allowlist, in the same shape, baked as `AGENT_ALLOWED_*`. Its `allowed_tcb_statuses` must equal the node file's. Unset bakes no agent entry; the releases leave it unset. |
 | `DOWNLOAD_CACHE` | `OUTPUT_DIR/downloads` | Where the pinned release archives are downloaded and checked. |
 
 The image's version is `versions.json` `imageVersion`, and the image runs on

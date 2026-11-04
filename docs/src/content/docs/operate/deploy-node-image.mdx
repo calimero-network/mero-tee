@@ -111,7 +111,7 @@ KMS release keys only to a matching profile — see
    ```
 
    It writes `OUT/merotee-node.raw` (the disk), `merotee-node.efi` (the UKI)
-   and mkosi's package manifest. `ROLE` is `node`, `kms` or `agent`.
+   and mkosi's package manifest. `ROLE` is `node` or `kms`.
 
 2. **Compute the measurements and upload**, as the releases do:
    `scripts/release/mkosi/build-image.sh` builds, checks the command line,
@@ -276,7 +276,7 @@ page). vmagent adds the same `instance_name`, `instance_type` and
 
 :::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
 Instance metadata picks the log sink, so treat every shipped line as readable
-by the VM's operator. Node, KMS and agent images send their journal through
+by the VM's operator. Node and KMS images send their journal through
 the `guard_egress` transform before the sink. It runs
 `mero-tee/ansible/roles/vector/files/egress-guard.vrl`, which is baked into the
 image and measured.

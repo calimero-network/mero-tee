@@ -222,8 +222,6 @@ uses scripts/release/kms/wait-for-node-release.sh "scripts/release/kms/verify-no
   "Release mero-kms verifies the node policy (wait-for-node-release.sh)"
 uses .github/workflows/release-kms.yaml "scripts/release/kms/extract-node-allowlist.sh \\\\$" \
   "Release mero-kms extracts the node allowlist through the script"
-uses .github/workflows/release-kms.yaml "scripts/release/kms/extract-node-allowlist.sh --check build/agent-allowlist.json" \
-  "Release mero-kms checks the agent allowlist"
 uses .github/workflows/node-image-mkosi.yaml "scripts/release/kms/verify-node-policy.sh" \
   "Image (mkosi) verifies the node policy"
 uses .github/workflows/node-image-mkosi.yaml "scripts/release/kms/extract-node-allowlist.sh" \
