@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# The release signs each agent and inference allowlist
-# (kms-{agent,inference}-attestation-policy.<profile>.json)
+# The release signs each inference allowlist
+# (kms-inference-attestation-policy.<profile>.json)
 # and then verifies every signature it made. Signing writes `<asset>.bundle.json`
 # beside each asset, and that name matches the allowlists' glob too, so the
 # 2.3.114 release verified the bundles as if they were assets, found no
@@ -56,7 +56,6 @@ for f in kms-checksums.txt kms-release-manifest.json kms-attestation-policy.json
 done
 profiles=(debug debug-read-only locked-read-only)
 for p in "${profiles[@]}"; do
-  echo '{"role":"agent"}' >"release-assets/kms-agent-attestation-policy.${p}.json"
   echo '{"role":"inference"}' >"release-assets/kms-inference-attestation-policy.${p}.json"
 done
 
@@ -76,17 +75,15 @@ for log in signed verified; do
     failures=$((failures + 1))
   fi
   for p in "${profiles[@]}"; do
-    grep -qx "release-assets/kms-agent-attestation-policy.${p}.json" "${log}" \
-      || { echo "FAIL: the ${p} agent allowlist was not ${log}"; failures=$((failures + 1)); }
     grep -qx "release-assets/kms-inference-attestation-policy.${p}.json" "${log}" \
       || { echo "FAIL: the ${p} inference allowlist was not ${log}"; failures=$((failures + 1)); }
   done
 done
-[[ -s release-assets/kms-agent-attestation-policy.locked-read-only.json.bundle.json ]] \
-  || { echo "FAIL: no bundle for the locked-read-only agent allowlist"; failures=$((failures + 1)); }
+[[ -s release-assets/kms-inference-attestation-policy.locked-read-only.json.bundle.json ]] \
+  || { echo "FAIL: no bundle for the locked-read-only inference allowlist"; failures=$((failures + 1)); }
 
 if [[ ${failures} -gt 0 ]]; then
-  echo "kms-agent-policy-signing-test: ${failures} failure(s)"
+  echo "kms-inference-policy-signing-test: ${failures} failure(s)"
   exit 1
 fi
-echo "kms-agent-policy-signing-test: ok"
+echo "kms-inference-policy-signing-test: ok"

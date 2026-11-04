@@ -131,13 +131,12 @@ production RTMR3 values will never admit a debug node.
 ### Roles
 
 The policy is a list of entries, one per image role: always `node`, and `agent` on a
-KMS built with an agent allowlist. A quote must match all five registers of **one**
+KMS built with an agent allowlist (mero-kms still supports one, but no release has
+baked one since the agent image was retired with Calimero Cloud 1.0). A quote must match all five registers of **one**
 entry; the KMS releases it keys under that entry's role (`merod/storage/…` for a node,
 `mero-agent/storage/…` for an agent). Registers are never pooled across entries, so a
 quote combining a node's MRTD..RTMR2 with an agent's RTMR3 matches nothing. RTMR3 is
-also the role discriminator: the agent image (see the
-[private agents design](https://github.com/calimero-network/mero-tee/blob/master/docs/design/private-agents.md))
-extends it with `calimero-rtmr3-v3:agent:<profile>:<roothash>`, which no node image
+also the role discriminator: the retired agent image extended it with `calimero-rtmr3-v3:agent:<profile>:<roothash>`, which no node image
 produces.
 
 merod does the mirror image on the KMS's `/attest` quote before every key fetch: not a

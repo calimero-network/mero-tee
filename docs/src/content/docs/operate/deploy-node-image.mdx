@@ -111,7 +111,7 @@ KMS release keys only to a matching profile — see
    ```
 
    It writes `OUT/merotee-node.raw` (the disk), `merotee-node.efi` (the UKI)
-   and mkosi's package manifest. `ROLE` is `node`, `kms` or `agent`.
+   and mkosi's package manifest. `ROLE` is `node`, `kms` or `inference`.
 
 2. **Compute the measurements and upload**, as the releases do:
    `scripts/release/mkosi/build-image.sh` builds, checks the command line,
@@ -196,6 +196,7 @@ scripts. All are optional except where noted:
 | `registry-url`, `apps-domain`, `peer-profiles`, `peer-min-release`, `replicas` | the merod flags of the same names | merod's defaults |
 | `release-approvals`, `app-upgrades`, `outbound-approvals` | merod's governance flags of the same names, `owner` or `operator`: who approves new node images, app upgrades and outbound hosts for the cluster. Read on a **first boot only** and fixed at the cluster's genesis; set the same values on every node of a cluster. Any other value stops the boot. See [Deployment governance](/operate/config-reference/#deployment-governance) | unset → merod's default, `owner` |
 | `deployments`, `deployers` | merod's governance flags of the same names: `deployments` is `open` or `granted` (whether only granted accounts and organizations may install apps), `deployers` is `operator` or `owner` (who grants them). First boot only and fixed at genesis, like the keys above; a value set for a merod that does not take the flag stops the boot. See [Who may deploy](/operate/config-reference/#who-may-deploy) | unset → merod's defaults, `open` and `operator` |
+| `sign-up` | merod's `--sign-up`: `open`, `invite` or `closed` (who may create an account). First boot only, like `deployments`; set for a merod that does not take the flag (1.0.0-rc.8 and earlier), it stops the boot. See [Who may sign up](/operate/config-reference/#who-may-sign-up) | unset → nothing passed; merod's default, `open` |
 | `metrics-endpoint` | if set, configures and starts `vmagent` **and** `node_exporter`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vmagent stays off |
 | `logs-endpoint` | if set, configures and starts `vector`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vector stays off |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the shippers push unauthenticated |
@@ -208,7 +209,8 @@ first initialised: `merod init` writes them to `config.toml` on the encrypted
 data disk, and later metadata changes are not applied. Each value is checked
 against the shape merod takes, and a bad one stops the boot. The governance
 keys are checked against merod's values (`owner` or `operator`; `open` or
-`granted` for `deployments`; `operator` or `owner` for `deployers`), logged on the
+`granted` for `deployments`; `operator` or `owner` for `deployers`; `open`,
+`invite` or `closed` for `sign-up`), logged on the
 first boot as the line `GOVERNANCE (fixed at the cluster's genesis, ...)`, and
 on every later boot ignored, with a line saying so. Not read: `--dev`, storage
 keys, `--allow-unsigned-bundles` and the plain `--ops-token`. `server-port` and
@@ -276,7 +278,7 @@ page). vmagent adds the same `instance_name`, `instance_type` and
 
 :::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
 Instance metadata picks the log sink, so treat every shipped line as readable
-by the VM's operator. Node, KMS and agent images send their journal through
+by the VM's operator. Node and KMS images send their journal through
 the `guard_egress` transform before the sink. It runs
 `mero-tee/ansible/roles/vector/files/egress-guard.vrl`, which is baked into the
 image and measured.

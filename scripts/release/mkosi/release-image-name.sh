@@ -28,10 +28,6 @@ case "${role}" in
     name="merotee-kms-${profile}-${v}${suffix}"
     family="merotee-kms-${profile}${dev}"
     description="MeroTEE mero-kms TDX cluster ${profile} image, built with mkosi from Ubuntu 26.04 LTS (Resolute Raccoon) packages." ;;
-  agent)
-    name="merotee-agent-${profile}-${v}${suffix}"
-    family="merotee-agent-${profile}${dev}"
-    description="MeroTEE private agent ${profile} image, built with mkosi from Ubuntu 26.04 LTS (Resolute Raccoon) packages, with mero-agent-gate." ;;
   inference)
     name="merotee-inference-${profile}-${v}${suffix}"
     family="merotee-inference-${profile}${dev}"

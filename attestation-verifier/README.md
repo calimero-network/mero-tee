@@ -47,7 +47,6 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 - `/kms?kms_attest_url=<url>&release_tag=<mero-kms tag>&profile=<profile>` — verifies a KMS at once;
   without `kms_attest_url`, a form to paste a replica's `/attest` response. `/?kms_url=…` still
   forwards to `/kms`.
-- `/agent` — a pasted mero-agent-gate `/attest` response and agent policy.
 - `/docs` — the steps, the measurement registers and the terms.
 
 A result page leads with the verdict: **Verified**, **Not verified** (a check failed) or

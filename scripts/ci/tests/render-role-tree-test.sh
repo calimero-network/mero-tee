@@ -9,7 +9,7 @@
 #   - keeps set_fact results (lookup('file') + from_json) for later roles,
 #     stats a build-host file for the asserts on it, fails the render on a
 #     failing assert, unpacks a build-host archive, and lists `user` tasks;
-#   - applies a task's and a block's own vars (the agent role's bundle pin),
+#   - applies a task's and a block's own vars,
 #     and keeps a fact set inside such a block;
 #   - refuses an unpinned download and one whose sha256 differs;
 #   - renders the real node and KMS playbooks' file-only roles, so a module a
@@ -134,7 +134,7 @@ cat > "${role}/tasks/main.yml" <<T
       - policy_stat.stat.exists
       - policy_stat.stat.checksum | length == 64
     fail_msg: "the policy is empty"
-- name: Assert with a task's own vars, as the agent role pins its bundle
+- name: Assert with a task's own vars
   vars:
     first: "{{ policy.allowed[0] }}"
   assert:

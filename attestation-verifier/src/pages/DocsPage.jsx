@@ -158,8 +158,7 @@ export function DocsPage() {
             .
           </p>
           <p>
-            Start a check: <Link to="/mero-tee">verify a node</Link>, <Link to="/kms">verify a KMS</Link> or{' '}
-            <Link to="/agent">verify a private agent</Link>.
+            Start a check: <Link to="/mero-tee">verify a node</Link> or <Link to="/kms">verify a KMS</Link>.
           </p>
         </div>
       </section>

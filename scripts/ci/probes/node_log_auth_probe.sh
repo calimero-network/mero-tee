@@ -27,7 +27,7 @@
 # debug-read-only profiles of the node release (release-node-image-gcp.yaml),
 # where a node that does not ship its logs stops the release before anything
 # is published; and the same profiles of the KMS release (release-kms.yaml),
-# for its KMS and agent images, whose probes take the two keys through
+# for its KMS images, whose probe takes the two keys through
 # log_auth_metadata.sh. Not locked-read-only: it ships only over https (see
 # setup).
 set -euo pipefail
@@ -52,7 +52,7 @@ require_env() {
 # ${RECEIVER_PREFIX}-${RUN_SUFFIX}. The staging probe keeps the default. The
 # release passes `tee-attest-rcv`, so that its cleanup sweep, which matches the
 # release's own `tee-attest-` names, also finds a receiver a cancelled run left.
-# The KMS release passes `kms-attest-rcv` and `agent-attest-rcv`, which that
+# The KMS release passes `kms-attest-rcv`, which that
 # sweep's stale patterns also match.
 names() {
   require_env VM_PROJECT VM_ZONE RUN_SUFFIX
@@ -84,9 +84,9 @@ setup() {
   names
 
   # The receiver goes where the VM it listens for is. The node release and the
-  # staging probe place their node on VM_SUBNETWORK. The KMS and agent probes
-  # (release-kms.yaml) give theirs neither a network nor a subnet, so it lands
-  # on the `default` network's subnet in the zone's region; they leave
+  # staging probe place their node on VM_SUBNETWORK. The KMS probe
+  # (release-kms.yaml) gives its VMs neither a network nor a subnet, so they land
+  # on the `default` network's subnet in the zone's region; it leaves
   # VM_SUBNETWORK empty, and the receiver gets the same with --network.
   local placement=(--subnet "${VM_SUBNETWORK:-}")
   if [[ -z "${VM_SUBNETWORK:-}" ]]; then
