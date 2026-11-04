@@ -6,7 +6,7 @@ release measures it best effort, as the agent image was at first.
 A fourth TDX image role, `inference`: an OpenAI-compatible model server (vLLM)
 in a confidential VM with an H100 in confidential-computing mode. mero-bot can
 then send prompts to a model nobody else can read, run by us, instead of only
-to NEAR AI Cloud ([private agents](private-agents.md), "The agent: mero-bot on
+to NEAR AI Cloud ([private agents](https://github.com/calimero-network/mero-tee/blob/d28169a18a560c9476c60c5a14788d37992cc44f/docs/design/private-agents.md), retired; "The agent: mero-bot on
 NEAR AI Cloud"). It is the "GPU TD of our own" that design had parked.
 
 ## At a glance

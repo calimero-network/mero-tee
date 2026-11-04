@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build one mkosi image: a role (node, kms, agent or inference) in one profile.
+# Build one mkosi image: a role (node, kms or inference) in one profile.
 #
-#   ROLE=node|kms|agent|inference PROFILE=locked-read-only|debug-read-only|debug \
+#   ROLE=node|kms|inference PROFILE=locked-read-only|debug-read-only|debug \
 #     mero-tee/mkosi-image/build.sh OUTPUT_DIR [-- MKOSI_OPTION ...]
 #
 # ROLE defaults to node, PROFILE to locked-read-only. The output is
@@ -9,8 +9,6 @@
 #
 # The role's inputs are environment variables:
 #   kms:   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, optional KMS_AGENT_POLICY_FILE
-#   agent: MERO_AGENT_GATE_BINARY, and MERO_AGENT_BINARY or MERO_BOT_BUNDLE
-#          (then the agent is scripts/agent/mero-bot-agent.sh)
 #   inference: MERO_INFERENCE_GATE_BINARY; vLLM comes from
 #          mero-tee/inference/requirements.lock (scripts/inference/install-runtime.sh,
 #          which needs uv)
@@ -50,9 +48,8 @@ role="${ROLE:-node}"
 case "${role}" in
   node) playbook="playbook.yml" ;;
   kms) playbook="playbook-kms.yml" ;;
-  agent) playbook="playbook-agent.yml" ;;
   inference) playbook="playbook-inference.yml" ;;
-  *) echo "build.sh: ROLE must be node, kms, agent or inference, not '${role}'" >&2; exit 2 ;;
+  *) echo "build.sh: ROLE must be node, kms or inference, not '${role}'" >&2; exit 2 ;;
 esac
 # An input given is a file on this host; empty is "not given" (the role decides).
 input() {
@@ -64,20 +61,7 @@ input() {
 mero_kms_binary="$(input MERO_KMS_BINARY "${MERO_KMS_BINARY:-}")"
 kms_node_policy_file="$(input KMS_NODE_POLICY_FILE "${KMS_NODE_POLICY_FILE:-}")"
 kms_agent_policy_file="$(input KMS_AGENT_POLICY_FILE "${KMS_AGENT_POLICY_FILE:-}")"
-mero_agent_gate_binary="$(input MERO_AGENT_GATE_BINARY "${MERO_AGENT_GATE_BINARY:-}")"
-mero_bot_bundle="$(input MERO_BOT_BUNDLE "${MERO_BOT_BUNDLE:-}")"
-mero_agent_binary="$(input MERO_AGENT_BINARY "${MERO_AGENT_BINARY:-}")"
 mero_inference_gate_binary="$(input MERO_INFERENCE_GATE_BINARY "${MERO_INFERENCE_GATE_BINARY:-}")"
-if [[ -n "${mero_bot_bundle}" ]]; then
-  # With mero-bot, the agent is the launcher.
-  launcher="$(realpath "${repo}/scripts/agent/mero-bot-agent.sh")"
-  if [[ -n "${mero_agent_binary}" && "${mero_agent_binary}" != "${launcher}" ]]; then
-    echo "build.sh: with MERO_BOT_BUNDLE the agent is ${launcher}; unset MERO_AGENT_BINARY" >&2
-    exit 2
-  fi
-  mero_agent_binary="${launcher}"
-fi
-
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 cp -a "${here}/." "${work}/"
@@ -99,9 +83,6 @@ python3 "${repo}/scripts/image/render_role_tree.py" "${here}/../${playbook}" \
   -e "mero_kms_binary=${mero_kms_binary}" \
   -e "kms_node_policy_file=${kms_node_policy_file}" \
   -e "kms_agent_policy_file=${kms_agent_policy_file}" \
-  -e "mero_agent_binary=${mero_agent_binary}" \
-  -e "mero_agent_gate_binary=${mero_agent_gate_binary}" \
-  -e "mero_bot_bundle=${mero_bot_bundle}" \
   -e "mero_inference_gate_binary=${mero_inference_gate_binary}"
 
 # No empty directories in the image, except one a role makes on purpose
@@ -193,7 +174,7 @@ import pathlib, re
 tree = pathlib.Path(f"{work}/rendered/tree")
 installed = sorted(p.name for p in (tree / "etc/systemd/system").glob("*") if p.suffix in (".service", ".socket", ".timer", ".target"))
 lines = ["# Written by build.sh from the render manifest (see there)."]
-# An enabled template instance (the agent's mero-agent@<slot>.service) is
+# An enabled template instance (a role's unit@<instance>.service) is
 # enabled through its template's preset, with the instances listed: a plain
 # `disable` of the template would remove them.
 instances = {}
@@ -216,7 +197,7 @@ preset.parent.mkdir(parents=True, exist_ok=True)
 preset.write_text("\n".join(dict.fromkeys(lines)) + "\n")
 open(f"{work}/rendered/mask.list", "w").write("".join(f"{u}\n" for u in manifest["mask"]))
 open(f"{work}/rendered/enable.list", "w").write("".join(f"{u}\n" for u in manifest["enable"]))
-# The users the roles create (the agent's slot users) or lock, for mkosi.postinst:
+# The users the roles create or lock, for mkosi.postinst:
 # name, then system/shell/create_home/password_lock as key=value.
 with open(f"{work}/rendered/users.list", "w") as f:
     for user in manifest["users"]:

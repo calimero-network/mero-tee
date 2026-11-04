@@ -17,7 +17,7 @@ systemctl --root="${BUILDROOT}" enable systemd-networkd.service systemd-resolved
 systemctl --root="${BUILDROOT}" enable merotee-hostname.service
 
 # What the roles' `user` tasks do (build.sh lists them from the render
-# manifest): the agent's slot users, baked in because the root is read-only.
+# manifest), baked in because the root is read-only.
 # Made in the roles' order on every build, so they get the same ids each time.
 # (mkosi-chroot gets /dev/null as stdin, so nothing it runs can read the list.)
 while read -r name options; do

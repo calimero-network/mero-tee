@@ -290,7 +290,7 @@ class Renderer:
     # --- driver -----------------------------------------------------------------
     def task_vars(self, task, scope):
         """The scope with a task's or block's own `vars:`, which hold for it
-        alone (the agent role's bundle pin names its bundle this way)."""
+        alone."""
         if not task.get("vars"):
             return scope
         local = dict(scope)

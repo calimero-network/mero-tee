@@ -101,8 +101,7 @@ jobs:
       # (get_url checksum). Check the lock against the publishers here too, so
       # a stale or wrong pin fails in seconds rather than three builds in.
       # mero-bot is private: it is checked against its release only with a
-      # token that reads it. The node image does not bake it, and the agent
-      # build checks the bundle it downloads against the same lock.
+      # token that reads it. The node image does not bake it.
       - name: Check build inputs are pinned to what was published
         env:
           GH_TOKEN: ${{ secrets.MERO_BOT_RELEASE_TOKEN }}

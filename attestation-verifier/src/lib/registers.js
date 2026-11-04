@@ -21,7 +21,7 @@ export function normHex(v) {
 
 /**
  * The allowlist for a register in a policy object. Node releases
- * (`published-mrtds.json`) and agent policies name it `allowed_<reg>`; KMS
+ * (`published-mrtds.json`) name it `allowed_<reg>`; KMS
  * policies (`kms-attestation-policy.<profile>.json`) `kms_allowed_<reg>`.
  */
 export function allowlistOf(policy, reg, kind) {

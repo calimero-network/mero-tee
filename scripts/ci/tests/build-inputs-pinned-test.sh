@@ -38,10 +38,9 @@ KEYS = {
     "nodeExporter": "nodeExporterVersion",
     "vmagent": "vmagentVersion",
     "vector": "vectorVersion",
-    "node": "nodeVersion",
     "meroBot": "meroBotVersion",
 }
-# Pinned only once versions.json names a version: the agent image's mero-bot.
+# Pinned only once versions.json names a version: mero-bot.
 OPTIONAL = {"meroBot"}
 for name, key in KEYS.items():
     entry = lock.get(name)

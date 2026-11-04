@@ -10,8 +10,6 @@
  *              (the API's own for a node or kms_attest_url; the operator's for a paste).
  *   identity   api/verify.js `transport_verified` (nodes): the quote commits to the
  *              node's transport key and this URL completed a sealed handshake with it.
- *   keys       api/verify.js `agent_keys_verified` (agents): report_data[32..64]
- *              commits to the agent id and keys the gate named.
  *   kms        (nodes) api/verify.js `kms_evidence_bound`: the node's quote commits
  *              to its record of the KMS quote it accepted before taking its keys;
  *              hooks/useNodeVerification.js then checks the record's MRTD and
@@ -19,8 +17,7 @@
  *              Not reported (an older node): not checked, never a failure.
  *   measure    hooks + lib/registers.js: MRTD and RTMR0-3 parsed from the quote are
  *              in the release's published lists (node: published-mrtds.json; KMS:
- *              kms_allowed_* of kms-attestation-policy.<profile>.json; agent: the
- *              pasted agent policy).
+ *              kms_allowed_* of kms-attestation-policy.<profile>.json).
  *   tcb        Intel's `attester_tcb_status` claim, shown for reference only: no
  *              path here fails on it, so it is never a pass.
  *
@@ -59,7 +56,6 @@ const TITLES = {
   token: 'Intel’s verdict is authentic',
   nonce: 'Fresh quote',
   identity: 'This URL is the attested machine',
-  keys: 'Quote commits to the agent’s keys',
   kms: 'Keys from a verified KMS',
   measure: 'Software matches the release',
   tcb: 'Platform patch level (TCB)',
@@ -76,7 +72,6 @@ const MEANINGS = {
   },
   identity:
     'The quote commits to the node’s transport key, and the server at this URL completed a sealed handshake with that key, so it is the attested machine and not a relay forwarding another node’s quote.',
-  keys: 'The quote’s report data commits to the agent id and the provisioning, signing and owner keys the gate named.',
   kms:
     'This node accepted keys only from a KMS whose quote matched the signed mero-kms release policy. Its own quote commits to the KMS it accepted, and this verifier checks that KMS’s measurements against the policy the release published.',
   measure:
@@ -256,42 +251,6 @@ export function modelFromResult(result) {
   };
 }
 
-/** An agent result (AgentVerificationPage) as verdict + rows. */
-export function modelFromAgent(result) {
-  const rows = [
-    row('intel', 'pass', { result: 'Intel Trust Authority accepted the quote and issued a token' }),
-    row('token', result.itaVerified ? 'pass' : 'fail', {
-      result: result.itaVerified ? 'Signature checked against Intel’s JWKS' : 'The token’s signature did not verify against Intel’s JWKS',
-    }),
-    result.nonceVerified
-      ? row('nonce', 'pass', { meaning: MEANINGS.nonce.paste, result: 'The quote’s report data carries the nonce' })
-      : row('nonce', 'skip', {
-        meaning: MEANINGS.nonce.paste,
-        reason: 'No nonce was given. The agent’s key can only be trusted from a quote made for your request.',
-      }),
-    row('keys', result.keysVerified ? 'pass' : 'fail', {
-      result: result.keysVerified ? 'The quote commits to the named agent and keys' : 'The quote does not commit to the named keys',
-    }),
-  ];
-  const mismatched = result.registers.filter((r) => !r.match).map((r) => r.reg.toUpperCase());
-  rows.push(row('measure', result.policyOk ? 'pass' : 'fail', {
-    title: `Software matches the agent policy${result.profile ? ` (${result.profile})` : ''}`,
-    meaning: MEANINGS.measure.replace('the release published', 'the agent policy you pasted allows'),
-    result: result.policyOk
-      ? 'All five registers are in the agent policy'
-      : `${mismatched.join(', ')} ${mismatched.length === 1 ? 'is' : 'are'} not in the agent policy`,
-    registers: result.registers,
-    profile: result.profile,
-  }));
-  const required = new Set(['intel', 'token', 'nonce', 'keys', 'measure']);
-  return {
-    ...verdictOf(rows, required),
-    rows,
-    comparison: { profile: result.profile, registers: result.registers, matched: result.policyOk, tag: null },
-    itaDisagree: [],
-  };
-}
-
 function verdictOf(rows, required) {
   const failed = rows.filter((r) => r.status === 'fail');
   const skipped = rows.filter((r) => r.status === 'skip');
@@ -311,12 +270,10 @@ function verdictOf(rows, required) {
 export function plannedRows(kind, { paste = false } = {}) {
   const ids = kind === 'node'
     ? ['intel', 'token', 'nonce', 'identity', 'kms', 'measure']
-    : kind === 'agent'
-      ? ['intel', 'token', 'nonce', 'keys', 'measure']
-      : ['intel', 'token', 'nonce', 'measure'];
+    : ['intel', 'token', 'nonce', 'measure'];
   return ids.map((id) => row(id, 'notrun', {
     meaning: id === 'nonce'
-      ? (kind === 'node' ? MEANINGS.nonce.node : kind === 'agent' || paste ? MEANINGS.nonce.paste : MEANINGS.nonce.kmsUrl)
+      ? (kind === 'node' ? MEANINGS.nonce.node : paste ? MEANINGS.nonce.paste : MEANINGS.nonce.kmsUrl)
       : MEANINGS[id],
   }));
 }

@@ -1,8 +1,8 @@
 name: Image (mkosi)
-run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role == 'agent' && format(', {0}', inputs.agent) || '' }})
+run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }})
 
 # The TEE images, built with mkosi (mdma#480) from a branch. Builds
-# mero-tee/mkosi-image for one role (node, kms, agent or inference) and profile
+# mero-tee/mkosi-image for one role (node, kms or inference) and profile
 # (locked-read-only, debug-read-only or debug) from the pinned archive snapshot
 # and the Ansible roles' files, as the releases do, then:
 #   1. computes RTMR1, RTMR2 and RTMR3 from the disk and UKI before anything
@@ -13,11 +13,6 @@ run-name: Image (mkosi, ${{ inputs.role }}, ${{ inputs.profile }}${{ inputs.role
 #      kms: a two-replica cluster (scripts/release/kms/run-cluster-probe.sh),
 #        serving the node allowlist of node_release_tag, which must verify
 #        against its Sigstore bundle (scripts/release/kms/verify-node-policy.sh);
-#      agent: ITA, then a throwaway secret provisioned to the agent
-#        (scripts/release/agent/run-agent-probe.sh). The agent is the stub
-#        (scripts/agent/stub-mero-agent.py) or, with agent=mero-bot, the
-#        mero-bot release versions.json pins, as the releases bake it; that
-#        needs the MERO_BOT_RELEASE_TOKEN secret;
 #      inference: on a GPU TDX VM (a3, H100), measure-only by default
 #        (scripts/release/inference/run-inference-probe.sh, as the release); or,
 #        with a model in inference_options, serves it and runs one chat
@@ -39,7 +34,6 @@ on:
         options:
           - node
           - kms
-          - agent
           - inference
         default: node
       profile:
@@ -55,14 +49,6 @@ on:
         description: "kms only: the node release whose allowlist the KMS serves (mero-tee-v<version>)"
         required: false
         default: "mero-tee-v2.3.118"
-      agent:
-        description: "agent only: the agent the image runs"
-        required: false
-        type: choice
-        options:
-          - stub
-          - mero-bot
-        default: stub
       inference_options:
         description: >-
           inference only, JSON: {"zone" (one or more, space-separated, tried in order), "machine_type", "provisioning_model" (STANDARD|SPOT),
@@ -86,7 +72,7 @@ on:
         type: boolean
         default: false
       wait_timeout_minutes:
-        description: "kms and agent: how long to wait for the replicas or the gate"
+        description: "kms: how long to wait for the replicas"
         required: false
         default: "15"
       log_verbosity:
@@ -135,8 +121,7 @@ jobs:
         with:
           key: image-mkosi-${{ inputs.role }}
 
-      # What a KMS or agent image bakes: the binaries from this commit, and the
-      # stub agent or the pinned mero-bot bundle.
+      # What a KMS or inference image bakes: the binaries from this commit.
       - name: Build mero-kms
         if: ${{ inputs.role == 'kms' }}
         run: |
@@ -169,41 +154,6 @@ jobs:
             inputs/published-mrtds.json "${PROFILE}" inputs/node-allowlist.json
           echo "KMS_NODE_POLICY_FILE=${PWD}/inputs/node-allowlist.json" >> "${GITHUB_ENV}"
 
-      - name: Build mero-agent-gate and stage the agent
-        if: ${{ inputs.role == 'agent' }}
-        env:
-          AGENT: ${{ inputs.agent }}
-        run: |
-          set -euo pipefail
-          cargo build -p mero-agent-gate --release --locked
-          mkdir -p inputs agent-tools
-          cp target/release/mero-agent-gate inputs/
-          cp target/release/mero-agent-provision agent-tools/
-          echo "MERO_AGENT_GATE_BINARY=${PWD}/inputs/mero-agent-gate" >> "${GITHUB_ENV}"
-          # With mero-bot, build.sh bakes the mero-bot launcher as the agent.
-          if [[ "${AGENT}" != mero-bot ]]; then
-            cp scripts/agent/stub-mero-agent.py inputs/mero-agent
-            echo "MERO_AGENT_BINARY=${PWD}/inputs/mero-agent" >> "${GITHUB_ENV}"
-          fi
-
-      # As Release mero-kms fetches it; the mero-agent role checks it against
-      # its pin again.
-      - name: Download the pinned mero-bot bundle
-        if: ${{ inputs.role == 'agent' && inputs.agent == 'mero-bot' }}
-        env:
-          GH_TOKEN: ${{ secrets.MERO_BOT_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          [[ -n "${GH_TOKEN}" ]] || { echo "::error::agent=mero-bot needs the MERO_BOT_RELEASE_TOKEN secret"; exit 1; }
-          version="$(jq -r '.meroBotVersion // empty' mero-tee/versions.json)"
-          [[ -n "${version}" ]] || { echo "::error::versions.json pins no meroBotVersion"; exit 1; }
-          asset="mero-bot-${version}-linux-x64.tar.gz"
-          gh release download "v${version}" --repo calimero-network/mero-bot --pattern "${asset}" --dir inputs
-          want="$(jq -r --arg a "${asset}" '.meroBot.sha256[$a] // empty' mero-tee/build-inputs.lock.json)"
-          [[ -n "${want}" ]] || { echo "::error::build-inputs.lock.json pins no sha256 for ${asset}"; exit 1; }
-          echo "${want}  inputs/${asset}" | sha256sum -c -
-          echo "MERO_BOT_BUNDLE=$(realpath "inputs/${asset}")" >> "${GITHUB_ENV}"
-
       # vLLM and torch's CUDA libraries are several GB installed.
       - name: Free runner disk for the inference image
         if: ${{ inputs.role == 'inference' }}
@@ -220,14 +170,6 @@ jobs:
           cp target/release/mero-inference-gate inputs/
           echo "MERO_INFERENCE_GATE_BINARY=${PWD}/inputs/mero-inference-gate" >> "${GITHUB_ENV}"
 
-      - name: Upload the agent probe's provisioning client
-        if: ${{ inputs.role == 'agent' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: mkosi-agent-tools-${{ github.run_id }}-${{ github.run_attempt }}
-          path: agent-tools/
-          retention-days: 3
-
       - name: Install the build tools
         run: scripts/release/mkosi/install-tools.sh
 
@@ -238,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts/release/mkosi/build-image.sh
-          if [[ -n "${MERO_KMS_BINARY:-}${MERO_AGENT_GATE_BINARY:-}${MERO_INFERENCE_GATE_BINARY:-}" ]]; then
+          if [[ -n "${MERO_KMS_BINARY:-}${MERO_INFERENCE_GATE_BINARY:-}" ]]; then
             sha256sum inputs/* | tee "${EVIDENCE_DIR}/inputs.sha256"
           fi
 
@@ -348,13 +290,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Download the agent probe's provisioning client
-        if: ${{ inputs.role == 'agent' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: mkosi-agent-tools-${{ github.run_id }}-${{ github.run_attempt }}
-          path: agent-tools
-
       # The same credentials the TDX image probes boot their VMs with.
       - name: Authenticate to GCP via service account key
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -366,8 +301,8 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      # `log_auth_check`: the check release-kms.yaml runs on the KMS and agent
-      # images of the debug profiles, here on demand, with the same receiver
+      # `log_auth_check`: the check release-kms.yaml runs on the KMS and
+      # inference images of the debug profiles, here on demand, with the same receiver
       # names (the node release's sweep catches stale ones). Setup refuses
       # locked-read-only (LOG_AUTH_UNSUPPORTED_PROFILE) before creating anything.
       - name: Set up log-auth check
@@ -390,16 +325,6 @@ jobs:
           LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
           OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
         run: bash scripts/release/kms/run-cluster-probe.sh
-
-      - name: Boot, measure and provision the agent
-        if: ${{ inputs.role == 'agent' }}
-        env:
-          LOGS_ENDPOINT: ${{ steps.log_auth.outputs.receiver_ip && format('http://{0}:9200', steps.log_auth.outputs.receiver_ip) || '' }}
-          OBSERVABILITY_TOKEN_FILE: ${{ steps.log_auth.outputs.receiver_ip && format('{0}/log-auth-token', runner.temp) || '' }}
-        run: |
-          set -euo pipefail
-          chmod +x agent-tools/mero-agent-provision
-          PROVISION_BIN="${PWD}/agent-tools/mero-agent-provision" bash scripts/release/agent/run-agent-probe.sh
 
       # inference_options picks the GPU shape, zones and model; the VM is
       # created in the first zone with a GPU free. The log receiver above stays
@@ -487,11 +412,10 @@ jobs:
           # The attest response of the booted image, as compute_rtmr.py reads
           # evidence: quoteB64, and eventLogB64 when it returns one. The node's
           # /attestation/release, the bootstrap KMS replica's /attest, the
-          # agent gate's /attest.
+          # inference gate's /attest.
           case "${ROLE}" in
             node) attest="$(echo evidence/node-gcp-staging-probe-*)/tee-attest-response.json" ;;
             kms) attest="$(echo evidence/mkosi-probe-*)/bootstrap-attest.json" ;;
-            agent) attest="$(echo evidence/mkosi-probe-*)/agent-attest.json" ;;
             inference) attest="$(echo evidence/mkosi-probe-*)/inference-attest.json" ;;
           esac
           jq '(.data // .) | {quoteB64, eventLogB64}' "${attest}" > evidence/evidence.json

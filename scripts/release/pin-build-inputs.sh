@@ -91,14 +91,7 @@ COMPONENTS = {
         "sums": "vector-{v}-SHA256SUMS",
         "assets": ["vector-{v}-x86_64-unknown-linux-gnu.tar.gz"],
     },
-    # The agent image's mero-bot runtime (mero-agent role, mero_bot_bundle).
-    "node": {
-        "key": "nodeVersion",
-        "base": "https://nodejs.org/dist/v{v}",
-        "sums": "SHASUMS256.txt",
-        "assets": ["node-v{v}-linux-x64.tar.xz"],
-    },
-    # Private: read through gh. Optional until the agent image runs mero-bot.
+    # Private: read through gh. Optional: pinned only while versions.json names it.
     "meroBot": {
         "key": "meroBotVersion",
         "gh": "calimero-network/mero-bot",

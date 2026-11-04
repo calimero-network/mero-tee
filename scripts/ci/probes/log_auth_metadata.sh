@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The two instance-metadata keys mdma gives every VM that ships logs, for the
-# KMS and agent image probes (run-cluster-probe.sh, run-agent-probe.sh) when
-# they run the log-auth check (node_log_auth_probe.sh, release-kms.yaml).
+# KMS image probe (run-cluster-probe.sh) when it runs the log-auth check
+# (node_log_auth_probe.sh, release-kms.yaml).
 #
 # Source this file, then:
 #
@@ -13,7 +13,7 @@
 # One without the other, or a value that would split gcloud's `--metadata`
 # (a comma or `=` in the token, anything but a plain URL), fails instead.
 #
-# Neither key is measured: kms-init and agent-init read them after extending
+# Neither key is measured: kms-init reads them after extending
 # RTMR3, whose event names only the role, the profile and the root hash.
 
 log_auth_metadata() {

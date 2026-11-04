@@ -86,7 +86,6 @@ export function LandingPage() {
           <div className="form">
             <div className="form__actions">
               <Link to="/kms" className="btn btn--ghost">Verify a KMS</Link>
-              <Link to="/agent" className="small">or a private agent</Link>
             </div>
           </div>
         </div>
