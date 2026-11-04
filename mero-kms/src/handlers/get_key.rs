@@ -435,7 +435,7 @@ pub(crate) fn verify_peer_signature(
     )
 }
 
-/// [`verify_peer_signature`] for a request that may name a node id
+/// The peer signature check, for a request that may name a node id
 /// (`rollbackNodeId`), which the signed payload then covers too.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_peer_signature_for(
