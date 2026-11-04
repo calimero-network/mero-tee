@@ -34,6 +34,7 @@ pub const ENV_KEYS: &[&str] = &[
     "MERO_KMS_BOOTSTRAP",
     "MERO_KMS_PEERS",
     "MERO_KMS_JOIN_RETRY_SECS",
+    "MERO_KMS_REPLICAS",
 ];
 
 /// Return a valid 96-character hex string (`"ab"` repeated 48 times) suitable

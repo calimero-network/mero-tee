@@ -34,6 +34,13 @@ const ROOT_DERIVE_SALT: &[u8] = b"mero-kms/tdx-root/derive/v1";
 /// string is guaranteed never to name a node's key.
 const CHALLENGE_KEY_SALT: &[u8] = b"mero-kms/tdx-root/challenge-mac/v1";
 
+/// Salt for the key replicas MAC counter messages with (`counters`). A salt of
+/// its own, like the challenge key's, so no node key path can name it.
+const COUNTERS_KEY_SALT: &[u8] = b"mero-kms/tdx-root/counters/v1";
+
+/// Salt for a node's rollback session key (`counters::session_key_info`).
+const ROLLBACK_SESSION_SALT: &[u8] = b"mero-kms/tdx-root/rollback-session/v1";
+
 /// Report data for the quote a TDX replica takes of itself at startup, to learn
 /// its own measurements.
 const SELF_MEASUREMENT_DOMAIN: &[u8] = b"mero-kms/self-measurement/v1";
@@ -279,6 +286,21 @@ impl TdxBackend {
         self.with_root(|root| Ok(root.derive_salted(CHALLENGE_KEY_SALT, "challenge")))
     }
 
+    /// The key every replica of this cluster MACs counter messages with, so
+    /// only replicas holding this root count toward a majority.
+    pub(crate) fn counters_key(&self) -> Result<Zeroizing<[u8; KEY_LEN]>, ServiceError> {
+        self.with_root(|root| Ok(root.derive_salted(COUNTERS_KEY_SALT, "counters")))
+    }
+
+    /// The session key a node's rollback calls are MACed with: any replica
+    /// recomputes it from the root and the session's `info`, none stores it.
+    pub(crate) fn rollback_session_key(
+        &self,
+        info: &str,
+    ) -> Result<Zeroizing<[u8; KEY_LEN]>, ServiceError> {
+        self.with_root(|root| Ok(root.derive_salted(ROLLBACK_SESSION_SALT, info)))
+    }
+
     /// This TD's event log: every measurement its firmware and boot chain
     /// extended into RTMR0-3, as the ACPI CCEL table exposes it. It is public:
     /// it says what was measured, which the quote already commits to.
@@ -366,6 +388,27 @@ mod tests {
         assert_ne!(*root.derive(path), *root.derive(sealed::TRANSPORT_KEY_PATH));
     }
 
+    /// Pinned: the core client derives the same session key from the sealed
+    /// release, and a change here would refuse every node's checkpoints.
+    #[test]
+    fn the_rollback_session_key_matches_its_vector() {
+        let tdx = test_tdx_backend(Some(Root::from_bytes(&[7; KEY_LEN]).unwrap()));
+        let info = crate::counters::session_key_info(
+            "merod/storage/locked-read-only/12D3KooWPeer",
+            3,
+            &[0x55; 16],
+        );
+        assert_eq!(
+            info,
+            "merod/storage/locked-read-only/12D3KooWPeer\n3\n55555555555555555555555555555555"
+        );
+        assert_eq!(
+            hex::encode(*tdx.rollback_session_key(&info).unwrap()),
+            SESSION_KEY_VECTOR
+        );
+        assert_ne!(*tdx.counters_key().unwrap(), *tdx.challenge_key().unwrap());
+    }
+
     /// The challenge MAC key has a salt of its own, so no node key path, from
     /// any configured prefix, can name it.
     #[test]
@@ -414,6 +457,10 @@ mod tests {
     // HKDF-SHA256(salt = "mero-kms/tdx-root/derive/v1", ikm = [7; 32],
     // info = the path), reproduced independently from RFC 5869 with Python's
     // `hmac` and `hashlib` (checked against the RFC's test case 1).
+    // HKDF-SHA256(salt "mero-kms/tdx-root/rollback-session/v1", ikm [7; 32],
+    // info as above), reproduced with Python's `cryptography`.
+    const SESSION_KEY_VECTOR: &str =
+        "25754d90eebd04e83e73104e9ea23f28ac148f9286777304e4f296a0cf2b0e52";
     const DERIVATION_VECTOR: &str =
         "0c96eabcba4b72bbd13b706aa478165d6bc71c46981d5316ffe14cccd8855f7f";
 }

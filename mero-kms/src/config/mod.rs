@@ -33,7 +33,8 @@
 //! | `AGENT_ALLOWED_RTMR3` | `CSV` | *(empty)* | Allowed agent RTMR3 hex values |
 //! | `MERO_KMS_BOOTSTRAP` | `bool` | `false` | Generate the cluster's root instead of joining. Set on exactly one replica, once |
 //! | `MERO_KMS_PEERS` | `CSV` | *(empty)* | Base URLs of replicas to join from. Untrusted: a wrong one only fails a join. Required unless `MERO_KMS_BOOTSTRAP=true` |
-//! | `MERO_KMS_JOIN_RETRY_SECS` | `u64` | `10` | Pause between rounds of join attempts |
+//! | `MERO_KMS_JOIN_RETRY_SECS` | `u64` | `10` | Pause between rounds of join attempts (and of counter syncs) |
+//! | `MERO_KMS_REPLICAS` | `usize` | `1` | Replicas in the cluster; a rollback counter needs a majority of them. Bake it into `kms.env`. More than 1 needs `MERO_KMS_PEERS` (the other replicas) on every replica |
 
 pub mod env;
 
@@ -86,6 +87,10 @@ pub struct Config {
     pub cluster_peers: Vec<String>,
     /// Pause between rounds of join attempts, in seconds.
     pub join_retry_secs: u64,
+    /// How many replicas the cluster runs (`MERO_KMS_REPLICAS`, default 1):
+    /// a rollback counter is acknowledged once a majority of them hold it.
+    /// Baked into `kms.env`, so measured: metadata cannot shrink the majority.
+    pub replicas: usize,
 }
 
 impl Default for Config {
@@ -105,6 +110,7 @@ impl Default for Config {
             kms_bootstrap: false,
             cluster_peers: Vec::new(),
             join_retry_secs: 10,
+            replicas: 1,
         }
     }
 }
@@ -161,6 +167,7 @@ impl Config {
         let require_sealed_key_release =
             parse_bool_env("MERO_KMS_REQUIRE_SEALED_KEY_RELEASE", true)?;
         let (kms_bootstrap, cluster_peers, join_retry_secs) = cluster_from_env()?;
+        let replicas = replicas_from_env(&cluster_peers)?;
 
         let mut attestation_policy = load_policy_from_env()?;
         attestation_policy.enforce_measurement_policy =
@@ -186,8 +193,30 @@ impl Config {
             kms_bootstrap,
             cluster_peers,
             join_retry_secs,
+            replicas,
         })
     }
+}
+
+/// `MERO_KMS_REPLICAS`: 1 to `MAX_REPLICAS`. More than one needs the other
+/// replicas' URLs (`MERO_KMS_PEERS`), a bootstrapping replica's included.
+fn replicas_from_env(cluster_peers: &[String]) -> EyreResult<usize> {
+    let replicas = std::env::var("MERO_KMS_REPLICAS")
+        .ok()
+        .map(|v| v.trim().parse::<usize>())
+        .transpose()
+        .map_err(|e| eyre::eyre!("MERO_KMS_REPLICAS: {e}"))?
+        .unwrap_or(1);
+    if !(1..=crate::counters::MAX_REPLICAS).contains(&replicas) {
+        bail!(
+            "MERO_KMS_REPLICAS must be 1 to {}",
+            crate::counters::MAX_REPLICAS
+        );
+    }
+    if replicas > 1 && cluster_peers.is_empty() {
+        bail!("MERO_KMS_REPLICAS={replicas} needs the other replicas in MERO_KMS_PEERS");
+    }
+    Ok(replicas)
 }
 
 /// Read the cluster settings. A replica with neither bootstrap nor peers could
@@ -375,8 +404,8 @@ pub fn log_startup_config(config: &Config) {
     info!("Starting mero-kms");
     info!("Listen address: {}", config.listen_addr);
     info!(
-        "Cluster: bootstrap={} peers={:?}",
-        config.kms_bootstrap, config.cluster_peers
+        "Cluster: bootstrap={} peers={:?} replicas={}",
+        config.kms_bootstrap, config.cluster_peers, config.replicas
     );
     info!("Challenge TTL (seconds): {}", config.challenge_ttl_secs);
     info!(

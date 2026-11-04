@@ -16,12 +16,16 @@ replaced by a new VM that joins its peers. See the [design](../docs/design/gcp-t
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | `{"status":"alive","service":"mero-kms","clusterRootReady":bool}`, plus `lastJoinError` while a joining replica has no root and `lastJoinRefusal` once a replica has refused a join |
+| `GET` | `/health` | `{"status":"alive","service":"mero-kms","clusterRootReady":bool,"countersReady":bool}`, plus `lastJoinError` while a joining replica has no root and `lastJoinRefusal` once a replica has refused a join |
 | `POST` | `/challenge` | Issue a challenge for a peer (503 until the replica holds the root) |
 | `POST` | `/get-key` | Verify the challenge, signature and attestation, and release the node's key |
 | `POST` | `/attest` | KMS self-attestation: a quote over the caller's nonce, optionally reporting the transport key (`transportKey`) and the CCEL event log (`eventLog`) |
 | `POST` | `/cluster/nonce` | Single-use nonce for a replica joining the cluster |
 | `POST` | `/cluster/join` | Give the root to a replica with exactly this replica's measurements |
+| `POST` | `/rollback/raise` | Raise a node's rollback counter (MACed under the session key its v2 release sealed) |
+| `POST` | `/rollback/reset` | Force a node's counter down to its store's (merod `--accept-rollback`); one epoch up |
+| `POST` | `/cluster/counters/read` | Another replica reads counters (MACed under a root-derived key) |
+| `POST` | `/cluster/counters/merge` | Another replica writes counters (same) |
 
 Every replica sits behind one load-balanced URL, with no stickiness and no shared
 storage. The `challengeId` `/challenge` returns is therefore self-contained: 16
@@ -55,7 +59,8 @@ at least one allowed value. See `src/config/mod.rs` for the full table.
 | `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE` | `true` | Refuse `/get-key` requests without `sealToB64` |
 | `MERO_KMS_BOOTSTRAP` | `false` | Generate the cluster root (exactly one replica, once) |
 | `MERO_KMS_PEERS` | — | Comma-separated base URLs of replicas to join from; required unless bootstrapping |
-| `MERO_KMS_JOIN_RETRY_SECS` | `10` | Pause between rounds of join attempts |
+| `MERO_KMS_JOIN_RETRY_SECS` | `10` | Pause between rounds of join attempts (and of counter syncs) |
+| `MERO_KMS_REPLICAS` | `1` | Replicas in the cluster; a rollback counter is acknowledged once a majority hold it. More than 1 needs `MERO_KMS_PEERS` (the other replicas) on every replica, the bootstrapping one included. Bake it into `kms.env` |
 | `CHALLENGE_TTL_SECS` | `60` | Lifetime of a challenge |
 | `MAX_CONSUMED_CHALLENGES` | `10000` | Used, unexpired challenges one replica remembers; `/get-key` answers 429 when full |
 | `CORS_ALLOWED_ORIGINS` | — | Comma-separated CORS origins; CORS is off when unset |
@@ -74,6 +79,48 @@ one-time X25519 key its quote and signature commit to — gets the key back as
 `sealedKeyB64`/`sealNonceB64` (X25519 → HKDF-SHA256 → AES-256-GCM) instead of `key`.
 A request without `sealToB64` is refused unless `MERO_KMS_REQUIRE_SEALED_KEY_RELEASE=false`.
 See `src/sealed.rs`; the format is merod's `kms::sealed`, pinned by shared vectors.
+
+**Rollback counters.** A host can restart a node on an older copy of its disk,
+and sealing hides a copy's content, not its age. So mero-kms keeps, per cluster key
+path, an `epoch` (forced rollbacks) and per node id an entry `(generation, mark)`
+the node also keeps in its sealed store and raises about once a second; merod
+refuses to start on a store below it (core `docs/specs/rollback-protection.md`).
+
+- `/attest` with `transportKey` and `capabilities: true` answers
+  `capabilities: ["rollback/v1"]` and binds `SHA-256("mero-kms/attest-transport-key/v2"
+  ‖ binding ‖ transport key ‖ "rollback/v1")`; without `capabilities` it is unchanged.
+- `/get-key` with `rollbackNodeId` (needs `sealToB64`): the quote binds
+  `SHA-256("mero-kms/sealed-get-key/v2" ‖ sealTo ‖ peerId ‖ nodeId as 8 bytes BE)`,
+  the signed payload gains `rollbackNodeId`, and `sealedKeyB64` holds, sealed under
+  the domain `mero-kms/sealed-key/v2`, the JSON `{keyHex, epoch, generation, mark?,
+  sessionIdB64, sessionKeyHex}` (`mark` absent while there is no entry). Node
+  role only.
+- The session key is `HKDF-SHA256(root, salt "mero-kms/tdx-root/rollback-session/v1",
+  info keyPath "\n" nodeId "\n" hex(sessionId))`: any replica recomputes it, none
+  stores it. `/rollback/raise` and `/rollback/reset` take `{peerId, nodeId,
+  sessionIdB64, generation, mark, nonceB64, macB64}`, MACed (HMAC-SHA256) over
+  `domain ‖ peerId ‖ "\n" ‖ nodeId ‖ sessionId ‖ generation ‖ mark ‖ nonce` (integers
+  8 bytes BE; domains `mero-kms/rollback-raise/v1`, `mero-kms/rollback-reset/v1`),
+  and answer `{epoch, generation, mark, macB64}` MACed over
+  `"mero-kms/rollback-ack/v1" ‖ nonce ‖ epoch ‖ generation ‖ mark`. A raise only
+  moves an entry up; a reset sets it to `(epoch + 1, mark)`.
+- **Replication.** Counters live in memory, like the root. A write is answered
+  once a majority of `MERO_KMS_REPLICAS` hold it; a read merges a majority's
+  views. Replicas MAC counter messages with a root-derived key and answer with a
+  random replica id, so only distinct replicas of this cluster count. A joiner
+  answers no counter request (503 `counters_unavailable`) until it has merged a
+  majority of ready replicas' counters. While a cluster is brought up, the
+  bootstrap replica starts ready in *genesis*, and a joiner that hears only empty
+  genesis replicas joins it; genesis ends once one round hears every replica
+  ready (needed before the first write), and 10 minutes after the root was made.
+  Limits: `MAX_COUNTER_CLUSTERS` (10 000), `MAX_COUNTER_NODES_PER_CLUSTER` (1024),
+  `MAX_REPLICAS` (15).
+- **Not yet in the image:** `kms.env` does not set `MERO_KMS_REPLICAS`, so each
+  replica keeps counters of its own, which a load balancer makes meaningless. Set
+  it (and `kms-peers` on the bootstrap replica) before nodes rely on counters.
+- What `/rollback/*` logs: raises at DEBUG, a forced rollback as `Forced a
+  rollback` (WARN) with the peer, node, mark and epoch; refusals as `Refused a
+  rollback call: <reason>`. Never the session key.
 
 ## Logging
 
