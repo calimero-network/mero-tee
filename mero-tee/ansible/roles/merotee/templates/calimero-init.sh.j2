@@ -1719,13 +1719,13 @@ stage services "starting merod and traefik"
 systemctl daemon-reload
 # Start non-blocking to avoid deadlock with units that declare After=calimero-init.service.
 if [[ "$MEROD_READY" == true ]]; then
-  systemctl enable merod traefik calimero-tls-cert
-  systemctl start --no-block merod traefik calimero-tls-cert
-  log "Queued non-blocking start for merod, traefik and calimero-tls-cert"
+  systemctl enable merod traefik calimero-tls-cert calimero-tls-cert-custom
+  systemctl start --no-block merod traefik calimero-tls-cert calimero-tls-cert-custom
+  log "Queued non-blocking start for merod, traefik, calimero-tls-cert and calimero-tls-cert-custom"
 else
-  systemctl enable traefik calimero-tls-cert
-  systemctl start --no-block traefik calimero-tls-cert
-  log "Queued non-blocking start for traefik and calimero-tls-cert; merod is not configured on this boot"
+  systemctl enable traefik calimero-tls-cert calimero-tls-cert-custom
+  systemctl start --no-block traefik calimero-tls-cert calimero-tls-cert-custom
+  log "Queued non-blocking start for traefik, calimero-tls-cert and calimero-tls-cert-custom; merod is not configured on this boot"
 fi
 
 log "Calimero init completed"

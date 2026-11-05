@@ -201,6 +201,8 @@ scripts. All are optional except where noted:
 | `logs-endpoint` | if set, configures and starts `vector`. Must be `https://` except on the `debug` and `debug-read-only` profiles | unset → vector stays off |
 | `observability-token` | the bearer token **both** shippers present; written to `/etc/vector/provided_token` and used via the `provided` secret provider | unset → the shippers push unauthenticated |
 | `tls-cert` | the PEM chain (leaf first) mdma issued for the node's TLS key; watched by `calimero-tls-cert.service`, which installs it as `/mnt/data/tls/cert.pem` and restarts Traefik only when every certificate parses, each is signed by the next, the leaf has not expired and its public key is the node's own. Anything else is refused and the current certificate kept. See [The node's TLS certificate](#the-nodes-tls-certificate) | unset → `:443` serves the self-signed placeholder |
+| `tls-custom-hosts` | custom domains: a JSON array of the hosts mdma has verified as this cluster's served origins (`["kv.example.com"]`). `calimero-tls-cert-custom.service` publishes one CSR per host over the node's TLS key as guest attribute `calimero/tls-csr-custom`. See [Custom-domain certificates](#custom-domain-certificates) | unset → no custom certificates; any installed are removed |
+| `tls-cert-custom` | custom domains: a JSON object `{"<host>": "<PEM chain, leaf first>"}`. A chain is installed for Traefik only for a listed host, the node's own key, and a leaf naming exactly that host | unset → nothing new installed |
 | `ephemeral-store` | `true` mounts a tmpfs over `/mnt/data`, for a VM meant to live minutes | unset |
 | `merod-version` | **only** used to download binaries at boot if they were not baked into the image — debug profiles only; `locked-read-only` refuses to boot rather than run an unmeasured binary | required only when unbaked |
 
@@ -478,6 +480,45 @@ Traefik stays a pass-through with no route of its own for it
 
 `scripts/ci/tests/tls-csr-test.sh` runs the tool against a mock metadata server
 and configfs-tsm.
+
+### Custom-domain certificates
+
+A package's served origin (a custom domain such as `kv.example.com`, core's
+`docs/specs/custom-domains.md`) gets its own certificate for the **same** key.
+`calimero-tls-cert-custom.service` (the same tool, `watch-custom`) long-polls
+the instance attributes and, on each change:
+
+1. **CSRs out.** For each host in `tls-custom-hosts` (lowercased; an entry
+   that is not a DNS name is logged and left out; a value that is not a JSON
+   array, or one naming more than 64 hosts, changes nothing) it keeps
+   `/mnt/data/tls/custom-csr/<host>.der`, a CSR over `/mnt/data/tls/key.pem`
+   naming exactly `CN=<host>` and `DNS:<host>`, rebuilt only when the key
+   changes, and writes them all as guest attribute `calimero/tls-csr-custom`,
+   `{"<host>": "<base64 DER>"}` (`{}` for none). No quote: mdma orders only
+   when the CSR's key is the one it attested through `calimero/tls-csr`. One
+   certificate per host keeps one customer's name out of another's
+   certificate in CT logs.
+2. **Certificates in.** A chain in `tls-cert-custom` is installed at
+   `/mnt/data/tls/custom/<host>.pem` (`0644`) only when the host is listed,
+   every certificate parses and is signed by the next, the leaf has not
+   expired, its key is the node's own, and it names exactly that host (one
+   `subjectAltName`, `DNS:<host>`). A refused renewal keeps the installed
+   chain while it still passes.
+3. **Traefik.** The installed chains are listed, with `keyFile:
+   /mnt/data/tls/key.pem`, in `/etc/traefik/dynamic/custom-certs.yml`, beside
+   `routing.yml` in the directory Traefik's file provider watches. Traefik
+   picks a certificate by SNI and falls back to the node certificate; a change
+   reloads it without a restart. The chain is written into the file rather
+   than named by path, because the file provider reloads only when the
+   configuration it reads differs, and a renewal at the same path would not.
+4. **Reported.** Guest attribute `calimero/tls-custom-installed` is the JSON
+   array of hosts with a chain installed; mdma's resolver routes a host only to
+   nodes that report it.
+
+A host leaving `tls-custom-hosts` loses its chain, CSR and Traefik entry. The
+node certificate (`cert.pem`, `calimero/tls-csr`, `calimero/tls-quote`) is
+never touched by this service. `scripts/ci/tests/tls-custom-test.sh` runs it
+against a mock metadata server.
 
 ### The boot stage mdma shows
 

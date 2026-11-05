@@ -24,6 +24,8 @@ sources:
     # self-signed placeholder says why only here (calimero-init logs just the
     # first attempt), and that placeholder is also what stops a new cluster
     # finding its leader, since mdma reads /health over verified TLS.
+    # `calimero-tls-cert-custom.service` does the same for custom domains and
+    # logs every chain it refuses or removes.
     #
     # `vector.service` and `vmagent.service` collect themselves. That is less
     # circular than it sounds: a shipper that fails at startup leaves nothing
@@ -35,6 +37,7 @@ sources:
       [
         "calimero-init.service",
         "calimero-tls-cert.service",
+        "calimero-tls-cert-custom.service",
         "merod.service",
         "traefik.service",
         "vector.service",
