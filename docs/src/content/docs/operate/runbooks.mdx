@@ -553,6 +553,44 @@ stamps each line of mkosi's output with its UTC time, keeps it as
 build has taken from 5 to 23 minutes for the same inputs, nearly all of it
 fetching packages from the snapshot mirror with no cache.
 
+### When snapshot.ubuntu.com is down
+
+`snapshot.ubuntu.com` answers 500, 502 and 503 for minutes at a time. The
+rc.10 release (2.3.139) failed four times in a row with
+`E: Unable to locate package base-files` (an index it could not fetch) or
+`E: Failed to fetch …/pool/…deb 503 Service Unavailable`. Three things keep a
+release building through that, and none of them changes what is measured:
+
+- **Retries.** `mkosi.sandbox/etc/apt/apt.conf.d/80-retries` retries every
+  fetch up to 8 times.
+- **Packages from the archive.** `80-snapshot-mirrors` points apt's snapshot
+  server at `mkosi.sandbox/etc/apt/snapshot-mirrors.list` (apt's `mirror+file:`
+  method):
+  - index files (`InRelease`, `Packages`, `Sources`) come only from the
+    snapshot, and they pin the package set;
+  - `.deb` files come from `archive.ubuntu.com` first, then from the snapshot.
+
+  A pool path names one immutable file, and apt checks each `.deb` against
+  the SHA256 in the snapshot's own index. The bytes are therefore the same
+  whichever host served them. `build.sh` refuses to build when the list's
+  snapshot id differs from `Snapshot=` in `mkosi.conf` or `mkosi.tools.conf`.
+  When you move `Snapshot=`, move the id in the list too.
+- **A cache between runs.** The node release restores and saves mkosi's
+  repository metadata and packages with `actions/cache`
+  (`MKOSI_CACHE_DIR` in `build-image.sh`). The cache key is the snapshot, the
+  profile and a hash of `mero-tee/mkosi-image/**`.
+  - On an exact hit, the build runs with `CacheOnly=metadata` and never asks
+    the snapshot for an index.
+  - Only a build that succeeded saves the cache, so its metadata is complete
+    for that configuration.
+  - After one successful release, the next releases of the same image
+    configuration do not need the snapshot at all.
+
+If a release still fails on the snapshot, it is down for its indexes and
+nothing is cached yet. Re-run the failed jobs later. A probe from outside
+(`curl -I https://snapshot.ubuntu.com/ubuntu/<Snapshot>/dists/resolute/InRelease`)
+tells you when it is back.
+
 A `locked-read-only` image writes nothing to the serial console, because it has
 no `console=`. When it never comes up, run the workflow with `serial_console`
 set. This appends `console=ttyS0,115200 systemd.journald.forward_to_console=1`,

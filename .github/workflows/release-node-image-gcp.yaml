@@ -276,6 +276,29 @@ jobs:
           gcloud --version
           jq --version
 
+      # mkosi's repository metadata and packages, kept between runs. The
+      # snapshot (Snapshot= in mkosi.conf) is pinned, so a cache never goes
+      # stale, and a release does not depend on snapshot.ubuntu.com being up.
+      # An exact hit (same snapshot, profile and mkosi-image files) builds
+      # with CacheOnly=metadata: the indexes come from the cache, not the
+      # snapshot. Any other restore only saves downloading the packages again.
+      - name: Key the mkosi cache
+        id: mkosi_cache_key
+        if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
+        run: |
+          set -euo pipefail
+          snapshot="$(sed -n 's/^Snapshot=//p' mero-tee/mkosi-image/mkosi.conf)"
+          echo "prefix=mkosi-node-${snapshot}-${{ matrix.profile }}-" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore the mkosi cache
+        id: mkosi_cache
+        if: ${{ steps.mkosi_cache_key.outcome == 'success' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mkosi-cache
+          key: ${{ steps.mkosi_cache_key.outputs.prefix }}${{ hashFiles('mero-tee/mkosi-image/**') }}
+          restore-keys: ${{ steps.mkosi_cache_key.outputs.prefix }}
+
       - name: Build the profile image
         id: build_image
         if: ${{ steps.auth_mode.outputs.run_full_pipeline == 'true' && steps.gcp_access.outputs.can_run == 'true' }}
@@ -284,9 +307,20 @@ jobs:
           PROFILE: ${{ matrix.profile }}
           MKOSI_OUT: ${{ runner.temp }}/mkosi-out
           EVIDENCE_DIR: ${{ runner.temp }}/mkosi-evidence
+          MKOSI_CACHE_DIR: ${{ runner.temp }}/mkosi-cache
+          MKOSI_CACHE_ONLY: ${{ steps.mkosi_cache.outputs.cache-hit == 'true' && 'metadata' || '' }}
         run: |
           set -euo pipefail
           scripts/release/mkosi/build-image.sh 2>&1 | tee /tmp/mkosi-build.log
+
+      # Only a build that succeeded saves: its metadata is complete for this
+      # configuration, so a later exact hit can safely skip the snapshot.
+      - name: Save the mkosi cache
+        if: ${{ steps.build_image.outcome == 'success' && steps.mkosi_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mkosi-cache
+          key: ${{ steps.mkosi_cache_key.outputs.prefix }}${{ hashFiles('mero-tee/mkosi-image/**') }}
 
       # The name, family and description mdma finds images by
       # (release-image-name.sh). Only a release may replace an existing image of that name.
