@@ -31,7 +31,7 @@ futures-util = "0.3"
 hex = "0.4"
 rand_core = { version = "0.9", features = ["os_rng"] }
 # The TLS key: ECDSA P-256, made in memory at every start, bound into quotes.
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
