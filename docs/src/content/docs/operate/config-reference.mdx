@@ -379,7 +379,7 @@ The image's version is `versions.json` `imageVersion`, and the image runs on
 
 ### Traefik on the node image
 
-Traefik is a TLS front only: `/etc/traefik/routing.yml` has one router that
+Traefik is a TLS front only: `/etc/traefik/dynamic/routing.yml` has one router that
 sends every path, on `:80` and `:443`, to merod on `127.0.0.1:2528` with no
 middleware (no forwardAuth, rate limit, CORS or header rewriting). merod 1.0
 authenticates its callers itself, inside the sealed channel, so Traefik never
@@ -387,6 +387,10 @@ sees a credential. See
 [What Traefik does on a 1.0 node](/operate/deploy-node-image/#what-traefik-does-on-a-10-node).
 `scripts/ci/tests/traefik-passthrough-test.sh` and the `locked-read-only`
 conformance role pin that shape.
+Its file provider watches `/etc/traefik/dynamic`, where
+`calimero-tls-cert-custom.service` also writes `custom-certs.yml`, the
+custom domains' certificates (see
+[Custom-domain certificates](/operate/deploy-node-image/#custom-domain-certificates)).
 
 v1's play variables `fleet_delegated_access` and `fleet_mdma_url`, the
 `auth-node` exemptions and device-key login went with mero-auth and the fleet

@@ -31,9 +31,13 @@ entryPoints:
     http:
       tls: {}
 
+# A directory, watched: routing.yml (the image's, fixed) and custom-certs.yml,
+# which calimero-tls-cert-custom.service writes at runtime with the custom
+# domains' certificates (Traefik picks one by SNI). A change there reloads the
+# dynamic configuration without a restart, so no connection is dropped.
 providers:
   file:
-    filename: /etc/traefik/routing.yml
+    directory: /etc/traefik/dynamic
     watch: true
 
 serversTransport:

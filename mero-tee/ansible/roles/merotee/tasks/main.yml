@@ -145,6 +145,32 @@
     dest: /etc/systemd/system/calimero-tls-cert.service
     mode: "0644"
 
+# Custom domains (core docs/specs/custom-domains.md): the same tool, its own
+# unit, so nothing it does can hold up or disturb the node certificate above.
+# It publishes a CSR over the same key per host in `tls-custom-hosts`, installs
+# the `tls-cert-custom` chains for that key into Traefik's watched dynamic
+# directory and removes those of hosts no longer listed. calimero-init enables
+# and starts it with traefik.
+- name: Create calimero-tls-cert-custom systemd service
+  copy:
+    content: |
+      [Unit]
+      Description=Calimero custom-domain TLS certificates (tls-custom-hosts, tls-cert-custom metadata in)
+      # /mnt/data/tls is on the data disk calimero-init unlocks and mounts.
+      Requires=calimero-init.service
+      After=calimero-init.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      ExecStart=/usr/local/lib/calimero/tls-cert.sh watch-custom
+      Restart=always
+      RestartSec=30
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/calimero-tls-cert-custom.service
+    mode: "0644"
+
 - name: Ensure traefik starts after calimero-init
   file:
     path: /etc/systemd/system/traefik.service.d
@@ -419,7 +445,7 @@
 # carry no forwardAuth (there is no mero-auth to ask) and no path rules.
 - name: Read the rendered traefik routing file
   slurp:
-    path: /etc/traefik/routing.yml
+    path: /etc/traefik/dynamic/routing.yml
   register: traefik_routing
 
 - name: Assert traefik passes every request to merod
@@ -429,5 +455,5 @@
       - "'forwardAuth' not in (traefik_routing.content | b64decode)"
       - "'middlewares' not in (traefik_routing.content | b64decode)"
     fail_msg: >-
-      /etc/traefik/routing.yml is not a plain pass-through to merod: it must
+      /etc/traefik/dynamic/routing.yml is not a plain pass-through to merod: it must
       route every path to merod with no forwardAuth or other middleware.

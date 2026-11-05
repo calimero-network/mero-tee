@@ -46,12 +46,23 @@
     group: root
     mode: "0755"
 
+# The file provider's directory. routing.yml is the image's; at runtime
+# calimero-tls-cert-custom.service adds custom-certs.yml beside it (the root is
+# a volatile overlay, so /etc is writable and starts from the image each boot).
+- name: Create traefik dynamic configuration directory
+  file:
+    path: /etc/traefik/dynamic
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 # A template so its header comment (why traefik only passes requests through)
 # stays in the source and out of the image.
 - name: Render traefik routing file
   template:
     src: traefik-routing.yml.j2
-    dest: /etc/traefik/routing.yml
+    dest: /etc/traefik/dynamic/routing.yml
     owner: root
     group: root
     mode: "0755"

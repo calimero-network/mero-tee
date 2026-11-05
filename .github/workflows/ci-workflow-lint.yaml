@@ -292,6 +292,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tls-csr-test.sh
 
+      # Custom domains (core docs/specs/custom-domains.md): per host in
+      # tls-custom-hosts, a CSR over the same attested key published as
+      # calimero/tls-csr-custom; a tls-cert-custom chain installed for Traefik's
+      # watched dynamic directory only for that key and exactly that host;
+      # removed hosts dropped; the node certificate untouched.
+      - name: Check custom-domain certificates are requested and installed only for this key and host
+        id: tls_custom_test
+        shell: bash
+        run: scripts/ci/tests/tls-custom-test.sh
+
       # A first boot gets the cluster's KMS identity only after mdma verified
       # its release attestation: calimero-init serves `merod attest --serve` on
       # merod's port (traefik started early), long-polls kms-identity metadata,
@@ -405,6 +415,7 @@ jobs:
             --checks-line "- vector collects every merotee unit: ${{ steps.vector_units_test.outcome }}" \
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
+            --checks-line "- custom-domain CSRs published, only own certificates installed: ${{ steps.tls_custom_test.outcome }}" \
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
             --checks-line "- probes read a merod 1.0 release attestation: ${{ steps.node_release_attestation_test.outcome }}" \
             --checks-line "- release names the attested merod: ${{ steps.merod_release_provenance_test.outcome }}" \
