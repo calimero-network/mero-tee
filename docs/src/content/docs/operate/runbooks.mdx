@@ -599,6 +599,20 @@ probes print the last lines of the serial port whenever their wait times out. A
 diagnostic build measures differently (RTMR2 covers the command line), so its
 registers are not the image's.
 
+### A release tag is single-use
+
+The repository's releases are immutable: once a release is published under a
+tag (`mero-tee-v2.3.139`, `mero-kms-v2.3.139`), GitHub never lets that tag
+carry a release again, even after the release is deleted. Re-running the
+publish job then fails with `tag_name was used by an immutable release`.
+
+So never delete a published release to retry part of it. When a published
+release is wrong or incomplete, cut the next version: bump `imageVersion` in
+`mero-tee/versions.json`, the `mero-kms` version in `mero-kms/Cargo.toml` and
+`Cargo.lock`, and the two version tables in `operate/`. 2.3.139 was lost this
+way and its build was released as 2.3.140. An unpublished draft (such as a KMS
+release whose upload step failed) can be deleted and its job re-run.
+
 ### When GCP fails to create a probe VM
 
 The release probes create their VMs through `gcp_create_instance`
