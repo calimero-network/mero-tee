@@ -10,6 +10,13 @@
 #   SERIAL_CONSOLE=true  diagnostic build: kernel and journal on ttyS0 (changes RTMR2)
 #   MERO_KMS_BINARY, KMS_NODE_POLICY_FILE, KMS_AGENT_POLICY_FILE,
 #   MERO_INFERENCE_GATE_BINARY                                   build.sh's inputs
+#   MKOSI_CACHE_DIR      keep mkosi's repository metadata (CACHE/cache) and
+#                        downloaded packages (CACHE/packages) here, e.g. to
+#                        save and restore them between CI runs. The snapshot
+#                        is pinned, so neither goes stale.
+#   MKOSI_CACHE_ONLY     mkosi's CacheOnly= (e.g. metadata: use the cached
+#                        indexes, never contact the snapshot for them). Only
+#                        with a cache made from this same configuration.
 #
 # Output:
 #   MKOSI_OUT/merotee-ROLE.tar.gz  the disk as GCE imports it (create-gce-image.sh)
@@ -34,6 +41,15 @@ if [[ "${SERIAL_CONSOLE:-false}" == "true" ]]; then
   # Appended to the image's command line. The journal goes to the console
   # too, so the init script's own log is in the serial output.
   extra=(--kernel-command-line="console=ttyS0,115200 systemd.journald.forward_to_console=1")
+fi
+if [[ -n "${MKOSI_CACHE_DIR:-}" ]]; then
+  mkdir -p "${MKOSI_CACHE_DIR}/cache" "${MKOSI_CACHE_DIR}/packages"
+  extra+=(--cache-directory="${MKOSI_CACHE_DIR}/cache" --package-cache-directory="${MKOSI_CACHE_DIR}/packages")
+  # mkosi runs as root; give the cache back so CI can save it, even after a failed build.
+  trap 'sudo chown -R "$(id -u):$(id -g)" "${MKOSI_CACHE_DIR}" || true' EXIT
+fi
+if [[ -n "${MKOSI_CACHE_ONLY:-}" ]]; then
+  extra+=(--cache-only="${MKOSI_CACHE_ONLY}")
 fi
 
 # As root. Run as an unprivileged user, mkosi's user namespace maps every other

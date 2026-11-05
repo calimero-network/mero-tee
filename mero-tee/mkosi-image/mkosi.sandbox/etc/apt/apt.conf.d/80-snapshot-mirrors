@@ -1,0 +1,13 @@
+// Fetch the pinned snapshot through ../snapshot-mirrors.list (apt's mirror
+// method) instead of straight from snapshot.ubuntu.com. Read by apt inside
+// mkosi's sandbox only; nothing here reaches the image.
+//
+// apt looks the snapshot server up by the Release file's origin once it has
+// one, and by the source's host before that (first build, empty cache), so
+// both are set. These replace apt's built-in defaults
+// (https://snapshot.ubuntu.com/@PATH@/@SNAPSHOTID@/); the snapshot id is
+// in the list itself.
+Acquire::Snapshots::URI::Override::Origin::Ubuntu "mirror+file:/etc/apt/snapshot-mirrors.list";
+Acquire::Snapshots::URI::Host::archive.ubuntu.com "mirror+file:/etc/apt/snapshot-mirrors.list";
+Acquire::Snapshots::URI::Host::.archive.ubuntu.com "mirror+file:/etc/apt/snapshot-mirrors.list";
+Acquire::Snapshots::URI::Host::security.ubuntu.com "mirror+file:/etc/apt/snapshot-mirrors.list";

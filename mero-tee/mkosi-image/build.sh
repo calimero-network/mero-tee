@@ -51,6 +51,20 @@ case "${role}" in
   inference) playbook="playbook-inference.yml" ;;
   *) echo "build.sh: ROLE must be node, kms or inference, not '${role}'" >&2; exit 2 ;;
 esac
+# apt fetches the snapshot through mkosi.sandbox/etc/apt/snapshot-mirrors.list,
+# which names the snapshot id itself: it must be the one mkosi.conf and
+# mkosi.tools.conf pin, or the image would be built from another package set.
+snapshot="$(sed -n 's/^Snapshot=//p' "${here}/mkosi.conf")"
+for f in mkosi.tools.conf mkosi.sandbox/etc/apt/snapshot-mirrors.list; do
+  case "${f}" in
+    *.conf) got="$(sed -n 's/^Snapshot=//p' "${here}/${f}")" ;;
+    *) got="$(sed -n 's#^https://snapshot\.ubuntu\.com/ubuntu/\([^/]*\)/.*#\1#p' "${here}/${f}")" ;;
+  esac
+  if [[ -z "${snapshot}" || "${got}" != "${snapshot}" ]]; then
+    echo "build.sh: ${f} pins snapshot '${got}', mkosi.conf pins '${snapshot}'" >&2
+    exit 2
+  fi
+done
 # An input given is a file on this host; empty is "not given" (the role decides).
 input() {
   if [[ -z "${2}" ]]; then return 0; fi
