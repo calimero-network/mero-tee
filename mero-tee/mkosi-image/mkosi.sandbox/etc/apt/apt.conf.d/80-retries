@@ -1,0 +1,8 @@
+// Read by apt inside mkosi's sandbox only (SandboxTrees=), never installed in
+// the image, so it changes no measurement. snapshot.ubuntu.com answers 500,
+// 502 and 504 under load; without retries one failed index means a package
+// "cannot be located" and the whole release build fails.
+Acquire::Retries "8";
+Acquire::Retries::Delay::Maximum "60";
+Acquire::http::Timeout "120";
+Acquire::https::Timeout "120";
