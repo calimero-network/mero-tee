@@ -8,7 +8,6 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
-      - "scripts/agent/**"
       - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
@@ -21,7 +20,6 @@ on:
       - "scripts/policy/**"
       - "scripts/attestation/**"
       - "scripts/ci/**"
-      - "scripts/agent/**"
       - "scripts/inference/**"
       - "scripts/image/**"
       - "mero-tee/**"
@@ -59,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s globstar nullglob
-          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/agent/**/*.sh scripts/inference/**/*.sh mero-tee/**/*.sh
+          shell_files=(scripts/release/**/*.sh scripts/policy/**/*.sh scripts/ci/**/*.sh scripts/inference/**/*.sh mero-tee/**/*.sh
                        mero-tee/mkosi-*/mkosi.postinst mero-tee/mkosi-*/mkosi.finalize)
           if [[ "${#shell_files[@]}" -eq 0 ]]; then
             echo "No shell files matched lint paths."
@@ -137,6 +135,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/compute-rtmr-test.sh
 
+      # build_timing.py ends every image build's log with how long each mkosi
+      # phase took.
+      - name: Check the build timing summary
+        id: build_timing_test
+        shell: bash
+        run: scripts/ci/tests/build-timing-test.sh
+
       # render_role_tree.py gives the mkosi images the files the Ansible roles
       # write; it must do what Ansible does, and render every node role.
       - name: Check the role renderer
@@ -205,39 +210,13 @@ jobs:
         run: scripts/ci/tests/calimero-init-disk-encryption-test.sh
 
       # Each image's RTMR3 extend is what its KMS policy entry matches, so the
-      # node, KMS, agent and inference init scripts' one shared block is
+      # node, KMS and inference init scripts' one shared block is
       # executed and the v3 event (role, profile, dm-verity roothash) checked
       # byte for byte.
-      - name: Check calimero-init, kms-init, agent-init and inference-init extend RTMR3 (v3)
+      - name: Check calimero-init, kms-init and inference-init extend RTMR3 (v3)
         id: init_rtmr3_test
         shell: bash
         run: scripts/ci/tests/init-rtmr3-test.sh
-
-      # The agent image's data disk (docs/design/private-agents.md) is the
-      # node's encrypted-disk logic narrowed: only ever LUKS2 with integrity,
-      # keyed from the KMS, never plain, never reformatted, never on a
-      # downgraded release.
-
-      - name: Check the agent's data disk is encrypted and never reformatted
-        id: agent_data_disk_test
-        shell: bash
-        run: scripts/ci/tests/agent-init-data-disk-test.sh
-
-      # An agent TD hosts several owners' agents, one per slot: each slot's
-      # keys and secrets are its group's alone, and its unit runs as its own
-      # user, writes only its own state and sees no other agent's processes.
-      - name: Check each agent slot is its own user's alone
-        id: agent_slots_test
-        shell: bash
-        run: scripts/ci/tests/agent-init-slots-test.sh
-
-      # The agent image's mero-bot launcher: it starts mero-bot only once the
-      # owner has provisioned it, with its allowlisted secrets and nothing else
-      # in its environment, never a secret in an argv, and restarts on new ones.
-      - name: Check the mero-bot launcher passes only its secrets
-        id: mero_bot_launcher_test
-        shell: bash
-        run: scripts/ci/tests/mero-bot-agent-launcher-test.sh
 
       # inference-init against stubs: measure-only extends RTMR3 with the image
       # alone; a model's configuration is measured as its second event; code
@@ -313,6 +292,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tls-csr-test.sh
 
+      # Custom domains (core docs/specs/custom-domains.md): per host in
+      # tls-custom-hosts, a CSR over the same attested key published as
+      # calimero/tls-csr-custom; a tls-cert-custom chain installed for Traefik's
+      # watched dynamic directory only for that key and exactly that host;
+      # removed hosts dropped; the node certificate untouched.
+      - name: Check custom-domain certificates are requested and installed only for this key and host
+        id: tls_custom_test
+        shell: bash
+        run: scripts/ci/tests/tls-custom-test.sh
+
       # A first boot gets the cluster's KMS identity only after mdma verified
       # its release attestation: calimero-init serves `merod attest --serve` on
       # merod's port (traefik started early), long-polls kms-identity metadata,
@@ -359,7 +348,7 @@ jobs:
       # The log-auth check (staging probe, node and KMS releases) only runs on
       # real GCP; this pins what could make it lie without any cloud: the
       # receiver's token classification, the verdict read from it, and how the
-      # KMS and agent probes get the two keys and find the receiver.
+      # KMS probe gets the two keys and finds the receiver.
       - name: Check the log-auth probe tells an authenticated push from one without a token
         id: log_auth_probe_test
         shell: bash
@@ -382,13 +371,13 @@ jobs:
         shell: bash
         run: scripts/ci/tests/build-inputs-pinned-test.sh
 
-      # Release mero-kms signs each agent allowlist and verifies what it signed.
+      # Release mero-kms signs each inference allowlist and verifies what it signed.
       # Signing writes a .bundle.json beside each, which the allowlists' glob
       # also matches: 2.3.114 verified its bundles as assets and published nothing.
-      - name: Check the release signs and verifies only the agent allowlists
-        id: kms_agent_policy_signing_test
+      - name: Check the release signs and verifies only the inference allowlists
+        id: kms_inference_policy_signing_test
         shell: bash
-        run: scripts/ci/tests/kms-agent-policy-signing-test.sh
+        run: scripts/ci/tests/kms-inference-policy-signing-test.sh
 
       # Logs leave the TEE for an endpoint the VM operator chooses. Every image
       # routes them through egress-guard.vrl first; runs it with the pinned
@@ -421,14 +410,12 @@ jobs:
             --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \
-            --checks-line "- agent data disk encrypted, never reformatted: ${{ steps.agent_data_disk_test.outcome }}" \
-            --checks-line "- agent slots isolated per user: ${{ steps.agent_slots_test.outcome }}" \
-            --checks-line "- mero-bot launcher passes only its secrets: ${{ steps.mero_bot_launcher_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \
             --checks-line "- vector image profile field: ${{ steps.vector_profile_test.outcome }}" \
             --checks-line "- vector collects every merotee unit: ${{ steps.vector_units_test.outcome }}" \
             --checks-line "- traefik passes every request to merod: ${{ steps.traefik_passthrough_test.outcome }}" \
             --checks-line "- TLS CSR published, only own certificate installed: ${{ steps.tls_csr_test.outcome }}" \
+            --checks-line "- custom-domain CSRs published, only own certificates installed: ${{ steps.tls_custom_test.outcome }}" \
             --checks-line "- KMS identity only after a release attestation: ${{ steps.kms_identity_gate_test.outcome }}" \
             --checks-line "- probes read a merod 1.0 release attestation: ${{ steps.node_release_attestation_test.outcome }}" \
             --checks-line "- release names the attested merod: ${{ steps.merod_release_provenance_test.outcome }}" \
@@ -436,7 +423,7 @@ jobs:
             --checks-line "- log-auth probe verdicts: ${{ steps.log_auth_probe_test.outcome }}" \
             --checks-line "- probe VM create retry: ${{ steps.gcp_create_instance_test.outcome }}" \
             --checks-line "- image build inputs pinned by sha256: ${{ steps.build_inputs_pinned_test.outcome }}" \
-            --checks-line "- release signs only the agent allowlists: ${{ steps.kms_agent_policy_signing_test.outcome }}" \
+            --checks-line "- release signs only the inference allowlists: ${{ steps.kms_inference_policy_signing_test.outcome }}" \
             --checks-line "- logs leave only through the egress guard: ${{ steps.log_egress_guard_test.outcome }}" \
             --result-line "- Job status: ${{ job.status }}" \
             --result-line "- ${result_line}" \

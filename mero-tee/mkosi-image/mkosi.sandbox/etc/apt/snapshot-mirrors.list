@@ -1,0 +1,16 @@
+# Where apt fetches the pinned Ubuntu snapshot from (80-snapshot-mirrors points
+# Acquire::Snapshots at this list). Read inside mkosi's sandbox only, never
+# installed in the image.
+#
+# - Index files (InRelease, Packages, Sources...; apt tags them type "index")
+#   only ever come from the snapshot: they pin the package set.
+# - Packages (type "deb") come from archive.ubuntu.com first, then the snapshot.
+#   A pool path names one immutable file, and apt checks every .deb against the
+#   SHA256 in the snapshot's own index, so the bytes, the image and RTMR1/RTMR2
+#   are the same whichever host served them. This keeps a release building when
+#   snapshot.ubuntu.com answers 502/503 for its .debs.
+#
+# The snapshot id here must equal Snapshot= in mkosi.conf and mkosi.tools.conf;
+# build.sh refuses to build when they differ.
+https://snapshot.ubuntu.com/ubuntu/20261015T000000Z/	priority:2
+http://archive.ubuntu.com/ubuntu/	priority:1 type:deb

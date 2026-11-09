@@ -9,6 +9,7 @@
 mod backend;
 mod cluster;
 mod config;
+mod counters;
 mod handlers;
 mod measurement;
 mod policy;
@@ -31,7 +32,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::backend::{Root, TdxBackend};
 use crate::config::log_startup_config;
-use crate::handlers::create_router;
+use crate::counters::Counters;
+use crate::handlers::create_router_with;
 
 pub use crate::config::Config;
 pub use crate::measurement::HexMeasurement;
@@ -74,21 +76,28 @@ async fn main() -> eyre::Result<()> {
         )
         .await?,
     );
+    let counters = Arc::new(Counters::new(config.replicas, config.cluster_peers.clone()));
     if config.kms_bootstrap {
         backend
             .set_root(Root::generate())
             .map_err(|e| eyre::eyre!("{e}"))?;
+        counters.bootstrap();
         tracing::info!("Generated a new cluster root; this replica bootstraps the cluster");
     } else {
-        drop(tokio::spawn(cluster::join_until_ready(
-            Arc::clone(&backend),
-            config.attestation_policy.clone(),
-            config.cluster_peers.clone(),
-            Duration::from_secs(config.join_retry_secs),
-        )));
+        let (backend, counters) = (Arc::clone(&backend), Arc::clone(&counters));
+        let policy = config.attestation_policy.clone();
+        let peers = config.cluster_peers.clone();
+        let retry = Duration::from_secs(config.join_retry_secs);
+        // The root first, then the counters: a joiner holds no counter until
+        // it has merged a majority's, and answers counter requests with 503.
+        drop(tokio::spawn(async move {
+            cluster::join_until_ready(Arc::clone(&backend), policy, peers, retry).await;
+            counters::sync_until_ready(counters, backend, retry).await;
+        }));
     }
 
-    let base_app = create_router(config.clone(), backend).layer(TraceLayer::new_for_http());
+    let base_app =
+        create_router_with(config.clone(), backend, counters).layer(TraceLayer::new_for_http());
     let app = build_cors_layer(&config.cors_allowed_origins, base_app)?;
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;

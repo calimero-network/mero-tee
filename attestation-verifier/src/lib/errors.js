@@ -32,14 +32,6 @@ const RULES = [
     action: 'Report it to the operator.',
   },
   {
-    test: /commit to the agent and keys|claimed agent has both/i,
-    check: 'keys',
-    actual: 'report_data[32..64] does not commit to the agent and keys the gate named',
-    title: 'The quote does not commit to the agent’s keys',
-    explain: 'The agent id and keys in the response are not the ones the quote’s report data commits to.',
-    action: 'Do not authorize this agent’s key. Call /attest again and paste the whole response unchanged.',
-  },
-  {
     test: /host not in allowed list/i,
     title: 'This address is not one the verifier will contact',
     explain:

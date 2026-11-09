@@ -315,15 +315,14 @@ access the release already has. A failing check shows in the profile job's
 codes above; `node-log-auth-result.json` and `log-auth-receiver-serial.log` are
 in that profile's `gcp-tdx-attestation-*` artifact.
 
-**The KMS release runs it on its KMS and agent images.** The `debug` and
+**The KMS release runs it on its KMS images.** The `debug` and
 `debug-read-only` jobs of **Release mero-kms** (`release-kms.yaml`), `Build and
-probe KMS image (<profile>)` and `Build and measure agent image (<profile>)`,
-run the same check. `kms-init` and `agent-init` read the same two keys and hand
-them to the same `configure_vector.sh`, with their role's
-`/etc/mero-kms/image-profile` or `/etc/mero-agent/image-profile`, so the
-https-only rule is the same and `locked-read-only` skips it the same way. Both
-read the keys after extending RTMR3, whose event names only the role, profile
-and root hash, so neither key is measured.
+probe KMS image (<profile>)`, run the same check. `kms-init` reads the same two
+keys and hands them to the same `configure_vector.sh`, with its role's
+`/etc/mero-kms/image-profile`, so the https-only rule is the same and
+`locked-read-only` skips it the same way. It reads the keys after extending
+RTMR3, whose event names only the role, profile and root hash, so neither key
+is measured.
 
 - **KMS:** only the bootstrap replica of the two-replica cluster
   (`run-cluster-probe.sh`) gets the keys. Both replicas boot the same image
@@ -331,28 +330,24 @@ and root hash, so neither key is measured.
   the joiner boots exactly as before. A failure deletes that profile's image
   and stops **Release Metadata**, so nothing is published. The result and the
   receiver's serial log are in `kms-probe-<version>-<profile>`.
-- **Agent:** the measurement VM (`run-agent-probe.sh`) gets the keys. A failure
-  deletes the agent image and withholds its allowlist, so that profile's KMS
-  image serves nodes only and the release goes on, as for any agent that fails
-  its probe ([Agents in the KMS release](/operate/release-pipeline/#agents-in-the-kms-release)).
 
 The probes take the keys as `LOGS_ENDPOINT` and `OBSERVABILITY_TOKEN_FILE`
 (`scripts/ci/probes/log_auth_metadata.sh`); without them a probe VM's metadata
 is unchanged. The probe VMs sit on the `default` network with no subnet flag,
 so the receiver is created with `--network default` (`VM_SUBNETWORK` empty) and
-its rule admits the probe's tag (`kms-rel-…`, `agent-rel-…`) on `tcp:9200`.
+its rule admits the probe's tag (`kms-rel-…`) on `tcp:9200`.
 Verify runs after the probe has deleted its VMs: the receiver keeps every push
 on its own serial console, and vector pushes within seconds of starting, long
-before the probe finishes. The receivers are `kms-attest-rcv-<profile>-<run>-<attempt>`
-and `agent-attest-rcv-…`. Each job's **Delete the log-auth receiver** step
+before the probe finishes. The receivers are `kms-attest-rcv-<profile>-<run>-<attempt>`.
+Each job's **Delete the log-auth receiver** step
 deletes its own on success, failure and cancellation. `Release mero-kms` has no
 sweep job, so `sweep-attestation-resources.sh`'s stale patterns also match
 these names: the next node release on `master` deletes one a lost runner left,
 once it is past `GCP_ATTESTATION_CLEANUP_MAX_AGE_HOURS`.
 
 `Release mero-kms` builds nothing off `master`, so to try the check from a
-branch, dispatch **Image (mkosi)** (`node-image-mkosi.yaml`) with `role: kms`
-or `agent`, a debug profile and `log_auth_check` set.
+branch, dispatch **Image (mkosi)** (`node-image-mkosi.yaml`) with `role: kms`,
+a debug profile and `log_auth_check` set.
 
 </TabItem>
 </Tabs>
@@ -414,7 +409,7 @@ build therefore still needs those two hosts reachable over plain HTTP.
 ## Build the images with mkosi
 
 `node-image-mkosi.yaml` (named for the image it began with) builds a node,
-KMS, agent or inference image with mkosi (mdma#480) from a branch, as the releases do. Its
+KMS or inference image with mkosi (mdma#480) from a branch, as the releases do. Its
 `role` input picks the image and its `profile` input the profile:
 `locked-read-only`, `debug-read-only` or `debug`. The workflow publishes
 nothing; it is how an image change is proven on TDX before a release builds it.
@@ -432,12 +427,6 @@ The roles take their inputs from environment variables:
   (`verify-node-policy.sh`) and pass `extract-node-allowlist.sh`. Locally, pass
   `KMS_NODE_POLICY_FILE` a file the extract script wrote: the role refuses any
   value that is not 96 hex characters or a TCB status name.
-- **agent:** `MERO_AGENT_GATE_BINARY`, and `MERO_AGENT_BINARY` or
-  `MERO_BOT_BUNDLE`. The workflow builds mero-agent-gate from the commit and
-  bakes the stub agent (`scripts/agent/stub-mero-agent.py`), or with
-  `agent: mero-bot` the mero-bot release `versions.json` pins, downloaded and
-  checked as `Release mero-kms` does (needs the `MERO_BOT_RELEASE_TOKEN`
-  secret).
 - **inference:** `MERO_INFERENCE_GATE_BINARY`; vLLM comes from
   `mero-tee/inference/requirements.lock`, installed with uv. The workflow boots
   it on a GPU TDX VM (H100 quota needed) set by `inference_options`, JSON:
@@ -472,11 +461,11 @@ mero-tee/mkosi-image/build.sh OUT`. `ROLE` defaults to `node` and `PROFILE` to
 
 The build (`mero-tee/mkosi-image/build.sh`) takes its files from the Ansible
 roles. `scripts/image/render_role_tree.py` reads the
-role's playbook (`playbook.yml`, `playbook-kms.yml` or `playbook-agent.yml`) and
+role's playbook (`playbook.yml` or `playbook-kms.yml`) and
 does what its `copy`, `template`, `file`, `get_url`, `unarchive` and `set_fact`
 tasks do into a directory. The release binaries come from a download cache and
 are checked against `build-inputs.lock.json`. It also evaluates the roles'
-asserts, so a KMS with an empty allowlist or an agent bundle that is not the
+asserts, so a KMS with an empty allowlist or a download that is not the
 pinned one fails the build. It skips an assert only when it
 checks a probe of the VM or the VM's facts. The renderer records the roles'
 packages, users and the units they enable and mask in a manifest. It lists
@@ -484,20 +473,16 @@ every task it does not run, such as probes of a running VM, so none disappears
 silently.
 
 `build.sh` adds the packages to the image. `mkosi.postinst` applies the enable
-list, creates the roles' users (the agent's slot users, baked in because the
-root is read-only) and locks root. `mkosi.finalize` applies the mask list and
+list, creates the roles' users (baked in because the root is read-only) and
+locks root. `mkosi.finalize` applies the mask list and
 makes the lockdown checks of `merotee-conformance` (whose tasks probe a running
 VM, so the renderer skips them), plus each role's own:
 
 - **node:** merod, meroctl and calimero-init are present, and the
   journal is volatile.
 - **kms:** mero-kms, kms-init and `kms.env` are present.
-- **agent:** the gate, the agent, merod and cryptsetup are present. finalize
-  also runs the agent role's probes, which the renderer skips: merod has
-  `kms disk-key`, the kernel has `dm_crypt` and `dm_integrity`, and a baked
-  mero-bot starts on the baked Node.
 
-On the node and the agent, the GCE disk naming files their data disk needs
+On the node, the GCE disk naming files its data disk needs
 are checked too. On every role, the services the init script starts are
 checked not to start at boot. After
 mkosi, `build.sh` checks that none of the removed packages (ssh, crash
@@ -534,8 +519,6 @@ The run:
    - node: the node staging probe (`node-image-gcp-staging-probe.yaml`, also
      callable as a reusable workflow);
    - kms: a two-replica cluster (`scripts/release/kms/run-cluster-probe.sh`);
-   - agent: ITA, then a throwaway secret provisioned to the agent
-     (`scripts/release/agent/run-agent-probe.sh`);
 3. compares the quote's RTMR1-3 with the computed values. It compares event
    by event when the image returns its event log, and the registers only
    otherwise.
@@ -556,9 +539,57 @@ on every build: nvme-cli's random host NQN and host id, `alternatives.log`
 and ldconfig's aux cache. It also runs mkosi as root, because as an
 unprivileged user mkosi's user namespace gave every file root as its owner,
 and the run fails when no file in the root is owned by anyone else. To find
-what differs between two builds, the run logs per-directory digests of the
-root and the initrd (`scripts/image/image_digest.py`); run the same on the
-other build and diff the two. Build locally as root, as CI does.
+what differs between two builds, the run writes per-directory digests of the
+root and the initrd (`scripts/image/image_digest.py`) to `root.digest` and
+`initrd.digest` in the build evidence (the step's log shows only their line
+counts and hashes); run the same on the other build and diff the two. Build
+locally as root, as CI does.
+
+When a build is slow, the last lines of its step say why: `build-image.sh`
+stamps each line of mkosi's output with its UTC time, keeps it as
+`mkosi-build.log` in the evidence (and the release uploads it as the
+`mkosi-build-log-<profile>-<run>` artifact), and ends with
+`build_timing.py`'s summary, each mkosi phase and the longest silences. The
+build has taken from 5 to 23 minutes for the same inputs, nearly all of it
+fetching packages from the snapshot mirror with no cache.
+
+### When snapshot.ubuntu.com is down
+
+`snapshot.ubuntu.com` answers 500, 502 and 503 for minutes at a time. The
+rc.10 release (2.3.139) failed four times in a row with
+`E: Unable to locate package base-files` (an index it could not fetch) or
+`E: Failed to fetch …/pool/…deb 503 Service Unavailable`. Three things keep a
+release building through that, and none of them changes what is measured:
+
+- **Retries.** `mkosi.sandbox/etc/apt/apt.conf.d/80-retries` retries every
+  fetch up to 8 times.
+- **Packages from the archive.** `80-snapshot-mirrors` points apt's snapshot
+  server at `mkosi.sandbox/etc/apt/snapshot-mirrors.list` (apt's `mirror+file:`
+  method):
+  - index files (`InRelease`, `Packages`, `Sources`) come only from the
+    snapshot, and they pin the package set;
+  - `.deb` files come from `archive.ubuntu.com` first, then from the snapshot.
+
+  A pool path names one immutable file, and apt checks each `.deb` against
+  the SHA256 in the snapshot's own index. The bytes are therefore the same
+  whichever host served them. `build.sh` refuses to build when the list's
+  snapshot id differs from `Snapshot=` in `mkosi.conf` or `mkosi.tools.conf`.
+  When you move `Snapshot=`, move the id in the list too.
+- **A cache between runs.** The node release restores and saves mkosi's
+  repository metadata and packages with `actions/cache`
+  (`MKOSI_CACHE_DIR` in `build-image.sh`). The cache key is the snapshot, the
+  profile and a hash of `mero-tee/mkosi-image/**`.
+  - On an exact hit, the build runs with `CacheOnly=metadata` and never asks
+    the snapshot for an index.
+  - Only a build that succeeded saves the cache, so its metadata is complete
+    for that configuration.
+  - After one successful release, the next releases of the same image
+    configuration do not need the snapshot at all.
+
+If a release still fails on the snapshot, it is down for its indexes and
+nothing is cached yet. Re-run the failed jobs later. A probe from outside
+(`curl -I https://snapshot.ubuntu.com/ubuntu/<Snapshot>/dists/resolute/InRelease`)
+tells you when it is back.
 
 A `locked-read-only` image writes nothing to the serial console, because it has
 no `console=`. When it never comes up, run the workflow with `serial_console`
@@ -568,12 +599,26 @@ probes print the last lines of the serial port whenever their wait times out. A
 diagnostic build measures differently (RTMR2 covers the command line), so its
 registers are not the image's.
 
+### A release tag is single-use
+
+The repository's releases are immutable: once a release is published under a
+tag (`mero-tee-v2.3.139`, `mero-kms-v2.3.139`), GitHub never lets that tag
+carry a release again, even after the release is deleted. Re-running the
+publish job then fails with `tag_name was used by an immutable release`.
+
+So never delete a published release to retry part of it. When a published
+release is wrong or incomplete, cut the next version: bump `imageVersion` in
+`mero-tee/versions.json`, the `mero-kms` version in `mero-kms/Cargo.toml` and
+`Cargo.lock`, and the two version tables in `operate/`. 2.3.139 was lost this
+way and its build was released as 2.3.140. An unpublished draft (such as a KMS
+release whose upload step failed) can be deleted and its job re-run.
+
 ### When GCP fails to create a probe VM
 
 The release probes create their VMs through `gcp_create_instance`
 (`scripts/ci/gcp_create_instance.sh`): the node release's measurement VM, the
-KMS release's agent probe and two-replica cluster, the mkosi run's KMS and
-agent probes, the post-release agent e2e, and the log-auth receiver the node
+KMS release's two-replica cluster, the mkosi run's KMS probe, and the
+log-auth receiver the node
 release's debug profiles start. The manual probes create theirs the same way:
 `node-image-gcp-staging-probe.yaml` (its TDX VM) and `uki-tdx-probe.yaml`. No
 workflow or script calls `gcloud compute instances create` directly any more,

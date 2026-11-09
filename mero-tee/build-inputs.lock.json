@@ -1,9 +1,9 @@
 {
   "merod": {
-    "version": "1.0.0-rc.3",
+    "version": "1.0.0-rc.11",
     "sha256": {
-      "merod_x86_64-unknown-linux-gnu.tar.gz": "61a419b2740d715f999e05dec76c1bfff7dfd6b02a47dbf257c63fc041f18a74",
-      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "3da2fe18a7d33778e13fef15ad5d8b19a61269a59417a1b2048374f9e3c07aeb"
+      "merod_x86_64-unknown-linux-gnu.tar.gz": "1a9d617421c1f95edc27dbd151fb43353c277729d8f8ea29ac6bd2d3abccad5e",
+      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "12861a48ef7fee06c84334aa13f31b56f7f9d9cfad4d9e45d1977c477eaf20af"
     }
   },
   "traefik": {
@@ -28,12 +28,6 @@
     "version": "0.50.0",
     "sha256": {
       "vector-0.50.0-x86_64-unknown-linux-gnu.tar.gz": "951ceb14f2382c1438696552745221c5584d6895f9aa2b0e12ff0e30271d4b0e"
-    }
-  },
-  "node": {
-    "version": "22.23.3",
-    "sha256": {
-      "node-v22.23.3-linux-x64.tar.xz": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de"
     }
   },
   "meroBot": {

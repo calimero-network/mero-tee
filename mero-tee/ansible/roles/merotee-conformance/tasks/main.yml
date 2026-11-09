@@ -252,7 +252,7 @@
   loop:
     - /etc/systemd/system/merod.service
     - /etc/traefik/config.yml
-    - /etc/traefik/routing.yml
+    - /etc/traefik/dynamic/routing.yml
 
 # Nothing of mero-auth may be left: core 1.0 has no mero-auth, and a unit or
 # config for it would be a service the image cannot start.

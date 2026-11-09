@@ -28,6 +28,10 @@ pub struct KmsAttestRequest {
     /// event makes two TDs' registers differ.
     #[serde(default)]
     pub event_log: bool,
+    /// With `transportKey`: also report what this KMS can do (`capabilities`)
+    /// and commit to it, with the v2 binding (`sealed::attest_binding_v2`).
+    #[serde(default)]
+    pub capabilities: bool,
 }
 
 /// Response body for the KMS attestation endpoint.
@@ -45,6 +49,10 @@ pub struct KmsAttestResponse {
     /// Base64 CCEL event log, present when the request asked for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_log_b64: Option<String>,
+    /// What this KMS can do (`sealed::CAPABILITIES`), present when asked with
+    /// `transportKey`; the quote then commits to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
 }
 
 /// Handler for KMS self-attestation.
@@ -57,7 +65,12 @@ pub(crate) async fn attest_kms_handler(
 ) -> Result<Json<KmsAttestResponse>, ServiceError> {
     let nonce = decode_fixed_b64_32("nonceB64", &request.nonce_b64)?;
     let binding = resolve_attestation_binding(request.binding_b64.as_deref())?;
-    let (binding, transport_public) = if request.transport_key {
+    let capabilities = request.transport_key && request.capabilities;
+    let (binding, transport_public) = if capabilities {
+        let transport = state.backend.transport_key()?;
+        let public = *transport.public();
+        (sealed::attest_binding_v2(&binding, &public), Some(public))
+    } else if request.transport_key {
         let transport = state.backend.transport_key()?;
         let public = *transport.public();
         (sealed::attest_binding(&binding, &public), Some(public))
@@ -77,6 +90,12 @@ pub(crate) async fn attest_kms_handler(
         report_data_hex: hex::encode(report_data),
         transport_public_key_b64: transport_public.map(|public| BASE64.encode(public)),
         event_log_b64: event_log,
+        capabilities: capabilities.then(|| {
+            sealed::CAPABILITIES
+                .iter()
+                .map(|c| (*c).to_owned())
+                .collect()
+        }),
     }))
 }
 
