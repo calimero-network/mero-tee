@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@calimero-network/mero-js": "^27.4.0",
+    "@calimero-network/mero-js": "^29.7.0",
     "jose": "^6.2.15",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
