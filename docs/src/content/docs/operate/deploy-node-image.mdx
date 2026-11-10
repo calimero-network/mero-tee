@@ -273,12 +273,30 @@ scrape config targets it — its unit file is installed by the image but is not
 enabled, so without that it would be a dead scrape target.
 
 The scrape config's other target is merod itself (job `merod`): `merod.service`
-sets `MEROD_METRICS_LISTEN=127.0.0.1:9464`, so merod serves its request,
-latency, error, Raft, disk and process metrics there, in plain HTTP on loopback
-only, with no credential. They carry counts, route templates and group numbers,
-never an app, account or organization id (see core's `operate/observability`
-page). vmagent adds the same `instance_name`, `instance_type` and
-`instance_profile` labels to these series as to node_exporter's.
+sets `MEROD_METRICS_LISTEN=127.0.0.1:9464`, so merod serves its metrics there,
+in plain HTTP on loopback only, with no credential. Most are request, latency,
+error, Raft, disk and process metrics, labelled with counts, route templates and
+group numbers. Since core 1.0.0-rc.9 the text also holds per-app usage for
+billing, the `calimero_app_*` series (calls, WASM CPU and memory, compute runs,
+outbound requests, state and blob bytes). Each is labelled `app` (the app's id),
+`org` (its payer: an organization's id, or `account:{id}` for a personal app)
+and `developer` (who is billed for it on a shared cluster, in the same form);
+`calimero_app_calls_total` adds `kind`. They hold ids, never names or state; the
+series and their meaning are on core's `operate/observability` page (Usage
+metering). vmagent ships them with the rest, adding the same `instance_name`
+(the node's FQDN), `instance_type` and `instance_profile` labels as to
+node_exporter's, and presents the fleet's `observability-token`.
+
+:::caution[Shipped usage series are not a billing record]
+The token is the same on every node and its vmauth user is write-only: it
+cannot read the store, but whoever holds it, including anyone who reads a
+node's instance metadata, can write any series under any label, a
+`calimero_app_*{developer="…"}` included. Nothing in the store proves a sample
+came from merod on an attested node. Use these series for dashboards, not to
+charge anyone: mdma shows them in its consoles but does not post them to Stripe
+(`MDMA_STRIPE_POST_VM_USAGE`, off by default) until it bills from core's usage
+book, which the app's leader records inside the TEE and its Raft log commits.
+:::
 
 :::caution[Shipped logs are readable by whoever sets `logs-endpoint`]
 Instance metadata picks the log sink, so treat every shipped line as readable
