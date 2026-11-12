@@ -21,7 +21,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -r "$TEMPLATE" ]] || fail "cannot read ${TEMPLATE}"
 body="$(cat "$TEMPLATE")"
 start=$(grep -nF '# --- The recovery disk' <<<"$body" | head -1 | cut -d: -f1)
-end=$(grep -nF '# --- TLS material for traefik' <<<"$body" | head -1 | cut -d: -f1)
+end=$(grep -nF '# --- merod 1.0: storage key' <<<"$body" | head -1 | cut -d: -f1)
 [[ -n "$start" && -n "$end" ]] || fail "could not locate the recovery disk block"
 block="$(sed -n "${start},${end}p" <<<"$body")"
 code="$(grep -vE '^[[:space:]]*#' <<<"$block")"
