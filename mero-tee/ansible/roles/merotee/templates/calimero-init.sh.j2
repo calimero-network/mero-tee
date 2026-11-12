@@ -1451,6 +1451,22 @@ merod_init_takes() {
   "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- "$1 "
 }
 
+# The public attestation verifier a node's consent page links to (merod
+# --attestation-verifier-url, core #5020, merod 1.0.0-rc.20 and later). Unlike
+# governance, a link the image's merod cannot take is not worth a failed boot:
+# without the flag the key is skipped with a warning (mdma also writes it only
+# for a merod known to take it). A value that does not match still stops it.
+verifier_arg() {
+  local value
+  value="$(get_meta attestation-verifier-url | tr -d '\r\n')"
+  [[ -n "$value" ]] || return 0
+  if ! merod_init_takes --attestation-verifier-url; then
+    log "WARN: instance metadata 'attestation-verifier-url' is set but this image's merod does not take --attestation-verifier-url; the consent page will show no verifier link"
+    return 0
+  fi
+  meta_arg attestation-verifier-url "^${URL_RE}$"
+}
+
 # On a first boot: check each governance key against the allowlist, append it to
 # merod init's arguments, and log the governance this node will found the
 # cluster with should it lead first.
@@ -1823,6 +1839,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   meta_arg peer-profiles '^[a-z0-9-]+(,[a-z0-9-]+)*$'
   meta_arg peer-min-release '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
   meta_arg replicas '^[0-9]{1,3}$'
+  verifier_arg
   governance_args
   log "Initializing merod 1.0 node (kms=$KMS_URL release=$TEE_RELEASE_VERSION)..."
   stage merod-init "initializing merod"

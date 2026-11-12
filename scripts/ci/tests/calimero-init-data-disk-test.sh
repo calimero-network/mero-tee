@@ -94,7 +94,7 @@ grep -qF 'exit 1' <<<"$unmountable_block" \
 # A locked or KMS-backed node, where a missing disk is fatal, waits long before
 # giving up on it. 30 s lost the race on the first production node against a
 # GCP KMS, when mdma still hot-attached the disk after boot.
-wait_secs=$(grep -oE 'DATA_DEVICE_WAIT_SECS=[0-9]+' <<<"$code" | sort -t= -k2 -n | tail -1 | cut -d= -f2 || true)
+wait_secs=$(grep -oE 'DATA_DEVICE_WAIT_SECS=[0-9]+' <<<"$code" | sort -t '=' -k 2 -n | tail -1 | cut -d= -f2 || true)
 [[ -n "$wait_secs" ]] || fail "no DATA_DEVICE_WAIT_SECS: the data-disk wait is not configurable per profile"
 (( wait_secs >= 300 )) \
   || fail "the longest data-disk wait is ${wait_secs}s; mdma hot-attaches the disk after the VM
