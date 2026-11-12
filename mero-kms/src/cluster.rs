@@ -554,6 +554,7 @@ mod tests {
             application_hash_verified: true,
             tcb_status: Some("UpToDate".to_owned()),
             advisory_ids: Vec::new(),
+            tcb_evaluation_data_number: None,
             quote,
         }
     }

@@ -1,6 +1,6 @@
 //! Shared test helpers available to all `#[cfg(test)]` modules.
 
-use calimero_server_primitives::admin::{
+use calimero_tee_attestation::{
     CertificationData, QeReportCertificationDataInfo, Quote, QuoteBody, QuoteHeader,
 };
 
