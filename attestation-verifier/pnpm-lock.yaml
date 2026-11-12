@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@calimero-network/mero-js':
-        specifier: ^29.7.0
-        version: 29.7.0
+        specifier: ^32.0.0
+        version: 32.0.0
       jose:
         specifier: ^6.2.15
         version: 6.2.15
@@ -33,8 +33,8 @@ importers:
 
 packages:
 
-  '@calimero-network/mero-js@29.7.0':
-    resolution: {integrity: sha512-M67wFre8MZsbHXXguvffKwRSisVY9xFePJ1b1KVrvtcJ9s/WKa+u8TEBNbJrx+Mce1lxRJr2O9RTWIiwxdWvzA==}
+  '@calimero-network/mero-js@32.0.0':
+    resolution: {integrity: sha512-NGghnXEMTQkMcfWQtPQirgbBCIIU+vbgoDEBoD4DQaAugFmNE9FWS3TLw8RiyAdHNNd3CyBTTpoEaxLc6NuVjQ==}
     engines: {node: '>=18.0.0'}
 
   '@oxc-project/types@0.156.0':
@@ -327,6 +327,12 @@ packages:
       encoding:
         optional: true
 
+  openapi-fetch@0.17.0:
+    resolution: {integrity: sha512-PsbZR1wAPcG91eEthKhN+Zn92FMHxv+/faECIwjXdxfTODGSGegYv0sc1Olz+HYPvKOuoXfp+0pA2XVt2cI0Ig==}
+
+  openapi-typescript-helpers@0.1.0:
+    resolution: {integrity: sha512-OKTGPthhivLw/fHz6c3OPtg72vi86qaMlqbJuVJ23qOvQ+53uw1n7HdmkJFibloF7QEjDrDkzJiOJuockM/ljw==}
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -450,9 +456,10 @@ packages:
 
 snapshots:
 
-  '@calimero-network/mero-js@29.7.0':
+  '@calimero-network/mero-js@32.0.0':
     dependencies:
       '@phala/dcap-qvl': 0.5.3
+      openapi-fetch: 0.17.0
     transitivePeerDependencies:
       - encoding
 
@@ -662,6 +669,12 @@ snapshots:
   node-fetch@2.7.0:
     dependencies:
       whatwg-url: 5.0.0
+
+  openapi-fetch@0.17.0:
+    dependencies:
+      openapi-typescript-helpers: 0.1.0
+
+  openapi-typescript-helpers@0.1.0: {}
 
   picocolors@1.1.1: {}
 
