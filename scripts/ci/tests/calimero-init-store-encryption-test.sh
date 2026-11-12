@@ -147,6 +147,7 @@ if [[ " \$* " == *" --help "* ]]; then
   fi
   if [[ "$merod" == 1.0 || "$merod" == 1.0-attest ]]; then
     echo "      --sign-up <SIGN_UP>"
+    echo "      --attestation-verifier-url <URL>"
   fi
   exit 0
 fi
@@ -332,6 +333,23 @@ for value in open invite closed; do
   [[ "$(rc "$name")" == 0 ]] || fail "sign-up=$value should initialise: $(cat "$WORK/$name/log")"
   [[ "$(arg "$name" --sign-up)" == "$value" ]] || fail "sign-up=$value did not reach merod init as --sign-up $value"
 done
+
+# The verifier link (core #5020): passed to a merod that takes it; skipped with a
+# warning, never a failed boot, on one that does not; a malformed value stops it.
+run_case verifier debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLIC" \
+  attestation-verifier-url=https://verify.example.com
+[[ "$(rc verifier)" == 0 ]] || fail "attestation-verifier-url should initialise: $(cat "$WORK/verifier/log")"
+[[ "$(arg verifier --attestation-verifier-url)" == https://verify.example.com ]] \
+  || fail "attestation-verifier-url did not reach merod init"
+run_case verifier-old locked-read-only "$URL" 2.3.70 1.0-nosignup fresh ext4 "${BASE[@]}" bootstrap=true \
+  attestation-verifier-url=https://verify.example.com
+[[ "$(rc verifier-old)" == 0 ]] || fail "a merod without --attestation-verifier-url must still boot: $(cat "$WORK/verifier-old/log")"
+has_flag verifier-old --attestation-verifier-url && fail "--attestation-verifier-url reached a merod that does not take it"
+logged verifier-old "does not take --attestation-verifier-url" || fail "the skipped link must be logged: $(cat "$WORK/verifier-old/log")"
+run_case verifier-bad debug "$URL" 2.3.70 1.0 fresh ext4 node-id=7 "public-url=$PUBLIC" \
+  "attestation-verifier-url=javascript:alert(1)"
+[[ "$(rc verifier-bad)" != 0 ]] || fail "a malformed attestation-verifier-url was accepted"
+init_ran verifier-bad && fail "merod init ran with a malformed attestation-verifier-url"
 
 # Not on the allowlist: refused on every profile, before merod init, saying why.
 n=0

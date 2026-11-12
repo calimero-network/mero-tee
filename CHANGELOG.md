@@ -8,6 +8,8 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ### Added
 
+- **A node's consent page links to the public attestation verifier.** `calimero-init` reads the instance metadata key `attestation-verifier-url` (mdma#756, mdma#758) and passes it to `merod init` as merod's `--attestation-verifier-url` (core #5020, merod 1.0.0-rc.20 and later), so the consent page links the person to a check of the node's attestation on a site the node does not control. A value that is not an `http(s)` URL stops the first boot. For a merod that does not take the flag the key is skipped with a warning, never a failed boot: a missing link is not worth a node. Unset, nothing changes. Covered by `scripts/ci/tests/calimero-init-store-encryption-test.sh`. Changes `calimero-init`, so the image's measurements change.
+
 - **The recovery disk.** Where mdma attaches a `recovery` disk and stamps `recovery-dir` metadata (core: `merod --recovery-dir`, backups sealed to the key of whoever upgrades each app, which open without any mero-kms), `calimero-init` finds it by `/dev/disk/by-id/google-recovery` only, formats it ext4 once if blank, refuses one holding anything else, mounts it `nosuid,nodev,noexec` on every boot and writes `MEROD_RECOVERY_DIR` to `merod.env`. A job node refuses it. Changes `calimero-init`, so the node image's measurements change. Test: `scripts/ci/tests/calimero-init-recovery-disk-test.sh`.
 
 ### Removed
