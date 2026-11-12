@@ -222,6 +222,24 @@ passphrase is never the KMS key a whole cluster derives its storage key from.
 The value is never logged, and the log egress guard masks the keypair's base64
 and hex shapes.
 
+### The recovery disk
+
+A node mdma creates with a recovery disk (attached as deviceName `recovery`) also
+carries **`recovery-dir`** metadata, the mount point (mdma: `/recovery`). On every
+boot `calimero-init` finds the disk by `/dev/disk/by-id/google-recovery` only,
+formats it ext4 if it is blank (no filesystem, no partitions), refuses one that
+holds anything else, mounts it `nosuid,nodev,noexec`, and writes
+`MEROD_RECOVERY_DIR` to `merod.env`, so `merod run` gets `--recovery-dir`.
+
+| Metadata key | Value | When absent |
+| --- | --- | --- |
+| `recovery-dir` | An absolute path of plain names (`/recovery`), not under the data disk or a system path. Refused on a job node, and when no `recovery` disk is attached. | No recovery disk is mounted and merod writes no recovery files. |
+
+The disk is not encrypted under a KMS key, on purpose: merod seals every file on
+it to the X25519 key of whoever upgrades the app and signs it with its attested
+receipt key, so the files open without any mero-kms and the host can neither read
+nor plant one a holder accepts (core: `calimero_node::recovery_disk`).
+
 merod trusts the KMS only if its quote matches the signed release the
 environment names (`MERO_KMS_RELEASE_TAG`, else `MERO_KMS_VERSION`, else
 `MERO_TEE_VERSION`, which the node images set from `tee-release-version`), for
