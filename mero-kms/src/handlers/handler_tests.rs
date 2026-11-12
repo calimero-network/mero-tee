@@ -35,7 +35,7 @@ fn post_json_request(uri: &str, body: &serde_json::Value) -> Request<Body> {
 /// Build a `VerificationResult` fixture for exercising the *real* measurement
 /// policy machinery (`enforce_attestation_policy`).
 ///
-/// This is deliberately built by hand from `calimero_server_primitives` types
+/// This is deliberately built by hand from `calimero_tee_attestation` quote types
 /// rather than via core's `verify_mock_attestation`, so that the policy tests
 /// below stay compiled and running in the default (no-`mock-attestation`) build.
 /// All measurement registers are zeroed, matching what a mock quote produced.
@@ -50,6 +50,7 @@ fn policy_verification_result(nonce_seed: u8) -> calimero_tee_attestation::Verif
         application_hash_verified: true,
         tcb_status: Some("Mock".to_owned()),
         advisory_ids: Vec::new(),
+        tcb_evaluation_data_number: None,
         quote,
     }
 }

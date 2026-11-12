@@ -21,7 +21,7 @@ TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run a
 cargo build --release
 ```
 
-Requires Rust. Dependencies on `calimero-tee-attestation` and `calimero-server-primitives` via git dependency on [calimero-network/core](https://github.com/calimero-network/core).
+Requires Rust. Depends on `calimero-tee-attestation` via a git dependency on [calimero-network/core](https://github.com/calimero-network/core).
 
 ### Build GCP Images
 

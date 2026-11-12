@@ -59,7 +59,7 @@ pub(crate) struct Measurements {
 }
 
 impl Measurements {
-    pub(crate) fn of(body: &calimero_server_primitives::admin::QuoteBody) -> Self {
+    pub(crate) fn of(body: &calimero_tee_attestation::QuoteBody) -> Self {
         Self {
             mrtd: body.mrtd.to_ascii_lowercase(),
             rtmr0: body.rtmr0.to_ascii_lowercase(),

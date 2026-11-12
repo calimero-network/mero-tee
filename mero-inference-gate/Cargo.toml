@@ -43,7 +43,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Same core rev as mero-kms and mero-agent-gate: one quote implementation.
-calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "23cf02c965a2ca2f9eb4d8abe47ce54a763c7fab" }
+calimero-tee-attestation = { git = "https://github.com/calimero-network/core", rev = "4f37b94d6332a6dcdef4fa7f00e5a6da80a85017" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
