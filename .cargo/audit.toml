@@ -4,16 +4,6 @@ ignore = [
   # calimero-tee-attestation's DCAP stack (dcap-qvl-webpki, x509-verify).
   # No patched rsa release is available yet.
   "RUSTSEC-2023-0071",
-  # hickory-proto 0.25, transitive through reqwest's hickory-dns resolver,
-  # which the calimero-network/core git dependency graph enables. Bumping it here
-  # is not possible without bumping the pinned core rev (which must stay
-  # reproducible for the release pin); tracked for the next core bump.
-  # NSEC3 closest-encloser unbounded loop ("No fixed upgrade is available!"
-  # per advisory).
-  "RUSTSEC-2026-0118",
-  # O(n^2) name-compression CPU exhaustion (fix in hickory-proto >=0.26.1,
-  # gated by the pinned core rev).
-  "RUSTSEC-2026-0119",
   # crypto-bigint 0.5 via elliptic-curve 0.13 (dcap-qvl's ecdsa); the fix is in
   # crypto-bigint 0.7, which needs the elliptic-curve 0.14 upgrade upstream.
   "RUSTSEC-2026-0387",
