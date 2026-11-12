@@ -185,6 +185,11 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-data-disk-test.sh
 
+      - name: Check the recovery disk is mounted safely
+        id: recovery_disk_test
+        shell: bash
+        run: scripts/ci/tests/calimero-init-recovery-disk-test.sh
+
       # merod 1.0 takes its storage key from mero-kms only and its cluster
       # settings from instance metadata. Runs the decision against a stub merod
       # and stub metadata: every value is checked before it becomes the node's
@@ -407,6 +412,7 @@ jobs:
             --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
+            --checks-line "- recovery disk mounted safely: ${{ steps.recovery_disk_test.outcome }}" \
             --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \

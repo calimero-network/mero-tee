@@ -6,6 +6,10 @@ The format is inspired by Keep a Changelog, and this project follows SemVer tags
 
 ## [Unreleased]
 
+### Added
+
+- **The recovery disk.** Where mdma attaches a `recovery` disk and stamps `recovery-dir` metadata (core: `merod --recovery-dir`, backups sealed to the key of whoever upgrades each app, which open without any mero-kms), `calimero-init` finds it by `/dev/disk/by-id/google-recovery` only, formats it ext4 once if blank, refuses one holding anything else, mounts it `nosuid,nodev,noexec` on every boot and writes `MEROD_RECOVERY_DIR` to `merod.env`. A job node refuses it. Changes `calimero-init`, so the node image's measurements change. Test: `scripts/ci/tests/calimero-init-recovery-disk-test.sh`.
+
 ### Removed
 
 - **The agent image is gone.** Calimero Cloud 1.0 runs no agents (mdma #548 deleted its agent services, tables and pages; core has no agent code), so mero-tee no longer builds, measures or publishes it. **Breaking** for anything that still fetched it. Deleted: `mero-agent-gate` (Cargo workspace member), the `mero-agent` role and `playbook-agent.yml`, `scripts/agent/`, `scripts/release/agent/`, their CI tests, **Post-release agent e2e** (`post-release-agent-e2e.yaml`), and the private agents design and docs page. Release mero-kms loses its `agent-image` job, so it publishes no `kms-agent-attestation-policy.<profile>.json` and its KMS images serve nodes only, as every image built without an agent allowlist always has; **Image (mkosi)** builds `node`, `kms` and `inference`; `release-image-name.sh` names no `merotee-agent-*` image. `versions.json` and `build-inputs.lock.json` drop Node.js (`nodeVersion`), which only the agent image baked. The attestation verifier drops its `/agent` page and the API's `agent: true` mode. Unchanged: the node, KMS and inference images (no file baked into any of them changes, so their measurements do not), the inference release job and its `kms-inference-attestation-policy.<profile>.json`, the mero-bot pin, mero-kms, which still accepts an optional agent allowlist (`AGENT_ALLOWED_*`, `KMS_AGENT_POLICY_FILE`) that no release bakes, and the agent images and policies already published.

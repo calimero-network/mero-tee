@@ -1112,6 +1112,64 @@ Refusing to start: state the host can write can carry an identity the host holds
 Recreate the node with a blank data disk."
 fi
 
+# --- The recovery disk ------------------------------------------------------
+#
+# merod's `--recovery-dir`: backups sealed to the X25519 key of whoever upgrades
+# each app (core `calimero_node::recovery_disk`). They open with that key alone,
+# so they outlive every mero-kms, which is the point: the disk is NOT encrypted
+# under a KMS key (that would die with the KMS). Every file on it is already
+# sealed to its holder and signed by this node's attested receipt key, so a
+# plain ext4 disk the host can read or write leaks nothing and can plant
+# nothing a holder accepts. merod only writes there, except during a recovery
+# the operator starts, when it checks each file's signature before using it.
+#
+# mdma attaches it as deviceName "recovery" (`{node}-recovery`) and stamps
+# `recovery-dir` (the mount point) only on a node created with one; a job node
+# never gets either. Addressed by its by-id link alone: unlike the data disk,
+# there is no fallback to "the one blank disk", which could be the data disk.
+# A blank disk is formatted once; a disk holding anything but ext4 is refused,
+# not formatted: it may be another node's backups.
+RECOVERY_DEVICE="/dev/disk/by-id/google-recovery"
+RECOVERY_DIR="$(get_meta recovery-dir | tr -d '\r\n')"
+if [[ -n "$RECOVERY_DIR" ]]; then
+  [[ "${JOB_NODE:-}" != true ]] \
+    || fatal "instance metadata 'recovery-dir' is set on a job node, which holds no app data"
+  [[ "$RECOVERY_DIR" =~ ^(/[A-Za-z0-9_-]{1,64}){1,8}$ ]] \
+    || fatal "instance metadata 'recovery-dir' must be an absolute path of plain names"
+  case "$RECOVERY_DIR" in
+    "$DATA_MOUNT"|"$DATA_MOUNT"/*|/etc|/etc/*|/usr|/usr/*|/run|/run/*|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*|/boot|/boot/*|/var|/var/*)
+      fatal "recovery-dir $RECOVERY_DIR is a system path or inside the data disk" ;;
+  esac
+  for _ in $(seq 1 60); do
+    [[ -b "$RECOVERY_DEVICE" ]] && break
+    sleep 1
+  done
+  [[ -b "$RECOVERY_DEVICE" ]] \
+    || fatal "recovery-dir is set but no disk is attached as 'recovery' ($RECOVERY_DEVICE)"
+  RECOVERY_FS="$(blkid -o value -s TYPE "$RECOVERY_DEVICE" 2>/dev/null || true)"
+  if [[ -z "$RECOVERY_FS" ]]; then
+    # Blank means nothing the kernel knows of: no filesystem and no partitions.
+    if [[ -n "$(lsblk -nro NAME "$RECOVERY_DEVICE" 2>/dev/null | tail -n +2)" ]]; then
+      fatal "the recovery disk has partitions and no filesystem; refusing to format it"
+    fi
+    log "Formatting the blank recovery disk (ext4)"
+    mkfs.ext4 -q -L calimero-recov "$RECOVERY_DEVICE" >>"$LOG" 2>&1 \
+      || fatal "could not format the recovery disk"
+  elif [[ "$RECOVERY_FS" != ext4 ]]; then
+    fatal "the recovery disk holds a $RECOVERY_FS filesystem, not ext4; refusing to format it"
+  fi
+  mkdir -p "$RECOVERY_DIR"
+  if ! mountpoint -q "$RECOVERY_DIR"; then
+    mount -t ext4 -o nosuid,nodev,noexec "$RECOVERY_DEVICE" "$RECOVERY_DIR" >>"$LOG" 2>&1 \
+      || fatal "could not mount the recovery disk at $RECOVERY_DIR"
+  fi
+  chmod 0700 "$RECOVERY_DIR"
+  # Every boot, beside the TEE release: `merod run` reads MEROD_RECOVERY_DIR.
+  printf 'MEROD_RECOVERY_DIR="%s"\n' "$(env_file_value "$RECOVERY_DIR")" >> /etc/calimero/merod.env
+  chmod 0644 /etc/calimero/merod.env
+  log "Recovery disk mounted at $RECOVERY_DIR ($(df -h --output=size "$RECOVERY_DIR" 2>/dev/null | tail -1 | tr -d ' ')); merod --recovery-dir writes there"
+fi
+
 # --- TLS material for traefik ---------------------------------------------
 #
 # Before the merod configuration below, because a first boot may start traefik
