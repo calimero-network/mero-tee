@@ -256,8 +256,9 @@ from an earlier, interrupted boot), whose merod has `attest --serve`:
    is free for `merod run`, then installs the identity and continues as below.
 
 mdma's side: fetch the release attestation over its own fresh nonce, verify it
-(`meroctl attest-release`, or `verify_release`) against the release named by
-`tee-release-version`, and only then stamp `kms-identity`.
+(`meroctl attest release`, core 1.0.0-rc.24 or later, or `verify_release`)
+against the release named by `tee-release-version`, and only then stamp
+`kms-identity`.
 
 A `kms-identity` already set when the boot starts is installed at once, with
 no server. An older merod without `attest`, the debug profiles and memory-only
