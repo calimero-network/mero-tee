@@ -18,12 +18,13 @@
 #     cluster holds the CSR's key; the host can write guest attributes too.
 #
 #   watch    (calimero-tls-cert.service)
-#     Long-poll instance metadata `tls-cert` (PEM chain, leaf first). Install a
-#     chain only when every certificate parses, each is signed by the next, the
-#     leaf has not expired, and the leaf's public key is key.pem's: the host can
-#     write metadata, so a chain for any other key is refused and the current
-#     cert.pem kept. Installing writes cert.pem atomically (0644) and restarts
-#     Traefik, which does not watch its certificate files.
+#     Long-poll instance metadata `tls-cert` (PEM chain, leaf first), and while
+#     it is unset the attributes directory, so a first chain lands at once.
+#     Install a chain only when every certificate parses, each is signed by the
+#     next, the leaf has not expired, and the leaf's public key is key.pem's:
+#     the host can write metadata, so a chain for any other key is refused and
+#     the current cert.pem kept. Installing writes cert.pem atomically (0644)
+#     and restarts Traefik, which does not watch its certificate files.
 #
 #   watch-custom  (calimero-tls-cert-custom.service)
 #     Custom domains: a package's served origin, e.g. kv.example.com (core
@@ -57,7 +58,7 @@ TSM_REPORT="${CALIMERO_TSM_REPORT:-/sys/kernel/config/tsm/report/calimero-tls-cs
 STATE_DIR="${CALIMERO_TLS_STATE_DIR:-/run/calimero}"
 # How long one long-poll of `tls-cert` waits for a change, in seconds.
 POLL_TIMEOUT="${CALIMERO_TLS_POLL_TIMEOUT:-300}"
-# Backoff while `tls-cert` is unset (404) or the metadata server errors.
+# Backoff after a metadata server error.
 BACKOFF_MIN="${CALIMERO_TLS_BACKOFF_MIN:-5}"
 BACKOFF_MAX="${CALIMERO_TLS_BACKOFF_MAX:-300}"
 # How often `watch` retries a publish that has not succeeded on this boot.
@@ -85,6 +86,9 @@ trap cleanup EXIT
 workdir() { [[ -n "$WORK" ]] || WORK="$(mktemp -d)"; }
 
 log() { echo "[$(date -Iseconds)] calimero-tls-cert: $*" >&2; }
+
+# etag_of HEADERS_FILE: the ETag in a curl -D dump, or nothing.
+etag_of() { awk -F': *' 'tolower($1) == "etag" { gsub(/[\r\n]/, "", $2); print $2; exit }' "$1"; }
 
 meta() {
   curl -sf --max-time 30 -H "$METADATA_HEADER" "$METADATA_ROOT/attributes/$1" 2>/dev/null \
@@ -301,7 +305,7 @@ cmd_poll_once() {
     || code=000
   case "$code" in
     200)
-      etag="$(awk -F': *' 'tolower($1) == "etag" { gsub(/[\r\n]/, "", $2); print $2; exit }' "$WORK/headers")"
+      etag="$(etag_of "$WORK/headers")"
       printf '%s\n' "${etag:-NONE}"
       if [[ -z "$etag" || "$etag" != "$last" ]]; then
         cmd_install "$WORK/body" >&2 || true
@@ -316,8 +320,24 @@ cmd_poll_once() {
   esac
 }
 
+# wait_attributes [LAST_ETAG]: long-poll the instance attributes directory
+# until its ETag differs from LAST_ETAG (NONE answers at once); prints it.
+wait_attributes() {
+  local code etag
+  code="$(curl -sS --max-time $((POLL_TIMEOUT + 30)) -H "$METADATA_HEADER" \
+    -D "$WORK/attrs-headers" -o /dev/null -w '%{http_code}' \
+    "$METADATA_ROOT/attributes/?recursive=true&wait_for_change=true&last_etag=${1:-NONE}&timeout_sec=${POLL_TIMEOUT}")" \
+    || code=000
+  if [[ "$code" != 200 ]]; then
+    log "metadata server answered ${code} for the instance attributes"
+    return 1
+  fi
+  etag="$(etag_of "$WORK/attrs-headers")"
+  printf '%s\n' "${etag:-NONE}"
+}
+
 cmd_watch() {
-  local last=NONE backoff="$BACKOFF_MIN" next_publish=0 out rc
+  local last=NONE dir=NONE backoff="$BACKOFF_MIN" next_publish=0 out rc
   # Made here, so each poll's subshell reuses it rather than leaving its own.
   workdir
   while true; do
@@ -334,9 +354,17 @@ cmd_watch() {
         sleep 1
         ;;
       2)
+        # Unset: long-poll the attributes rather than sleep. dir was read before
+        # this 404, so a chain written since then ends the wait at once.
         last=NONE
-        sleep "$backoff"
-        backoff=$(( backoff * 2 > BACKOFF_MAX ? BACKOFF_MAX : backoff * 2 ))
+        if out="$(wait_attributes "$dir")"; then
+          dir="$out"
+          backoff="$BACKOFF_MIN"
+          sleep 1
+        else
+          sleep "$backoff"
+          backoff=$(( backoff * 2 > BACKOFF_MAX ? BACKOFF_MAX : backoff * 2 ))
+        fi
         ;;
       *)
         sleep "$backoff"
@@ -646,7 +674,7 @@ for k in ("tls-custom-hosts", "tls-cert-custom"):
     return 1
   fi
   rm -f "$WORK/custom-attrs"
-  etag="$(awk -F': *' 'tolower($1) == "etag" { gsub(/[\r\n]/, "", $2); print $2; exit }' "$WORK/custom-headers")"
+  etag="$(etag_of "$WORK/custom-headers")"
   printf '%s\n' "${etag:-NONE}"
   if [[ -z "$etag" || "$etag" != "$last" ]]; then
     cmd_reconcile_custom "$(cat "$WORK/tls-custom-hosts")" "$(cat "$WORK/tls-cert-custom")" >&2 || return 1

@@ -493,7 +493,8 @@ Traefik stays a pass-through with no route of its own for it
    names against its own record of the node, orders the certificate over ACME
    DNS-01, and writes the chain back as `tls-cert` instance metadata.
 3. **Certificate in.** `calimero-tls-cert.service` (root, started with Traefik)
-   long-polls `tls-cert` (`wait_for_change`, with backoff while it is unset).
+   long-polls `tls-cert` (`wait_for_change`; while it is unset, the attributes
+   directory by ETag, so a first chain is installed within seconds).
    It installs a chain only for the node's own key -- the host can write
    metadata too -- writes `cert.pem` atomically (`0644`) and restarts Traefik,
    which does not watch its certificate files. A renewal arrives the same way.
