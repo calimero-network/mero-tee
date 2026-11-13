@@ -1,8 +1,22 @@
 # mero-tee
 
-TEE infrastructure for Calimero: **mero-kms** (the Key Management Service, run as a frozen GCP TDX cluster, one per release) and the **GCP image builds** (mkosi-built merod node, KMS and GPU inference images with TDX attestation).
+**The trust layer behind Calimero: the hardware images and key service that make "nobody can read your data, not even us" true, and checkable.**
 
-> **Full documentation**: [Documentation](https://calimero-network.github.io/mero-tee/)
+[Calimero](https://github.com/calimero-network/core) is an app backend, like
+Firebase, that runs every app inside attested Intel TDX confidential VMs. This
+repository builds what those VMs boot and how they get their keys:
+
+- **The images.** The merod node, mero-kms and private-inference images for GCP
+  TDX, built reproducibly with mkosi and sealed with dm-verity. Their
+  measurements (MRTD and RTMR0-3) are published with every release.
+- **The keys.** mero-kms hands a node its disk key only after checking the
+  node's attestation against those published measurements. A node running
+  anything else, or a copied disk, gets nothing.
+- **The proof.** Every release is signed with Sigstore, so clients (mero-js,
+  calimero-client-py, meroctl) and anyone else can check a node against it. The
+  [attestation verifier](attestation-verifier/) does it in a browser.
+
+> **Full documentation**: [calimero-network.github.io/mero-tee](https://calimero-network.github.io/mero-tee/)
 
 ## Components
 
@@ -60,7 +74,7 @@ All detailed documentation lives in the **[Documentation](https://calimero-netwo
 
 ## Release Process
 
-1. Merge version bump PR (`Cargo.toml` and `versions.json` aligned)
+1. Merge version bump PR (`Cargo.toml` and `mero-tee/versions.json` aligned)
 2. Node release runs first; KMS release waits, then creates draft
 3. Human reviews and publishes KMS draft release
 4. `update-compatibility-catalog` workflow updates `compatibility-catalog.json`
@@ -71,7 +85,10 @@ Two artifact families per version:
 
 ## Related Repositories
 
-- [calimero-network/core](https://github.com/calimero-network/core) – merod, node runtime
+| Repo | What it is |
+| --- | --- |
+| [core](https://github.com/calimero-network/core) | merod, meroctl, the app SDK: the platform these images run |
+| [mero-js](https://github.com/calimero-network/mero-js) · [calimero-client-py](https://github.com/calimero-network/calimero-client-py) | Clients that verify a node against these releases before sending anything |
 
 ## License
 
