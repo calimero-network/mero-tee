@@ -25,6 +25,8 @@
 #     leave cert.pem alone and traefik running
 #   * poll-once: 404 while tls-cert is unset, installs on a new ETag, nothing on
 #     the same one
+#   * watch: a chain written after tls-cert was long unset is installed within
+#     seconds, not after a backoff; an error from the metadata server backs off
 #   * the role installs the tool and its unit, and calimero-init publishes after
 #     the TLS key exists and starts the unit with traefik
 #
@@ -44,8 +46,10 @@ pass() { echo "ok: $*"; }
 
 WORK="$(mktemp -d)"
 SERVER_PID=""
+WATCH_PID=""
 cleanup() {
   [[ -z "$SERVER_PID" ]] || kill "$SERVER_PID" 2>/dev/null || true
+  [[ -z "$WATCH_PID" ]] || kill "$WATCH_PID" 2>/dev/null || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -54,13 +58,15 @@ trap cleanup EXIT
 # GET  .../instance/attributes/<key>   from $META/attrs/<key>; 404 when absent;
 #      ETag = sha256 of the value; wait_for_change with the current ETag as
 #      last_etag waits (at most timeout_sec, capped at 2s) and then returns it.
+# GET  .../instance/attributes/?recursive=true  every key as a JSON object, the
+#      same way; 503 while $META/deny-dir exists.
 # PUT  .../instance/guest-attributes/calimero/<key>  into $META/guest/<key>;
 #      403 while $META/deny-guest exists (guest attributes not enabled).
 # Anything without Metadata-Flavor: Google is refused, as GCE does.
 META="$WORK/meta"
 mkdir -p "$META/attrs" "$META/guest"
 cat >"$WORK/server.py" <<'PY'
-import hashlib, os, sys, time
+import hashlib, json, os, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -86,18 +92,32 @@ class H(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if not url.path.startswith(ATTRS):
             return self.reply(404)
-        path = os.path.join(root, "attrs", url.path[len(ATTRS):])
+        key = url.path[len(ATTRS):]
         q = parse_qs(url.query)
         with open(os.path.join(root, "requests"), "a") as f:
             f.write(self.path + "\n")
         def read():
-            try:
-                with open(path, "rb") as f:
-                    body = f.read()
-            except FileNotFoundError:
-                return None, None
+            d = os.path.join(root, "attrs")
+            if key == "":
+                if os.path.exists(os.path.join(root, "deny-dir")):
+                    return "503", None
+                if q.get("recursive") != ["true"]:
+                    return None, None
+                listing = {}
+                for name in sorted(os.listdir(d)):
+                    with open(os.path.join(d, name), encoding="utf-8") as f:
+                        listing[name] = f.read()
+                body = json.dumps(listing).encode()
+            else:
+                try:
+                    with open(os.path.join(d, key), "rb") as f:
+                        body = f.read()
+                except FileNotFoundError:
+                    return None, None
             return body, hashlib.sha256(body).hexdigest()[:16]
         body, etag = read()
+        if body == "503":
+            return self.reply(503)
         if body is None:
             return self.reply(404)
         if q.get("wait_for_change") == ["true"] and q.get("last_etag", [""])[0] == etag:
@@ -377,6 +397,44 @@ cmp -s <(openssl x509 -in "$CERT" -outform DER) <(openssl x509 -in "$WORK/leaf3.
   || fail "watch did not install the chain in tls-cert"
 [[ "$(cat "$WORK/systemctl.log")" == "restart traefik" ]] || fail "watch restarted traefik other than once"
 pass "watch publishes when the boot did not, installs tls-cert once, and keeps running"
+
+# A chain written long after tls-cert was unset is installed at once: on the
+# first cluster, one node waited out a 4-minute 404 backoff with it in metadata.
+unset_meta tls-cert
+leaf_for "$CSR" "$WORK/leaf4.pem"
+cat "$WORK/leaf4.pem" "$WORK/int.pem" >"$WORK/chain4.pem"
+: >"$WORK/systemctl.log"
+: >"$META/requests"
+CALIMERO_TLS_BACKOFF_MIN=2 CALIMERO_TLS_BACKOFF_MAX=60 "$TOOL" watch 2>>"$WORK/tool.log" &
+WATCH_PID=$!
+# A 404 backoff from 2s sleeps 2, 4, then 8s (from about 6s to 14s).
+sleep 8
+set_meta tls-cert "$(cat "$WORK/chain4.pem")"
+for _ in $(seq 30); do
+  [[ "$(cat "$WORK/systemctl.log")" == "restart traefik" ]] && break
+  sleep 0.1
+done
+kill "$WATCH_PID"
+wait "$WATCH_PID" 2>/dev/null || true
+WATCH_PID=""
+cmp -s <(openssl x509 -in "$CERT" -outform DER) <(openssl x509 -in "$WORK/leaf4.pem" -outform DER) \
+  || fail "watch did not install a chain within 3s of it being written after 8s unset"
+(( $(grep -c '/attributes/tls-cert?' "$META/requests") <= 10 )) \
+  || fail "watch polled tls-cert $(grep -c '/attributes/tls-cert?' "$META/requests") times while it was unset"
+pass "watch installs a chain within seconds of it being written, however long tls-cert was unset"
+
+# While the attributes listing errors, the unset watch backs off (2s, then 4s).
+unset_meta tls-cert
+touch "$META/deny-dir"
+: >"$META/requests"
+rc=0
+CALIMERO_TLS_BACKOFF_MIN=2 timeout 5 "$TOOL" watch 2>>"$WORK/tool.log" || rc=$?
+rm -f "$META/deny-dir"
+[[ "$rc" == 124 ]] || fail "watch exited ($rc) when the attributes listing errored"
+grep -q "answered 503 for the instance attributes" "$WORK/tool.log" || fail "watch did not log the listing's error"
+(( $(grep -c '/attributes/tls-cert?' "$META/requests") <= 3 )) \
+  || fail "watch polled tls-cert $(grep -c '/attributes/tls-cert?' "$META/requests") times in 5s without backing off"
+pass "watch backs off while the attributes listing errors"
 
 # --- the image wiring ------------------------------------------------------------------
 grep -qF 'src: calimero-tls-cert.sh' "$TASKS" || fail "the role does not install calimero-tls-cert.sh"
