@@ -1,9 +1,9 @@
 {
   "merod": {
-    "version": "1.0.0-rc.24",
+    "version": "1.0.0-rc.26",
     "sha256": {
-      "merod_x86_64-unknown-linux-gnu.tar.gz": "9629695d14d52447e8967f1adc7251d6e78d6fcc1e1f4245301636ab3967211e",
-      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "f362bd9c2b4eea6af75ffb8b6a7e19323e38a061105b041c07aa666b1e45c2f2"
+      "merod_x86_64-unknown-linux-gnu.tar.gz": "2ead307daeb2d98704c24a9354b3568113b3f1a3f330118e77b7238cfb4fbdc1",
+      "meroctl_x86_64-unknown-linux-gnu.tar.gz": "734a076e1886324c1cf8a5f5f8182cbc6116062659f09110d5a740be1f0ef87e"
     }
   },
   "traefik": {
