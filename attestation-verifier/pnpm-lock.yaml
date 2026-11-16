@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@calimero-network/mero-js':
-        specifier: ^33.0.0
-        version: 33.0.0
+        specifier: ^36.0.0
+        version: 36.0.0
       jose:
         specifier: ^6.2.15
         version: 6.2.15
@@ -33,9 +33,13 @@ importers:
 
 packages:
 
-  '@calimero-network/mero-js@33.0.0':
-    resolution: {integrity: sha512-w8mE1BLpwsr8P9LtpJBTSgZIXEkEu5wdvc1f/fTjPCTdkImj8x63zBWiaM+g4GgNmLkFMHNJ0f4DXhd+deNTUA==}
+  '@calimero-network/mero-js@36.0.0':
+    resolution: {integrity: sha512-wWTdVRPIFyx0I1UBWzId9ptFaqGmK2OX7rrfYRYMakWK7LoEd9Z3TDtOXCEFWQTms3jRXEh4RGNsvqy2srpUag==}
     engines: {node: '>=18.0.0'}
+
+  '@noble/hashes@2.4.0':
+    resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
+    engines: {node: '>= 20.19.0'}
 
   '@oxc-project/types@0.156.0':
     resolution: {integrity: sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw==}
@@ -456,12 +460,15 @@ packages:
 
 snapshots:
 
-  '@calimero-network/mero-js@33.0.0':
+  '@calimero-network/mero-js@36.0.0':
     dependencies:
+      '@noble/hashes': 2.4.0
       '@phala/dcap-qvl': 0.5.3
       openapi-fetch: 0.17.0
     transitivePeerDependencies:
       - encoding
+
+  '@noble/hashes@2.4.0': {}
 
   '@oxc-project/types@0.156.0': {}
 
