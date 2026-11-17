@@ -307,6 +307,14 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tls-custom-test.sh
 
+      # Staging nodes trust the Let's Encrypt staging roots for HTTPS to their
+      # peers (merod --tls-extra-roots) only for tls-extra-roots=le-staging,
+      # only from the bundle the image ships, only for a merod that takes them.
+      - name: Check extra TLS roots are added only for le-staging, from the shipped bundle
+        id: tls_extra_roots_test
+        shell: bash
+        run: scripts/ci/tests/tls-extra-roots-test.sh
+
       # A first boot gets the cluster's KMS identity only after mdma verified
       # its release attestation: calimero-init serves `merod attest --serve` on
       # merod's port (traefik started early), long-polls kms-identity metadata,

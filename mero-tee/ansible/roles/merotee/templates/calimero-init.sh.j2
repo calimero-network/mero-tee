@@ -1229,6 +1229,41 @@ if [[ -n "$RECOVERY_DIR" ]]; then
   log "Recovery disk mounted at $RECOVERY_DIR ($(df -h --output=size "$RECOVERY_DIR" 2>/dev/null | tail -1 | tr -d ' ')); merod --recovery-dir writes there"
 fi
 
+# --- Extra TLS roots --------------------------------------------------------
+#
+# merod trusts only the web roots for HTTPS to its peers (attestation, the
+# cluster key, the sealed channel). A staging cluster's node certificates come
+# from the Let's Encrypt STAGING CA, which no web root signs, so without more a
+# new node never fetches the cluster key and the leader never attests it: no
+# node joins a running cluster. Instance metadata `tls-extra-roots` set to
+# exactly `le-staging` (mdma sets it only where it orders node certificates
+# from the ACME staging directory) points `merod run` at the staging roots this
+# image ships (MEROD_TLS_EXTRA_ROOTS). Any other value is ignored and logged:
+# metadata never names a file, so it can only choose the roots baked into the
+# measured image, never bring its own. A merod before 1.0.0-rc.32 has no
+# --tls-extra-roots and would ignore the variable without a word, so the
+# setting is skipped with a warning when `merod run --help` does not list it:
+# the log then says why such a node cannot join.
+LE_STAGING_ROOTS="/usr/local/lib/calimero/le-staging-roots.crt"
+TLS_EXTRA_ROOTS="$(get_meta tls-extra-roots)"
+case "$TLS_EXTRA_ROOTS" in
+  "") ;;
+  le-staging)
+    if [[ ! -r "$LE_STAGING_ROOTS" ]]; then
+      log "WARN: tls-extra-roots=le-staging, but this image has no $LE_STAGING_ROOTS; merod trusts the web roots only"
+    elif ! "$BIN_DIR/merod" run --help 2>/dev/null | grep -qF -- '--tls-extra-roots'; then
+      log "WARN: tls-extra-roots=le-staging, but this merod has no --tls-extra-roots (1.0.0-rc.32 and later); merod trusts the web roots only"
+    else
+      printf 'MEROD_TLS_EXTRA_ROOTS="%s"\n' "$(env_file_value "$LE_STAGING_ROOTS")" >> /etc/calimero/merod.env
+      chmod 0644 /etc/calimero/merod.env
+      log "merod trusts the Let's Encrypt staging roots for HTTPS to its peers (tls-extra-roots=le-staging)"
+    fi
+    ;;
+  *)
+    log "WARN: ignoring instance metadata tls-extra-roots='${TLS_EXTRA_ROOTS//[^A-Za-z0-9._-]/?}': the only value is le-staging"
+    ;;
+esac
+
 # --- merod 1.0: storage key and cluster configuration ----------------------
 #
 # TDX protects this VM's MEMORY, not its disks. merod 1.0 seals everything it
