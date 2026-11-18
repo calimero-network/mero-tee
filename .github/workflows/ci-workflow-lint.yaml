@@ -307,10 +307,10 @@ jobs:
         shell: bash
         run: scripts/ci/tests/tls-custom-test.sh
 
-      # Staging nodes trust the Let's Encrypt staging roots for HTTPS to their
-      # peers (merod --tls-extra-roots) only for tls-extra-roots=le-staging,
-      # only from the bundle the image ships, only for a merod that takes them.
-      - name: Check extra TLS roots are added only for le-staging, from the shipped bundle
+      # Debug images trust the Let's Encrypt staging roots for HTTPS to their
+      # peers (merod --tls-extra-roots), from the bundle they ship, for a merod
+      # that takes them; the locked-read-only image has neither.
+      - name: Check only debug images ship and use the Let's Encrypt staging roots
         id: tls_extra_roots_test
         shell: bash
         run: scripts/ci/tests/tls-extra-roots-test.sh
