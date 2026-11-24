@@ -15,6 +15,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { createSealedFetch, transportKeyBinding } from '@calimero-network/mero-js';
 import * as jose from 'jose';
+import { fetchFailure, nodeFetch } from './node-fetch.js';
 
 const ITA_URL = process.env.ITA_APPRAISAL_URL || 'https://api.trustauthority.intel.com/appraisal/v2/attest';
 const ITA_JWKS_URL = 'https://portal.trustauthority.intel.com/certs';
@@ -275,7 +276,7 @@ export function kmsEvidenceBinding(inner, kms) {
  */
 async function answersAsTheAttestedKey(base, key, healthPath) {
   const guardedFetch = (input, init = {}) =>
-    fetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS) });
+    nodeFetch(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS) });
   const sealed = createSealedFetch({ baseUrl: base, transportPublicKey: key, fetch: guardedFetch });
   try {
     const response = await sealed(`${base}${healthPath}`);
@@ -408,13 +409,13 @@ export default async function handler(req, res) {
       const nonceHex = nonceBytes.toString('hex');
       const base = `${node.origin}${node.pathname.replace(/\/$/, '')}`;
       const attestV2 = () =>
-        fetch(`${base}/attestation?nonce=${nonceHex}&purpose=kms`, {
+        nodeFetch(`${base}/attestation?nonce=${nonceHex}&purpose=kms`, {
           method: 'GET',
           redirect: 'manual',
           signal: AbortSignal.timeout(NODE_FETCH_TIMEOUT_MS),
         });
       const attest = (body) =>
-        fetch(`${base}/admin-api/tee/attest`, {
+        nodeFetch(`${base}/admin-api/tee/attest`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -444,8 +445,13 @@ export default async function handler(req, res) {
             attestRes = await attest({ nonce: nonceHex });
           }
         }
-      } catch {
-        return res.status(502).json({ error: 'Node attestation endpoint did not answer' });
+      } catch (e) {
+        // Say why: an untrusted certificate is not a machine that is down.
+        const why = fetchFailure(e);
+        const error = why.startsWith('TLS certificate not trusted')
+          ? `Node attestation endpoint: ${why}`
+          : `Node attestation endpoint did not answer (${why})`;
+        return res.status(502).json({ error });
       }
       const endpoint = nodeApi === 'v2' ? '/attestation' : '/admin-api/tee/attest';
       if (!attestRes.ok) {

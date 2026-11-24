@@ -51,9 +51,15 @@ const RULES = [
     action: 'Check the URL and try again.',
   },
   {
+    test: /TLS certificate not trusted/i,
+    title: 'The node’s TLS certificate is not trusted',
+    explain: 'The verifier reached the node, but its HTTPS certificate does not chain to a root the verifier trusts, so it asked for no quote.',
+    action: 'Staging nodes hold Let’s Encrypt staging certificates, which this verifier trusts only for <name>.relay.staging.cloud.calimero.network hosts. For any other host, the node needs a publicly trusted certificate.',
+  },
+  {
     test: /did not answer/i,
     title: 'The machine did not answer',
-    explain: 'The verifier asked for a fresh quote and got no answer within 20 seconds.',
+    explain: 'The verifier asked for a fresh quote and got no answer: it timed out after 20 seconds, or the connection failed (the details say which).',
     action: 'Check that the node (or the manager relaying the KMS) is running and reachable from the internet, then verify again.',
   },
   {
