@@ -212,6 +212,16 @@ jobs:
         shell: bash
         run: scripts/ci/tests/merod-env-whitelist-test.sh
 
+      # calimero-init asks merod's --help which flags it takes, under pipefail.
+      # Piped into `grep -q`, merod still writing gets SIGPIPE and a flag it
+      # takes reads as one it does not: a governance key then stops the first
+      # boot. The stub merod lists its flags and then writes a megabyte, so the
+      # race is certain; every probe must still answer by the flag alone.
+      - name: Check merod help probes do not race grep -q under pipefail
+        id: help_probe_test
+        shell: bash
+        run: scripts/ci/tests/calimero-init-help-probe-test.sh
+
       # The store is not the whole disk: config.toml, the TLS key and the KMS
       # identity sit beside it. So the data disk itself is
       # LUKS2 with integrity, keyed from the KMS. Runs the disk block against
@@ -434,6 +444,7 @@ jobs:
             --checks-line "- recovery disk mounted safely: ${{ steps.recovery_disk_test.outcome }}" \
             --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- merod.env and merod.service carry only whitelisted keys: ${{ steps.merod_env_whitelist_test.outcome }}" \
+            --checks-line "- merod help probes do not race grep -q under pipefail: ${{ steps.help_probe_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \
             --checks-line "- vmagent node identity labels: ${{ steps.vmagent_identity_test.outcome }}" \

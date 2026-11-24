@@ -465,7 +465,7 @@ publish_custom_csrs() {
   for file in "$CUSTOM_CSR_DIR"/*.der; do
     [[ -e "$file" ]] || continue
     host="$(basename "$file" .der)"
-    if ! printf '%s\n' "$@" | grep -qxF -- "$host"; then
+    if ! grep -qxF -- "$host" <<<"$(printf '%s\n' "$@")"; then
       rm -f "$file"
       log "dropped the CSR for ${host}: no longer in tls-custom-hosts"
     fi
@@ -547,7 +547,7 @@ for k, v in d.items():
   for file in "$CUSTOM_DIR"/*.pem; do
     [[ -e "$file" ]] || continue
     host="$(basename "$file" .pem)"
-    if ! printf '%s\n' "$@" | grep -qxF -- "$host"; then
+    if ! grep -qxF -- "$host" <<<"$(printf '%s\n' "$@")"; then
       rm -f "$file"
       log "removed the certificate for ${host}: no longer in tls-custom-hosts"
     fi
