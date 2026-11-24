@@ -1245,9 +1245,16 @@ fi
 # word, so the setting is skipped with a warning when `merod run --help` does
 # not list it: the log then says why such a node cannot join.
 LE_STAGING_ROOTS="/usr/local/lib/calimero/le-staging-roots.crt"
+# Whether the baked merod's `run` takes FLAG; its help is read whole, as in
+# merod_init_takes.
+merod_run_takes() {
+  local help
+  help="$("$BIN_DIR/merod" run --help 2>/dev/null)" || return 1
+  grep -qF -- "$1" <<<"$help"
+}
 if [[ ! -r "$LE_STAGING_ROOTS" ]]; then
   log "WARN: this debug image has no $LE_STAGING_ROOTS; merod trusts the web roots only"
-elif ! "$BIN_DIR/merod" run --help 2>/dev/null | grep -qF -- '--tls-extra-roots'; then
+elif ! merod_run_takes --tls-extra-roots; then
   log "WARN: this merod has no --tls-extra-roots (1.0.0-rc.32 and later); merod trusts the web roots only"
 else
   printf 'MEROD_TLS_EXTRA_ROOTS="%s"\n' "$(env_file_value "$LE_STAGING_ROOTS")" >> /etc/calimero/merod.env
@@ -1473,9 +1480,14 @@ governance_value_ok() {
   return 1
 }
 
-# Whether the baked merod's `init` takes FLAG.
+# Whether the baked merod's `init` takes FLAG. The help is read whole before it
+# is searched, as in merod_can_unlock_disk: piped into `grep -q`, which stops
+# at the first match, merod still writing would die of SIGPIPE and, under
+# `pipefail`, a flag merod lists would read as one it does not take.
 merod_init_takes() {
-  "$BIN_DIR/merod" --node probe init --help 2>/dev/null | grep -q -- "$1 "
+  local help
+  help="$("$BIN_DIR/merod" --node probe init --help 2>/dev/null)" || return 1
+  grep -q -- "$1 " <<<"$help"
 }
 
 # The public attestation verifier a node's consent page links to (merod

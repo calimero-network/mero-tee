@@ -255,7 +255,7 @@ tool publish || fail "publish with apps-domain failed"
 [[ "$(sha256sum <"$CSR")" != "$before" ]] || fail "the CSR was not rebuilt when apps-domain was set"
 [[ "$(csr_sans "$CSR")" == "DNS:n1.example.com, DNS:*.apps.example.com" ]] \
   || fail "SANs with apps-domain: $(csr_sans "$CSR")"
-openssl req -inform DER -in "$CSR" -noout -text | grep -q 'IP Address' && fail "the CSR names an IP address"
+grep -q 'IP Address' <<<"$(openssl req -inform DER -in "$CSR" -noout -text)" && fail "the CSR names an IP address"
 cmp -s <(tool report-data "$CSR") "$CALIMERO_TSM_REPORT/inblob" || fail "the new CSR was not the one quoted"
 [[ "$(cat "$META/guest/tls-csr")" == "$(base64 -w0 <"$CSR")" ]] || fail "tls-csr not republished for the new CSR"
 with_apps="$(sha256sum <"$CSR")"
