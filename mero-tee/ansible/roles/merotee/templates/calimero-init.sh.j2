@@ -1449,6 +1449,26 @@ meta_arg() {
   INIT_EXTRA_ARGS+=("--$key" "$value")
 }
 
+# no_debug_peer_profiles: a node that is not a debug image refuses a
+# `peer-profiles` that names a debug profile, i.e. one whose name contains
+# "debug" (core's `is_debug_profile`). merod already drops debug peer profiles
+# unless the node itself is debug; refusing here as well means the defence does
+# not rest on merod alone, and a manager that asks a production node to trust
+# debug peers is told so at boot instead of getting a node that ignores it.
+no_debug_peer_profiles() {
+  local value profile profiles=()
+  [[ "${IMAGE_PROFILE,,}" == *debug* ]] && return 0
+  value="$(get_meta peer-profiles | tr -d '\r\n')"
+  IFS=, read -ra profiles <<<"$value"
+  for profile in "${profiles[@]}"; do
+    if [[ "${profile,,}" == *debug* ]]; then
+      fatal "instance metadata 'peer-profiles' names a debug profile ('$profile') \
+and this is a $IMAGE_PROFILE image: a production node never trusts a debug \
+image's quote. Refusing to initialise the node with it."
+    fi
+  done
+}
+
 # The governance flags and merod's accepted values for each, the first being
 # merod's default: core's `Authority` for the approvals, `Deployments` and
 # `Deployers` for who may deploy, and the sign-up policy. A value merod adds
@@ -1864,6 +1884,7 @@ nodes (allowed on profile=$IMAGE_PROFILE or a memory-only store only)"
   meta_arg registry-url "^${URL_RE}$"
   meta_arg apps-domain "^${HOST_RE}$"
   meta_arg peer-profiles '^[a-z0-9-]+(,[a-z0-9-]+)*$'
+  no_debug_peer_profiles
   meta_arg peer-min-release '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'
   meta_arg replicas '^[0-9]{1,3}$'
   verifier_arg
