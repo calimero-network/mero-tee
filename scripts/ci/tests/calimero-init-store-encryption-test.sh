@@ -26,6 +26,8 @@
 #   * a merod that is not 1.0                    -> refuse, on every profile
 #   * no node-id / public-url; no cluster on locked -> refuse
 #   * a value that is not the shape merod takes  -> refuse
+#   * peer-profiles naming a debug profile        -> refuse on locked-read-only;
+#                                                  passed on the debug profiles
 #   * kms-identity: valid -> written 0600 to merod's --kms-identity path and
 #     never logged; malformed -> refuse; absent on a locked cluster with a
 #     disk store -> refuse; absent on debug or memory-only -> merod generates
@@ -454,6 +456,30 @@ for bad in "node-id=1; reboot" "node-id=-1" "public-url=javascript:alert(1)" "pu
   last="$WORK/bad-$n"
   [[ "$(cat "$last/rc")" != 0 ]] || fail "metadata '$bad' was accepted"
   [[ -f "$last/init-args" ]] && fail "merod init ran with metadata '$bad'"
+done
+
+# --- peer-profiles: a production node never accepts a debug peer ---------------
+# merod already drops debug peer profiles unless the node itself is debug
+# (core's is_debug_profile: the name contains "debug"); a non-debug image also
+# refuses to be initialised with one, so the defence does not rest on merod
+# alone and a manager that asks for it learns at once.
+n=0
+for value in debug debug-read-only locked-read-only,debug-read-only debug,locked-read-only \
+             locked-read-only,locked-debug; do
+  n=$((n + 1))
+  run_case "peer-debug-$n" locked-read-only "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" "peer-profiles=$value"
+  [[ "$(rc "peer-debug-$n")" != 0 ]] || fail "peer-profiles=$value was accepted on locked-read-only"
+  init_ran "peer-debug-$n" && fail "merod init ran on locked-read-only with peer-profiles=$value"
+  logged "peer-debug-$n" "'peer-profiles' names a debug profile" \
+    || fail "a refused peer-profiles must say why: $(cat "$WORK/peer-debug-$n/log")"
+done
+# A debug image may trust debug peers (a debug cluster is made of them).
+for profile in debug debug-read-only; do
+  name="peer-debug-on-$profile"
+  run_case "$name" "$profile" "$URL" 2.3.70 1.0 fresh ext4 "${BASE[@]}" peer-profiles=locked-read-only,debug-read-only
+  [[ "$(rc "$name")" == 0 ]] || fail "a $profile node with debug peer-profiles should initialise: $(cat "$WORK/$name/log")"
+  [[ "$(arg "$name" --peer-profiles)" == locked-read-only,debug-read-only ]] \
+    || fail "peer-profiles did not reach a $profile node's merod init"
 done
 
 # --- kms-identity ----------------------------------------------------------------

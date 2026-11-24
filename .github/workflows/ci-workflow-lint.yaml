@@ -201,6 +201,17 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-store-encryption-test.sh
 
+      # merod.env and merod.service are merod run's configuration besides the
+      # checked init flags. Renders calimero-init for every profile and fails
+      # when either could carry a key outside its whitelist (a new key needs a
+      # whitelist entry, in review), when a debug-only key reaches
+      # locked-read-only, or when the unit gains a directive or flag. Needs the
+      # jinja2 and pyyaml the template-parse step installs.
+      - name: Check merod.env and merod.service carry only whitelisted keys
+        id: merod_env_whitelist_test
+        shell: bash
+        run: scripts/ci/tests/merod-env-whitelist-test.sh
+
       # calimero-init asks merod's --help which flags it takes, under pipefail.
       # Piped into `grep -q`, merod still writing gets SIGPIPE and a flag it
       # takes reads as one it does not: a governance key then stops the first
@@ -432,6 +443,7 @@ jobs:
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
             --checks-line "- recovery disk mounted safely: ${{ steps.recovery_disk_test.outcome }}" \
             --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
+            --checks-line "- merod.env and merod.service carry only whitelisted keys: ${{ steps.merod_env_whitelist_test.outcome }}" \
             --checks-line "- merod help probes do not race grep -q under pipefail: ${{ steps.help_probe_test.outcome }}" \
             --checks-line "- data disk encrypted, never reformatted: ${{ steps.disk_encryption_test.outcome }}" \
             --checks-line "- init scripts extend RTMR3 (v3): ${{ steps.init_rtmr3_test.outcome }}" \
