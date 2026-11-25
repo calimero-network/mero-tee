@@ -12,9 +12,9 @@
 #
 #   * calimero-init.sh.j2, rendered for each profile, writes merod.env only
 #     through `printf 'KEY="..."\n'` lines, and the keys are exactly
-#     ENV_WHITELIST; MEROD_TLS_EXTRA_ROOTS is in no locked-read-only render;
-#     every other mention of the file is a comment, a log line, chmod, rm,
-#     a test for it, or a `sed -i '/^KEY=/d'` of a whitelisted key;
+#     ENV_WHITELIST; every other mention of the file is a comment, a log
+#     line, chmod, rm, a test for it, or a `sed -i '/^KEY=/d'` of a
+#     whitelisted key;
 #   * the only merod.service drop-in it writes is job-node.conf, which unsets
 #     MEROD_METRICS_LISTEN; nothing else in mero-tee/ writes one;
 #   * the merod.service unit (roles/merotee/tasks/main.yml) has only the
@@ -22,10 +22,9 @@
 #     MEROD_METRICS_LISTEN on loopback, EnvironmentFile= only merod.env, and
 #     ExecStart= takes no flags beyond --home, --node and `run`.
 #
-# The checker is then run against mutated copies (a new key, an echo, a
-# debug-only key on locked-read-only, a new Environment= or ExecStartPre=, a
-# new drop-in), each of which must fail, so a checker that stops looking fails
-# too.
+# The checker is then run against mutated copies (a new key, an echo, a new
+# Environment= or ExecStartPre=, a new drop-in), each of which must fail, so a
+# checker that stops looking fails too.
 #
 # Needs python3 with jinja2 and pyyaml (the "Check Ansible templates parse"
 # step installs them).
@@ -70,9 +69,7 @@ ENV_WHITELIST = {
     "MEROD_CLUSTER_IDENTITY",   # job node: 64 lowercase hex, checked
     "MEROD_NODE_ID",            # job node: a number, checked
     "MEROD_CLUSTER",            # job node: CLUSTER_RE, checked
-    "MEROD_TLS_EXTRA_ROOTS",    # debug images only: a fixed path in the image
 }
-DEBUG_ONLY = {"MEROD_TLS_EXTRA_ROOTS"}
 PROFILES = ("locked-read-only", "debug-read-only", "debug")
 
 # The merod.service unit, directive by directive.
@@ -191,9 +188,6 @@ per_profile = {p: env_keys(p) for p in PROFILES}
 for p, keys in per_profile.items():
     for k in sorted(keys - ENV_WHITELIST):
         finding(f"{p}: merod.env gets {k}, which is not in ENV_WHITELIST")
-    if p == "locked-read-only":
-        for k in sorted(keys & DEBUG_ONLY):
-            finding(f"{p}: merod.env gets {k}, which is for debug images only")
 written = set().union(*per_profile.values())
 for k in sorted(ENV_WHITELIST - written):
     finding(f"ENV_WHITELIST names {k}, which calimero-init no longer writes; drop it")
@@ -307,9 +301,6 @@ mutate echo-write template \
 mutate alias template \
   "s.replace('$ANCHOR', 'ENVF=/etc/calimero/merod.env\\n$ANCHOR', 1)" \
   "a new name for merod.env"
-mutate debug-roots-on-locked template \
-  "s.replace(\"{% if lockdown_profile != 'locked-read-only' %}\", '{% if true %}', 1)" \
-  "MEROD_TLS_EXTRA_ROOTS, which is for debug images only"
 mutate new-dropin template \
   "s.replace('$ANCHOR', 'printf \\'[Service]\\\\nEnvironment=MEROD_DEV=true\\\\n\\' >/run/systemd/system/merod.service.d/dev.conf\\n$ANCHOR', 1)" \
   "touches merod.service other than the job-node drop-in"

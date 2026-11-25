@@ -1229,39 +1229,6 @@ if [[ -n "$RECOVERY_DIR" ]]; then
   log "Recovery disk mounted at $RECOVERY_DIR ($(df -h --output=size "$RECOVERY_DIR" 2>/dev/null | tail -1 | tr -d ' ')); merod --recovery-dir writes there"
 fi
 
-{% if lockdown_profile != 'locked-read-only' %}
-# --- Extra TLS roots (debug images only) ------------------------------------
-#
-# merod trusts only the web roots for HTTPS to its peers (attestation, the
-# cluster key, the sealed channel). A debug node's certificate comes from the
-# Let's Encrypt STAGING CA, which no web root signs, so without more a new node
-# never fetches the cluster key and the leader never attests it: no node joins
-# a running cluster. A debug image ships the staging roots (Let's Encrypt's
-# public root certificates) and always points `merod run` at them
-# (MEROD_TLS_EXTRA_ROOTS). The production image (locked-read-only) has neither
-# the file nor this block: it is decided when the image is built, so it is part
-# of the measured image, and nothing at run time can turn it on. A merod before
-# 1.0.0-rc.32 has no --tls-extra-roots and would ignore the variable without a
-# word, so the setting is skipped with a warning when `merod run --help` does
-# not list it: the log then says why such a node cannot join.
-LE_STAGING_ROOTS="/usr/local/lib/calimero/le-staging-roots.crt"
-# Whether the baked merod's `run` takes FLAG; its help is read whole, as in
-# merod_init_takes.
-merod_run_takes() {
-  local help
-  help="$("$BIN_DIR/merod" run --help 2>/dev/null)" || return 1
-  grep -qF -- "$1" <<<"$help"
-}
-if [[ ! -r "$LE_STAGING_ROOTS" ]]; then
-  log "WARN: this debug image has no $LE_STAGING_ROOTS; merod trusts the web roots only"
-elif ! merod_run_takes --tls-extra-roots; then
-  log "WARN: this merod has no --tls-extra-roots (1.0.0-rc.32 and later); merod trusts the web roots only"
-else
-  printf 'MEROD_TLS_EXTRA_ROOTS="%s"\n' "$(env_file_value "$LE_STAGING_ROOTS")" >> /etc/calimero/merod.env
-  chmod 0644 /etc/calimero/merod.env
-  log "merod trusts the Let's Encrypt staging roots for HTTPS to its peers (debug image)"
-fi
-{% endif %}
 
 # --- merod 1.0: storage key and cluster configuration ----------------------
 #

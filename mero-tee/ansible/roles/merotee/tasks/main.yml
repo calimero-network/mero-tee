@@ -125,19 +125,6 @@
     group: root
     mode: "0755"
 
-# The Let's Encrypt staging roots (their public root certificates), in debug
-# images only: a debug node's certificate comes from the staging CA, and
-# calimero-init points merod at these for HTTPS to its peers
-# (--tls-extra-roots). The production image (locked-read-only) never has them.
-- name: Install the Let's Encrypt staging roots (debug images)
-  copy:
-    src: le-staging-roots.crt
-    dest: /usr/local/lib/calimero/le-staging-roots.crt
-    owner: root
-    group: root
-    mode: "0644"
-  when: lockdown_profile | default('locked-read-only') != 'locked-read-only'
-
 - name: Create calimero-tls-cert systemd service
   copy:
     content: |
