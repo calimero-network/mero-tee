@@ -55,7 +55,6 @@ if [[ "$MODE" != absent ]]; then
   echo "      --attestation-verifier-url <URL>"
   echo "      --key-out <PATH>"
   echo "      --serve <ADDR>"
-  echo "      --tls-extra-roots <TLS_EXTRA_ROOTS>"
 fi
 [[ "$MODE" != fails ]] || exit 2
 for ((i = 0; i < 16000; i++)); do
@@ -93,7 +92,6 @@ CALLS=(
   "merod_is_1_0"
   "merod_can_unlock_disk"
   "merod_can_attest"
-  "merod_run_takes --tls-extra-roots"
 )
 for call in "${CALLS[@]}"; do
   probe long "$call" || fail "$call: false for a merod whose help lists the flag and goes on (the help pipeline died of SIGPIPE under pipefail)"

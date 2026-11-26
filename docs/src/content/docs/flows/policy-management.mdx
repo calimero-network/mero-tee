@@ -78,13 +78,8 @@ There are exactly three profiles, forming distinct trust cohorts:
 - **`debug-read-only`** — staging / pre-production.
 - **`locked-read-only`** — hardened production.
 
-Outside production, node certificates come from the Let's Encrypt staging CA, which no
-built-in root list trusts. So the two debug profiles ship Let's Encrypt's published staging
-roots (`/usr/local/lib/calimero/le-staging-roots.crt`) and start merod with
-`--tls-extra-roots` (merod 1.0.0-rc.32 and later), so their nodes accept each other's
-certificates and can form multi-node clusters. This is decided when the image is built, so it
-is part of the measurement: a `locked-read-only` image contains neither the file nor the
-setting, and nothing at runtime can add them.
+Node certificates are publicly trusted on every profile, so no profile ships extra TLS roots:
+nodes reach each other with merod's built-in web roots.
 
 A KMS serves exactly one profile: each profile is its own KMS image, with that profile's
 node allowlist baked in, and so its own cluster. The profile is pinned by a file baked

@@ -10,7 +10,7 @@ Vercel with environment variables: `ITA_API_KEY`, `ITA_APPRAISAL_URL`, `NODE_ALL
 
 `NODE_ALLOWED_HOSTS` (comma-separated regexes) defaults to bare IPv4 addresses and the fleet's node names, `<name>.relay.cloud.calimero.network` and `<name>.relay.staging.cloud.calimero.network`, which mdma's manager and cloud console link here. Setting it replaces that default. Either way a host must resolve to public addresses only.
 
-Staging nodes hold certificates from Let's Encrypt's staging CA (mdma orders every node of its staging deployment there), which no public trust store has. For hosts matching `NODE_STAGING_CA_HOSTS` (comma-separated regexes, default `<name>.relay.staging.cloud.calimero.network` only) the API trusts the public roots plus the staging roots (`api/le-staging-roots.js`, `api/node-fetch.js`); every other host is fetched with the public roots alone. The verdict does not rest on TLS: Intel verifies the quote, the nonce makes it fresh and the sealed handshake proves the URL holds the attested key. A fetch that fails says why (`timed out`, `TLS certificate not trusted (<code>)`, or the network error).
+Every node, production and staging, holds a publicly trusted certificate, so the API fetches a node with the public roots alone (`api/node-fetch.js`). The verdict does not rest on TLS: Intel verifies the quote, the nonce makes it fresh and the sealed handshake proves the URL holds the attested key. A fetch that fails says why (`timed out`, `TLS certificate not trusted (<code>)`, or the network error).
 
 ## Flow
 
