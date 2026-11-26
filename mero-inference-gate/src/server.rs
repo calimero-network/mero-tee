@@ -1,4 +1,4 @@
-//! The gate's HTTP layer: `/health`, `/attest`, and `/v1/*` passed to vLLM.
+//! The gate's HTTP layer: `/health`, `/attest`, and [`PROXIED_ROUTES`] passed to vLLM.
 
 use std::sync::Arc;
 
@@ -225,10 +225,28 @@ fn copy_headers(from: &HeaderMap, to: &mut HeaderMap, dropped: &[HeaderName]) {
     }
 }
 
-/// `/v1/*` to vLLM, answers streamed back as they come.
+/// The vLLM routes the gate passes on, by method and exact path: OpenAI-compatible inference
+/// and the model list. Every other route vLLM serves (adapter loading, tokenizer and
+/// profiler endpoints, anything a later vLLM adds) answers `404` before the token is even
+/// read, so a flaw in one of them is not reachable through the gate, token or not.
+pub const PROXIED_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/v1/chat/completions"),
+    ("POST", "/v1/completions"),
+    ("GET", "/v1/models"),
+];
+
+/// Whether `method` and `path` are one of [`PROXIED_ROUTES`].
+#[must_use]
+pub fn proxied(method: &axum::http::Method, path: &str) -> bool {
+    PROXIED_ROUTES
+        .iter()
+        .any(|(m, p)| method.as_str() == *m && path == *p)
+}
+
+/// [`PROXIED_ROUTES`] to vLLM, answers streamed back as they come.
 async fn proxy(State(gate): State<Arc<Gate>>, request: Request) -> Response {
     let path = request.uri().path();
-    if !path.starts_with("/v1/") || gate.served_model.is_none() {
+    if !proxied(request.method(), path) || gate.served_model.is_none() {
         return error(StatusCode::NOT_FOUND, "not_found", "no such route");
     }
     let authorization = request
@@ -438,6 +456,40 @@ mod tests {
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{authorization:?}");
             assert_eq!(headers[header::WWW_AUTHENTICATE], "Bearer");
         }
+    }
+
+    /// vLLM's other routes, the one SGLang's unauthenticated RCE came through included in
+    /// kind (adapter loading), answer `404` with a valid token; so does a listed path under
+    /// another method.
+    #[tokio::test]
+    async fn only_the_inference_routes_are_proxied() {
+        let gate = gate(CONFIG, &upstream().await);
+        for (method, path) in [
+            ("POST", "/v1/load_lora_adapter"),
+            ("POST", "/v1/unload_lora_adapter"),
+            ("POST", "/tokenize"),
+            ("POST", "/v1/start_profile"),
+            ("GET", "/v1/chat/completions"),
+            ("POST", "/v1/chat/completions/"),
+            ("POST", "/v1//chat/completions"),
+        ] {
+            let request = HttpRequest::builder()
+                .method(method)
+                .uri(path)
+                .header(header::AUTHORIZATION, "Bearer secret")
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                call(Arc::clone(&gate), request).await.0,
+                StatusCode::NOT_FOUND,
+                "{method} {path}"
+            );
+        }
+        let request = HttpRequest::get("/v1/models")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(call(gate, request).await.0, StatusCode::OK);
     }
 
     #[tokio::test]

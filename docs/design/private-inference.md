@@ -1,7 +1,9 @@
 # Design: private inference on GCP TDX + H100
 
-Status: prototype. Built and unit-tested here; not yet booted on an H100. The
-release measures it best effort, as the agent image was at first.
+Status: **experimental**. A prototype, not in production: built and
+unit-tested here, not yet booted on an H100, and no cluster or client relies on
+it. The release measures it best effort, as the agent image was at first. Do
+not send it prompts that matter until this status changes.
 
 A fourth TDX image role, `inference`: an OpenAI-compatible model server (vLLM)
 in a confidential VM with an H100 in confidential-computing mode. mero-bot can
@@ -129,7 +131,18 @@ CA.
 | --- | --- | --- |
 | `GET` | `/health` | `{"status":"ok"\|"starting","model":<served name>}`; `ok` once vLLM answers |
 | `POST` | `/attest` | `{"nonceHex": <64 hex>}` → the answer below |
-| any | `/v1/*` | proxied to vLLM, streaming included, with `Authorization: Bearer <token>` whose SHA-256 is in `access-token-sha256`. `401` otherwise. With no tokens configured, every call is refused |
+| `POST` | `/v1/chat/completions`, `/v1/completions` | proxied to vLLM, streaming included, with `Authorization: Bearer <token>` whose SHA-256 is in `access-token-sha256`. `401` otherwise. With no tokens configured, every call is refused |
+| `GET` | `/v1/models` | the same |
+
+Every other path and method is `404` before the token is read
+(`server::PROXIED_ROUTES`), so vLLM's other routes (adapter loading,
+tokenizer and profiler endpoints, whatever a later vLLM adds) are not reachable
+through the gate, token or not. A token holder reaches only the inference
+routes; an inference server's own flaw is the one thing the TD does not stop,
+so the less of it is exposed, the better. vLLM itself listens on loopback
+only. Its Python packages (`mero-tee/inference/requirements.lock`) are audited
+with `pip-audit` weekly and on every change to the lock (`security-audit.yaml`,
+`inference-audit`).
 
 **`/attest`**
 
