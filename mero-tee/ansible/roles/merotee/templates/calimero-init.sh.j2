@@ -1171,7 +1171,7 @@ if [[ -s "$TLS_DIR/key.pem" ]]; then
   fi
 fi
 
-# --- The recovery disk ------------------------------------------------------
+# --- The recovery and backup disks -----------------------------------------
 #
 # merod's `--recovery-dir`: backups sealed to the X25519 key of whoever upgrades
 # each app (core `calimero_node::recovery_disk`). They open with that key alone,
@@ -1182,51 +1182,69 @@ fi
 # nothing a holder accepts. merod only writes there, except during a recovery
 # the operator starts, when it checks each file's signature before using it.
 #
-# mdma attaches it as deviceName "recovery" (`{node}-recovery`) and stamps
-# `recovery-dir` (the mount point) only on a node created with one; a job node
-# never gets either. Addressed by its by-id link alone: unlike the data disk,
-# there is no fallback to "the one blank disk", which could be the data disk.
-# A blank disk is formatted once; a disk holding anything but ext4 is refused,
-# not formatted: it may be another node's backups.
-RECOVERY_DEVICE="/dev/disk/by-id/google-recovery"
-RECOVERY_DIR="$(get_meta recovery-dir | tr -d '\r\n')"
-if [[ -n "$RECOVERY_DIR" ]]; then
+# merod's `--backup-dir`: each app's Raft snapshot sealed under the cluster key
+# K_c (core `calimero_node::backup`), which opens only on a node holding this
+# cluster's K_c, so a plain ext4 disk leaks nothing here either.
+#
+# mdma attaches each as deviceName "recovery" / "backup" and stamps
+# `recovery-dir` / `backup-dir` (the mount point) only on a node created with
+# one; a job node never gets either. Addressed by its by-id link alone: unlike
+# the data disk, there is no fallback to "the one blank disk", which could be
+# the data disk. A blank disk is formatted once; a disk holding anything but
+# ext4 is refused, not formatted: it may be another node's backups.
+mount_app_disk() {
+  local name="$1" dir="$2" label="$3"
+  local device="/dev/disk/by-id/google-$name" fs
   [[ "${JOB_NODE:-}" != true ]] \
-    || fatal "instance metadata 'recovery-dir' is set on a job node, which holds no app data"
-  [[ "$RECOVERY_DIR" =~ ^(/[A-Za-z0-9_-]{1,64}){1,8}$ ]] \
-    || fatal "instance metadata 'recovery-dir' must be an absolute path of plain names"
-  case "$RECOVERY_DIR" in
+    || fatal "instance metadata '$name-dir' is set on a job node, which holds no app data"
+  [[ "$dir" =~ ^(/[A-Za-z0-9_-]{1,64}){1,8}$ ]] \
+    || fatal "instance metadata '$name-dir' must be an absolute path of plain names"
+  case "$dir" in
     "$DATA_MOUNT"|"$DATA_MOUNT"/*|/etc|/etc/*|/usr|/usr/*|/run|/run/*|/proc|/proc/*|/sys|/sys/*|/dev|/dev/*|/boot|/boot/*|/var|/var/*)
-      fatal "recovery-dir $RECOVERY_DIR is a system path or inside the data disk" ;;
+      fatal "$name-dir $dir is a system path or inside the data disk" ;;
   esac
   for _ in $(seq 1 60); do
-    [[ -b "$RECOVERY_DEVICE" ]] && break
+    [[ -b "$device" ]] && break
     sleep 1
   done
-  [[ -b "$RECOVERY_DEVICE" ]] \
-    || fatal "recovery-dir is set but no disk is attached as 'recovery' ($RECOVERY_DEVICE)"
-  RECOVERY_FS="$(blkid -o value -s TYPE "$RECOVERY_DEVICE" 2>/dev/null || true)"
-  if [[ -z "$RECOVERY_FS" ]]; then
+  [[ -b "$device" ]] \
+    || fatal "$name-dir is set but no disk is attached as '$name' ($device)"
+  fs="$(blkid -o value -s TYPE "$device" 2>/dev/null || true)"
+  if [[ -z "$fs" ]]; then
     # Blank means nothing the kernel knows of: no filesystem and no partitions.
-    if [[ -n "$(lsblk -nro NAME "$RECOVERY_DEVICE" 2>/dev/null | tail -n +2)" ]]; then
-      fatal "the recovery disk has partitions and no filesystem; refusing to format it"
+    if [[ -n "$(lsblk -nro NAME "$device" 2>/dev/null | tail -n +2)" ]]; then
+      fatal "the $name disk has partitions and no filesystem; refusing to format it"
     fi
-    log "Formatting the blank recovery disk (ext4)"
-    mkfs.ext4 -q -L calimero-recov "$RECOVERY_DEVICE" >>"$LOG" 2>&1 \
-      || fatal "could not format the recovery disk"
-  elif [[ "$RECOVERY_FS" != ext4 ]]; then
-    fatal "the recovery disk holds a $RECOVERY_FS filesystem, not ext4; refusing to format it"
+    log "Formatting the blank $name disk (ext4)"
+    mkfs.ext4 -q -L "$label" "$device" >>"$LOG" 2>&1 \
+      || fatal "could not format the $name disk"
+  elif [[ "$fs" != ext4 ]]; then
+    fatal "the $name disk holds a $fs filesystem, not ext4; refusing to format it"
   fi
-  mkdir -p "$RECOVERY_DIR"
-  if ! mountpoint -q "$RECOVERY_DIR"; then
-    mount -t ext4 -o nosuid,nodev,noexec "$RECOVERY_DEVICE" "$RECOVERY_DIR" >>"$LOG" 2>&1 \
-      || fatal "could not mount the recovery disk at $RECOVERY_DIR"
+  mkdir -p "$dir"
+  if ! mountpoint -q "$dir"; then
+    mount -t ext4 -o nosuid,nodev,noexec "$device" "$dir" >>"$LOG" 2>&1 \
+      || fatal "could not mount the $name disk at $dir"
   fi
-  chmod 0700 "$RECOVERY_DIR"
-  # Every boot, beside the TEE release: `merod run` reads MEROD_RECOVERY_DIR.
+  chmod 0700 "$dir"
+  log "The $name disk is mounted at $dir ($(df -h --output=size "$dir" 2>/dev/null | tail -1 | tr -d ' ')); merod --$name-dir writes there"
+}
+
+# Every boot, beside the TEE release: `merod run` reads MEROD_RECOVERY_DIR and
+# MEROD_BACKUP_DIR.
+RECOVERY_DIR="$(get_meta recovery-dir | tr -d '\r\n')"
+if [[ -n "$RECOVERY_DIR" ]]; then
+  mount_app_disk recovery "$RECOVERY_DIR" calimero-recov
   printf 'MEROD_RECOVERY_DIR="%s"\n' "$(env_file_value "$RECOVERY_DIR")" >> /etc/calimero/merod.env
   chmod 0644 /etc/calimero/merod.env
-  log "Recovery disk mounted at $RECOVERY_DIR ($(df -h --output=size "$RECOVERY_DIR" 2>/dev/null | tail -1 | tr -d ' ')); merod --recovery-dir writes there"
+fi
+BACKUP_DIR="$(get_meta backup-dir | tr -d '\r\n')"
+if [[ -n "$BACKUP_DIR" ]]; then
+  [[ "$BACKUP_DIR" != "$RECOVERY_DIR" ]] \
+    || fatal "instance metadata 'backup-dir' and 'recovery-dir' name the same mount point"
+  mount_app_disk backup "$BACKUP_DIR" calimero-backup
+  printf 'MEROD_BACKUP_DIR="%s"\n' "$(env_file_value "$BACKUP_DIR")" >> /etc/calimero/merod.env
+  chmod 0644 /etc/calimero/merod.env
 fi
 
 {% if lockdown_profile != 'locked-read-only' %}

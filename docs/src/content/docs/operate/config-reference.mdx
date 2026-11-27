@@ -240,6 +240,23 @@ it to the X25519 key of whoever upgrades the app and signs it with its attested
 receipt key, so the files open without any mero-kms and the host can neither read
 nor plant one a holder accepts (core: `calimero_node::recovery_disk`).
 
+### The backup disk
+
+A node mdma creates with a backup disk (attached as deviceName `backup`) also
+carries **`backup-dir`** metadata, the mount point. `calimero-init` treats it
+exactly as the recovery disk: found by `/dev/disk/by-id/google-backup` only,
+formatted ext4 once if blank, refused if it holds anything else, mounted
+`nosuid,nodev,noexec` on every boot, and `MEROD_BACKUP_DIR` written to
+`merod.env`, so `merod run` gets `--backup-dir`.
+
+| Metadata key | Value | When absent |
+| --- | --- | --- |
+| `backup-dir` | As `recovery-dir`, and not the same mount point. Refused on a job node, and when no `backup` disk is attached. | No backup disk is mounted and merod writes no cluster-key backups. |
+
+merod writes each app's snapshot there sealed under the cluster key, so a backup
+opens and restores only on a node that holds this cluster's key (core:
+`calimero_node::backup`).
+
 merod trusts the KMS only if its quote matches the signed release the
 environment names (`MERO_KMS_RELEASE_TAG`, else `MERO_KMS_VERSION`, else
 `MERO_TEE_VERSION`, which the node images set from `tee-release-version`), for

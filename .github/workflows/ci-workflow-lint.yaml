@@ -185,10 +185,10 @@ jobs:
         shell: bash
         run: scripts/ci/tests/calimero-init-data-disk-test.sh
 
-      - name: Check the recovery disk is mounted safely
-        id: recovery_disk_test
+      - name: Check the recovery and backup disks are mounted safely
+        id: app_disks_test
         shell: bash
-        run: scripts/ci/tests/calimero-init-recovery-disk-test.sh
+        run: scripts/ci/tests/calimero-init-app-disks-test.sh
 
       # merod 1.0 takes its storage key from mero-kms only and its cluster
       # settings from instance metadata. Runs the decision against a stub merod
@@ -441,7 +441,7 @@ jobs:
             --checks-line "- release image name test: ${{ steps.release_image_name_test.outcome }}" \
             --checks-line "- token files created under umask: ${{ steps.secret_umask_test.outcome }}" \
             --checks-line "- data disk mounted before use: ${{ steps.data_disk_test.outcome }}" \
-            --checks-line "- recovery disk mounted safely: ${{ steps.recovery_disk_test.outcome }}" \
+            --checks-line "- recovery and backup disks mounted safely: ${{ steps.app_disks_test.outcome }}" \
             --checks-line "- merod 1.0 configured from metadata, keyed by the KMS: ${{ steps.store_encryption_test.outcome }}" \
             --checks-line "- merod.env and merod.service carry only whitelisted keys: ${{ steps.merod_env_whitelist_test.outcome }}" \
             --checks-line "- merod help probes do not race grep -q under pipefail: ${{ steps.help_probe_test.outcome }}" \

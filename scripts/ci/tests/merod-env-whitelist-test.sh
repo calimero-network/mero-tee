@@ -66,6 +66,7 @@ ENV_WHITELIST = {
     "MERO_TEE_PROFILE",         # the image's profile (baked)
     "MEROD_KMS_DISK_EVIDENCE",  # a fixed path on /run/calimero
     "MEROD_RECOVERY_DIR",       # a fixed mount point
+    "MEROD_BACKUP_DIR",         # a fixed mount point
     "MEROD_JOB_NODE",           # job node: "true"
     "MEROD_CLUSTER_IDENTITY",   # job node: 64 lowercase hex, checked
     "MEROD_NODE_ID",            # job node: a number, checked
