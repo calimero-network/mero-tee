@@ -26,6 +26,7 @@ repository builds what those VMs boot and how they get their keys:
 | **mero-tee/** | mkosi build of the merod 1.0 node, KMS and inference images (debug, debug-read-only, locked-read-only profiles) |
 | **mero-inference-gate** | **Experimental: a prototype, not in production.** The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
+| **frontend-verifier/** | Browser extension that checks a Calimero app's page, file by file, against what its attested node verified at install (Firefox blocks a changed file; Chrome warns). See [Levels of frontend trust](docs/src/content/docs/understand/trust-model.mdx#levels-of-frontend-trust) |
 
 ## Quick Start
 

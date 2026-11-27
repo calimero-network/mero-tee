@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Calimero page check</title>
+<style>
+  :root { --ink:#16202a; --muted:#56636f; --line:#d9dee3; --ok:#0f7a6c; --bad:#b3261e; --warn:#9a5b00; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#e4e9ee; --muted:#9aa7b3; --line:#2b3640; --ok:#4fc4b2; --bad:#f08a80; --warn:#e6b05a; } }
+  body { font: 13px/1.45 system-ui, sans-serif; color: var(--ink); width: 320px; margin: 0; padding: 14px; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .verdict { font-weight: 600; }
+  .verified { color: var(--ok); } .tampered { color: var(--bad); } .unverified, .checking { color: var(--warn); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 10px 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  ul { margin: 6px 0 0; padding-left: 16px; } li { overflow-wrap: anywhere; }
+  .note { color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; margin-top: 10px; }
+  label { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>Calimero page check</h1>
+  <p id="verdict" class="verdict checking">Not a Calimero app page.</p>
+  <dl id="facts" hidden></dl>
+  <div id="problems" hidden></div>
+  <label><input type="checkbox" id="strict"> Strict: also block pages that cannot be checked</label>
+  <p class="note" id="mode"></p>
+  <script src="popup.js"></script>
+</body>
+</html>
