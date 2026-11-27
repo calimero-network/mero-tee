@@ -1,0 +1,20 @@
+{
+  "name": "calimero-frontend-verifier",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser extension that checks a Calimero app's page, file by file, against what its attested node verified at install",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@calimero-network/mero-js": "1.0.0-rc.38"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

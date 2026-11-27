@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Calimero Frontend Verifier",
+  "version": "0.1.0",
+  "description": "Checks every file of a Calimero app's page against what its attested node verified, and warns when one was changed.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon-128.png"
+  },
+  "icons": {
+    "128": "icon-128.png"
+  },
+  "permissions": [
+    "webRequest",
+    "storage",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://*.apps.calimero.network/*",
+    "https://*.apps.relay.staging.cloud.calimero.network/*",
+    "https://*.calimero.network/*"
+  ]
+}

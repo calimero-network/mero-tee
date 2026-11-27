@@ -183,3 +183,26 @@ Rejections surface as typed errors — `tcb_status_rejected` and
 `measurement_policy_rejected` return **403**, challenge/signature/attestation
 failures return **401**, and a replica without its root returns **503**. See
 [error handling](/operate/error-handling/) for the full mapping.
+
+## Levels of frontend trust
+
+Everything above protects the node and its keys. A person reaches a node through an
+app's page, and that page decrypts and shows what they read and checks the node's
+attestation in its own JavaScript, so they also trust whoever served the page.
+
+| Level | Where the page comes from | Who could serve another page | Use for |
+| --- | --- | --- | --- |
+| **Debug** | A static host (Vercel) or any branch build | That host, whoever can push to the branch or its dependencies, and anyone with a certificate for its name | Demos and debugging. Never data that matters. |
+| **Production** | The node (`merod --apps-domain`), from the release's signed `.mpk`, with TLS ending inside the TD on Calimero Cloud | Whoever can get a WebPKI certificate for the name: the operator, through the DNS zone it controls | Every customer-facing app |
+| **Full** | Production, plus the [frontend verifier](https://github.com/calimero-network/mero-tee/tree/master/frontend-verifier) extension checking every file | Nobody without the attested node's key | People who must not have to trust TLS, DNS or the operator |
+
+At the full level the extension attests a node itself, asks it over the sealed channel
+for the release's file list (core's `GET /packages/{package}/{version}/frontend`, every
+file with the SHA-256 the node computed from the files it verified against the
+publisher's signature), and compares each file the page loads. In Firefox a changed or
+unlisted file is stopped before the page runs it; in Chrome, whose extension API does
+not expose response bodies, it is detected after loading and the badge turns red.
+
+How a person tells the level: the debug level is any host other than the Calimero Cloud
+apps domains; production is a page under them; full is production with the extension's
+badge showing **OK**.
