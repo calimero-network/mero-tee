@@ -1,5 +1,6 @@
-//! mero-inference-gate: serves `/attest` and passes `/v1/*` to vLLM inside a
-//! private inference TD, over TLS that ends here.
+//! mero-inference-gate: serves `/attest` and passes the inference routes
+//! (`server::PROXIED_ROUTES`) to vLLM inside a private inference TD, over TLS that
+//! ends here. Experimental: a prototype, not in production.
 //!
 //! # Environment
 //!

@@ -9,6 +9,7 @@ on:
       - Cargo.toml
       - "mero-kms/Cargo.toml"
       - Cargo.lock
+      - "mero-tee/inference/requirements.lock"
       - ".github/workflows/security-audit.yaml"
 
 permissions:
@@ -53,3 +54,29 @@ jobs:
             --result-line "- ${result_line}" \
             --artifacts-line "- n/a" \
             --next-line "- Review advisories and update dependencies."
+
+  # The inference image's Python packages (vLLM, torch and their dependencies,
+  # mero-tee/inference/requirements.lock): what runs inside its TD next to the
+  # model. cargo audit does not see them, and an inference server's own flaw is
+  # what a TEE does not stop. Each ignore names why it does not reach the image.
+  inference-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pip-audit
+        run: python3 -m pip install --quiet pip-audit==2.10.1
+
+      # PYSEC-2026-3447: setuptools' MANIFEST.in exclusions miss NFD names when an
+      # sdist is built on macOS; the image builds no sdist. GHSA-xmj3-9gf7-h52w:
+      # setuptools' legacy wheel-as-egg install writes outside its directory on
+      # Windows; the image installs hash-pinned wheels with uv on Linux. Both are
+      # held by vLLM and torch's setuptools<81: drop them once those move.
+      - name: Audit the inference lock
+        run: |
+          python3 -m pip_audit -r mero-tee/inference/requirements.lock \
+            --no-deps --disable-pip --progress-spinner off \
+            --ignore-vuln PYSEC-2026-3447 --ignore-vuln GHSA-xmj3-9gf7-h52w

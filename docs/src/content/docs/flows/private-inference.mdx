@@ -5,6 +5,11 @@ sidebar:
   order: 6
 ---
 
+:::caution[Experimental]
+Private inference is a prototype, not in production: it has not yet been booted on an
+H100, and no cluster or client relies on it.
+:::
+
 A private inference TD is a fourth TDX image role, `inference`: vLLM on an H100 in
 confidential-computing mode, inside a TDX confidential VM. mero-bot sends prompts to it
 with `"attest": "mero"` instead of to NEAR AI Cloud. The rationale, the risks and the

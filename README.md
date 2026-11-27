@@ -6,7 +6,7 @@
 Firebase, that runs every app inside attested Intel TDX confidential VMs. This
 repository builds what those VMs boot and how they get their keys:
 
-- **The images.** The merod node, mero-kms and private-inference images for GCP
+- **The images.** The merod node, mero-kms and (experimental) private-inference images for GCP
   TDX, built reproducibly with mkosi and sealed with dm-verity. Their
   measurements (MRTD and RTMR0-3) are published with every release.
 - **The keys.** mero-kms hands a node its disk key only after checking the
@@ -24,7 +24,7 @@ repository builds what those VMs boot and how they get their keys:
 |-----------|-------------|
 | **mero-kms** | KMS that validates TDX attestations and releases storage encryption keys to merod nodes. Runs as the frozen, dm-verity-sealed GCP TDX image `merotee-kms-<profile>-<version>`: one 5-replica cluster per release, whose root key exists only in the replicas' memory and is shared only by attested join. See the [design](docs/design/gcp-tdx-kms.md) |
 | **mero-tee/** | mkosi build of the merod 1.0 node, KMS and inference images (debug, debug-read-only, locked-read-only profiles) |
-| **mero-inference-gate** | The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
+| **mero-inference-gate** | **Experimental: a prototype, not in production.** The attested TLS front of the private inference image: vLLM on an H100 in a TDX confidential VM, serving a model chosen at deploy time and named, with its weights' digest, in every quote. See the [design](docs/design/private-inference.md) |
 | **attestation-verifier/** | Public web tool for verifying KMS and node attestations via Intel Trust Authority |
 
 ## Quick Start
